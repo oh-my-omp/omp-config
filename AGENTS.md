@@ -408,8 +408,8 @@ exercised in a real omp session.
   full design-document reads and mandatory mentor/two-discussant support. Children do
   not receive this appendix; worker-specific rules live in their definitions.
 - `agent/omomp.yml`, section `system-prompt-replace` — injected
-  tool-description revisions. Read explains source + view/query, snapshots, recovery
-  and `omp://tools/read.md`; task owns cost/trust tier choice, explicit agent/effort and
+  tool-description revisions. Read explains source + view/query, single-stream `.gz` members,
+  snapshots, recovery and `omp://tools/read.md`; task owns cost/trust tier choice, explicit agent/effort and
   isolation. Native child workflow skips checks unless explicitly assigned; the existing
   developer notice from `fork_task` explicitly requires relevant scoped checks and runtime
   verification before handoff. The main agent owns final verification, directly or through
