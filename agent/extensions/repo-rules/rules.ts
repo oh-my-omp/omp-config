@@ -37,6 +37,13 @@ export type ScopedOrigin =
 	| { readonly kind: "scan" }
 	| { readonly kind: "native"; readonly agents: readonly string[] | undefined; readonly placement: NativePlacement };
 
+/**
+ * One compiled `paths` pattern. Claude Code patterns are relative to the rule's base directory; a
+ * pattern starting with `/` or `~/` (an extension of Claude Code's syntax, where such a pattern
+ * matches nothing) is matched against the touched file's absolute path, `~` being the home directory.
+ */
+type PathGlob = { readonly kind: "relative"; readonly glob: Bun.Glob } | { readonly kind: "absolute"; readonly glob: Bun.Glob };
+
 /** A rule with Claude Code `paths` frontmatter: loaded only when a matching file is touched. */
 export interface ScopedRule {
 	/** Real path of the rule file: identity for deduplication and the loaded marker. */
@@ -44,8 +51,8 @@ export interface ScopedRule {
 	readonly name: string;
 	readonly body: string;
 	readonly patterns: readonly string[];
-	readonly globs: readonly Bun.Glob[];
-	/** Directory the patterns are relative to. */
+	readonly globs: readonly PathGlob[];
+	/** Directory relative patterns are relative to. */
 	readonly base: string;
 	readonly origin: ScopedOrigin;
 }
@@ -111,7 +118,7 @@ function splitPatterns(value: string): string[] {
 	return out;
 }
 
-/** Claude Code `paths`: a YAML list or a comma-separated string of globs relative to the rule's base directory. */
+/** Claude Code `paths`: a YAML list or a comma-separated string of globs relative to the rule's base directory, or absolute (`/`, `~/`). */
 function parsePaths(value: unknown): string[] {
 	let items: string[];
 	if (typeof value === "string") items = splitPatterns(value);
@@ -201,8 +208,15 @@ function readText(filePath: string): string | null {
 	}
 }
 
+function compilePattern(pattern: string): PathGlob {
+	if (pattern.startsWith("~/"))
+		return { kind: "absolute", glob: new Bun.Glob(path.posix.join(os.homedir().split(path.sep).join("/"), pattern.slice(2))) };
+	if (pattern.startsWith("/")) return { kind: "absolute", glob: new Bun.Glob(pattern) };
+	return { kind: "relative", glob: new Bun.Glob(pattern) };
+}
+
 function scopedRule(id: string, name: string, body: string, patterns: string[], base: string, origin: ScopedOrigin): ScopedRule {
-	return { id, name, body, patterns, globs: patterns.map((pattern) => new Bun.Glob(pattern)), base, origin };
+	return { id, name, body, patterns, globs: patterns.map(compilePattern), base, origin };
 }
 
 /** Placement of a scanned file: `paths` wins; otherwise the existing alwaysApply/description semantics. */
@@ -349,7 +363,11 @@ function relativeInside(base: string, file: string): string | null {
 	return rel.split(path.sep).join("/");
 }
 
-/** Whether a touched absolute file matches the rule, lexically or with both paths resolved through symlinks. */
+/**
+ * Whether a touched absolute file matches the rule, lexically or with both paths resolved through
+ * symlinks: relative patterns against the path inside the base directory, absolute ones against the
+ * whole path.
+ */
 export function ruleMatches(rule: ScopedRule, file: string): boolean {
 	const pairs: Array<readonly [string, string]> = [[rule.base, file]];
 	const realBase = realpathOr(rule.base);
@@ -357,7 +375,21 @@ export function ruleMatches(rule: ScopedRule, file: string): boolean {
 	if (realBase !== rule.base || realFile !== file) pairs.push([realBase, realFile]);
 	for (const [base, target] of pairs) {
 		const rel = relativeInside(base, target);
-		if (rel !== null && rule.globs.some((glob) => glob.match(rel))) return true;
+		const absolute = target.split(path.sep).join("/");
+		for (const { kind, glob } of rule.globs) {
+			switch (kind) {
+				case "relative":
+					if (rel !== null && glob.match(rel)) return true;
+					break;
+				case "absolute":
+					if (glob.match(absolute)) return true;
+					break;
+				default: {
+					const exhaustive: never = kind;
+					throw new Error(`Unexpected pattern kind: ${String(exhaustive)}`);
+				}
+			}
+		}
 	}
 	return false;
 }
