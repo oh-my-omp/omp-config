@@ -31,13 +31,16 @@
  *
  * Registers `tool_call` and `session_shutdown`; it reads the host-managed session
  * branch for the assignment/tools and requests the independent Todo owner's
- * synchronous read projection before and after judging. It reads the judge model
- * from the `task-completion-judge` section of omomp.* (a project copy wins) at every
- * judgment, and writes only in-memory round state. Only the named task subagents
+ * synchronous read projection before and after judging. Its model is the OMP
+ * model role `@task-completion-judge` (assign it in `/model`), then the role
+ * named by `fallbackRole` in the `task-completion-judge` section of omomp.* (a
+ * project copy wins), both resolved at every judgment, and it writes only
+ * in-memory round state. Only the named task subagents
  * are judged; main sessions pass.
- * Every failure (agent not identified, Todo owner unavailable, config missing or
- * invalid, model unavailable, provider error, unparseable answer, deadline) lets
- * the yield pass as written. The deadline stays under the harness's 30 s
+ * Every failure (agent not identified, Todo owner unavailable, no model in
+ * either role, every model's provider failing, unparseable answer, deadline) lets
+ * the yield pass as written. A provider failure moves to the next model of the
+ * chain; an unparseable answer does not. The deadline stays under the harness's 30 s
  * `tool_call` handler timeout, which would otherwise block the yield.
  */
 import { basename } from "node:path";
@@ -47,16 +50,19 @@ import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
-import { findModel } from "../_shared/models.ts";
 import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
+import { modelLabel, roleModels, roleName } from "../_shared/roles.ts";
 
 const configSchema = z.object({
-	/** Judge model: `provider/id`, bare id, or role alias. No `:effort` suffix; the judge runs at low effort. */
-	model: z.string().min(1),
+	/** OMP model role (`smol`, `@smol`, …) whose models answer when `@task-completion-judge` resolves none or all of its models fail. */
+	fallbackRole: z.string().min(1).optional(),
 });
 
 const omompSection = defineOmompSection(import.meta.dir, configSchema);
+/** The OMP model role this extension's judge model comes from: the extension's own name. */
+const ROLE = omompSection.id;
 
+/** Effort when the role entry has no `:level` suffix. */
 const EFFORT = THINKING_EFFORTS.find((effort) => effort === "low");
 if (EFFORT === undefined) throw new Error("Host thinking efforts do not include low");
 const DEADLINE_MS = 25_000;
@@ -373,26 +379,41 @@ const parseAnswer = (text: string): Verdict => {
 
 const judge = async (ctx: ExtensionContext, prompt: string, signal: AbortSignal): Promise<Verdict> => {
 	const config = loadOmompSection(omompSection, ctx.cwd);
-	if (config.kind === "none") {
-		const skipped = config.skipped.map(({ path, reason }) => `${path}: ${reason}`).join("; ");
-		return { kind: "unknown", why: `no valid task-completion-judge section in omomp.*: ${skipped || "not found"}` };
-	}
-	const model = findModel(ctx, config.value.model);
-	if (model === undefined) return { kind: "unknown", why: `model unavailable: ${config.value.model}` };
+	const fallbackRole = config.kind === "found" ? config.value.fallbackRole : undefined;
+	const failures: string[] = [];
 	try {
-		const reply = await completeSimple(
-			model,
-			{
-				systemPrompt: [SYSTEM_PROMPT],
-				messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-			},
-			{ apiKey: ctx.modelRegistry.resolver(model), reasoning: EFFORT, signal },
-		);
-		if (reply.stopReason === "error" || reply.stopReason === "aborted") {
-			return { kind: "unknown", why: `${reply.stopReason}: ${reply.errorMessage ?? ""}` };
+		const models = roleModels(ctx, fallbackRole === undefined ? [ROLE] : [ROLE, fallbackRole]);
+		if (models.length === 0) {
+			return {
+				kind: "unknown",
+				why: `no model: assign @${ROLE} in /model${fallbackRole === undefined ? "" : ` or @${roleName(fallbackRole)}`}`,
+			};
 		}
-		const text = textOf(reply.content);
-		return parseAnswer(text);
+		for (const { model, level } of models) {
+			if (signal.aborted) return { kind: "unknown", why: "deadline" };
+			try {
+				const reply = await completeSimple(
+					model,
+					{
+						systemPrompt: [SYSTEM_PROMPT],
+						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+					},
+					level === "off"
+						? { apiKey: ctx.modelRegistry.resolver(model), disableReasoning: true, signal }
+						: { apiKey: ctx.modelRegistry.resolver(model), reasoning: level ?? EFFORT, signal },
+				);
+				if (reply.stopReason === "aborted") return { kind: "unknown", why: "aborted" };
+				if (reply.stopReason === "error") {
+					failures.push(`${modelLabel(model)}: ${reply.errorMessage ?? "error"}`);
+					continue;
+				}
+				return parseAnswer(textOf(reply.content));
+			} catch (error) {
+				if (signal.aborted) return { kind: "unknown", why: "deadline" };
+				failures.push(`${modelLabel(model)}: ${errorText(error)}`);
+			}
+		}
+		return { kind: "unknown", why: `every model failed: ${failures.join("; ")}` };
 	} catch (error) {
 		return { kind: "unknown", why: signal.aborted ? "deadline" : errorText(error) };
 	}

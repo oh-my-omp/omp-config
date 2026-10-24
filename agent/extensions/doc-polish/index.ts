@@ -1,8 +1,8 @@
 // Reads the doc-polish section of omomp.* (the project copy before the agent-dir copy); reads source
 // documents and writes original copies, split indexes, and reviews under /tmp/doc-polish.
-// Available in main and sub sessions. Invalid/missing config falls back to defaults;
-// runtime model failures retry three times, while unparseable polish output is reported
-// in the review without changing the source document.
+// Available in main and sub sessions. Models come only from OMP model roles; a failing
+// model hands the request to the next model of its role chain, while unparseable polish
+// output is reported in the review without changing the source document.
 // ============================================================================
 // doc-polish — an omp extension that restructures a markdown/plaintext document
 // for engineer readability WITHOUT changing its meaning, then emits a
@@ -13,8 +13,8 @@
 // more).
 //
 // Three sub-agents, each its own restricted, in-memory `createAgentSession`
-// bound to an explicit `provider/model:effort` spec and reusing the host's
-// providers/models via `ctx.modelRegistry`:
+// bound to a model of its OMP model role (assign them in `/model`) and reusing
+// the host's providers/models via `ctx.modelRegistry`:
 //
 //   1. Split agent   — standard subagent, tools = [read, write] only. Its
 //                      prompt carries NO document text, only the task. It reads
@@ -26,17 +26,21 @@
 //                      to the batch; returns polished blocks + keyword-change
 //                      records. Its text output is captured by the program.
 //   3. Check agent   — no tools. Per regrouped block, judges whether the
-//                      rewrite preserved meaning. Defaults to the split model
-//                      when its own spec is omitted.
+//                      rewrite preserved meaning.
+//
+// Roles: `@doc-polish.split`, `@doc-polish.polish`, `@doc-polish.check`, each
+// followed by the role named by `fallbackRole` in the doc-polish section. A
+// check role with no model of its own uses the split chain. Each role entry's
+// `:effort` suffix sets that model's thinking level.
 // ============================================================================
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
-import { type ModelChoice as ResolvedModel, resolveModelChain } from "../_shared/models.ts";
 import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
+import { modelLabel, type RoleModel, roleModels, roleName } from "../_shared/roles.ts";
 
 const BATCH_LIMIT = 5000; // code points per polish request; a block over this goes alone, never truncated.
 
@@ -92,19 +96,21 @@ const polishSchema = z.object({
 });
 
 const configSchema = z.object({
-	splitModel: z.string().optional(),
-	polishModel: z.string().optional(),
-	checkModel: z.string().optional(),
+	/** OMP model role (`default`, `@smol`, …) whose models follow every doc-polish role's own models. */
+	fallbackRole: z.string().min(1).optional(),
 	concurrency: z.number().int().min(1).optional(),
 });
 
 const omompSection = defineOmompSection(import.meta.dir, configSchema);
 
-type DocPolishConfig = { splitModel?: string; polishModel?: string; checkModel?: string; concurrency?: number };
+type DocPolishConfig = z.infer<typeof configSchema>;
 
-// Optional predefined model config: the `doc-polish` section of omomp.* (the
-// project's `.omp/` copy wins over the agent-dir copy) supplies default model
-// specs and concurrency; explicit tool/command arguments still override it.
+/** The three sub-agent stages and the OMP model role each takes its models from. */
+type Stage = "split" | "polish" | "check";
+const stageRole = (stage: Stage): string => `${omompSection.id}.${stage}`;
+
+// The machine-local `doc-polish` section of omomp.* (the project's `.omp/` copy
+// wins over the agent-dir copy) supplies the fallback role and concurrency.
 function loadConfig(cwd: string): DocPolishConfig {
 	const loaded = loadOmompSection(omompSection, cwd);
 	switch (loaded.kind) {
@@ -121,108 +127,83 @@ function loadConfig(cwd: string): DocPolishConfig {
 
 // --- model resolution -------------------------------------------------------
 
-function defaultModelSpec(ctx: ExtensionContext): string {
-	const current = ctx.models?.current?.();
-	if (current) return `${current.provider}/${current.id}`;
-	const first = ctx.modelRegistry?.getAvailable?.()?.[0];
-	if (first) return `${first.provider}/${first.id}`;
-	throw new Error("doc-polish: no model available to run sub-agents");
-}
-
-// Raised before any work when a model this call would use is absent from the
-// model list. Both entry points surface it as an error.
+// Raised before any work when a role this call needs resolves no model.
 class DocPolishModelError extends Error {}
 
-// Raised when a sub-agent request keeps failing at runtime after retries. Surfaced
+// Raised when a sub-agent request failed on every model of its chain. Surfaced
 // as a readable, self-contained error — distinct from the pre-run model check.
 class DocPolishRuntimeError extends Error {}
 
-type ModelRole = "splitModel" | "polishModel" | "checkModel";
-type ModelSource = "调用参数" | "omomp 配置 doc-polish" | "当前会话模型";
-
-interface ModelChoice {
-	readonly role: ModelRole;
-	readonly spec: string;
-	readonly source: ModelSource;
-}
-
-function missingModelMessage(missing: readonly ModelChoice[]): string {
-	const list = missing.map((m) => `- \`${m.role}\`: \`${m.spec}\`（来自${m.source}）`).join("\n");
+function missingModelMessage(missing: readonly Stage[], fallbackRole: string | undefined): string {
+	const list = missing.map((stage) => `- \`@${stageRole(stage)}\``).join("\n");
 	return [
-		"doc-polish 调用失败，未做任何处理（没有拆分、润色或写文件）：这次调用要用的这些模型不在当前可用模型列表中（只核对列表，未发送请求）：",
+		"doc-polish 调用失败，未做任何处理（没有拆分、润色或写文件）：这些 OMP 模型角色没有解析到任何可用模型（只核对模型列表，未发送请求）：",
 		list,
 		"",
-		"三个模型的作用：",
-		"- `splitModel`（拆分）：读取文档、按相关性切成小块、标注每块在原文的起止行号、抽取关键词词表；需要 read+write 工具能力。",
-		"- `polishModel`（润色）：在不改变原意的前提下，把每个批次重排/润色成工程师更易读的文本，并给出词表变更；无工具。",
-		"- `checkModel`（校验）：对合并后的每个编组判断语义是否保持、如何理解；无工具。未设置时回退到 `splitModel`。",
+		"三个角色的作用：",
+		`- \`@${stageRole("split")}\`（拆分）：读取文档、按相关性切成小块、标注每块在原文的起止行号、抽取关键词词表；需要 read+write 工具能力。`,
+		`- \`@${stageRole("polish")}\`（润色）：在不改变原意的前提下，把每个批次重排/润色成工程师更易读的文本，并给出词表变更；无工具。`,
+		`- \`@${stageRole("check")}\`（校验）：对合并后的每个编组判断语义是否保持、如何理解；无工具。没有自己的模型时使用拆分角色的模型。`,
 		"",
-		"改 omomp 配置的 `doc-polish` 段或在调用时传入可用模型后重新调用（`omp models` 可查看可用模型）。",
+		fallbackRole === undefined
+			? "在 `/model` 里给这些角色指定模型后重新调用；或在 omomp 的 `doc-polish` 段设置 `fallbackRole`。"
+			: `在 \`/model\` 里给这些角色或回退角色 \`@${roleName(fallbackRole)}\` 指定模型后重新调用。`,
 	].join("\n");
 }
 
 // --- sub-agent runner (createAgentSession, reusing host providers) ----------
 
-const SUBAGENT_MAX_ATTEMPTS = 3;
-
 type SubSessionOptions = {
-	resolved: ResolvedModel;
+	/** The stage's role chain, in order. */
+	models: readonly RoleModel[];
 	role: string;
 	toolNames: string[];
 	prompt: string;
 	agentId: string;
 	cwd: string;
+	/** Receives the `provider/id` of the model that answered. */
+	used: Set<string>;
+	/** Runs before every model's attempt, e.g. to clear a file the previous model left. */
+	beforeAttempt?: () => void;
 };
 
-// One attempt: shared mechanics retain a default-prompt, restricted helper session.
-async function runSubSessionOnce(ctx: ExtensionContext, opts: SubSessionOptions): Promise<string> {
-	const result = await runHelperPrompt(ctx, {
-		cwd: opts.cwd,
-		model: opts.resolved.model,
-		thinkingLevel: opts.resolved.level,
-		toolNames: opts.toolNames,
-		prompt: opts.prompt,
-		agentId: opts.agentId,
-		systemPrompt: "default",
-	});
-	switch (result.kind) {
-		case "text":
-			return result.text;
-		case "provider-error":
-			throw new Error(result.message || "模型返回错误（stopReason=error）");
-		case "failed":
-			throw new Error(result.message);
-		case "canceled":
-			// No signal is passed: cancellation cannot originate from this caller.
-			throw new Error("doc-polish: sub-agent canceled");
-		default: {
-			const exhaustive: never = result;
-			return exhaustive;
-		}
-	}
-}
-
-// Real runtime consumption: a genuinely failing request is retried up to
-// SUBAGENT_MAX_ATTEMPTS times; still failing, it throws a readable, self-contained
-// error. A response that merely fails to parse is handled by the caller, not here.
+// Each model of the chain in turn: a provider error or a failed helper session hands
+// the request to the next model; the first text answer wins. Every model failing is a
+// readable, self-contained error. A response that merely fails to parse is handled by
+// the caller, not here.
 async function runSubSession(ctx: ExtensionContext, opts: SubSessionOptions): Promise<string> {
-	let lastError: unknown;
-	for (let attempt = 1; attempt <= SUBAGENT_MAX_ATTEMPTS; attempt++) {
-		try {
-			return await runSubSessionOnce(ctx, opts);
-		} catch (err) {
-			lastError = err;
-			if (attempt < SUBAGENT_MAX_ATTEMPTS) {
-				const { promise, resolve } = Promise.withResolvers<void>();
-				setTimeout(resolve, 400 * attempt);
-				await promise;
+	const failures: string[] = [];
+	for (const { model, level } of opts.models) {
+		opts.beforeAttempt?.();
+		const result = await runHelperPrompt(ctx, {
+			cwd: opts.cwd,
+			model,
+			thinkingLevel: level,
+			toolNames: opts.toolNames,
+			prompt: opts.prompt,
+			agentId: opts.agentId,
+			systemPrompt: "default",
+		});
+		switch (result.kind) {
+			case "text":
+				opts.used.add(modelLabel(model));
+				return result.text;
+			case "provider-error":
+				failures.push(`\`${modelLabel(model)}\`：${result.message || "模型返回错误（stopReason=error）"}`);
+				continue;
+			case "failed":
+				failures.push(`\`${modelLabel(model)}\`：${result.message}`);
+				continue;
+			case "canceled":
+				// No signal is passed: cancellation cannot originate from this caller.
+				throw new Error("doc-polish: sub-agent canceled");
+			default: {
+				const exhaustive: never = result;
+				return exhaustive;
 			}
 		}
 	}
-	const detail = errorText(lastError);
-	throw new DocPolishRuntimeError(
-		`doc-polish：${opts.role}子代理（模型 \`${opts.resolved.spec}\`）连续 ${SUBAGENT_MAX_ATTEMPTS} 次调用失败，未成功：${detail}`,
-	);
+	throw new DocPolishRuntimeError(`doc-polish：${opts.role}子代理在角色链的每个模型上都调用失败：${failures.join("；")}`);
 }
 
 // --- JSON parsing (tolerant of code fences) ---------------------------------
@@ -433,11 +414,13 @@ function checkPrompt(original: string, polished: string): string {
 // --- core pipeline ----------------------------------------------------------
 
 type Progress = (message: string) => void;
+type StageModels = Readonly<Record<Stage, readonly RoleModel[]>>;
+type StageUsed = Readonly<Record<Stage, Set<string>>>;
 
 async function polishOneFile(
 	ctx: ExtensionContext,
 	absPath: string,
-	models: { split: ResolvedModel; polish: ResolvedModel; check: ResolvedModel },
+	models: StageModels,
 	progress: Progress,
 	concurrency: number,
 ): Promise<string> {
@@ -459,16 +442,20 @@ async function polishOneFile(
 	copyFileSync(absPath, originalCopy);
 	const splitOut = join(workspace, "split.json");
 	const reviewPath = join(workspace, "review.md");
+	const used: StageUsed = { split: new Set(), polish: new Set(), check: new Set() };
 
 	// 1. Split agent (standard subagent: read + write only, no document text in prompt).
 	progress(`[${basename(absPath)}] 拆分中…`);
 	await runSubSession(ctx, {
-		resolved: models.split,
+		models: models.split,
 		role: "拆分",
 		toolNames: ["read", "write"],
 		prompt: splitPrompt(absPath, splitOut, ext === ".md" ? "Markdown" : "plain-text", originalLines.length),
 		agentId: `docpolish-split-${stamp}`,
 		cwd: workspace,
+		used: used.split,
+		// A model that failed after writing part of the index must not hand it to the next one.
+		beforeAttempt: () => rmSync(splitOut, { force: true }),
 	});
 	if (!existsSync(splitOut)) {
 		throw new Error(`doc-polish: split agent did not write ${splitOut}`);
@@ -505,12 +492,13 @@ async function polishOneFile(
 		const batchText = batch.map((b) => b.text).join("\n");
 		const kws = relevantKeywords(keywords, batchText);
 		const raw = await runSubSession(ctx, {
-			resolved: models.polish,
+			models: models.polish,
 			role: "润色",
 			toolNames: [],
 			prompt: polishPrompt(batch, kws),
 			agentId: `docpolish-polish-${stamp}-${i}`,
 			cwd: workspace,
+			used: used.polish,
 		});
 		progress(`[${basename(absPath)}] 润色 ${++polished}/${batches.length}…`);
 		try {
@@ -535,12 +523,13 @@ async function polishOneFile(
 	let checked = 0;
 	const reviews = await mapLimit<Group, string>(groups, concurrency, async (g, i) => {
 		const review = await runSubSession(ctx, {
-			resolved: models.check,
+			models: models.check,
 			role: "校验",
 			toolNames: [],
 			prompt: checkPrompt(g.original, g.polished),
 			agentId: `docpolish-check-${stamp}-${i}`,
 			cwd: workspace,
+			used: used.check,
 		});
 		progress(`[${basename(absPath)}] 校验 ${++checked}/${groups.length}…`);
 		return review;
@@ -552,14 +541,14 @@ async function polishOneFile(
 	});
 
 	// 4. Write the before/after/review document.
-	writeFileSync(reviewPath, renderReview(absPath, originalCopy, models, keywordChanges, groups, diagnostics), "utf8");
+	writeFileSync(reviewPath, renderReview(absPath, originalCopy, used, keywordChanges, groups, diagnostics), "utf8");
 	return reviewPath;
 }
 
 function renderReview(
 	source: string,
 	originalCopy: string,
-	models: { split: ResolvedModel; polish: ResolvedModel; check: ResolvedModel },
+	used: StageUsed,
 	keywordChanges: KeywordChange[],
 	groups: Group[],
 	diagnostics: string[],
@@ -570,9 +559,10 @@ function renderReview(
 	lines.push(`- 源文件：\`${source}\``);
 	lines.push(`- 原文副本：\`${originalCopy}\``);
 	lines.push(`- 生成时间：${new Date().toISOString()}`);
-	lines.push(`- 拆分模型：\`${models.split.spec}\``);
-	lines.push(`- 润色模型：\`${models.polish.spec}\``);
-	lines.push(`- 校验模型：\`${models.check.spec}\``);
+	const usedLine = (models: Set<string>) => [...models].map((label) => `\`${label}\``).join("、") || "（无）";
+	lines.push(`- 拆分模型：${usedLine(used.split)}（角色 \`@${stageRole("split")}\`）`);
+	lines.push(`- 润色模型：${usedLine(used.polish)}（角色 \`@${stageRole("polish")}\`）`);
+	lines.push(`- 校验模型：${usedLine(used.check)}（角色 \`@${stageRole("check")}\`）`);
 	lines.push("");
 	lines.push("## 词表变更记录");
 	const cell = (s: string) =>
@@ -630,9 +620,6 @@ function renderReview(
 
 type PolishOptions = {
 	paths: string[];
-	splitModel?: string;
-	polishModel?: string;
-	checkModel?: string;
 	concurrency?: number;
 };
 
@@ -642,35 +629,18 @@ async function polishDocuments(
 	progress: Progress,
 ): Promise<{ source: string; review: string }[]> {
 	const config = loadConfig(ctx.cwd);
-	// The model each role will actually use: call parameter > omomp doc-polish >
-	// current session model (checkModel falls back to splitModel's choice).
-	const choose = (role: ModelRole, explicit: string | undefined, configured: string | undefined): ModelChoice | undefined => {
-		if (explicit !== undefined) return { role, spec: explicit, source: "调用参数" };
-		if (configured !== undefined) return { role, spec: configured, source: "omomp 配置 doc-polish" };
-		return undefined;
-	};
-	const split: ModelChoice = choose("splitModel", options.splitModel, config.splitModel) ?? {
-		role: "splitModel",
-		spec: defaultModelSpec(ctx),
-		source: "当前会话模型",
-	};
-	const polish: ModelChoice = choose("polishModel", options.polishModel, config.polishModel) ?? {
-		role: "polishModel",
-		spec: defaultModelSpec(ctx),
-		source: "当前会话模型",
-	};
-	const check: ModelChoice = choose("checkModel", options.checkModel, config.checkModel) ?? { ...split, role: "checkModel" };
-	const splitModel = resolveModelChain(ctx, split.spec);
-	const polishModel = resolveModelChain(ctx, polish.spec);
-	const checkModel = resolveModelChain(ctx, check.spec);
-	if (!splitModel || !polishModel || !checkModel) {
-		const missing: ModelChoice[] = [];
-		if (!splitModel) missing.push(split);
-		if (!polishModel) missing.push(polish);
-		if (!checkModel) missing.push(check);
-		throw new DocPolishModelError(missingModelMessage(missing));
-	}
-	const models = { split: splitModel, polish: polishModel, check: checkModel };
+	// Each stage's role, then the configured fallback role; resolved per call so `/model` changes apply.
+	const chain = (stage: Stage): RoleModel[] =>
+		roleModels(ctx, config.fallbackRole === undefined ? [stageRole(stage)] : [stageRole(stage), config.fallbackRole]);
+	const split = chain("split");
+	const polish = chain("polish");
+	const missing: Stage[] = [];
+	if (split.length === 0) missing.push("split");
+	if (polish.length === 0) missing.push("polish");
+	if (missing.length > 0) throw new DocPolishModelError(missingModelMessage(missing, config.fallbackRole));
+	// A check role with no model of its own uses the whole split chain.
+	const check = roleModels(ctx, [stageRole("check")]).length === 0 ? split : chain("check");
+	const models: StageModels = { split, polish, check };
 	const concurrency = options.concurrency ?? config.concurrency ?? DEFAULT_CONCURRENCY;
 	const results: { source: string; review: string }[] = [];
 	for (const p of options.paths) {
@@ -704,15 +674,6 @@ function buildAgentResultText(results: { source: string; review: string }[]): st
 
 const polishOptionsSchema = z.object({
 	paths: z.array(z.string()).min(1).describe("Absolute or cwd-relative paths to .md or .txt files (one sub-agent pipeline per file)."),
-	splitModel: z
-		.string()
-		.optional()
-		.describe("Split agent model, full `provider/model:effort` spec. Defaults to the current session model."),
-	polishModel: z
-		.string()
-		.optional()
-		.describe("Polish agent model, full `provider/model:effort` spec. Defaults to the current session model."),
-	checkModel: z.string().optional().describe("Meaning-check agent model, full `provider/model:effort` spec. Defaults to the split model."),
 	concurrency: z
 		.number()
 		.int()
@@ -736,9 +697,9 @@ export default function docPolish(pi: ExtensionAPI): void {
 			"before/after/review file under /tmp/doc-polish and RETURNS its path. Splits the " +
 			"document with a read+write sub-agent, polishes batched paragraphs (<=5000 code points, never " +
 			"truncated) with tool-less sub-agents in parallel, regroups merged paragraphs, then meaning-checks each " +
-			"group. Models are given as full `provider/model:effort` specs; each defaults to the current " +
-			"session model. The '改之后' rewrite is a REFERENCE direction, not an authoritative result: the " +
-			"caller must read the review and decide what, if anything, to adopt.",
+			"group. Models come from the OMP model roles `@doc-polish.split`, `@doc-polish.polish` and " +
+			"`@doc-polish.check` (assigned in `/model`). The '改之后' rewrite is a REFERENCE direction, not an " +
+			"authoritative result: the caller must read the review and decide what, if anything, to adopt.",
 		parameters: polishOptionsSchema,
 		async execute(_toolCallId, params, _signal, onUpdate, ctx) {
 			const progress: Progress = (message) => onUpdate?.({ content: [{ type: "text", text: message }] });

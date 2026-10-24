@@ -4,16 +4,14 @@ import {
 	type JudgeOptions,
 	type JudgmentRequest,
 	type JudgmentResult,
-	type Model,
 	type Questions,
 	TextJudge,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
-import { AgentRegistry, type AgentSession, type ExtensionContext, logger, z } from "@oh-my-pi/pi-coding-agent";
-import { resolveRoleChain } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import { roleCandidatePool } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { type JudgeDeps, journalJudgmentUsage, kindOf, resolveJudge, sharedJudgmentCache } from "@oh-my-pi/pi-coding-agent/judgment";
+import { AgentRegistry, type ExtensionContext, logger, z } from "@oh-my-pi/pi-coding-agent";
+import { type JudgeDeps, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "@oh-my-pi/pi-coding-agent/judgment";
 import { defineSharedOmompSection, loadOmompSection } from "./omomp.ts";
+import { modelLabel, type RoleModel, roleModels, roleName } from "./roles.ts";
 
 const configSchema = z.object({
 	/** OMP model role (`tiny`, `smol`, … or `@tiny`) whose model chain answers when the judge role chain cannot. */
@@ -25,7 +23,7 @@ const omompSection = defineSharedOmompSection(import.meta.path, configSchema);
 export type JudgeOpen = { readonly kind: "ready"; readonly judge: Judge } | { readonly kind: "inactive" };
 
 /** A fallback role with the chat models its own role chain resolves to, in chain order. */
-type Fallback = { readonly role: string; readonly models: readonly Model[] };
+type Fallback = { readonly role: string; readonly models: readonly RoleModel[] };
 
 /**
  * The calling session's judge. First OMP's own judge-role chain
@@ -56,7 +54,7 @@ export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 	};
 	const chain = resolveJudge(deps);
 	const hasChain = chain.primaryModel() !== undefined;
-	if (!hasChain && roleFallback(session, ctx.cwd) === null) return { kind: "inactive" };
+	if (!hasChain && roleFallback(ctx) === null) return { kind: "inactive" };
 	return {
 		kind: "ready",
 		judge: {
@@ -71,12 +69,12 @@ export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 						chainError = error;
 					}
 				}
-				const fallback = roleFallback(session, ctx.cwd);
+				const fallback = roleFallback(ctx);
 				if (fallback === null) throw chainError;
 				logger.warn("judgment judge role chain failed; falling back to role", {
 					purpose,
 					role: fallback.role,
-					candidates: fallback.models.map(identity),
+					candidates: fallback.models.map((entry) => modelLabel(entry.model)),
 					error: chainError instanceof Error ? chainError.message : String(chainError),
 				});
 				return judgeWithChat(deps, fallback, request, options);
@@ -85,20 +83,15 @@ export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 	};
 }
 
-const identity = (model: Model): string => `${model.provider}/${model.id}`;
-
 /** The configured fallback role's chat models, or null without a `judge` section or when the role resolves none. */
-function roleFallback(session: AgentSession, cwd: string): Fallback | null {
-	const config = loadOmompSection(omompSection, cwd);
+function roleFallback(ctx: ExtensionContext): Fallback | null {
+	const config = loadOmompSection(omompSection, ctx.cwd);
 	switch (config.kind) {
 		case "none":
 			return null;
 		case "found": {
-			const role = config.value.fallbackRole.replace(/^@/, "");
-			const { settings, modelRegistry } = session;
-			const models = resolveRoleChain(role, settings, roleCandidatePool(role, settings, modelRegistry))
-				.filter((candidate) => kindOf(candidate) === "online")
-				.map((candidate) => candidate.model);
+			const role = roleName(config.value.fallbackRole);
+			const models = roleModels(ctx, [role]);
 			return models.length === 0 ? null : { role, models };
 		}
 		default: {
@@ -119,11 +112,11 @@ async function judgeWithChat<Q extends Questions>(
 	const { registry, sessionId } = deps;
 	const signal = options.signal;
 	let lastFailure: string | undefined;
-	for (const model of fallback.models) {
+	for (const { model } of fallback.models) {
 		if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new AIError.AbortError("judgment aborted");
 		try {
 			if (!(await registry.getApiKey(model, sessionId, { signal }))) {
-				lastFailure = `no API key for ${identity(model)}`;
+				lastFailure = `no API key for ${modelLabel(model)}`;
 				continue;
 			}
 			const apiKey = registry.resolver(model, sessionId);
@@ -151,7 +144,7 @@ async function judgeWithChat<Q extends Questions>(
 			if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new AIError.AbortError("judgment aborted");
 			if (isAbortOrTimeout(error)) throw error;
 			lastFailure = error instanceof Error ? error.message : String(error);
-			logger.warn("judgment fallback role candidate failed", { role: fallback.role, candidate: identity(model), error: lastFailure });
+			logger.warn("judgment fallback role candidate failed", { role: fallback.role, candidate: modelLabel(model), error: lastFailure });
 		}
 	}
 	throw new Error(`judgment: every candidate of fallback role ${fallback.role} failed: ${lastFailure ?? "unknown error"}`);

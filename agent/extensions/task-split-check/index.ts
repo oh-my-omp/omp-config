@@ -1,5 +1,5 @@
 /**
- * Registers `tool_call`; reads the model from the `task-split-check` section of omomp.* and writes no files. Split checks are main-only;
+ * Registers `tool_call`; takes its model from the OMP model role `@task-split-check` and writes no files. Split checks are main-only;
  * report-limit checks apply to main and sub sessions. Unexpected hook errors
  * are logged as warnings and let the call run.
  *
@@ -22,11 +22,12 @@
  *   again.
  *
  * Memory is per process, keyed by check + sha256 of the item prompt.
- * The model is the `model` of the `task-split-check` section of omomp.*, re-read at every request; without a valid section every request fails open.
- * Every failure (model missing, provider error, unparseable answer, deadline)
- * lets the item pass for the affected checks. The deadline stays under the
- * harness's 30 s `tool_call` handler timeout, which would otherwise block the
- * call.
+ * The model is the OMP model role `@task-split-check` (assign it in `/model`), then the role named by
+ * `fallbackRole` in the `task-split-check` section of omomp.*, both resolved at every request; a
+ * provider failure moves to the next model of that chain. Every failure (no model in either role,
+ * every model failing, unparseable answer, deadline) lets the item pass for the affected checks.
+ * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise
+ * block the call.
  */
 import { createHash } from "node:crypto";
 import { completeSimple } from "@oh-my-pi/pi-ai";
@@ -35,12 +36,16 @@ import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
 import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
+import { modelLabel, roleModels, roleName } from "../_shared/roles.ts";
 
 const configSchema = z.object({
-	/** Fast model (`provider/id`, bare id, or role alias) answering the dispatch questions. No `:effort` suffix; reasoning is always medium. */
-	model: z.string().min(1),
+	/** OMP model role (`smol`, `@smol`, …) whose models answer when `@task-split-check` resolves none or all of its models fail. */
+	fallbackRole: z.string().min(1).optional(),
 });
 const omompSection = defineOmompSection(import.meta.dir, configSchema);
+/** The OMP model role this extension's model comes from: the extension's own name. */
+const ROLE = omompSection.id;
+/** Effort when the role entry has no `:level` suffix. */
 const EFFORT = THINKING_EFFORTS.find((effort) => effort === "medium");
 if (EFFORT === undefined) throw new Error("task-split-check: host does not recognize medium reasoning effort");
 const DEADLINE_MS = 25_000;
@@ -186,25 +191,41 @@ type ItemVerdicts = { readonly label: string; readonly verdicts: ReadonlyMap<Che
 export default function taskSplitCheck(pi: ExtensionAPI): void {
 	const ask = async (ctx: ExtensionContext, systemPrompt: string, prompt: string, signal: AbortSignal): Promise<Reply> => {
 		const config = loadOmompSection(omompSection, ctx.cwd);
-		if (config.kind === "none") {
-			const skipped = config.skipped.map(({ path, reason }) => `${path}: ${reason}`).join("; ");
-			return { kind: "failed", why: `no valid task-split-check section in omomp.*: ${skipped || "not found"}` };
-		}
-		const model = ctx.models.resolve(config.value.model);
-		if (model === undefined) return { kind: "failed", why: `model unavailable: ${config.value.model}` };
+		const fallbackRole = config.kind === "found" ? config.value.fallbackRole : undefined;
+		const failures: string[] = [];
 		try {
-			const reply = await completeSimple(
-				model,
-				{
-					systemPrompt: [systemPrompt],
-					messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-				},
-				{ apiKey: ctx.modelRegistry.resolver(model), reasoning: EFFORT, signal },
-			);
-			if (reply.stopReason === "error" || reply.stopReason === "aborted") {
-				return { kind: "failed", why: `${reply.stopReason}: ${reply.errorMessage ?? ""}` };
+			const models = roleModels(ctx, fallbackRole === undefined ? [ROLE] : [ROLE, fallbackRole]);
+			if (models.length === 0) {
+				return {
+					kind: "failed",
+					why: `no model: assign @${ROLE} in /model${fallbackRole === undefined ? "" : ` or @${roleName(fallbackRole)}`}`,
+				};
 			}
-			return { kind: "text", text: textOf(reply.content) };
+			for (const { model, level } of models) {
+				if (signal.aborted) return { kind: "failed", why: "deadline" };
+				try {
+					const reply = await completeSimple(
+						model,
+						{
+							systemPrompt: [systemPrompt],
+							messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+						},
+						level === "off"
+							? { apiKey: ctx.modelRegistry.resolver(model), disableReasoning: true, signal }
+							: { apiKey: ctx.modelRegistry.resolver(model), reasoning: level ?? EFFORT, signal },
+					);
+					if (reply.stopReason === "aborted") return { kind: "failed", why: "aborted" };
+					if (reply.stopReason === "error") {
+						failures.push(`${modelLabel(model)}: ${reply.errorMessage ?? "error"}`);
+						continue;
+					}
+					return { kind: "text", text: textOf(reply.content) };
+				} catch (error) {
+					if (signal.aborted) return { kind: "failed", why: "deadline" };
+					failures.push(`${modelLabel(model)}: ${errorText(error)}`);
+				}
+			}
+			return { kind: "failed", why: `every model failed: ${failures.join("; ")}` };
 		} catch (error) {
 			return { kind: "failed", why: signal.aborted ? "deadline" : errorText(error) };
 		}

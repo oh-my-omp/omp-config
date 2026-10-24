@@ -8,9 +8,9 @@ lang-nag:
   language: 中文
   instruction: 说中文
 input-polish:
-  model: opencode-go/muse-spark-1.3-contributor:high
   key: ctrl+enter
   instruction: 在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。
+  fallbackRole: smol
 tool-policy-nag:
   detector: heuristic
   form:
@@ -24,9 +24,9 @@ tool-policy-nag:
     minChars: 600
     minPrograms: 3
 task-completion-judge:
-  model: openai-codex/gpt-6-1-sol
+  fallbackRole: smol
 task-split-check:
-  model: openai-codex/gpt-6-1-sol
+  fallbackRole: smol
 child-memory-warning:
   thresholdGiB: 4
 system-prompt-replace:

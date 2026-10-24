@@ -3,6 +3,19 @@ extensions:
 setupVersion: 2
 disabledProviders:
   - vscode
+modelTags:
+  input-polish:
+    name: Input polish
+  task-completion-judge:
+    name: Task completion judge
+  task-split-check:
+    name: Task split check
+  doc-polish.split:
+    name: Doc polish split
+  doc-polish.polish:
+    name: Doc polish polish
+  doc-polish.check:
+    name: Doc polish check
 dev:
   autoqaConsent: denied
 composer:

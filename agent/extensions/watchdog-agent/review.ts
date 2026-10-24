@@ -1,9 +1,10 @@
+import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
 import { openJudge } from "../_shared/judge.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
-import { findModel, type Model, splitLevel, type ThinkingLevel } from "../_shared/models.ts";
+import type { Model, ThinkingLevel } from "../_shared/models.ts";
 import { ADVISORY_TAG, type ChatWatchdog, type DeliverAs, hasKey, type JevWatchdog, type Scope, type Verdict } from "./spec.ts";
 
 const REVIEW_TIMEOUT_MS = 90_000;
@@ -102,6 +103,33 @@ export function renderTranscript(messages: ReadonlyArray<unknown>): string {
 		if (part !== undefined) parts.push(part);
 	}
 	return parts.join("\n");
+}
+
+// --- model specs ------------------------------------------------------------
+
+/**
+ * `provider/id:level` → base and level. A level is `off` or one of the host's
+ * efforts (minimal … max); a missing suffix, or any other (`auto`, `inherit`),
+ * leaves the spec whole.
+ */
+function splitLevel(spec: string): { readonly base: string; readonly level: ThinkingLevel | undefined } {
+	const trimmed = spec.trim();
+	const colon = trimmed.lastIndexOf(":");
+	if (colon > 0) {
+		const suffix = trimmed.slice(colon + 1);
+		// The host's own effort values, so the level is typed without a cast; `off` is not an effort.
+		const level = suffix === "off" ? "off" : THINKING_EFFORTS.find((effort) => effort === suffix);
+		if (level !== undefined) return { base: trimmed.slice(0, colon), level };
+	}
+	return { base: trimmed, level: undefined };
+}
+
+/** A role alias or pattern through the host resolver, else an available `provider/id`, else a bare id. */
+function findModel(ctx: ExtensionContext, base: string): Model | undefined {
+	const resolved = ctx.models?.resolve?.(base);
+	if (resolved) return resolved;
+	const available = ctx.modelRegistry.getAvailable();
+	return available.find((model) => `${model.provider}/${model.id}` === base) ?? available.find((model) => model.id === base);
 }
 
 // --- reviewer ---------------------------------------------------------------

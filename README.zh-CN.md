@@ -46,9 +46,9 @@ flowchart TD
 | **运行期偏离遥测与纠偏** | 模型在长任务中偏离验证要求、偷换问题，或未验证就宣布完成 | 每 $N$ 步动作 / 回合结束 | [watchdog-agent](#watchdog-agent) + [turn-judge](#turn-judge) | `watchdog-agent` 按 `target` 独立审阅分支并注入 `<watchdog>`；`turn-judge` 每轮后用原生 JUDGE 打分并在达阈值时直接输入纠偏 prompt | 禁用 |
 | **运行期偏离遥测与纠偏** | 服务端或本地 Compaction 后模型丢失中文回复约束 | 主会话 `agent_end` → 下次 `input` | [lang-nag](#lang-nag) | 检测回复末段前 200 字符语言；不符时在用户下一条真实输入前静默拼接 `说中文`，零额外回合开销 | 禁用 |
 | **防回声室与子代理门禁** | `mentor` 与 `discuss` 只看到派发方裁剪后的转述，沦为回声室放大器 | 子代理每次 `context`（含 IRC 唤醒） | [user-prompt-inject](#user-prompt-inject) + `PROMPT-INJECT-user-goal.md` | 沿 `parentId` 爬回根会话，提取全部人类原话注入顾问请求首部，令其拿人类原话审判咨询方的计划偏差 | 禁用 |
-| **防回声室与子代理门禁** | 主代理把多个无关主题塞给一个 worker，或限制 worker 报告字数截断证据 | `task` / `fork_task` 的 `tool_call` | [task-split-check](#task-split-check) | 调用 `gpt-6-1-sol` 并发检查：多主题首次拦截（原样重派放行），限制报告长度永久拦截 | 禁用 |
+| **防回声室与子代理门禁** | 主代理把多个无关主题塞给一个 worker，或限制 worker 报告字数截断证据 | `task` / `fork_task` 的 `tool_call` | [task-split-check](#task-split-check) | 用 OMP 模型角色 `@task-split-check` 并发检查：多主题首次拦截（原样重派放行），限制报告长度永久拦截 | 禁用 |
 | **防回声室与子代理门禁** | 多个并发写入 worker 共用同一工作目录互相踩踏文件 | `task` 的 `tool_call` | [isolation-nudge](#isolation-nudge) | 存在 $\ge 2$ 个未隔离写入者时按 prompt hash 首次拦截，要求改为 `isolated: true` | 禁用 |
-| **防回声室与子代理门禁** | 低阶 worker（`task:low/mid/free`）在工作未做完或未更新 Todo 时提前 `yield` | 子代理 `yield` 的 `tool_call` | [task-completion-judge](#task-completion-judge) | 调用 `gpt-6-1-sol` 核对派工单、工具记录与提交内容：未做完退回一次，Todo 仍有未完项再退回一次，放行时附 `completion_judge` | 禁用 |
+| **防回声室与子代理门禁** | 低阶 worker（`task:low/mid/free`）在工作未做完或未更新 Todo 时提前 `yield` | 子代理 `yield` 的 `tool_call` | [task-completion-judge](#task-completion-judge) | 用 OMP 模型角色 `@task-completion-judge` 核对派工单、工具记录与提交内容：未做完退回一次，Todo 仍有未完项再退回一次，放行时附 `completion_judge` | 禁用 |
 | **上下文经济学与防失忆** | 百万字级设计背景或复杂人类对齐意图无法浓缩进短 `task` `context` 字符串 | 子代理派发 | [fork-task](#fork-task) (`fork_task`) | 克隆调用方（或 `from` 指定代理）的对话历史作为子代理起点，支持 `shake: true` 压缩早期工具结果 | 禁用 |
 | **上下文经济学与防失忆** | 主会话发生 Compaction 后丢失已完成任务账本与子代理拓扑 | `todo` 修改时 / 主会话 compact 后 | 插件 `omp-todo-more` 的 [ctx](#ctx) + [Task log](#task-log) | 每次成功 `todo` 修改追加写入 `task-log/<agent-id>.md`；compact 后自动把 `ctx list` 与重放时间线注入新上下文 | 启用 |
 | **提示词分层与模型适配** | 内置工具协议在基础模板和附录里重复堆砌，或与自定义派发/检索规则冲突 | 每次 `before_agent_start`（最后执行） | [system-prompt-replace](#system-prompt-replace) | 在 `inlineToolDescriptors: "on"` 下原地改写渲染后的内置与插件工具描述 | 禁用 |
@@ -220,7 +220,7 @@ model-compaction:
 
 #### task-split-check
 
-在 `tool_call` 阶段调用 `omomp.yml#task-split-check.model`（仓库配置 `openai-codex/gpt-6-1-sol`，每次请求重读，固定 `medium` 推理，整批共用 25s 超时信号）对 `task` / `fork_task` 的每个派发项并发执行两项是非检查，任一项命中即拦截整次调用：
+在 `tool_call` 阶段询问 OMP 模型角色 `@task-split-check`（在 `/model` 中指定；`modelRoles` 属于本机，仓库不为它附带模型），再询问 `omomp.yml#task-split-check.fallbackRole` 所指的角色（仓库配置 `smol`），每次请求实时解析，角色条目不带 `:level` 后缀时用 `medium` 推理，整批共用 25s 超时信号，某个模型报 provider 错误时换角色链中的下一个，对 `task` / `fork_task` 的每个派发项并发执行两项是非检查，任一项命中即拦截整次调用：
 
 | 检查项 | 适用范围 | 判定准则 | 进程内缓存与重派策略 |
 |---|---|---|---|
@@ -234,7 +234,7 @@ model-compaction:
 在 `task:low`、`task:mid`、`task:free` 子代理会话内拦截结构化 `yield`（`task:high`、主会话、带错误的 `yield` 或增量提交不拦截）：
 
 - **证据组装（60k token 窗口）**：提取当前分支最后一条 `session_init` 中的派工单（跳过 `fork_task` 开头继承的父会话历史），加上 system prompt 共享背景、worker 自身 Todo 的 `goal`、本次 `yield` 提交内容（最多保留 6,000 字符），以及从最新一条往前连续装入剩余预算的本轮工具调用与结果（单次调用参数与结果各最多保留 800 字符，超长按前 60% + 后 40% 加省略行截断；按 ASCII 字符 1 token、其他字符 2 token 估算）。
-- **判定模型与标准**：调用 `omomp.yml#task-completion-judge.model`（仓库配置 `openai-codex/gpt-6-1-sol`，每次判定重读，固定 `low` 推理，25s 超时）回答 `DONE` 或 `NOT_DONE`。派工单是唯一权威标准：若 worker 的 Todo `goal` 窄化了派工单范围、`goal` 写的验证方式未在工具调用中出现、或未达 `doneWhen`（含如实报告 blocker），均判 `NOT_DONE`。
+- **判定模型与标准**：询问 OMP 模型角色 `@task-completion-judge`，再询问 `omomp.yml#task-completion-judge.fallbackRole` 所指的角色（仓库配置 `smol`），每次判定实时解析，角色条目不带 `:level` 后缀时用 `low` 推理，25s 超时，某个模型报 provider 错误时换角色链中的下一个，回答 `DONE` 或 `NOT_DONE`。派工单是唯一权威标准：若 worker 的 Todo `goal` 窄化了派工单范围、`goal` 写的验证方式未在工具调用中出现、或未达 `doneWhen`（含如实报告 blocker），均判 `NOT_DONE`。
 - **双重单次退回（Single-Bounce）与结果附注**：
   1. 首次判为 `NOT_DONE` 时拦截本次 `yield`，将原因退回给子代理要求继续做完并验证。
   2. 判为 `DONE` 后，立即通过同步事件 `omp-todo-more:read` 重新读取该子代理的最新 Todo 投影；若仍有 `pending` 或 `in_progress` 项（`blocked` 项不触发），再拦截一次并逐项列出解释，要求先把 Todo 更新到真实进度。
@@ -324,7 +324,7 @@ macOS（Darwin）专属，完整模式与轻量模式均启用。首个主会话
 
 #### input-polish
 
-仅作用于主会话交互式 TUI。在输入框按下配置组合键（默认 `Ctrl+Enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可配为 `alt+enter`）时，通过 raw terminal-input 监听器拦截按键，调用 `omomp.yml#input-polish`（仓库配置：`model: opencode-go/muse-spark-1.3-contributor:high`、`key: ctrl+enter`、`instruction: 在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`）在 `taskDepth: 1` 无工具内存辅助会话中流式润色草稿，并将改写流式显示在覆盖输入框的只读 overlay 浮层中（输入框始终保留原草稿）：
+仅作用于主会话交互式 TUI。在输入框按下配置组合键（默认 `Ctrl+Enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可配为 `alt+enter`）时，通过 raw terminal-input 监听器拦截按键，用 OMP 模型角色 `@input-polish`（在 `/model` 中指定；思考强度取角色条目的 `:level`，否则关闭），再用 `fallbackRole` 所指的角色（`omomp.yml#input-polish` 仓库配置：`key: ctrl+enter`、`instruction: 在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`、`fallbackRole: smol`）在 `taskDepth: 1` 无工具内存辅助会话中流式润色草稿，并将改写流式显示在覆盖输入框的只读 overlay 浮层中（输入框始终保留原草稿）；某个模型失败时换角色链中的下一个模型，并先清空预览：
 
 - **按键与占位符保真**：润色和预览期间吞掉其他按键；润色完成后按 `Enter` 关闭浮层、将润色稿写入输入框并放行同一次回车走原生提交流程，按 `Esc` / `Ctrl+C` 中止并关闭浮层且原草稿不变。空白草稿或以 `/`、`!`、`$` 开头的草稿不润色。若改写稿中 `[Paste #N …]` 或 `[Image #N …]` 占位符数量或内容与原文不一致，直接按失败处理并在浮层显示原因。
 
@@ -336,17 +336,15 @@ macOS（Darwin）专属，完整模式与轻量模式均启用。首个主会话
   1. **拆分（Split）**：仅持 `[read, write]` 工具，自行读取原文并写出带起止行号的段落块索引与全文术语表。
   2. **润色（Polish）**：无工具，按每批正文 $\le 5000$ 码点（超长单段单独成批，不截断）及该批相关术语表并发重写，返回润色文本与术语变更；随后用并查集按 `sourceIndices` 识别跨段合并并重新编组。
   3. **校验（Check）**：无工具，按同一并发上限逐组判断改写是否保持原意。
-- **配置优先级与本机示例**：模型按 **工具参数 > `omomp.*` 的 `doc-polish` 段（项目 `.omp/omomp.*` 优先于 agent 目录）> 当前会话模型** 选择（支持逗号候选链与 `:effort`；`checkModel` 省略时复用 `splitModel`；并发默认 `6`）。`doc-polish` 段属于本机（仓库不带，`/update-omp` 在缺失时会询问是否创建），典型本机配置示例：
+- **模型与本机配置**：每个阶段从各自的 OMP 模型角色取模型，在 `/model` 中指定：`@doc-polish.split`、`@doc-polish.polish`、`@doc-polish.check`，各自之后再接 `omomp.*` 中 `doc-polish` 段 `fallbackRole` 所指的角色（项目 `.omp/omomp.*` 优先于 agent 目录）。角色条目的 `:level` 决定该阶段的思考强度；`@doc-polish.check` 没有自己的模型时使用拆分角色链；并发默认 `6`。`doc-polish` 段属于本机（仓库不带，`/update-omp` 在缺失时会询问是否创建），典型本机配置示例：
 
 ```yaml
 doc-polish:
-  splitModel: opencode-go/muse-spark-1.3-contributor:xhigh
-  polishModel: commandcode/google/gemini-3.7-flash:high
-  checkModel: opencode-go/muse-spark-1.3-contributor:xhigh
+  fallbackRole: default
   concurrency: 8
 ```
 
-- **失败处理与接收方硬约束**：调用前先在可用模型列表预检三个角色的模型，任一缺失立即报错退出（不写 `/tmp/doc-polish/`）；运行期请求失败最多重试 3 次，润色输出无法解析的批次保留原文并在报告中标出。返回结果附有硬性指令：接收方（主 agent）必须亲自处理并完整通读每份 `review.md`，严禁转交子代理或只读摘要/分页截断。
+- **失败处理与接收方硬约束**：开始处理前先解析拆分与润色两个角色，任一解析不出模型立即报错退出（不写 `/tmp/doc-polish/`，并列出需要指定的角色）；子代理请求所用模型失败时换该角色链中的下一个模型（每次尝试前先清掉切分索引），润色输出无法解析的批次保留原文并在报告中标出。`review.md` 记录每个阶段实际作答的模型。返回结果附有硬性指令：接收方（主 agent）必须亲自处理并完整通读每份 `review.md`，严禁转交子代理或只读摘要/分页截断。
 
 #### wt-tool
 
@@ -560,7 +558,8 @@ OMP 从 `~/.omp/agent/extensions/` 只向下找一层：本仓库所有扩展均
 | `errors.ts` | `errorText(error)`：将任意异常安全格式化为字符串 |
 | `messages.ts` | `textOf`、`lastAssistantText`：提取消息中的纯文本内容块 |
 | `omomp.ts` | `defineOmompSection`、`defineSharedOmompSection`、`loadOmompSection`、`writeOmompSection`：按 `import.meta.dir` 目录名，或 `_shared` 模块的文件名（`import.meta.path`，如 `judge`），读写 `omomp.{yml,yaml,json,toml}` 对应段（项目 `<cwd>/.omp/omomp.*` 优先于 `<agentDir>/omomp.*`） |
-| `models.ts` | `resolveModelChain`、`findModel`、`splitLevel`：解析 `provider/id[:effort]` 与逗号分隔候选链（只查可用列表，不发请求） |
+| `models.ts` | `Model`、`ThinkingLevel`：宿主模型类型与辅助会话思考强度类型 |
+| `roles.ts` | `roleModels`、`roleName`、`modelLabel`：按角色链顺序取 OMP 模型角色的聊天模型（先 `modelRoles.<role>`，再 `retry.fallbackChains.<role>`，内置角色再用 OMP 默认链；未指定模型的自定义角色不贡献任何模型），每次调用都从当前会话的实时设置解析，`/model` 改动立即生效。扩展角色命名为 `<扩展名>` 或 `<扩展名>.<部分>`（用 `.` 是因为 `/` 会让 `retry.fallbackChains` 的键变成模型选择器，`:` 是思考强度后缀）；`agent/config.yml` 的 `modelTags` 列出这些角色，未指定模型前 `/model` 也能看到 |
 | `helper-session.ts` | `runHelperPrompt`：在无工具、无扩展、空系统提示词的内存辅助会话中执行单次模型调用，**固定传 `taskDepth: 1`** 且永不抛异常 |
 | `judge.ts` | `openJudge`：为当前会话构建 OMP 的 judge 角色链（`@oh-my-pi/pi-coding-agent/judgment` 的 `resolveJudge`），带用量账本与判定缓存，不加会话模型；链失败或解析不出候选时，以提示式判定（`TextJudge`）询问 `judge` 段 `fallbackRole` 角色的聊天模型；只有两者都解析不出模型时才不启用 |
 | `spec-files.ts` | `discoverSpecFiles`、`parseFrontmatter`、`unquote`：扫描扩展目录及 `cwd` 至 git 根各层（含 `.omp/`）的 `*-<label>.md` 文件 |

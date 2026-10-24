@@ -19,7 +19,7 @@
 
 1. **omp 不用退出码表达配置故障。** 扩展 import 抛错、`session_start` 或 `before_agent_start` 抛错、system-prompt-replace 规则找不到目标，进程都以 0 退出。故障只出现在三处：stderr（如 `Failed to load extension …`、`system-prompt-replace: … found no target …`），RPC 的 `extension_error` 事件，`$HOME/.omp/logs/omp.<date>.<pid>.log` 中 `warn` / `error` 级记录。
 2. **一部分故障要真实模型请求才出现。** `before_agent_start` 只在 prompt 被准备时运行，而 omp 在此之前检查模型凭据；没有可用模型时，启动类检查走不到这些钩子。
-3. **配置引用的模型都要付费凭据。** `task.agentModelOverrides`、`omomp.yml` 的 `input-polish`、`task-completion-judge`、`task-split-check` 段，以及 `thinking-translator.json` 引用 openai-codex、anthropic、opencode-go、bansos、futureppo-pool、commandcode 的模型；CI 没有这些凭据，引用它们的 helper 会自己报“模型不可用”。
+3. **配置引用的模型都要付费凭据。** `task.agentModelOverrides` 和 `thinking-translator.json` 引用 openai-codex、anthropic、opencode-go、bansos、futureppo-pool、commandcode 的模型；CI 没有这些凭据。扩展模型角色（`@input-polish`、`@task-completion-judge`、`@task-split-check`、`@doc-polish.*`）放在本机的 `modelRoles` 里，CI 不指定它们，于是这些扩展回退到各自的 `fallbackRole`（`smol`，已绑定到免费模型），或自行报告“没有模型”。
 4. **Kilo 网关的 `:free` 模型允许匿名调用、不计费**（kilo.ai 文档：每 IP 每小时 200 次）。`nvidia/nemotron-3-ultra-550b-a55b:free` 能处理完整配置的 system prompt（约 2 万 token）。同期实测：配置里的 `bansos` 免费 Muse 与 Zen big-pickle 返回 429 `FreeUsageLimitError`；`opencode-go` 按官方价目收费；Kilo `cohere/north-mini-code:free` 对完整配置的请求返回 422。
 5. **仓库公开。** 来自 fork 的 PR 代码不可信，fork PR 的 workflow 拿不到 secret。
 
@@ -116,7 +116,7 @@ flowchart TB
 
 - **用 GitHub-hosted runner，不用 GARM。** 因为域性质 5：fork PR 的代码不能接触 homelab mesh。所需端点（npm、GitHub、Kilo）都在公网。重审条件：检查需要访问私网服务。
 - **免费模型选 Kilo `nvidia/nemotron-3-ultra-550b-a55b:free`。** 因为域性质 4，其余候选或额度耗尽、或收费、或拒绝完整配置的请求。代价：GitHub runner 的出口 IP 是共享的，每小时 200 次的额度可能已被别人用完，此时检查以退出码 2 结束（R3）。重审条件：该模型下线，或出现频繁的 429。可用 `CI_FREE_MODEL`、`CI_FREE_BASE_URL` 换模型而不改代码。
-- **影子模型而不是配置覆盖。** 替代方案是用 `--config` overlay 把 `task.agentModelOverrides` 等改成免费模型。它会改动被检查的配置，使检查验证的是 overlay，而不是仓库。影子模型只改机器本地的 `models.yml`，配置原样运行。代价：影子列表由 `ci/check.ts` 从 `config.yml`、`omomp.yml` 的段和 `thinking-translator.json` 中读出，只写在扩展源码里的模型不在列表里。检查的 prompt 只要求文字回复，只在调用 `task` 等工具时才请求模型的 helper 碰不到；这些 helper 缺凭据时按各自规则放行，属于覆盖边界之外。
+- **影子模型而不是配置覆盖。** 替代方案是用 `--config` overlay 把 `task.agentModelOverrides` 等改成免费模型。它会改动被检查的配置，使检查验证的是 overlay，而不是仓库。影子模型只改机器本地的 `models.yml`，配置原样运行。代价：影子列表由 `ci/check.ts` 从 `config.yml` 的 `task.agentModelOverrides` 和 `thinking-translator.json` 中读出，只写在扩展源码里的模型不在列表里。检查的 prompt 只要求文字回复，只在调用 `task` 等工具时才请求模型的 helper 碰不到；这些 helper 缺凭据时按各自规则放行，属于覆盖边界之外。
 - **始终安装最新 omp。** 操作员裁决：机器通过 `omp update` 跟随最新版，检查也跟随。代价：上游的变化会让与之无关的提交也变红；这类红是真实的兼容性问题，比如 system-prompt-replace 规则的目标被上游删掉。可用 `OMP_VERSION` 在本地复现指定版本。
 - **插件不钉版本。** 与 `install-plugins.sh` 一致：检查装的就是机器会装的。
 - **stderr 每行都是诊断；日志只排除主机噪声。** 扩展警告不设白名单，因为一条被放行的警告就是一个被接受的缺陷，应当修配置或开 issue。主机噪声只覆盖与配置无关的事实：没有本地模型服务器；没有 D-Bus；技能描述压缩时免费模型输出被截断（`Model stopped: length`）——`modelRoles` 是本机字段，CI 把所有角色绑到会推理的免费模型上，它偶尔用完 omp 给这项后台任务的输出预算（同一配置 10 次运行中出现 1 次），机器上实际用哪个模型由各机器自己的 `modelRoles` 决定。

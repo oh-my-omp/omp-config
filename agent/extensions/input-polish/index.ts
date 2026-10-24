@@ -13,11 +13,14 @@
 // Every key is decided in a raw terminal-input listener, which runs before the
 // focused component. The overlay itself is display-only.
 //
-// Polishing uses a dedicated in-memory helper: configured model (thinking per
-// its `:effort` suffix, off by default), NO tools, empty system prompt, no MCP/LSP/
-// extensions. Config is the `input-polish` section of omomp.*: the project's
-// `.omp/` copy wins over the agent-dir copy; a missing or invalid section leaves
-// the extension inert.
+// Polishing uses a dedicated in-memory helper: the OMP model role `@input-polish`
+// (assign it in `/model`; thinking per the entry's `:effort` suffix, off by
+// default), then the role named by `fallbackRole`, resolved at every polish; a
+// provider failure moves to the next model of that chain with the preview
+// cleared. NO tools, empty system prompt, no MCP/LSP/extensions. Config (chord,
+// instruction, fallback role) is the `input-polish` section of omomp.*: the
+// project's `.omp/` copy wins over the agent-dir copy; a missing or invalid
+// section leaves the extension inert.
 //
 // Drafts that start with `/`, `!` or `$` (slash command, bash, python) and empty
 // drafts are not polished: the chord falls through to the host untouched.
@@ -31,21 +34,23 @@ import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding
 import { type Component, isKeyRelease, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
-import { findModel, type Model, splitLevel, type ThinkingLevel } from "../_shared/models.ts";
 import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
+import { modelLabel, type RoleModel, roleModels, roleName } from "../_shared/roles.ts";
 
 // --- config (`input-polish` section of omomp.yml) -----------------------------
 
 const configSchema = z.object({
-	/** Model spec (`provider/id`, bare id, or role alias), optionally with a `:effort` thinking suffix. No suffix means thinking off. */
-	model: z.string().min(1),
 	/** Chord that starts a polish. Ctrl+Enter is what a Windows keyboard sends; Alt+Enter is Option+Enter on macOS. */
 	key: z.enum(["ctrl+enter", "alt+enter"]).default("ctrl+enter"),
 	/** What the rewrite should do. The fidelity rules are always appended by the extension. */
 	instruction: z.string().min(1),
+	/** OMP model role (`smol`, `@smol`, …) whose models answer when `@input-polish` resolves none or all of its models fail. */
+	fallbackRole: z.string().min(1).optional(),
 });
 
 const omompSection = defineOmompSection(import.meta.dir, configSchema);
+/** The OMP model role the rewrite model comes from: the extension's own name. */
+const ROLE = omompSection.id;
 
 type PolishConfig = z.infer<typeof configSchema>;
 
@@ -61,17 +66,6 @@ function loadConfig(cwd: string): PolishConfig | null {
 			return unreachable;
 		}
 	}
-}
-
-// --- model resolution -------------------------------------------------------
-
-type ResolvedModel = { readonly model: Model; readonly effort: ThinkingLevel };
-
-// `provider/id[:effort]`. A missing or unknown suffix means thinking off.
-function resolveModel(ctx: ExtensionContext, spec: string): ResolvedModel | undefined {
-	const { base, level } = splitLevel(spec);
-	const model = findModel(ctx, base);
-	return model ? { model, effort: level ?? "off" } : undefined;
 }
 
 // --- polishing --------------------------------------------------------------
@@ -106,43 +100,51 @@ class PolishCanceled extends Error {}
 
 async function polish(
 	ctx: ExtensionContext,
-	resolved: ResolvedModel,
+	models: readonly RoleModel[],
 	cfg: PolishConfig,
 	draft: string,
 	signal: AbortSignal,
 	onProgress: (partial: string) => void,
 ): Promise<Exclude<Preview, { readonly kind: "polishing" }>> {
-	const result = await runHelperPrompt(ctx, {
-		agentId: "input-polish",
-		model: resolved.model,
-		thinkingLevel: resolved.effort,
-		prompt: buildPrompt(cfg.instruction, draft),
-		systemPrompt: "none",
-		signal,
-		onText: onProgress,
-	});
-	switch (result.kind) {
-		case "canceled":
-			throw new PolishCanceled();
-		case "provider-error":
-			return { kind: "failed", message: result.message || "The model returned an error." };
-		case "failed":
-			return { kind: "failed", message: result.message };
-		case "text": {
-			const text = stripVTControlCharacters(result.text);
-			if (text === "") return { kind: "failed", message: "The model returned an empty rewrite." };
-			const want = placeholders(draft);
-			const got = placeholders(text);
-			if (want.length !== got.length || want.some((token) => !got.includes(token))) {
-				return { kind: "failed", message: "The rewrite dropped or changed an attachment/paste placeholder; nothing was applied." };
+	const failures: string[] = [];
+	for (const { model, level } of models) {
+		// A new model starts from an empty preview, never from the last model's partial text.
+		onProgress("");
+		const result = await runHelperPrompt(ctx, {
+			agentId: "input-polish",
+			model,
+			thinkingLevel: level ?? "off",
+			prompt: buildPrompt(cfg.instruction, draft),
+			systemPrompt: "none",
+			signal,
+			onText: onProgress,
+		});
+		switch (result.kind) {
+			case "canceled":
+				throw new PolishCanceled();
+			case "provider-error":
+				failures.push(`${modelLabel(model)}: ${result.message || "the model returned an error"}`);
+				continue;
+			case "failed":
+				failures.push(`${modelLabel(model)}: ${result.message}`);
+				continue;
+			case "text": {
+				const text = stripVTControlCharacters(result.text);
+				if (text === "") return { kind: "failed", message: "The model returned an empty rewrite." };
+				const want = placeholders(draft);
+				const got = placeholders(text);
+				if (want.length !== got.length || want.some((token) => !got.includes(token))) {
+					return { kind: "failed", message: "The rewrite dropped or changed an attachment/paste placeholder; nothing was applied." };
+				}
+				return { kind: "ready", text };
 			}
-			return { kind: "ready", text };
-		}
-		default: {
-			const unreachable: never = result;
-			return unreachable;
+			default: {
+				const unreachable: never = result;
+				return unreachable;
+			}
 		}
 	}
+	return { kind: "failed", message: `Every model failed: ${failures.join("; ")}` };
 }
 
 // --- preview overlay --------------------------------------------------------
@@ -279,12 +281,20 @@ export default function inputPolish(pi: ExtensionAPI): void {
 			pi.logger.info("input-polish: no input-polish section in omomp.* found — inert");
 			return;
 		}
-		pi.logger.info(`input-polish: active (key=${cfg.key}, model=${cfg.model})`);
+		pi.logger.info(
+			`input-polish: active (key=${cfg.key}, role=@${ROLE}${cfg.fallbackRole === undefined ? "" : `, fallback=@${roleName(cfg.fallbackRole)}`})`,
+		);
 
 		const start = (draft: string): void => {
-			const model = resolveModel(ctx, cfg.model);
-			if (!model) {
-				ctx.ui.notify(`input-polish: model "${cfg.model}" unavailable`, "warning");
+			let models: RoleModel[];
+			try {
+				models = roleModels(ctx, cfg.fallbackRole === undefined ? [ROLE] : [ROLE, cfg.fallbackRole]);
+			} catch (error) {
+				ctx.ui.notify(`input-polish: ${errorText(error)}`, "warning");
+				return;
+			}
+			if (models.length === 0) {
+				ctx.ui.notify(`input-polish: no model — assign @${ROLE} in /model`, "warning");
 				return;
 			}
 			const controller = new AbortController();
@@ -320,7 +330,7 @@ export default function inputPolish(pi: ExtensionAPI): void {
 					pi.logger.warn("input-polish: preview failed", { error: errorText(error) });
 				}
 			};
-			void polish(ctx, model, cfg, draft, controller.signal, (partial) => settle({ kind: "polishing", partial })).then(
+			void polish(ctx, models, cfg, draft, controller.signal, (partial) => settle({ kind: "polishing", partial })).then(
 				(preview) => {
 					if (preview.kind === "failed") pi.logger.warn("input-polish: polish failed", { error: preview.message });
 					settle(preview);
