@@ -17,9 +17,9 @@
  * option reminds when its probability reaches the lane's `threshold`. The
  * reminder names the intent and the required tool, then quotes the call.
  *
- * FAILURE. Missing or invalid spec, no judge candidate, a request that failed
- * on every native and chat-fallback candidate, or the timeout: no reminder, no
- * `form` fallback; the caller reports the reason once.
+ * FAILURE. Missing or invalid spec, no judge model, a request that failed on
+ * the judge role chain and the `judge` fallback role, or the timeout: no
+ * reminder, no `form` fallback; the caller reports the reason once.
  */
 
 import { readdir, readFile } from "node:fs/promises";

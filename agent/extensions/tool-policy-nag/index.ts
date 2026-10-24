@@ -26,8 +26,8 @@
  *   per call. No counting, no cap: one reminder per offending call. A failed
  *   judge request warns once per reason and reminds nothing. An optional
  *   `form` block makes the string lane count beside it and send its prompt
- *   only while the intent lane cannot run (no valid enabled spec, or no JUDGE
- *   candidate at all); a failed judge request does not fall back.
+ *   only while the intent lane cannot run (no valid enabled spec, or no judge
+ *   model at all); a failed judge request does not fall back.
  *
  * `risk` — the risk lane (`risk.ts`): no judge, no counting. A shell call that
  * is long, runs many different programs and writes something has an outcome

@@ -244,7 +244,7 @@ model-compaction:
 
 ### 4.2 运行期旁路纠偏与原生 JUDGE 角色共享机制
 
-`turn-judge`、`tool-policy-nag` 的 `intent` 通道（`detector: jev` 时）、`watchdog-agent` 的选项后端与 `lang-nag` 通过 `_shared/judge.ts` 的 `openJudge` 共用宿主的 **JUDGE 模型角色**。每次判定先交给 OMP 自己的 judge 角色链：先 `modelRoles.judge`，再 `retry.fallbackChains.judge`，未配置该键时用 OMP 内置的 judge 默认链（原生 Jev 模型，再 `@tiny`、`@smol`、`@default`）。链会跳过没有凭据的候选，候选报 provider 错误时换下一个（401/402/403 让该候选冷却 5 分钟），遇到中止或超时即停止。从第一个原生判定 API 模型起，OMP 只保留原生候选；它们全部失败时，`openJudge` 依次用链中排在该原生模型之后的聊天模型、最后用会话模型，以提示式判定作答。提示式答案是 one-hot（选中项概率为 1），所以选项阈值退化为“选中即生效”。要指定回退 LLM，就在 `retry.fallbackChains.judge` 里把聊天模型排在原生模型之后；该键会整体替换内置默认链。两个阶段的每次尝试都记入会话用量账本，完全相同的原生请求由 OMP 共享判定缓存作答。若链的第一个候选是聊天模型，则完全由 OMP 自己遍历（先聊天模型，再原生，再会话模型）。只有链解析不出任何候选时才不运行。角色设置每次触发实时解析，热重载后下一次触发即生效。
+`turn-judge`、`tool-policy-nag` 的 `intent` 通道（`detector: jev` 时）、`watchdog-agent` 的选项后端与 `lang-nag` 通过 `_shared/judge.ts` 的 `openJudge` 共用宿主的 **JUDGE 模型角色**。每次判定先交给 OMP 自己的 judge 角色链：先 `modelRoles.judge`，再 `retry.fallbackChains.judge`，未配置该键时用 OMP 内置的 judge 默认链。链会跳过没有凭据的候选，候选报 provider 错误时换下一个（401/402/403 让该候选冷却 5 分钟），遇到中止或超时即停止；从第一个原生判定 API 模型起 OMP 只保留原生候选，`openJudge` 也从不把会话模型加进链里。这条链因中止、超时以外的原因失败，或解析不出任何候选时，由 `omomp.yml` 中 `judge` 段的 `fallbackRole` 所指的角色作答（仓库配置 `fallbackRole: tiny`，即 `@tiny`）：按该角色自己的模型链（先 `modelRoles.tiny`，再 `retry.fallbackChains.tiny`）依次以提示式判定作答，跳过本地 `local` 模型。提示式答案是 one-hot（选中项概率为 1），所以选项阈值退化为“选中即生效”。没有 `judge` 段就没有回退。两个阶段的每次尝试都记入会话用量账本，完全相同的原生请求由 OMP 共享判定缓存作答。只有链和回退角色都解析不出模型时才不运行。角色设置与该段每次触发实时读取，热重载后下一次触发即生效。
 
 #### tool-policy-nag
 
@@ -266,7 +266,7 @@ tool-policy-nag:
 ```
 
 - **`detector: heuristic`**：必须有 `form`；`intent` 段被忽略（保留它只为切回时改一个词），因此不发 JUDGE 请求、不读 `INTENT-policy.md`。每次检查被监视的调用之前，扩展在主会话实时设置上加一层仅运行期的覆盖 `bashInterceptor.enabled = false`，不论 `agent/config.yml`（已打开）怎么设；子代理透读这份设置，也一并失去拦截器。detector 改变时和 `session_shutdown` 时清除这层覆盖，不写任何磁盘文件。
-- **`detector: jev`**：必须有 `intent`；`bashInterceptor.enabled` 按配置生效，为真时三条通道都跳过 `bash` 调用，因为拦截器已在执行前拒绝绕过内置工具的命令（`exec_command`、`bash_bg` 与 `eval` 照常检查）。可选的 `form` 段在 intent 通道旁照常计数，仅当 intent 通道无法运行（同目录 `INTENT-policy.md` 缺失、无效或停用，或根本没有 JUDGE 候选）时才发送它的 `prompt`；判定失败（原生链与聊天回退都失败）或 90s 超时时记一次 warning，不补发 `form` 提醒。
+- **`detector: jev`**：必须有 `intent`；`bashInterceptor.enabled` 按配置生效，为真时三条通道都跳过 `bash` 调用，因为拦截器已在执行前拒绝绕过内置工具的命令（`exec_command`、`bash_bg` 与 `eval` 照常检查）。可选的 `form` 段在 intent 通道旁照常计数，仅当 intent 通道无法运行（同目录 `INTENT-policy.md` 缺失、无效或停用，或 JUDGE 角色链与回退角色都解析不出模型）时才发送它的 `prompt`；判定失败（judge 链与回退角色都失败）或 90s 超时时记一次 warning，不补发 `form` 提醒。
 - **`form` 通道（启发式语法解析与计数）**：
   - 解析管道、`;`/`&&`/`||`、引号、heredoc、`$(…)`/反引号命令替换与重定向（含 `>|`、`&>`），并把每条命令还原为实际运行的程序：跳过 `NAME=value` 前缀、保留字 `if`/`elif`/`while`/`until`/`do`/`then`/`else`/`!`/`{`，以及带自身选项的包装命令（`timeout`、`env`、`nice`、`stdbuf`、`time`、`nohup`、`command`、`exec`、`builtin`、`xargs`）；跳过 `sudo`/`doas`/`su`/`ssh`，字面量 `bash|sh|zsh|dash -c '…'`、`eval '…'` 与 `find -exec … ;` 的命令体就地分析。统计六类 shell 违规：列目录（`ls`、`tree`、`fd`、不带动作的 `find`、`rg --files`、`ag -g`）、读文件（`cat`/`bat`/`nl`/`head`/`tail`/`less`/`more`/`zcat`、`sed -n`、awk 行范围与 `/start/,/end/` 区段、对单个 JSON 文件的 `jq`、单条只读 `sqlite3` 查询与 `.tables`/`.schema`、`tar -t`/`tar -xO`、`unzip -l`/`-p`）、搜索（带文件或 `-r` 的 `grep`；`rg`/`ag`/`ack` 无路径时搜当前目录，stdin 来自管道时除外；awk `/re/`；工作树上的 `git grep`）、编辑（`sed -i`、`perl -i`、`awk -i inplace`、`mv`）、写入自拟内容（`echo`/`printf`/heredoc `cat` 重定向到文件或经管道交给 `tee`）、内联脚本（`node`/`bun`/`deno`/`python`/`ruby` 在脚本参数之前带 `-e`/`-c`/`-p`/`--eval`，或 `-` 读 stdin）；另加 `eval` 文件/目录操作（`Path.read_text`、`open`、`glob`、`os.listdir`、`readFileSync`、`Bun.file`、`readdir`、`Bun.Glob`）。输出交给 shell 的列目录/读/搜不计数：`$(…)` 捕获、只经 stdin 过滤器流入 `wc`/`uniq -c`/`grep -c` 的管道、`xargs` 的参数，以及作为 `if`/`while` 条件的 `grep -q`。`/dev/*` 豁免读/搜/改/写。与 OMP 拦截器不同，`tail -f`、`locate`、带 `-delete`/`-exec rm` 的 `find`、`git ls-files` 与读 stdin 的无路径 `grep` 不计违规。
   - 前 `form.afterHits`（`3`）次违规仅记录；超过后每次违规以 steer 发送配置的 `form.prompt`（不得为空）并弹 UI 警告，每个 context 最多发 `form.maxNags`（`3`）条，之后停止，直至下次 compaction、`/clear` 或 `branch_summary`（在配置里调高 `maxNags` 立即恢复）。三个字段均必填。状态存于会话条目 `mouriya.omp.tool-policy-nag.state`，随分支切换自动重建。
@@ -289,7 +289,7 @@ tool-policy-nag:
 | `every`、`scope` | `every` 默认 `30`；`scope` 为 `full`（默认）或 `window` | 每个工具调用与每条非空文字回复各计 1 步；满 `every` 立即后台审阅，回合结束（非 `willContinue`）对余数补跑一次。`window` 只看游标之后的新消息 |
 | `maxPerContext` | 正整数，默认不限 | 两次 compaction 之间最多注入几条提醒；compaction 后清零封顶计数，不重置操作计数与 `window` 游标 |
 | `model`、`tools` | 聊天 reviewer 后端（默认） | 在禁加载扩展、`taskDepth: 1` 的内存会话中运行；`model` 缺省依次试 `@advisor`、`advisor`、`@slow`、会话模型；`tools` 默认 `[read, grep, glob]`（可授 `ast_grep, web_search, edit, write, bash, eval`）。首行 `PASS`/`OK`/`LGTM`/`NONE` 为通过，其余作为 `<watchdog name=… severity=…>` 注入 |
-| `instructions`、`option.<标签>[.prompt\|.delivery]` | JUDGE 后端（声明 $\ge 2$ 个 `option.*` 即启用） | 不可与 `model`/`tools`/`note` 同用；经 OMP 的 JUDGE 角色链（含聊天回退）按正文准则从声明的小写标签选项中选一个，选中带 `.prompt` 的选项时注入该文本（无 `.prompt` 为静默通过）。失败或 90s 超时不回退聊天 reviewer |
+| `instructions`、`option.<标签>[.prompt\|.delivery]` | JUDGE 后端（声明 $\ge 2$ 个 `option.*` 即启用） | 不可与 `model`/`tools`/`note` 同用；先经 OMP 的 JUDGE 角色链、再经 `judge` 段的回退角色，按正文准则从声明的小写标签选项中选一个，选中带 `.prompt` 的选项时注入该文本（无 `.prompt` 为静默通过）。失败或 90s 超时不回退聊天 reviewer |
 
 - **游标持久化与恢复**：每次审阅得出结论后推进游标并写入会话条目 `mouriya.omp.watchdog-agent.cursor`，切换分支或恢复会话时从分支重建游标、封顶计数与未审操作数。
 - **管理命令与三轮交互起草协议**：
@@ -298,7 +298,7 @@ tool-policy-nag:
 
 #### turn-judge
 
-扫描扩展目录及 `cwd` 至 git 根各层的 `TURN-JUDGE-<label>.md`，在文件所指向的会话里，每轮正常结束（assistant 消息 `stopReason: "stop"` 且有非空文字）后，每个适用文件发一次 JUDGE 请求（仓库自带 `TURN-JUDGE-gpt-talk-only.md`，见下；本机自建的文件归本机；无适用文件或 JUDGE 角色链解析不出任何候选时静默不运行）。`task.structured` 关闭时（OMP 默认），子代理的最终报告及其对 IRC 唤醒的回复都属于这种回合。
+扫描扩展目录及 `cwd` 至 git 根各层的 `TURN-JUDGE-<label>.md`，在文件所指向的会话里，每轮正常结束（assistant 消息 `stopReason: "stop"` 且有非空文字）后，每个适用文件发一次 JUDGE 请求（仓库自带 `TURN-JUDGE-gpt-talk-only.md`，见下；本机自建的文件归本机；无适用文件，或 JUDGE 角色链与回退角色都解析不出模型时静默不运行）。`task.structured` 关闭时（OMP 默认），子代理的最终报告及其对 IRC 唤醒的回复都属于这种回合。
 
 - **适用范围**：`target` 沿用 `watchdog-agent` 的写法——逗号分隔的 `main`、`subagents`（别名 `subagent`/`sub`/`subs`）、`*`（别名 `all`/`any`）或子代理定义名 / 注册 id（如 `task:mid`），不写时默认 `main`；`model` 与 `provider` 同 `append-system-model`，为不加锚点的 JavaScript 正则，匹配被判定消息自身的 `model`/`provider`；`skipTools` 是逗号分隔的工具名，这一轮调用过其中任何一个时，该文件不判定这一轮（用于 `wt`、`harness_restart` 这类回合结束后才执行的工具）。仅当 `target` 覆盖当前会话、所写正则全部匹配且没有调用跳过工具时文件才适用；不适用的文件不发 JUDGE 请求。`target`、`skipTools` 或正则为空，或正则非法时文件无效（每进程警告一次）。
 - **配置字段与输入**：frontmatter 支持 `name`、`enabled`（默认 `true`）、`target`、`model`、`provider`、`skipTools`、`maxChars`（默认 `30000`）、`option.<标签>`（至少 2 个，禁含 `.` 或空白）、`option.<标签>.prompt` 与对应的必填 `option.<标签>.threshold` $\in (0, 1]$，正文为问题原文。JUDGE 接收 `{ 时间线: [{ 类型, 内容 }], 本轮回复 }`。`时间线` 只覆盖被判定回合所属的这件工作：从分支上最后一条人类输入开始，按发生顺序列出 `用户说`（那条人类输入：非 synthetic，主会话为 `attribution: "user"`，子代理不限归属、含派发任务）、`提醒`（之后的非人类 prompt，如 harness 提醒或 turn-judge 纠偏，每条只取前 400 字）、`模型想`（思考文字：GPT、Gemini 的推理摘要，Claude 的推理；redacted 块不收）、`模型说`（assistant 文字）、`模型调用工具`（`工具名：intent`，取调用携带的 harness intent；参数和结果不收）。被判定消息自身的思考排在 `时间线` 末尾，它的文字是 `本轮回复`；超 `maxChars` 字时，从 `用户说` 之后最早的条目整条丢弃。`skipTools` 只看模型上一次以 `stop` 结束之后的工具调用，所以由纠偏 prompt 或提醒开启的新一轮从零算起。
@@ -490,7 +490,7 @@ flowchart LR
 | `PROMPT-INJECT-*.md`、`TURN-JUDGE-*.md`、`INTENT-*.md` | 仓库带则归仓库；本机自建归本机 | 覆盖仓库自带模板；本机在同目录自建的模板文件绝不触碰或删除 | 仅收回仓库已有的同名模板 | 下次派发 / 下一轮 / 下次调用 |
 | `APPEND_SYSTEM_MODEL.md`、`WATCHDOG-*.md` | 本机独占 | 绝不写入或删除（仅在旧平铺迁移时从根目录移入扩展目录） | 绝不收回仓库 | 下一条 prompt / 写入即刻重读 |
 | `agent/config.yml`（4 个结构化文件之一） | 仓库 + 本机按字段合并 | 仓库键覆盖本机同名键；**本机字段 `LOCAL_CONFIG_FIELDS`**（`providers.webSearchOrder`、`modelRoles`、`defaultThinkingLevel`、`skills`、`symbolPreset`、`theme`、`colorBlindMode`、`hideThinkingBlock`、`statusLine`、`terminal`、`tui`、`display`、`worktree`、`compaction.thresholdTokens`、`compaction.thresholdPercent`、`compaction.idleThresholdTokens`）及本机独有键保留不动；**共享列表 `MACHINE_LIST_FIELDS`（`extensions`）** 将本机独有条目（如 `~/.claude`）保留在仓库条目**之前** | 先 `read` 两边，仅用 `edit` 修改非本机字段的差异行，绝不整文件重序列化；本机字段与 `extensions` 本机条目不写回仓库 | OMP 实时热重载 |
-| `agent/omomp.yml`（4 个结构化文件之二） | 仓库 7 段 + 本机 3 段按段合并 | 覆盖仓库托管的 7 个段（`lang-nag`、`input-polish`、`tool-policy-nag`、`task-completion-judge`、`task-split-check`、`child-memory-warning`、`system-prompt-replace`）；保留本机独占的 3 个段 `LOCAL_OMOMP_SECTIONS`（`doc-polish`、`model-compaction`、`omp-config-autoupdate`） | 仅用 `edit` 修改仓库托管 7 个段的差异行；本机 3 个段不写回仓库 | 随各扩展读取时机生效 |
+| `agent/omomp.yml`（4 个结构化文件之二） | 仓库 8 段 + 本机 3 段按段合并 | 覆盖仓库托管的 8 个段（`judge`、`lang-nag`、`input-polish`、`tool-policy-nag`、`task-completion-judge`、`task-split-check`、`child-memory-warning`、`system-prompt-replace`）；保留本机独占的 3 个段 `LOCAL_OMOMP_SECTIONS`（`doc-polish`、`model-compaction`、`omp-config-autoupdate`） | 仅用 `edit` 修改仓库托管 8 个段的差异行；本机 3 个段不写回仓库 | 随各扩展读取时机生效 |
 | `agent/thinking-translator.json`（4 个结构化文件之三） | 仓库 + 本机按字段合并 | 按字段合并覆盖仓库键，保留本机额外键 | 仅用 `edit` 修改差异字段 | 下一条消息开始时 |
 | `pi/agent/pi-bansos-relay-state.json`（4 个结构化文件之四） | 仓库 + 本机按字段合并 | 写入 `~/.pi/agent/pi-bansos-relay-state.json` | 从 `~/.pi/agent/` 按字段比对写回（本机文件不存在时不视为删除，保持仓库原样） | 下次会话启动或 `/bansos` |
 | 应用托管文件（首行 `// @orca-managed-pi-extension` 或含 `marker: _otty`） | 外部应用（Orca / Otty）独占 | 每次覆盖与删除前检查标记并跳过（记入 `skipped`） | 跳过不收回 | — |
@@ -559,10 +559,10 @@ OMP 从 `~/.omp/agent/extensions/` 只向下找一层：本仓库所有扩展均
 |---|---|
 | `errors.ts` | `errorText(error)`：将任意异常安全格式化为字符串 |
 | `messages.ts` | `textOf`、`lastAssistantText`：提取消息中的纯文本内容块 |
-| `omomp.ts` | `defineOmompSection`、`loadOmompSection`、`writeOmompSection`：按 `import.meta.dir` 目录名读写 `omomp.{yml,yaml,json,toml}` 对应段（项目 `<cwd>/.omp/omomp.*` 优先于 `<agentDir>/omomp.*`） |
+| `omomp.ts` | `defineOmompSection`、`defineSharedOmompSection`、`loadOmompSection`、`writeOmompSection`：按 `import.meta.dir` 目录名，或 `_shared` 模块的文件名（`import.meta.path`，如 `judge`），读写 `omomp.{yml,yaml,json,toml}` 对应段（项目 `<cwd>/.omp/omomp.*` 优先于 `<agentDir>/omomp.*`） |
 | `models.ts` | `resolveModelChain`、`findModel`、`splitLevel`：解析 `provider/id[:effort]` 与逗号分隔候选链（只查可用列表，不发请求） |
 | `helper-session.ts` | `runHelperPrompt`：在无工具、无扩展、空系统提示词的内存辅助会话中执行单次模型调用，**固定传 `taskDepth: 1`** 且永不抛异常 |
-| `judge.ts` | `openJudge`：为当前会话构建 OMP 的 judge 角色链（`@oh-my-pi/pi-coding-agent/judgment` 的 `resolveJudge`），带用量账本与判定缓存；原生候选全部失败时，依次以提示式判定（`TextJudge`）询问链中排在第一个原生模型之后的聊天模型和会话模型；只有链解析不出任何候选时才不启用 |
+| `judge.ts` | `openJudge`：为当前会话构建 OMP 的 judge 角色链（`@oh-my-pi/pi-coding-agent/judgment` 的 `resolveJudge`），带用量账本与判定缓存，不加会话模型；链失败或解析不出候选时，以提示式判定（`TextJudge`）询问 `judge` 段 `fallbackRole` 角色的聊天模型；只有两者都解析不出模型时才不启用 |
 | `spec-files.ts` | `discoverSpecFiles`、`parseFrontmatter`、`unquote`：扫描扩展目录及 `cwd` 至 git 根各层（含 `.omp/`）的 `*-<label>.md` 文件 |
 
 **硬性代码规范（由 `bun run check` 即 Biome + `tsc --noEmit` 强制执行）：**

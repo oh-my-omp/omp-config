@@ -103,10 +103,11 @@
 //   extensions' message_end handlers for the same message wait too.
 //   Subagent sessions have no UI: their reports and warnings go to the log.
 //
-// AVAILABILITY. No applying file: nothing runs — no request and no report. A
-// JUDGE role chain with no candidate: silently inactive; when its native
-// candidates fail, its chat models answer as prompted judges (`_shared/judge.ts`,
-// one-hot probabilities). Role changes apply on the next turn. A
+// AVAILABILITY. No applying file: nothing runs — no request and no report.
+// Neither the JUDGE role chain nor the `judge` fallback role resolves a model:
+// silently inactive; when the chain fails, the fallback role's chat models
+// answer as prompted judges (`_shared/judge.ts`, one-hot probabilities). Role
+// changes apply on the next turn. A
 // failed request warns for that turn; an invalid file warns once per process
 // (per path and reason). Sessions without UI only log. Nothing blocks or
 // changes the turn itself.

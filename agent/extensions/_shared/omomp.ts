@@ -7,7 +7,10 @@ import { errorText } from "./errors.ts";
  * Unified extension configuration. Every extension keeps its settings as one
  * top-level section of an `omomp` file; the section id is the extension's
  * directory name, so `defineOmompSection(import.meta.dir, schema)` is the whole
- * mapping from file to extension. Sections are never deep-merged.
+ * mapping from file to extension. A `_shared` module whose behavior several
+ * extensions share owns one section named after its file
+ * (`defineSharedOmompSection(import.meta.path, schema)`). Sections are never
+ * deep-merged.
  *
  * Locations, first valid copy wins per section:
  *   1. `<cwd>/.omp/omomp.{yml,yaml,json,toml}`  (project; skipped when cwd is null)
@@ -34,6 +37,11 @@ type Root = Readonly<Record<string, unknown>>;
 /** Bind an extension's config type to its section. `extensionDir` is `import.meta.dir`. */
 export function defineOmompSection<T>(extensionDir: string, schema: zod.ZodLikeSchema<T>): OmompSection<T> {
 	return { id: basename(extensionDir), schema };
+}
+
+/** Bind a `_shared` module's config type to its section. `modulePath` is `import.meta.path`; the id is the file name without `.ts`. */
+export function defineSharedOmompSection<T>(modulePath: string, schema: zod.ZodLikeSchema<T>): OmompSection<T> {
+	return { id: basename(modulePath, extname(modulePath)), schema };
 }
 
 type Located =
