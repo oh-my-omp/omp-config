@@ -294,10 +294,12 @@ tool-policy-nag:
 
 #### turn-judge
 
-主会话每轮正常结束（assistant 消息 `stopReason: "stop"` 且有非空文字）后，扫描扩展目录及 `cwd` 至 git 根各层的 `TURN-JUDGE-<label>.md`（仓库不带文件，本机自建归本机；无匹配文件或无原生 JUDGE 时静默不运行），每个文件向原生 JUDGE 发一次请求：
+扫描扩展目录及 `cwd` 至 git 根各层的 `TURN-JUDGE-<label>.md`，在文件所指向的会话里，每轮正常结束（assistant 消息 `stopReason: "stop"` 且有非空文字）后，每个适用文件向原生 JUDGE 发一次请求（仓库不带文件，本机自建归本机；无适用文件或无原生 JUDGE 时静默不运行）。`task.structured` 关闭时（OMP 默认），子代理的最终报告及其对 IRC 唤醒的回复都属于这种回合。
 
-- **配置字段与输入**：frontmatter 支持 `name`、`enabled`（默认 `true`）、`maxChars`（默认 `30000`）、`option.<标签>`（至少 2 个，禁含 `.` 或空白）、`option.<标签>.prompt` 与对应的必填 `option.<标签>.threshold` $\in (0, 1]$，正文为问题原文。JUDGE 接收 `{ 过去的记录: [{ 角色: "用户" | "模型", 内容 }], 本轮回复 }`（仅含 `attribution: "user"` 的用户输入与 assistant 纯文本，超 `maxChars` 从最早记录整条丢弃）。
-- **触发与合并通知**：在所有带 `.prompt` 且概率 $\ge$ `.threshold` 的选项中，取概率最高者将其 prompt 以 `attribution: "agent"` 自动发出（引起的新一轮同样会被判定，无上限）；其余未触发文件等本轮全部判定返回后合并弹出一条 UI info 通知 `turn-judge <name>：<选中标签>（<各选项概率>）`。判定返回前若用户已输入或切换了会话/分支，则只弹 info 不再自动输入。
+- **适用范围**：`target` 沿用 `watchdog-agent` 的写法——逗号分隔的 `main`、`subagents`（别名 `subagent`/`sub`/`subs`）、`*`（别名 `all`/`any`）或子代理定义名 / 注册 id（如 `task:mid`），不写时默认 `main`；`model` 与 `provider` 同 `append-system-model`，为不加锚点的 JavaScript 正则，匹配被判定消息自身的 `model`/`provider`。仅当 `target` 覆盖当前会话且所写正则全部匹配时文件才适用；不适用的文件不读历史、不发 JUDGE 请求。`target` 为空、正则为空或非法时文件无效（每进程警告一次）。
+- **配置字段与输入**：frontmatter 支持 `name`、`enabled`（默认 `true`）、`target`、`model`、`provider`、`maxChars`（默认 `30000`）、`option.<标签>`（至少 2 个，禁含 `.` 或空白）、`option.<标签>.prompt` 与对应的必填 `option.<标签>.threshold` $\in (0, 1]$，正文为问题原文。JUDGE 接收 `{ 过去的记录: [{ 角色: "用户" | "模型", 内容 }], 本轮回复 }`，包含 assistant 纯文本与非 synthetic 的用户输入——主会话只收 `attribution: "user"` 的输入，子代理收全部输入（含派发任务与父代理消息，仍标为 `用户`）——超 `maxChars` 从最早记录整条丢弃。
+- **主会话触发与合并通知**：判定在后台运行。在所有带 `.prompt` 且概率 $\ge$ `.threshold` 的选项中，取概率最高者将其 prompt 以 `attribution: "agent"` 自动发出（引起的新一轮同样会被判定，无上限）；其余未触发文件等本轮全部判定返回后合并弹出一条 UI info 通知 `turn-judge <name>：<选中标签>（<各选项概率>）`。判定返回前若用户已输入或切换了会话/分支，则只弹 info 不再自动输入。
+- **子代理触发**：`message_end` 处理器在 20 秒总时限内等待判定（OMP 等待扩展处理器的上限是 30 秒），因此 task 执行器不会先于判定收走结果。若有文件按时触发且被判定消息之后分支没有新消息，处理器等子代理空闲后，把全部触发的 prompt 合成一条 `attribution: "agent"` 消息发出、开启新回合，确认新回合已开始后返回。子代理对它的回复会替换原报告成为父代理收到的结果，所以面向子代理的 prompt 应要求给出完整修订报告；反复触发的文件会让子代理一直不返回。超时或过期的判定只记录、不发送。子代理没有 UI，判定与警告只写入 OMP 日志。
 
 #### lang-nag
 
@@ -377,7 +379,7 @@ doc-polish:
 | 9 | `task-completion-judge` | [§4.1](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge`（仓库托管） |
 | 10 | `tool-policy-nag` | [§4.2](#tool-policy-nag) | 主会话 | 否 | `omomp.yml#tool-policy-nag` + `INTENT-policy.md`（仓库托管） |
 | 11 | `watchdog-agent` | [§4.2](#watchdog-agent) | 主 + 子 | 否 | `WATCHDOG-*.md`（本机独占） |
-| 12 | `turn-judge` | [§4.2](#turn-judge) | 主会话 | 否 | `TURN-JUDGE-*.md`（本机自建） |
+| 12 | `turn-judge` | [§4.2](#turn-judge) | 主 + 子（按文件 `target`） | 否 | `TURN-JUDGE-*.md`（本机自建） |
 | 13 | `lang-nag` | [§4.2](#lang-nag) | 主会话 | 否 | `omomp.yml#lang-nag`（仓库托管） |
 | 14 | `child-memory-warning` | [§4.3](#child-memory-warning) | 主进程全局 | 是 | `omomp.yml#child-memory-warning`（仓库托管） |
 | 15 | `input-polish` | [§4.3](#input-polish) | 主 TUI | 是 | `omomp.yml#input-polish`（仓库托管） |
