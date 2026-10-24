@@ -42,7 +42,7 @@
 // wake. Files are re-read at every turn, so edits apply to the next turn.
 //
 // STATE. Each file is one separate judge request whose state is
-//   { 过去的记录: [{ 角色: "用户" | "模型", 内容 }...], 本轮回复 }
+//   { 过去的记录: [{ 角色: "用户" | "模型", 内容 }...], 本轮工具调用: [name...], 本轮回复 }
 // 过去的记录 is the current branch before this turn, oldest first: the
 // user-role prompts and every assistant message's text (tool calls, tool
 // results and thinking are left out). Synthetic user messages never count. In
@@ -51,6 +51,12 @@
 // assignment, messages from the parent, earlier turn-judge prompts), still
 // labelled "用户". When it exceeds `maxChars` characters, whole entries are
 // dropped from the oldest end.
+// 本轮工具调用 is the names, in order and with repeats, of the tool calls the
+// model made in this turn: every assistant message on the branch after the
+// previous assistant message that ended with `stopReason: "stop"` and before
+// the judged one. A turn a prompt (human, turn-judge or harness) starts after
+// a stop therefore counts from zero. Tool calls inside the judged message
+// itself are not counted: they have not run when it is judged. `[]` = no call.
 //
 // OUTCOME. JUDGE answers one choice question with a probability per option.
 // Among options that carry a prompt, the one with the highest probability at
@@ -138,7 +144,10 @@ type SpecParse =
 
 type HistoryLine = { readonly 角色: "用户" | "模型"; readonly 内容: string };
 
-type TurnState = { readonly 过去的记录: readonly HistoryLine[]; readonly 本轮回复: string };
+type TurnState = { readonly 过去的记录: readonly HistoryLine[]; readonly 本轮工具调用: readonly string[]; readonly 本轮回复: string };
+
+/** What the branch before the judged message contributes to every file's state. */
+type Before = { readonly history: readonly HistoryLine[]; readonly toolCalls: readonly string[] };
 
 type Verdict = { readonly choice: string; readonly probabilities: Readonly<Record<string, number>> };
 
@@ -376,10 +385,14 @@ function applyingSpecs(pi: ExtensionAPI, ctx: ExtensionContext, message: Assista
 
 // --- turn state ---------------------------------------------------------------
 
-/** The session's prompts and the model's text on the branch before the judged message, oldest first. */
-function historyBefore(ctx: ExtensionContext, judgedTimestamp: number): HistoryLine[] {
+/**
+ * The session's prompts and the model's text on the branch before the judged
+ * message, oldest first, and the tool calls made since the previous stop.
+ */
+function before(ctx: ExtensionContext, judgedTimestamp: number): Before {
 	const main = ctx.agent.kind === "main";
-	const lines: HistoryLine[] = [];
+	const history: HistoryLine[] = [];
+	let toolCalls: string[] = [];
 	for (const entry of ctx.sessionManager.getBranch()) {
 		if (entry.type !== "message") continue;
 		const message = entry.message;
@@ -387,13 +400,15 @@ function historyBefore(ctx: ExtensionContext, judgedTimestamp: number): HistoryL
 		if (message.role === "user") {
 			if (message.synthetic === true || (main && message.attribution !== "user")) continue;
 			const text = textOf(message.content, "\n").trim();
-			if (text !== "") lines.push({ 角色: "用户", 内容: text });
+			if (text !== "") history.push({ 角色: "用户", 内容: text });
 		} else if (message.role === "assistant") {
 			const text = textOf(message.content, "\n").trim();
-			if (text !== "") lines.push({ 角色: "模型", 内容: text });
+			if (text !== "") history.push({ 角色: "模型", 内容: text });
+			for (const block of message.content) if (block.type === "toolCall") toolCalls.push(block.name);
+			if (message.stopReason === "stop") toolCalls = [];
 		}
 	}
-	return lines;
+	return { history, toolCalls };
 }
 
 /** Keep the newest whole entries whose total length fits `maxChars`. */
@@ -459,14 +474,9 @@ function describeVerdict(spec: TurnJudgeSpec, verdict: Verdict): string {
 	return `turn-judge ${spec.name}：${verdict.choice}（${parts.join(" · ")}）`;
 }
 
-async function judgeSpec(
-	judge: Judge,
-	spec: TurnJudgeSpec,
-	history: readonly HistoryLine[],
-	reply: string,
-	signal: AbortSignal,
-): Promise<Judged> {
-	const result = await runJudge(judge, spec, { 过去的记录: fitHistory(history, spec.maxChars), 本轮回复: reply }, signal);
+async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, context: Before, reply: string, signal: AbortSignal): Promise<Judged> {
+	const state: TurnState = { 过去的记录: fitHistory(context.history, spec.maxChars), 本轮工具调用: context.toolCalls, 本轮回复: reply };
+	const result = await runJudge(judge, spec, state, signal);
 	switch (result.kind) {
 		case "failed":
 			return { kind: "failed", line: `turn-judge ${spec.name}：判断失败（${result.reason}）` };
@@ -533,8 +543,8 @@ async function judgeSubagentTurn(
 ): Promise<void> {
 	const opened = await openNativeJudge(ctx);
 	if (opened.kind === "inactive") return;
-	const history = historyBefore(ctx, message.timestamp);
-	const judged = await Promise.all(specs.map((spec) => judgeSpec(opened.judge, spec, history, reply, deadline)));
+	const context = before(ctx, message.timestamp);
+	const judged = await Promise.all(specs.map((spec) => judgeSpec(opened.judge, spec, context, reply, deadline)));
 	const warnings = judged.flatMap((j) => (j.kind === "failed" ? [j.line] : []));
 	const infos = judged.flatMap((j) => (j.kind === "info" ? [j.line] : []));
 	const triggered = judged.flatMap((j) => (j.kind === "prompt" ? [j] : []));
@@ -588,14 +598,14 @@ export default function turnJudge(pi: ExtensionAPI): void {
 
 	/** Start the main session's judgments in the background; one notification per turn once all settle. */
 	const judgeMainTurn = async (ctx: ExtensionContext, specs: readonly TurnJudgeSpec[], message: AssistantMessage, reply: string) => {
-		const history = historyBefore(ctx, message.timestamp);
+		const context = before(ctx, message.timestamp);
 		const startedAt = epoch;
 		const opened = await openNativeJudge(ctx);
 		if (opened.kind === "inactive") return;
 		// One notification per turn: consecutive UI notifications replace each other.
 		void Promise.all(
 			specs.map(async (spec) =>
-				settleMain(ctx, await judgeSpec(opened.judge, spec, history, reply, AbortSignal.timeout(JUDGE_TIMEOUT_MS)), startedAt),
+				settleMain(ctx, await judgeSpec(opened.judge, spec, context, reply, AbortSignal.timeout(JUDGE_TIMEOUT_MS)), startedAt),
 			),
 		)
 			.then((reports) => {
