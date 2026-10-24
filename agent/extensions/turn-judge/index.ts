@@ -17,6 +17,7 @@
 //   target:  main, task:mid              # optional; default main, see SCOPE
 //   model:   opus                        # optional; regex, see SCOPE
 //   provider: ^anthropic$                # optional; regex, see SCOPE
+//   skipTools: wt, harness_restart       # optional; tool names, see SCOPE
 //   maxChars: 30000                      # optional; history budget, see STATE
 //   option.<label>: <criteria>           # >= 2 options; empty criteria = the label says it all
 //   option.<label>.prompt: <text>        # optional; typed as a user prompt when triggered
@@ -31,9 +32,14 @@
 // `model` and `provider` follow append-system-model: JavaScript regexes,
 // unanchored `RegExp.test`, against the judged message's own `model` and
 // `provider` (the model that produced the turn, not `upstreamModel`); an
-// empty value or a bad regex makes the file invalid. A file judges a turn only
-// when its target covers the session and every regex it sets matches. Files
-// that do not apply cost nothing: no history walk and no JUDGE request.
+// empty value or a bad regex makes the file invalid. `skipTools` is a comma
+// list of tool names: a turn whose 本轮工具调用 (see STATE) includes any of them
+// is not judged by the file, e.g. a turn that queued a session move (`wt`,
+// `harness_restart`), which runs only after the turn ends; a key that lists
+// nothing makes the file invalid. A file judges a turn only when its target
+// covers the session, every regex it sets matches and no skip tool was called.
+// Files that do not apply cost nothing: no JUDGE request, and no history walk
+// unless a file passes the target and model checks.
 //
 // TURN. A turn is an assistant message the model ended itself
 // (`stopReason: "stop"`) with nonempty text. Aborted, errored and tool-use
@@ -133,6 +139,8 @@ type TurnJudgeSpec = {
 	readonly question: string;
 	readonly options: readonly JudgeOption[];
 	readonly maxChars: number;
+	/** Tool names whose call in the judged turn skips this file. */
+	readonly skipTools: ReadonlySet<string>;
 	readonly targets: readonly Target[];
 	readonly constraints: readonly ModelConstraint[];
 };
@@ -278,6 +286,18 @@ function parseConstraints(fields: Readonly<Record<string, string>>): Constraints
 	return { kind: "ok", constraints };
 }
 
+type SkipToolsParse = { readonly kind: "ok"; readonly tools: ReadonlySet<string> } | { readonly kind: "invalid"; readonly reason: string };
+
+function parseSkipTools(raw: string | undefined): SkipToolsParse {
+	if (raw === undefined) return { kind: "ok", tools: new Set() };
+	const tools = raw
+		.split(",")
+		.map((item) => unquote(item))
+		.filter((item) => item !== "");
+	if (tools.length === 0) return { kind: "invalid", reason: "skipTools lists nothing" };
+	return { kind: "ok", tools: new Set(tools) };
+}
+
 function parseSpecFile(path: string): SpecParse {
 	let raw: string;
 	try {
@@ -300,6 +320,8 @@ function parseSpecFile(path: string): SpecParse {
 	if (targets.kind === "invalid") return targets;
 	const constraints = parseConstraints(fields);
 	if (constraints.kind === "invalid") return constraints;
+	const skipTools = parseSkipTools(fields.skiptools);
+	if (skipTools.kind === "invalid") return skipTools;
 	const options = parseOptions(fields);
 	if (options.kind === "invalid") return options;
 	const label = basename(path)
@@ -315,6 +337,7 @@ function parseSpecFile(path: string): SpecParse {
 			maxChars,
 			targets: targets.targets,
 			constraints: constraints.constraints,
+			skipTools: skipTools.tools,
 		},
 	};
 }
@@ -537,13 +560,13 @@ async function judgeSubagentTurn(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	specs: readonly TurnJudgeSpec[],
+	context: Before,
 	message: AssistantMessage,
 	reply: string,
 	deadline: AbortSignal,
 ): Promise<void> {
 	const opened = await openNativeJudge(ctx);
 	if (opened.kind === "inactive") return;
-	const context = before(ctx, message.timestamp);
 	const judged = await Promise.all(specs.map((spec) => judgeSpec(opened.judge, spec, context, reply, deadline)));
 	const warnings = judged.flatMap((j) => (j.kind === "failed" ? [j.line] : []));
 	const infos = judged.flatMap((j) => (j.kind === "info" ? [j.line] : []));
@@ -597,8 +620,7 @@ export default function turnJudge(pi: ExtensionAPI): void {
 	};
 
 	/** Start the main session's judgments in the background; one notification per turn once all settle. */
-	const judgeMainTurn = async (ctx: ExtensionContext, specs: readonly TurnJudgeSpec[], message: AssistantMessage, reply: string) => {
-		const context = before(ctx, message.timestamp);
+	const judgeMainTurn = async (ctx: ExtensionContext, specs: readonly TurnJudgeSpec[], context: Before, reply: string) => {
 		const startedAt = epoch;
 		const opened = await openNativeJudge(ctx);
 		if (opened.kind === "inactive") return;
@@ -648,10 +670,13 @@ export default function turnJudge(pi: ExtensionAPI): void {
 			const deadline = ctx.agent.kind === "sub" ? AbortSignal.timeout(SUB_DEADLINE_MS) : null;
 			const reply = textOf(message.content, "\n").trim();
 			if (reply === "") return;
-			const specs = applyingSpecs(pi, ctx, message);
+			const scoped = applyingSpecs(pi, ctx, message);
+			if (scoped.length === 0) return;
+			const context = before(ctx, message.timestamp);
+			const specs = scoped.filter((spec) => !context.toolCalls.some((name) => spec.skipTools.has(name)));
 			if (specs.length === 0) return;
-			if (deadline === null) await judgeMainTurn(ctx, specs, message, reply);
-			else await judgeSubagentTurn(pi, ctx, specs, message, reply, deadline);
+			if (deadline === null) await judgeMainTurn(ctx, specs, context, reply);
+			else await judgeSubagentTurn(pi, ctx, specs, context, message, reply, deadline);
 		} catch (error) {
 			pi.logger.warn("turn-judge: message_end failed", { error: errorText(error) });
 		}
