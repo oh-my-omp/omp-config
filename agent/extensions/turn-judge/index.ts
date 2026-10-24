@@ -103,8 +103,10 @@
 //   extensions' message_end handlers for the same message wait too.
 //   Subagent sessions have no UI: their reports and warnings go to the log.
 //
-// AVAILABILITY. No applying file: nothing runs — no request and no report. No
-// native JUDGE role: silently inactive. Role changes apply on the next turn. A
+// AVAILABILITY. No applying file: nothing runs — no request and no report. A
+// JUDGE role chain with no candidate: silently inactive; when its native
+// candidates fail, its chat models answer as prompted judges (`_shared/judge.ts`,
+// one-hot probabilities). Role changes apply on the next turn. A
 // failed request warns for that turn; an invalid file warns once per process
 // (per path and reason). Sessions without UI only log. Nothing blocks or
 // changes the turn itself.
@@ -617,7 +619,7 @@ async function judgeSubagentTurn(
 	reply: string,
 	deadline: AbortSignal,
 ): Promise<void> {
-	const opened = openJudge(ctx, "turn-judge", "native");
+	const opened = openJudge(ctx, "turn-judge");
 	if (opened.kind === "inactive") return;
 	const judged = await Promise.all(specs.map((spec) => judgeSpec(opened.judge, spec, context, reply, deadline)));
 	const warnings = judged.flatMap((j) => (j.kind === "failed" ? [j.line] : []));
@@ -674,7 +676,7 @@ export default function turnJudge(pi: ExtensionAPI): void {
 	/** Start the main session's judgments in the background; one notification per turn once all settle. */
 	const judgeMainTurn = async (ctx: ExtensionContext, specs: readonly TurnJudgeSpec[], context: Before, reply: string) => {
 		const startedAt = epoch;
-		const opened = openJudge(ctx, "turn-judge", "native");
+		const opened = openJudge(ctx, "turn-judge");
 		if (opened.kind === "inactive") return;
 		// One notification per turn: consecutive UI notifications replace each other.
 		void Promise.all(

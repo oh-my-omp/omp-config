@@ -90,7 +90,7 @@ async function detectInstruction(
 ): Promise<string | null> {
 	let opened: JudgeOpen;
 	try {
-		opened = openJudge(ctx, "lang-nag", "any");
+		opened = openJudge(ctx, "lang-nag");
 	} catch (error) {
 		if (!signal.aborted) pi.logger.warn("lang-nag: judge unavailable", { error: errorText(error) });
 		return null;

@@ -34,10 +34,11 @@
 //   maxPerContext: 6                              # optional per-watchdog cap; default unlimited
 //   every:  30                                    # run after this many watched actions (default 30)
 //   scope:  full                                  # full (whole branch, default) | window (since own last run)
-// Body = review priorities for chat; judgment criterion for native JUDGE.
-// Option-based watchdogs need OMP's JUDGE role to resolve first to a native
-// judgment backend; otherwise they stay inactive. Native JUDGE has no tools,
-// free-form explanation, or implicit chat fallback. Labels are lowercased
+// Body = review priorities for chat; judgment criterion for JUDGE.
+// Option-based watchdogs use OMP's JUDGE role chain (`_shared/judge.ts`): its
+// native candidates first, then its chat models as prompted judges; they stay
+// inactive only when the chain resolves no candidate. JUDGE has no tools,
+// free-form explanation, or fallback to the chat reviewer. Labels are lowercased
 // (the frontmatter parser lowercases keys); each value is a single line.
 //
 // RUNTIME. Every discovered watchdog matching the session identity runs

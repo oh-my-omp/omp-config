@@ -203,7 +203,7 @@ export async function runReviewer(
 /** Native JUDGE answers a typed choice; the chosen option supplies the injected text. */
 export async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevWatchdog, transcript: string): Promise<Verdict | null> {
 	const signal = AbortSignal.timeout(REVIEW_TIMEOUT_MS);
-	const opened = openJudge(ctx, "watchdog-agent", "native");
+	const opened = openJudge(ctx, "watchdog-agent");
 	if (opened.kind === "inactive") return null;
 	const { judge } = opened;
 	try {
