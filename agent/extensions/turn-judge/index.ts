@@ -53,12 +53,16 @@
 //
 // STATE. Each file is one separate judge request whose state is
 //   { 时间线: [{ 类型, 内容 }...], 本轮回复 }
-// 时间线 is the current branch up to the judged message, oldest first, one
-// entry per event in the order it happened:
-//   用户说        a user-role prompt. Synthetic ones never count; in a main
-//                session only the human's own (`attribution: "user"`), in a
-//                subagent every one (the assignment, messages from the parent,
-//                earlier turn-judge prompts).
+// 时间线 covers the work the judged turn belongs to: it starts at the last
+// human prompt on the current branch and runs to the judged message, one
+// entry per event in the order it happened. A human prompt is a non-synthetic
+// user-role prompt: in a main session only the human's own (`attribution:
+// "user"`), in a subagent any (its assignment and the parent's messages).
+//   用户说        that human prompt, always the first entry (absent only when
+//                the branch has none).
+//   提醒          any later user-role prompt that is not a human prompt: a
+//                harness or extension reminder, a turn-judge prompt; only its
+//                first 400 characters.
 //   模型想        a thinking block's text (GPT and Gemini send a summary of
 //                their reasoning; Claude sends its reasoning). Redacted and
 //                empty blocks are left out.
@@ -68,8 +72,8 @@
 //                carries; just the name when it has none). Arguments and
 //                results are left out.
 // The judged message's own thinking closes the 时间线; its text is 本轮回复.
-// When the 时间线 exceeds `maxChars` characters, whole entries are dropped
-// from the oldest end.
+// When the entries after 用户说 exceed `maxChars` characters, whole entries
+// are dropped from the oldest end; 用户说 itself is never dropped.
 //
 // OUTCOME. JUDGE answers one choice question with a probability per option.
 // Among options that carry a prompt, the one with the highest probability at
@@ -123,6 +127,8 @@ const JUDGE_TIMEOUT_MS = 90_000;
 const SUB_DEADLINE_MS = 20_000;
 /** Poll interval while a subagent handler waits for idle or for its prompt's turn. */
 const POLL_MS = 25;
+/** A 提醒 keeps its head only: harness attachments (post-compaction context lists) run to thousands of characters. */
+const REMINDER_MAX_CHARS = 400;
 
 type AgentIdentity = ExtensionContext["agent"];
 
@@ -157,7 +163,7 @@ type SpecParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-type TimelineKind = "用户说" | "模型想" | "模型说" | "模型调用工具";
+type TimelineKind = "用户说" | "提醒" | "模型想" | "模型说" | "模型调用工具";
 
 type TimelineEntry = { readonly 类型: TimelineKind; readonly 内容: string };
 
@@ -449,21 +455,24 @@ function assistantEvents(message: AssistantMessage, withText: boolean): Timeline
 }
 
 /**
- * The timeline up to the judged message (whose thinking closes it; its text is
- * the reply), and the tool names called since the previous stop.
+ * The timeline from the last human prompt to the judged message (whose
+ * thinking closes it; its text is the reply), and the tool names called since
+ * the previous stop.
  */
 function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
 	const main = ctx.agent.kind === "main";
-	const timeline: TimelineEntry[] = [];
+	let timeline: TimelineEntry[] = [];
 	let toolCalls: string[] = [];
 	for (const entry of ctx.sessionManager.getBranch()) {
 		if (entry.type !== "message") continue;
 		const message = entry.message;
 		if (message.timestamp >= judged.timestamp) break;
 		if (message.role === "user") {
-			if (message.synthetic === true || (main && message.attribution !== "user")) continue;
 			const text = textOf(message.content, "\n").trim();
-			if (text !== "") timeline.push({ 类型: "用户说", 内容: text });
+			if (text === "") continue;
+			const human = message.synthetic !== true && (!main || message.attribution === "user");
+			if (human) timeline = [{ 类型: "用户说", 内容: text }];
+			else timeline.push({ 类型: "提醒", 内容: text.length > REMINDER_MAX_CHARS ? `${text.slice(0, REMINDER_MAX_CHARS)}…` : text });
 		} else if (message.role === "assistant") {
 			timeline.push(...assistantEvents(message, true));
 			for (const block of message.content) if (block.type === "toolCall") toolCalls.push(block.name);
@@ -474,18 +483,21 @@ function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
 	return { timeline, toolCalls };
 }
 
-/** Keep the newest whole entries whose total length fits `maxChars`. */
+/** Keep the leading 用户说 and the newest whole later entries whose total length fits `maxChars`. */
 function fitTimeline(entries: readonly TimelineEntry[], maxChars: number): TimelineEntry[] {
+	const [first, ...rest] = entries;
+	const head = first?.类型 === "用户说" ? [first] : [];
+	const tail = head.length > 0 ? rest : entries;
 	const kept: TimelineEntry[] = [];
 	let used = 0;
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
+	for (let i = tail.length - 1; i >= 0; i--) {
+		const entry = tail[i];
 		if (entry === undefined) continue;
 		used += entry.内容.length;
 		if (used > maxChars) break;
 		kept.push(entry);
 	}
-	return kept.reverse();
+	return [...head, ...kept.reverse()];
 }
 
 /** Whether the branch's latest message is newer than the judged one. */
