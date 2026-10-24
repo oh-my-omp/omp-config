@@ -14,9 +14,11 @@
 // APPEND_SYSTEM.md, extensions (this one included) and plugins apply on the
 // next start, which the notification says.
 //
-// FAILURE POLICY. Missing bun or script, a busy lock, offline fetch, or an
-// apply error degrade to a log entry, warning, or report line; the session is
-// unaffected.
+// VISIBILITY. Every automatic run ends in one UI notification (info, or a
+// warning for failures) and the footer status `omp-config: …` keeps the last
+// outcome for the rest of the session, so "up to date" is as visible as an
+// update. Missing bun or script, a busy lock, offline fetch, or an apply error
+// never affect the session.
 // ============================================================================
 
 import { spawn } from "node:child_process";
@@ -304,6 +306,102 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 	});
 }
 
+/** What the startup run tells the user: a notification and the footer status that stays after it. */
+interface StartupMessage {
+	readonly level: "info" | "warning";
+	readonly text: string;
+	readonly status: string;
+}
+
+function startupMessage(outcome: RunOutcome): StartupMessage {
+	switch (outcome.kind) {
+		case "no-script":
+			return {
+				level: "warning",
+				text: `omp-config: ${outcome.script} missing; run /update-omp once to install the updater`,
+				status: "omp-config: updater missing",
+			};
+		case "no-bun":
+			return { level: "warning", text: "omp-config: bun is not on PATH; auto-update skipped", status: "omp-config: no bun" };
+		case "no-result":
+			return {
+				level: "warning",
+				text: `omp-config: updater exited ${outcome.code} without a result: ${outcome.stderr.slice(0, 500)}`,
+				status: "omp-config: update failed",
+			};
+		case "result":
+			break;
+		default: {
+			const exhaustive: never = outcome;
+			return exhaustive;
+		}
+	}
+	const result = outcome.result;
+	switch (result.kind) {
+		case "busy":
+			return { level: "info", text: "omp-config: another update is running; skipped this start", status: "omp-config: skipped (busy)" };
+		case "offline":
+			return { level: "info", text: `omp-config: GitHub fetch failed, not updated: ${result.error}`, status: "omp-config: offline" };
+		case "failed":
+			return { level: "warning", text: `omp-config: auto-update failed: ${result.error}`, status: "omp-config: update failed" };
+		case "up-to-date": {
+			const { plugins } = result;
+			if (plugins.errors.length > 0)
+				return {
+					level: "warning",
+					text: `omp-config: config ${short(result.commit)} up to date; plugin refresh hit ${plugins.errors.length} error(s), will retry next start: ${plugins.errors[0]}; /omp-config-autoupdate run shows the full report`,
+					status: "omp-config: plugin refresh failed",
+				};
+			const changed = [...plugins.installed, ...plugins.upgraded];
+			if (changed.length === 0)
+				return {
+					level: "info",
+					text: `omp-config: up to date at ${short(result.commit)}; plugins current`,
+					status: `omp-config: ${short(result.commit)} ✓`,
+				};
+			return {
+				level: "info",
+				text: `omp-config: config ${short(result.commit)} up to date; ${plugins.installed.length} installed and ${plugins.upgraded.length} upgraded plugin(s) (${changed.map((spec) => spec.split("/").at(-1)).join(", ")}); restart OMP to load them`,
+				status: "omp-config: plugins updated, restart",
+			};
+		}
+		case "applied": {
+			const { report } = result;
+			if (report.errors.length > 0)
+				return {
+					level: "warning",
+					text: `omp-config: applied ${short(result.commit)} with ${report.errors.length} error(s), will retry next start: ${report.errors[0]}; /omp-config-autoupdate run shows the full report`,
+					status: "omp-config: update failed",
+				};
+			const changed =
+				report.written.length +
+				report.moved.length +
+				report.deleted.length +
+				report.pluginsInstalled.length +
+				report.pluginsUpgraded.length;
+			if (changed === 0)
+				return {
+					level: "info",
+					text: `omp-config: applied ${short(result.commit)}; this machine already matched`,
+					status: `omp-config: ${short(result.commit)} ✓`,
+				};
+			return {
+				level: "info",
+				text: `omp-config: updated to ${short(result.commit)} (${report.written.length} written, ${report.moved.length} moved, ${report.deleted.length} deleted, ${report.pluginsInstalled.length} installed and ${report.pluginsUpgraded.length} upgraded plugin(s))${report.restartNeeded ? "; restart OMP to load extensions/APPEND_SYSTEM/plugins" : ""}`,
+				status: report.restartNeeded
+					? `omp-config: ${short(result.commit)} applied, restart`
+					: `omp-config: ${short(result.commit)} applied`,
+			};
+		}
+		default: {
+			const exhaustive: never = result;
+			return exhaustive;
+		}
+	}
+}
+
+const STATUS_KEY = "omp-config";
+
 export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 	registerAutoupdateCommand(pi);
 
@@ -321,93 +419,15 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 			if (state.kind === "invalid")
 				notify(ctx, `omp-config: ${switchLocation()} is invalid (${state.reason}); auto-update is off`, "warning");
 			if (state.kind !== "on") return;
+			if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, "omp-config: checking…");
 			ctx.setTimeout(async () => {
 				try {
-					const outcome = await runUpdater(getAgentDir());
-					switch (outcome.kind) {
-						case "no-script":
-							notify(ctx, `omp-config: ${outcome.script} missing; run /update-omp once to install the updater`, "warning");
-							return;
-						case "no-bun":
-							notify(ctx, "omp-config: bun is not on PATH; auto-update skipped", "warning");
-							return;
-						case "no-result":
-							notify(ctx, `omp-config: updater exited ${outcome.code} without a result: ${outcome.stderr.slice(0, 500)}`, "warning");
-							return;
-						case "result":
-							break;
-						default: {
-							const exhaustive: never = outcome;
-							return exhaustive;
-						}
-					}
-					const result = outcome.result;
-					switch (result.kind) {
-						case "busy":
-							pi.logger.info("omp-config: another update is running; skipped");
-							return;
-						case "offline":
-							pi.logger.info(`omp-config: fetch failed, not updated: ${result.error}`);
-							return;
-						case "up-to-date": {
-							const { plugins } = result;
-							if (plugins.errors.length > 0) {
-								notify(
-									ctx,
-									`omp-config: plugin refresh hit ${plugins.errors.length} error(s), will retry next start: ${plugins.errors[0]}; /omp-config-autoupdate run shows the full report`,
-									"warning",
-								);
-								return;
-							}
-							const changed = plugins.installed.length + plugins.upgraded.length;
-							if (changed === 0) {
-								pi.logger.info(`omp-config: up to date at ${short(result.commit)}, plugins current`);
-								return;
-							}
-							notify(
-								ctx,
-								`omp-config: ${plugins.installed.length} installed and ${plugins.upgraded.length} upgraded plugin(s) (${[...plugins.installed, ...plugins.upgraded].map((spec) => spec.split("/").at(-1)).join(", ")}); restart OMP to load them`,
-								"info",
-							);
-							return;
-						}
-						case "failed":
-							notify(ctx, `omp-config: auto-update failed: ${result.error}`, "warning");
-							return;
-						case "applied": {
-							const { report } = result;
-							const changed =
-								report.written.length +
-								report.moved.length +
-								report.deleted.length +
-								report.pluginsInstalled.length +
-								report.pluginsUpgraded.length;
-							if (report.errors.length > 0) {
-								notify(
-									ctx,
-									`omp-config: applied ${short(result.commit)} with ${report.errors.length} error(s), will retry next start: ${report.errors[0]}; /omp-config-autoupdate run shows the full report`,
-									"warning",
-								);
-								return;
-							}
-							if (changed === 0) {
-								pi.logger.info(`omp-config: ${short(result.commit)} applied, host already matched`);
-								return;
-							}
-							notify(
-								ctx,
-								`omp-config: updated to ${short(result.commit)} (${report.written.length} written, ${report.moved.length} moved, ${report.deleted.length} deleted, ${report.pluginsInstalled.length} installed and ${report.pluginsUpgraded.length} upgraded plugin(s))${report.restartNeeded ? "; restart OMP to load extensions/APPEND_SYSTEM/plugins" : ""}`,
-								"info",
-							);
-							return;
-						}
-						default: {
-							const exhaustive: never = result;
-							return exhaustive;
-						}
-					}
+					const message = startupMessage(await runUpdater(getAgentDir()));
+					notify(ctx, message.text, message.level);
+					if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, message.status);
 				} catch (error) {
 					pi.logger.warn("omp-config: auto-update failed unexpectedly", { error: errorText(error) });
+					if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, "omp-config: update failed");
 				}
 			}, 0);
 		} catch (error) {
