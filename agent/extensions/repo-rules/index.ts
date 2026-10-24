@@ -25,7 +25,8 @@
  * `astCondition`, `question`) and OMP's bundled rules keep OMP's own triggering. Patterns are
  * relative to the cwd for user-level rules, to the directory holding the rule's dot directory
  * (`.claude`, `.omp`, …) for project rules, and to the plugin or extension root for rules in its
- * `rules/`.
+ * `rules/`. A pattern starting with `/` or `~/` matches the absolute path instead (beyond Claude
+ * Code, which never matches such a pattern).
  *
  * A matching rule is delivered as the `tool_result` `additionalContext` (a developer message after
  * the tool batch), once per context: a rule whose marker is already in the session's current context

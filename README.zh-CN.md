@@ -103,6 +103,7 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 
 - **无作用域规则：** 本扩展从 `cwd` 向上至 git 根目录（不在仓库中时只看 `cwd`）逐层递归扫描 `.claude/rules`、`.agents/rules`、`.pi/rules` 下的非隐藏 `.md` / `.mdc`（离 `cwd` 越近优先级越高，同层按 `.claude` → `.agents` → `.pi` 排序），并在每个会话额外扫描用户级 `~/.claude/rules`，在每次 `before_agent_start` 追加 `<repo-level-rules>` 块。无 frontmatter、frontmatter 无法解析或 `alwaysApply: true` 的规则注入全文；其余带 frontmatter 的规则仅列出名称、`description` 与路径。OMP 已自行放置（alwaysApply、rulebook 条目或 TTSR）的文件跳过；正文空白归一后已在本次收到的 system prompt 中、或列表项的 `rule://<文件名>` 已在其中的也跳过。
 - **按路径作用的规则（Claude Code `paths`）：** frontmatter 含 `paths`（YAML 列表或逗号分隔的 glob 字符串，支持花括号与 `[…]` 字符类）的规则，只在触及匹配文件时加载：成功的 `read`、`write`、`edit`，或只读取单个文件的纯 `cat`/`head`/`tail` 的 `bash` 命令（管道、命令串联与多文件命令不算）。来源为上述扫描文件以及 OMP 原生发现的全部规则（项目与用户级 `.omp`/`.agents` 规则、cursor/windsurf/cline/GitHub 规则、插件与扩展根目录的 `rules/`，例如经 `~/.claude` 扩展条目加载的 `~/.claude/rules`）。glob 的基准目录：用户级规则为 `cwd`，项目规则为包含该规则所在点目录的目录，插件或扩展根下 `rules/` 的规则为该根目录。带 `paths` 的原生规则无论 OMP 原本放在哪里都由本扩展接管：`alwaysApply` 正文从 `<generic-rules>` 删除，rulebook 条目从 `<domain-rules>` 删除，并继续遵守 `ttsr.disabledRules` 与其 `agents` 作用域。TTSR 规则（`condition`、`astCondition`、`question`）与 OMP 内置规则仍由 OMP 自行触发。命中的规则以 `tool_result` 的 `additionalContext`（工具批次之后的 developer 消息）送达，每个上下文一次：只要其 `<path-scoped-rule path="…">` 标记仍在 OMP 将发送的上下文中就不重复（因此压缩丢掉标记、resume 与切分支都按实际上下文处理）。
+- **绝对路径模式（Claude Code 之外的扩展）：** 以 `/` 或 `~/` 开头的 `paths` 模式匹配被触及文件的绝对路径（`~` 为家目录），而非相对基准目录的路径，因此用户级规则可以按目录名生效、与会话 cwd 无关，例如 `/**/{omp,.omp,omp-*,*-omp,*-omp-*}/**` 覆盖所有 omp 仓库。Claude Code 本身把这类模式当作相对路径，永远不会命中。
 
 ---
 
