@@ -53,7 +53,7 @@ flowchart TD
 | **上下文经济学与防失忆** | 主会话发生 Compaction 后丢失已完成任务账本与子代理拓扑 | `todo` 修改时 / 主会话 compact 后 | 插件 `omp-todo-more` 的 [ctx](#ctx) + [Task log](#task-log) | 每次成功 `todo` 修改追加写入 `task-log/<agent-id>.md`；compact 后自动把 `ctx list` 与重放时间线注入新上下文 | 启用 |
 | **提示词分层与模型适配** | 内置工具协议在基础模板和附录里重复堆砌，或与自定义派发/检索规则冲突 | 每次 `before_agent_start`（最后执行） | [system-prompt-replace](#system-prompt-replace) | 在 `inlineToolDescriptors: "on"` 下原地改写渲染后的内置与插件工具描述 | 禁用 |
 | **提示词分层与模型适配** | OMP 原生提示词与自动压缩阈值无法按模型家族正则差异化配置 | 每次 `before_agent_start` | [append-system-model](#append-system-model) + [model-compaction](#model-compaction) | 按 `model`/`provider` 正则追加模型专属提示词，并为匹配模型写入原生 `"provider/id": "f<N>"` 压缩水位 | 启用 |
-| **宿主环境与运维补齐** | OMP 默认不扫描仓库 `.claude/rules` 与 `.pi/rules` | `session_start` / `before_agent_start` | [repo-rules](#repo-rules) | 从 `cwd` 向上至 git 根扫描 `.claude/rules`、`.agents/rules`、`.pi/rules` 并去重注入 | 启用 |
+| **宿主环境与运维补齐** | OMP 不扫描 `.claude/rules` 与 `.pi/rules`，丢弃既无 `alwaysApply` 也无 `description` 的规则文件，也不认 Claude Code 的 `paths` frontmatter | `session_start` / `before_agent_start` / `tool_result` | [repo-rules](#repo-rules) | 注入 `.claude/rules`、`.agents/rules`、`.pi/rules`（cwd 向上至 git 根）与 `~/.claude/rules` 的规则；所有带 `paths` 的规则（含 OMP 原生发现的）只在读、写、编辑或 `cat` 到匹配文件后加载 | 启用 |
 | **宿主环境与运维补齐** | 仅人类能在 TUI 输入 `/wt`、`/move`、`/restart`，主代理无法自主切 worktree 或重启生效新配置 | 主 TUI 会话空闲时 | [wt-tool](#wt-tool) (`wt`/`wt_remove`) + [harness-restart](#harness-restart) | 排队并在回合真正结束后调用 TUI 原生命令分发器执行 worktree 切换、两阶段验证删除与带原因重启恢复 | 启用 |
 | **宿主环境与运维补齐** | 子进程内存泄漏（含脱离父进程的孤儿进程）拖垮宿主机 | macOS 每 2 s | [child-memory-warning](#child-memory-warning) | 通过 Bun FFI 调 `libproc` 采样后代进程 `phys_footprint`，超过 `omomp.yml#child-memory-warning.thresholdGiB`（仓库配置 4 GiB）时告警主 UI 与主 agent | 启用 |
 | **宿主环境与运维补齐** | `--model` 指定 `commandcode` 模型时因宿主缓存遮蔽或内置 provider 同名冲突报鉴权失败 | `session_start` | [commandcode-model-spec](#commandcode-model-spec) | 识别 `commandcode-models.json` 中的模型并在 `api !== "commandcode-custom"` 时重选回插件实时注册模型 | 启用 |
@@ -99,7 +99,10 @@ system-prompt-replace:
 
 #### repo-rules
 
-OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf/rules`、`.clinerules` 与 `.github/instructions`，但不扫描项目级 `.claude/rules` 与 `.pi/rules`。本扩展在 `session_start` 从 `cwd` 向上至 git 根目录逐层递归扫描 `.claude/rules`、`.agents/rules`、`.pi/rules` 下的非隐藏 `.md` / `.mdc`（离 `cwd` 越近优先级越高，同层按 `.claude` → `.agents` → `.pi` 排序），并在每次 `before_agent_start` 追加 `<repo-level-rules>` 块：无 frontmatter 或 `alwaysApply: true` 的规则注入全文（若空白归一后已出现在本次收到的 system prompt 中则跳过）；其余带 frontmatter 的规则仅列出名称、`description` 与路径（若 system prompt 已含子串 `rule://<文件名>` 则跳过）。
+OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf/rules`、`.clinerules` 与 `.github/instructions`，但不扫描 `.claude/rules` 与 `.pi/rules`，会丢弃既无 `alwaysApply` 也无 `description` 的规则文件，也不读取 Claude Code 的 `paths` frontmatter。
+
+- **无作用域规则：** 本扩展从 `cwd` 向上至 git 根目录（不在仓库中时只看 `cwd`）逐层递归扫描 `.claude/rules`、`.agents/rules`、`.pi/rules` 下的非隐藏 `.md` / `.mdc`（离 `cwd` 越近优先级越高，同层按 `.claude` → `.agents` → `.pi` 排序），并在每个会话额外扫描用户级 `~/.claude/rules`，在每次 `before_agent_start` 追加 `<repo-level-rules>` 块。无 frontmatter、frontmatter 无法解析或 `alwaysApply: true` 的规则注入全文；其余带 frontmatter 的规则仅列出名称、`description` 与路径。OMP 已自行放置（alwaysApply、rulebook 条目或 TTSR）的文件跳过；正文空白归一后已在本次收到的 system prompt 中、或列表项的 `rule://<文件名>` 已在其中的也跳过。
+- **按路径作用的规则（Claude Code `paths`）：** frontmatter 含 `paths`（YAML 列表或逗号分隔的 glob 字符串，支持花括号与 `[…]` 字符类）的规则，只在触及匹配文件时加载：成功的 `read`、`write`、`edit`，或只读取单个文件的纯 `cat`/`head`/`tail` 的 `bash` 命令。来源为上述扫描文件以及 OMP 原生发现的全部规则（项目与用户级 `.omp`/`.agents` 规则、cursor/windsurf/cline/GitHub 规则、插件与扩展根目录的 `rules/`，例如经 `~/.claude` 扩展条目加载的 `~/.claude/rules`）。glob 的基准目录：用户级规则为 `cwd`，项目规则为包含该规则所在点目录的目录，插件或扩展根下 `rules/` 的规则为该根目录。OMP 只会列入 rulebook 或直接丢弃的带 `paths` 原生规则由本扩展接管：从 `<domain-rules>` 中删除其条目，并继续遵守 `ttsr.disabledRules` 与其 `agents` 作用域；OMP 以 `alwaysApply` 注入或注册为 TTSR 的原生规则保持 OMP 的放置方式。命中的规则以 `tool_result` 的 `additionalContext`（工具批次之后的 developer 消息）送达，每个上下文一次：只要其 `<path-scoped-rule path="…">` 标记仍在 OMP 将发送的上下文中就不重复（因此压缩丢掉标记、resume 与切分支都按实际上下文处理）。
 
 ---
 
@@ -370,7 +373,7 @@ doc-polish:
 |---|---|---|---|---|---|
 | 1 | `system-prompt-replace` | [§2.1](#system-prompt-replace) | 主 + 子 | 否 | `omomp.yml#system-prompt-replace`（仓库托管） |
 | 2 | `append-system-model` | [§2.1](#append-system-model) | 主 + 子 | 是 | `APPEND_SYSTEM_MODEL.md`（本机独占） |
-| 3 | `repo-rules` | [§2.1](#repo-rules) | 主 + 子 | 是 | 扫描仓库 `.claude/rules`、`.agents/rules`、`.pi/rules` |
+| 3 | `repo-rules` | [§2.1](#repo-rules) | 主 + 子 | 是 | 扫描 `.claude/rules`、`.agents/rules`、`.pi/rules`（cwd 向上至 git 根）、`~/.claude/rules`，并读取 OMP 原生规则的 `paths` |
 | 4 | `fork-task` | [§2.2](#fork-task) | 主 + 子 | 否 | 无配置文件 |
 | 5 | `model-compaction` | [§2.2](#model-compaction) | 主写 / 子读 | 是 | `omomp.yml#model-compaction`（本机独占） |
 | 6 | `user-prompt-inject` | [§3.2](#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库带 `user-goal.md`） |

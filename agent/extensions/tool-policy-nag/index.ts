@@ -52,10 +52,11 @@
  * do not escape into omp.
  */
 import type { Judge } from "@oh-my-pi/pi-ai";
-import { AgentRegistry, type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
 import { cfgBashInterceptorEnabled } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import { errorText } from "../_shared/errors.ts";
 import { openNativeJudge } from "../_shared/judge.ts";
+import { sessionSettings } from "../_shared/settings.ts";
 import { type WatchedCall, watchedCallOf } from "./calls.ts";
 import { type FormLane, type IntentLane, type Lanes, loadLanes } from "./detector-config.ts";
 import { detectEvalViolations, detectShellViolations } from "./heuristic.ts";
@@ -108,15 +109,6 @@ function rebuildState(ctx: ExtensionContext): NagState {
 		if (parsed !== null) state = parsed;
 	}
 	return state;
-}
-
-/** The live settings of this session, as OMP registered it. */
-function sessionSettings(ctx: ExtensionContext): Settings {
-	const session = AgentRegistry.global()
-		.list()
-		.find((ref) => ref.session?.sessionManager === ctx.sessionManager)?.session;
-	if (session == null) throw new Error("tool-policy-nag: current OMP session is not registered");
-	return session.settings;
 }
 
 function heuristicCheck(
@@ -295,6 +287,7 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 	/** Under the heuristic detector the interceptor is off whatever config says; otherwise config decides. */
 	const syncInterceptor = (ctx: ExtensionContext, lanes: Lanes): Settings => {
 		const settings = sessionSettings(ctx);
+		if (settings === undefined) throw new Error("tool-policy-nag: current OMP session is not registered");
 		if (lanes.tool?.detector !== "heuristic") {
 			releaseInterceptor("detector is not heuristic");
 			return settings;
