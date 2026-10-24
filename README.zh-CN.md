@@ -244,7 +244,7 @@ model-compaction:
 
 ### 4.2 运行期旁路纠偏与原生 JUDGE 角色共享机制
 
-`turn-judge`、`tool-policy-nag` 的 `intent` 通道（`detector: jev` 时）与 `watchdog-agent` 的选项后端共用宿主的 **JUDGE 模型角色**（`_shared/judge.ts` 的 `openNativeJudge`）。只需在 OMP 的 `modelRoles.judge` 中配置原生判定模型（如 `futureppo-jev/decision-model-preview`），三处功能即自动启用；若 `judge` 指向普通聊天模型或未配置，需要选项概率的原生判定会静默跳过且绝不回退到聊天模型。角色设置每次触发实时解析，热重载后下一次触发即生效。
+`turn-judge`、`tool-policy-nag` 的 `intent` 通道（`detector: jev` 时）、`watchdog-agent` 的选项后端与 `lang-nag` 通过 `_shared/judge.ts` 的 `openJudge` 共用宿主的 **JUDGE 模型角色**：每次判定都交给 OMP 自己的 judge 角色链，先 `modelRoles.judge`，再 `retry.fallbackChains.judge`，未配置该键时用 OMP 内置的 judge 默认链。链会跳过没有凭据的候选，候选报 provider 错误时换下一个（401/402/403 让该候选冷却 5 分钟），遇到中止或超时即停止；从第一个原生判定 API 模型起只保留原生候选。每次尝试记入会话用量账本，完全相同的请求由 OMP 共享判定缓存作答。前三者要求首选为原生：只需在 OMP 的 `modelRoles.judge` 中配置原生判定模型（如 `futureppo-jev/decision-model-preview`）即自动启用；若链的第一个候选是普通聊天模型，它们静默跳过且绝不回退到聊天模型。`lang-nag` 接受任意首选（含本地与提示式聊天模型），链中没有原生候选时还会用会话模型。角色设置每次触发实时解析，热重载后下一次触发即生效。
 
 #### tool-policy-nag
 
@@ -308,7 +308,7 @@ tool-policy-nag:
 
 #### lang-nag
 
-仅作用于主会话。在 `agent_end` 取最后一条有正文回复的最后一段（前 200 个字符），优先通过原生 JUDGE（不可用时用 `taskDepth: 1` 内存辅助会话调用 `omomp.yml#lang-nag.model`）判断是否为 `language`（仓库配置：`model: openai-codex/gpt-6-luna`、`language: 中文`、`instruction: 说中文`，会话开始或切换时读取）。若判定为否，在用户下一条真实输入前拼接 `"说中文\n\n"`（斜杠命令清掉待用判定；若用户发送时判定尚未完成则中止判定并原样放行）。
+仅作用于主会话。在 `agent_end` 取最后一条有正文回复的最后一段（前 200 个字符），向上述 JUDGE 角色链发一道选择题，判断是否主要为 `language`（仓库配置：`language: 中文`、`instruction: 说中文`，会话开始或切换时读取；没有可用候选或全部候选失败时不提醒）。若判定为否，在用户下一条真实输入前拼接 `"说中文\n\n"`（斜杠命令清掉待用判定；若用户发送时判定尚未完成则中止判定并原样放行）。
 
 ---
 
@@ -562,7 +562,7 @@ OMP 从 `~/.omp/agent/extensions/` 只向下找一层：本仓库所有扩展均
 | `omomp.ts` | `defineOmompSection`、`loadOmompSection`、`writeOmompSection`：按 `import.meta.dir` 目录名读写 `omomp.{yml,yaml,json,toml}` 对应段（项目 `<cwd>/.omp/omomp.*` 优先于 `<agentDir>/omomp.*`） |
 | `models.ts` | `resolveModelChain`、`findModel`、`splitLevel`：解析 `provider/id[:effort]` 与逗号分隔候选链（只查可用列表，不发请求） |
 | `helper-session.ts` | `runHelperPrompt`：在无工具、无扩展、空系统提示词的内存辅助会话中执行单次模型调用，**固定传 `taskDepth: 1`** 且永不抛异常 |
-| `judge.ts` | `openNativeJudge`：通过宿主角色解析器解析当前会话 `@judge` 角色，仅当其为原生 judgment API（`isJudgmentApi`）时返回 `Judge` 实例 |
+| `judge.ts` | `openJudge`：为当前会话构建 OMP 的 judge 角色链（`@oh-my-pi/pi-coding-agent/judgment` 的 `resolveJudge`），带用量账本与判定缓存；作用域 `native` 仅当链的首选候选为原生判定 API 模型时返回，`any` 只要有候选即返回 |
 | `spec-files.ts` | `discoverSpecFiles`、`parseFrontmatter`、`unquote`：扫描扩展目录及 `cwd` 至 git 根各层（含 `.omp/`）的 `*-<label>.md` 文件 |
 
 **硬性代码规范（由 `bun run check` 即 Biome + `tsc --noEmit` 强制执行）：**

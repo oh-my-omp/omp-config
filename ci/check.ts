@@ -164,7 +164,7 @@ function configuredModels(): ModelRef[] {
 	const overrides =
 		isMapping(config) && isMapping(config.task) && isMapping(config.task.agentModelOverrides) ? config.task.agentModelOverrides : {};
 	for (const chain of Object.values(overrides)) if (typeof chain === "string") selectors.push(...chain.split(","));
-	for (const name of ["lang-nag", "input-polish", "task-completion-judge", "task-split-check"]) {
+	for (const name of ["input-polish", "task-completion-judge", "task-split-check"]) {
 		const model = omompSection(name).model;
 		if (typeof model === "string") selectors.push(model);
 	}

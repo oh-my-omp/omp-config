@@ -244,7 +244,7 @@ Intercepts terminal structured `yield` calls inside `task:low`, `task:mid` and `
 
 ### 4.2 Runtime Sideband Correction and Shared Native JUDGE Role
 
-`turn-judge`, the `intent` lane of `tool-policy-nag` (under `detector: jev`) and the option backend of `watchdog-agent` share OMP's **JUDGE model role** (`openNativeJudge` in `_shared/judge.ts`). Pointing `modelRoles.judge` in OMP at a native judgment API model (such as `futureppo-jev/decision-model-preview`) activates all three automatically; when `judge` points at an ordinary chat model or is unset, native option judgments stay silently inactive and never fall back to a chat model. Role config is re-read on every trigger.
+`turn-judge`, the `intent` lane of `tool-policy-nag` (under `detector: jev`), the option backend of `watchdog-agent` and `lang-nag` share OMP's **JUDGE model role** through `openJudge` in `_shared/judge.ts`, which hands every judgment to OMP's own judge-role chain: `modelRoles.judge` first, then `retry.fallbackChains.judge`, or OMP's built-in judge defaults when that key is absent. The chain skips candidates without credentials, moves to the next candidate after a provider error (a 401/402/403 parks that candidate for 5 minutes), and stops at an abort or timeout; from the first native judgment API model on, only native candidates remain. Attempts are recorded in the session's usage ledger and exact repeats are answered from OMP's shared judgment cache. The first three need a native primary: pointing `modelRoles.judge` at a native judgment API model (such as `futureppo-jev/decision-model-preview`) activates them; when the chain's first candidate is an ordinary chat model, they stay silently inactive and never fall back to a chat model. `lang-nag` takes any primary, local or prompted chat included, and the session model when the chain has no native candidate. Role config is re-read on every trigger.
 
 #### tool-policy-nag
 
@@ -308,7 +308,7 @@ After every turn that the model ended itself (`stopReason: "stop"` with non-empt
 
 #### lang-nag
 
-Main session only. At `agent_end`, takes the first 200 characters of the last paragraph of the last non-empty reply and checks whether it matches `language` via native JUDGE when available, or a `taskDepth: 1` in-memory helper session calling `omomp.yml#lang-nag.model` (repository values: `model: openai-codex/gpt-6-luna`, `language: 中文`, `instruction: 说中文`, read at session start or switch). On a mismatch, prepends `"说中文\n\n"` to the user's next real input (slash commands clear the pending verdict; if detection is still running when the user sends a message, it is aborted and the message goes out unchanged).
+Main session only. At `agent_end`, takes the first 200 characters of the last paragraph of the last non-empty reply and asks the JUDGE role chain above one choice question: is it mainly in `language`? (repository values: `language: 中文`, `instruction: 说中文`, read at session start or switch; no judge candidate, or every candidate failing, means no nag). On a mismatch, prepends `"说中文\n\n"` to the user's next real input (slash commands clear the pending verdict; if detection is still running when the user sends a message, it is aborted and the message goes out unchanged).
 
 ---
 
@@ -562,7 +562,7 @@ OMP discovers extensions one level deep under `~/.omp/agent/extensions/`: every 
 | `omomp.ts` | `defineOmompSection`, `loadOmompSection`, `writeOmompSection`: binds an extension directory name (`import.meta.dir`) to its section in `omomp.{yml,yaml,json,toml}` (project `<cwd>/.omp/omomp.*` wins over `<agentDir>/omomp.*`) |
 | `models.ts` | `resolveModelChain`, `findModel`, `splitLevel`: resolves `provider/id[:effort]` and comma-separated fallback chains against the available model list without sending requests |
 | `helper-session.ts` | `runHelperPrompt`: executes a one-shot prompt in a tool-less, extension-less in-memory helper session with **`taskDepth: 1` always set** and never throws |
-| `judge.ts` | `openNativeJudge`: resolves the current session's `@judge` role through the host role parser and returns a `Judge` instance only when backed by a native judgment API (`isJudgmentApi`) |
+| `judge.ts` | `openJudge`: builds OMP's judge-role chain (`resolveJudge` from `@oh-my-pi/pi-coding-agent/judgment`) for the calling session, with its usage ledger and answer cache; scope `native` returns it only when the chain's primary candidate is a native judgment API model, scope `any` whenever a candidate resolves |
 | `spec-files.ts` | `discoverSpecFiles`, `parseFrontmatter`, `unquote`: discovers and parses `*-<label>.md` files in the extension directory and from `cwd` up to the git root (`.omp/` included) |
 
 **Mandatory engineering rules (enforced by `bun run check`, i.e. Biome + `tsc --noEmit`):**

@@ -1,50 +1,48 @@
-import { createNativeJudge, isJudgmentApi, type Judge, type Model } from "@oh-my-pi/pi-ai";
-import { AgentRegistry, type ExtensionContext, resolveScopedModels } from "@oh-my-pi/pi-coding-agent";
+import type { Judge } from "@oh-my-pi/pi-ai";
+import { AgentRegistry, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { journalJudgmentUsage, kindOf, resolveJudge, sharedJudgmentCache } from "@oh-my-pi/pi-coding-agent/judgment";
 
-export type JudgeOpen = { readonly kind: "ready"; readonly judge: Judge; readonly model: Model } | { readonly kind: "inactive" };
+/** `native`: only a native judgment API primary activates the judge; `any`: native, local or prompted chat. */
+export type JudgeScope = "native" | "any";
 
-const JUDGE_SCOPE: Parameters<typeof resolveScopedModels>[0] = {
-	models: ["@judge"],
-	messages: [],
-	fileArgs: [],
-	unknownFlags: new Map<string, boolean | string>(),
-	unrecognizedFlags: [],
-	invalidFlagValues: [],
-};
+export type JudgeOpen = { readonly kind: "ready"; readonly judge: Judge } | { readonly kind: "inactive" };
 
 /**
- * Use the host's role parser and the calling session's live settings.
- * ctx.models.resolve searches chat models only; the scope resolver accepts an
- * all-kind registry view without recreating role parsing. Snapshot the native
- * model so availability and execution agree after a role change. Credentials
- * and headers are requested from the host only when a judgment executes.
+ * OMP's own judge for the calling session: the `judge` role chain
+ * (`modelRoles.judge`, then `retry.fallbackChains.judge`), walked in order on
+ * missing credentials and provider errors, with OMP's account-rejection
+ * cooldown, session usage ledger, pricing and shared answer cache. Abort and
+ * timeout end the walk. From the first native candidate on only native
+ * candidates remain, so a `native` judge never answers from a prompted model.
+ * The gate reads the same instance's primary candidate the judgment uses.
+ * `purpose` labels ledger entries and telemetry spans.
  */
-export async function openNativeJudge(ctx: ExtensionContext): Promise<JudgeOpen> {
+export function openJudge(ctx: ExtensionContext, purpose: string, scope: JudgeScope): JudgeOpen {
 	const session = AgentRegistry.global()
 		.list()
 		.find((ref) => ref.session?.sessionManager === ctx.sessionManager)?.session;
 	if (session == null) throw new Error("JUDGE: current OMP session is not registered");
-	const [resolved] = await resolveScopedModels(
-		JUDGE_SCOPE,
-		{
-			getAvailable: () => ctx.modelRegistry.getAvailable("all"),
-			getDiscoverableProviders: () => ctx.modelRegistry.getDiscoverableProviders(),
-			refresh: (mode, options) => ctx.modelRegistry.refresh(mode, options),
-		},
-		session.settings,
-	);
-	const model = resolved?.model;
-	if (model === undefined || !isJudgmentApi(model.api)) return { kind: "inactive" };
-	const sessionId = ctx.sessionManager.getSessionId();
-	const judge: Judge = {
-		label: `${model.provider}/${model.id}`,
-		async judge(request, options) {
-			const signal = options?.signal;
-			const apiKey = await ctx.modelRegistry.getApiKey(model, sessionId, { signal });
-			if (!apiKey) throw new Error(`judge ${model.provider}/${model.id}: credentials unavailable`);
-			const headers = await ctx.modelRegistry.resolveModelHeaders(model, signal);
-			return createNativeJudge(model, { apiKey: ctx.modelRegistry.resolver(model, sessionId), headers }).judge(request, options);
-		},
-	};
-	return { kind: "ready", judge, model };
+	const judge = resolveJudge({
+		settings: session.settings,
+		registry: session.modelRegistry,
+		sessionModel: session.model,
+		sessionId: session.sessionId,
+		metadataResolver: (provider) => session.agent.metadataForProvider(provider),
+		purpose,
+		onUsage: journalJudgmentUsage(session.sessionManager),
+		telemetry: session.agent.telemetry,
+		cache: sharedJudgmentCache(),
+	});
+	const primary = judge.primaryModel();
+	if (primary === undefined) return { kind: "inactive" };
+	switch (scope) {
+		case "native":
+			return kindOf(primary) === "native" ? { kind: "ready", judge } : { kind: "inactive" };
+		case "any":
+			return { kind: "ready", judge };
+		default: {
+			const exhaustive: never = scope;
+			return exhaustive;
+		}
+	}
 }

@@ -3,7 +3,6 @@
 # Installed as <agent dir>/omomp.yml. Machine-local sections (doc-polish, model-compaction,
 # omp-config-autoupdate) live only on the machine and are never written from here.
 lang-nag:
-  model: openai-codex/gpt-6-luna
   language: 中文
   instruction: 说中文
 input-polish:

@@ -115,7 +115,7 @@ import { basename } from "node:path";
 import type { AssistantMessage, Judge } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
-import { openNativeJudge } from "../_shared/judge.ts";
+import { openJudge } from "../_shared/judge.ts";
 import { textOf } from "../_shared/messages.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 
@@ -617,7 +617,7 @@ async function judgeSubagentTurn(
 	reply: string,
 	deadline: AbortSignal,
 ): Promise<void> {
-	const opened = await openNativeJudge(ctx);
+	const opened = openJudge(ctx, "turn-judge", "native");
 	if (opened.kind === "inactive") return;
 	const judged = await Promise.all(specs.map((spec) => judgeSpec(opened.judge, spec, context, reply, deadline)));
 	const warnings = judged.flatMap((j) => (j.kind === "failed" ? [j.line] : []));
@@ -674,7 +674,7 @@ export default function turnJudge(pi: ExtensionAPI): void {
 	/** Start the main session's judgments in the background; one notification per turn once all settle. */
 	const judgeMainTurn = async (ctx: ExtensionContext, specs: readonly TurnJudgeSpec[], context: Before, reply: string) => {
 		const startedAt = epoch;
-		const opened = await openNativeJudge(ctx);
+		const opened = openJudge(ctx, "turn-judge", "native");
 		if (opened.kind === "inactive") return;
 		// One notification per turn: consecutive UI notifications replace each other.
 		void Promise.all(

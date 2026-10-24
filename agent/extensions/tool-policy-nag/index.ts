@@ -55,7 +55,7 @@ import type { Judge } from "@oh-my-pi/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
 import { cfgBashInterceptorEnabled } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import { errorText } from "../_shared/errors.ts";
-import { openNativeJudge } from "../_shared/judge.ts";
+import { openJudge } from "../_shared/judge.ts";
 import { sessionSettings } from "../_shared/settings.ts";
 import { type WatchedCall, watchedCallOf } from "./calls.ts";
 import { type FormLane, type IntentLane, type Lanes, loadLanes } from "./detector-config.ts";
@@ -226,7 +226,7 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 				return unreachable;
 			}
 		}
-		const opened = await openNativeJudge(ctx);
+		const opened = openJudge(ctx, "tool-policy-nag", "native");
 		return opened.kind === "inactive" ? null : { judge: opened.judge, spec: loaded.spec };
 	};
 
