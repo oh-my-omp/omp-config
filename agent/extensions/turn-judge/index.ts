@@ -18,7 +18,7 @@
 //   model:   opus                        # optional; regex, see SCOPE
 //   provider: ^anthropic$                # optional; regex, see SCOPE
 //   skipTools: wt, harness_restart       # optional; tool names, see SCOPE
-//   maxChars: 30000                      # optional; history budget, see STATE
+//   maxChars: 30000                      # optional; 时间线 budget, see STATE
 //   option.<label>: <criteria>           # >= 2 options; empty criteria = the label says it all
 //   option.<label>.prompt: <text>        # optional; typed as a user prompt when triggered
 //   option.<label>.threshold: 0.7        # required with .prompt, in (0, 1]
@@ -33,13 +33,17 @@
 // unanchored `RegExp.test`, against the judged message's own `model` and
 // `provider` (the model that produced the turn, not `upstreamModel`); an
 // empty value or a bad regex makes the file invalid. `skipTools` is a comma
-// list of tool names: a turn whose 本轮工具调用 (see STATE) includes any of them
-// is not judged by the file, e.g. a turn that queued a session move (`wt`,
-// `harness_restart`), which runs only after the turn ends; a key that lists
-// nothing makes the file invalid. A file judges a turn only when its target
-// covers the session, every regex it sets matches and no skip tool was called.
-// Files that do not apply cost nothing: no JUDGE request, and no history walk
-// unless a file passes the target and model checks.
+// list of tool names: a turn that called any of them is not judged by the
+// file, e.g. a turn that queued a session move (`wt`, `harness_restart`),
+// which runs only after the turn ends. The turn's calls are those of every
+// assistant message after the previous one that ended with `stopReason:
+// "stop"`, so a turn a prompt (human, turn-judge or harness) starts after a
+// stop counts from zero; calls inside the judged message itself have not run
+// and do not count. A key that lists nothing makes the file invalid. A file
+// judges a turn only when its target covers the session, every regex it sets
+// matches and no skip tool was called. Files that do not apply cost nothing:
+// no JUDGE request, and no branch walk unless a file passes the target and
+// model checks.
 //
 // TURN. A turn is an assistant message the model ended itself
 // (`stopReason: "stop"`) with nonempty text. Aborted, errored and tool-use
@@ -48,21 +52,24 @@
 // wake. Files are re-read at every turn, so edits apply to the next turn.
 //
 // STATE. Each file is one separate judge request whose state is
-//   { 过去的记录: [{ 角色: "用户" | "模型", 内容 }...], 本轮工具调用: [name...], 本轮回复 }
-// 过去的记录 is the current branch before this turn, oldest first: the
-// user-role prompts and every assistant message's text (tool calls, tool
-// results and thinking are left out). Synthetic user messages never count. In
-// a main session only the human's own prompts (`attribution: "user"`) count;
-// in a subagent every user-role prompt counts whatever its attribution (the
-// assignment, messages from the parent, earlier turn-judge prompts), still
-// labelled "用户". When it exceeds `maxChars` characters, whole entries are
-// dropped from the oldest end.
-// 本轮工具调用 is the names, in order and with repeats, of the tool calls the
-// model made in this turn: every assistant message on the branch after the
-// previous assistant message that ended with `stopReason: "stop"` and before
-// the judged one. A turn a prompt (human, turn-judge or harness) starts after
-// a stop therefore counts from zero. Tool calls inside the judged message
-// itself are not counted: they have not run when it is judged. `[]` = no call.
+//   { 时间线: [{ 类型, 内容 }...], 本轮回复 }
+// 时间线 is the current branch up to the judged message, oldest first, one
+// entry per event in the order it happened:
+//   用户说        a user-role prompt. Synthetic ones never count; in a main
+//                session only the human's own (`attribution: "user"`), in a
+//                subagent every one (the assignment, messages from the parent,
+//                earlier turn-judge prompts).
+//   模型想        a thinking block's text (GPT and Gemini send a summary of
+//                their reasoning; Claude sends its reasoning). Redacted and
+//                empty blocks are left out.
+//   模型说        an assistant text block, or a thinking block the provider
+//                marks as narration addressed to the user.
+//   模型调用工具  a tool call, as `name：intent` (the harness intent the call
+//                carries; just the name when it has none). Arguments and
+//                results are left out.
+// The judged message's own thinking closes the 时间线; its text is 本轮回复.
+// When the 时间线 exceeds `maxChars` characters, whole entries are dropped
+// from the oldest end.
 //
 // OUTCOME. JUDGE answers one choice question with a probability per option.
 // Among options that carry a prompt, the one with the highest probability at
@@ -150,12 +157,17 @@ type SpecParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-type HistoryLine = { readonly 角色: "用户" | "模型"; readonly 内容: string };
+type TimelineKind = "用户说" | "模型想" | "模型说" | "模型调用工具";
 
-type TurnState = { readonly 过去的记录: readonly HistoryLine[]; readonly 本轮工具调用: readonly string[]; readonly 本轮回复: string };
+type TimelineEntry = { readonly 类型: TimelineKind; readonly 内容: string };
 
-/** What the branch before the judged message contributes to every file's state. */
-type Before = { readonly history: readonly HistoryLine[]; readonly toolCalls: readonly string[] };
+type TurnState = { readonly 时间线: readonly TimelineEntry[]; readonly 本轮回复: string };
+
+/**
+ * What the branch up to the judged message contributes to every file: the
+ * timeline, and the tool names called since the previous stop (for `skipTools`).
+ */
+type Before = { readonly timeline: readonly TimelineEntry[]; readonly toolCalls: readonly string[] };
 
 type Verdict = { readonly choice: string; readonly probabilities: Readonly<Record<string, number>> };
 
@@ -408,42 +420,70 @@ function applyingSpecs(pi: ExtensionAPI, ctx: ExtensionContext, message: Assista
 
 // --- turn state ---------------------------------------------------------------
 
+/** The thinking, text and tool-call events of one assistant message, in block order. */
+function assistantEvents(message: AssistantMessage, withText: boolean): TimelineEntry[] {
+	const events: TimelineEntry[] = [];
+	for (const block of message.content) {
+		switch (block.type) {
+			case "thinking": {
+				const text = block.thinking.trim();
+				if (text !== "") events.push({ 类型: block.narration === true ? "模型说" : "模型想", 内容: text });
+				break;
+			}
+			case "text": {
+				const text = block.text.trim();
+				if (withText && text !== "") events.push({ 类型: "模型说", 内容: text });
+				break;
+			}
+			case "toolCall": {
+				const intent = block.intent?.trim();
+				events.push({ 类型: "模型调用工具", 内容: intent ? `${block.name}：${intent}` : block.name });
+				break;
+			}
+			default:
+				// Redacted thinking, images and provider-specific blocks carry nothing the judge can read.
+				break;
+		}
+	}
+	return events;
+}
+
 /**
- * The session's prompts and the model's text on the branch before the judged
- * message, oldest first, and the tool calls made since the previous stop.
+ * The timeline up to the judged message (whose thinking closes it; its text is
+ * the reply), and the tool names called since the previous stop.
  */
-function before(ctx: ExtensionContext, judgedTimestamp: number): Before {
+function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
 	const main = ctx.agent.kind === "main";
-	const history: HistoryLine[] = [];
+	const timeline: TimelineEntry[] = [];
 	let toolCalls: string[] = [];
 	for (const entry of ctx.sessionManager.getBranch()) {
 		if (entry.type !== "message") continue;
 		const message = entry.message;
-		if (message.timestamp >= judgedTimestamp) break;
+		if (message.timestamp >= judged.timestamp) break;
 		if (message.role === "user") {
 			if (message.synthetic === true || (main && message.attribution !== "user")) continue;
 			const text = textOf(message.content, "\n").trim();
-			if (text !== "") history.push({ 角色: "用户", 内容: text });
+			if (text !== "") timeline.push({ 类型: "用户说", 内容: text });
 		} else if (message.role === "assistant") {
-			const text = textOf(message.content, "\n").trim();
-			if (text !== "") history.push({ 角色: "模型", 内容: text });
+			timeline.push(...assistantEvents(message, true));
 			for (const block of message.content) if (block.type === "toolCall") toolCalls.push(block.name);
 			if (message.stopReason === "stop") toolCalls = [];
 		}
 	}
-	return { history, toolCalls };
+	timeline.push(...assistantEvents(judged, false).filter((event) => event.类型 !== "模型调用工具"));
+	return { timeline, toolCalls };
 }
 
 /** Keep the newest whole entries whose total length fits `maxChars`. */
-function fitHistory(lines: readonly HistoryLine[], maxChars: number): HistoryLine[] {
-	const kept: HistoryLine[] = [];
+function fitTimeline(entries: readonly TimelineEntry[], maxChars: number): TimelineEntry[] {
+	const kept: TimelineEntry[] = [];
 	let used = 0;
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const line = lines[i];
-		if (line === undefined) continue;
-		used += line.内容.length;
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (entry === undefined) continue;
+		used += entry.内容.length;
 		if (used > maxChars) break;
-		kept.push(line);
+		kept.push(entry);
 	}
 	return kept.reverse();
 }
@@ -498,7 +538,7 @@ function describeVerdict(spec: TurnJudgeSpec, verdict: Verdict): string {
 }
 
 async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, context: Before, reply: string, signal: AbortSignal): Promise<Judged> {
-	const state: TurnState = { 过去的记录: fitHistory(context.history, spec.maxChars), 本轮工具调用: context.toolCalls, 本轮回复: reply };
+	const state: TurnState = { 时间线: fitTimeline(context.timeline, spec.maxChars), 本轮回复: reply };
 	const result = await runJudge(judge, spec, state, signal);
 	switch (result.kind) {
 		case "failed":
@@ -672,7 +712,7 @@ export default function turnJudge(pi: ExtensionAPI): void {
 			if (reply === "") return;
 			const scoped = applyingSpecs(pi, ctx, message);
 			if (scoped.length === 0) return;
-			const context = before(ctx, message.timestamp);
+			const context = before(ctx, message);
 			const specs = scoped.filter((spec) => !context.toolCalls.some((name) => spec.skipTools.has(name)));
 			if (specs.length === 0) return;
 			if (deadline === null) await judgeMainTurn(ctx, specs, context, reply);
