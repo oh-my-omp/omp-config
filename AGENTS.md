@@ -25,7 +25,9 @@ The repo is consumed by `omp` in two directions:
   default), `extensions/omp-config-autoupdate/` runs `omp-config-update.ts auto`
   at every `omp` start, which fetches the GitHub default branch into its own
   clone (`~/.omp/omp-config-src`) and applies it when the commit differs from
-  the one recorded in `<agent dir>/.omp-config-applied`.
+  the one recorded in `<agent dir>/.omp-config-applied`; when it does not, it
+  still reruns `omp install` on the unpinned GitHub plugins, so they follow
+  their default branch without a config commit.
 - **machine → repo**: `/sync-omp-config` captures eligible local state back here.
 
 ## Architecture & Data Flow
@@ -455,14 +457,17 @@ exercised in a real omp session.
   `/omp-config-autoupdate` (`status` reads; `on`/`off` write) manages the machine-local switch: the `omp-config-autoupdate` section of the agent dir's `omomp.*` (`{"enabled": bool}`; missing or invalid = off), which neither the updater nor `/sync-omp-config` carries, and
   which the hook reads once per start. When on, the hook spawns the updater beside it with
   `bun` from a managed `ctx.setTimeout` (an in-process fault must not take OMP
-  down) and notifies only on changes or failures (up to date, a busy lock, and
-  a failed fetch only log); `/omp-config-autoupdate run`
+  down) and notifies only on changes or failures (up to date with no plugin
+  change, a busy lock, and a failed fetch only log); `/omp-config-autoupdate run`
   spawns the same child on demand, whatever the switch says, and posts the full
   report of that run only as a display-only transcript message. `auto` takes
   the lock dir `~/.omp/omp-config-update.lock`, fetches into
   `~/.omp/omp-config-src` (a failed fetch, first clone included, applies
-  nothing and returns `offline`), then
-  imports `applySnapshot` from the fetched clone's copy of the updater, so a
+  nothing and returns `offline`). On an unchanged commit it runs `omp install`
+  on every unpinned GitHub entry of `install-plugins.sh` (required, and optional
+  ones already installed) and returns `up-to-date` with the installed, upgraded
+  and failed plugins; a failure warns and never touches the marker. On a new
+  commit it imports `applySnapshot` from the fetched clone's copy of the updater, so a
   commit is applied by its own rules; keep `applySnapshot(options)`
   backward-compatible. It parses the child's JSON result with a schema
   (`moved` included). The marker `<agent dir>/.omp-config-applied` is written
@@ -521,7 +526,7 @@ exercised in a real omp session.
   `oh-my-omp/omp-codex-image-gen`, and `oh-my-omp/omp-todo-more`
   (independent rich Todo, reminders/planning, read projection and native editing,
   with awaited Tern owner asset initialization). All unpinned: `omp install` resolves npm versions,
-  and GitHub URLs track the default branch. The updater reruns `omp install` for every entry on each apply, which upgrades installed plugins too (`omp plugin upgrade` is not used: it leaves GitHub-sourced plugins on their locked commit). An existing
+  and GitHub URLs track the default branch. The updater reruns `omp install` for every entry on each apply, and `auto` with an unchanged config commit reruns it for the unpinned GitHub entries (required and installed optional), which upgrades installed plugins too (`omp plugin upgrade` is not used: it leaves GitHub-sourced plugins on their locked commit). An existing
   npm `pi-bansos` install must be removed with `omp plugin uninstall pi-bansos` before installing the fork URL,
   and an existing `pi-unified-exec` with `omp plugin uninstall pi-unified-exec` (both register the same tools).
   `oh-my-omp/omp-remote-build` and `oh-my-omp/omp-playbooks` are listed commented out

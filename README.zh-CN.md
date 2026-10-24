@@ -394,7 +394,7 @@ doc-polish:
 
 ## 5. 插件生态与外部能力底座
 
-仓库将轻量级的“策略与生命周期钩子”留在 `agent/extensions/`，而把重状态的持久化引擎、模型网关协议适配层、跨平台 PTY 终端与 Tern 分屏 UI 面板下沉为通过 `install-plugins.sh` 安装到 `~/.omp/plugins/` 的独立插件（共 8 个必装 + 2 个注释态可选，均不钉版本；每次更新器运行都会对必装项执行 `omp install` 以安装缺失项并升级已装项）。`plugin-audit.sh` 以 `omp install` 在 `~/.omp/plugins/package.json` 中为每个 Git/URL 条目记下的包名（第二列）作为对比键，已装的可选插件归入 `[保留]`，既不算缺失也不进卸载候选：
+仓库将轻量级的“策略与生命周期钩子”留在 `agent/extensions/`，而把重状态的持久化引擎、模型网关协议适配层、跨平台 PTY 终端与 Tern 分屏 UI 面板下沉为通过 `install-plugins.sh` 安装到 `~/.omp/plugins/` 的独立插件（共 8 个必装 + 2 个注释态可选，均不钉版本；每次更新器运行都会对必装项执行 `omp install` 以安装缺失项并升级已装项；配置提交未变的自动更新仍会对每个不带 `#ref` 的 GitHub 条目（必装项与已装的可选项）执行 `omp install`，所以它们不等配置提交也会跟上各自的默认分支）。`plugin-audit.sh` 以 `omp install` 在 `~/.omp/plugins/package.json` 中为每个 Git/URL 条目记下的包名（第二列）作为对比键，已装的可选插件归入 `[保留]`，既不算缺失也不进卸载候选：
 
 | 声明源（`install-plugins.sh`） | `omp plugin list` 包名 | 类别 | 暴露的工具 / 命令 / 技能 / 界面 | 核心机制及与本配置的耦合契约 |
 |---|---|---|---|---|
@@ -538,6 +538,7 @@ flowchart LR
 - 在根主会话 `session_start` 通过 `ctx.setTimeout` 异步派生子进程运行，由锁目录 `~/.omp/omp-config-update.lock`（带死进程 PID 抢占）串行化。
 - 拉取 `https://github.com/oh-my-omp/omp-config.git` 的 `main` 分支到 `~/.omp/omp-config-src`（自动修正旧 `mouriya-s-lab/omp-config.git` 地址；断网拉取失败时绝不用本地旧克隆代替，直接退出）。
 - 当远端提交与 `<agentDir>/.omp-config-applied` 不同时，从新拉取的克隆中动态导入 `applySnapshot`，按 **全量解析预检（Preflight）→ `omp install` 安装/升级全部声明插件 → 向 OMP 宿主 catalog 校验 `omp-todo-more` 已启用且 `./index.ts` 存在 → 执行旧平铺布局迁移（`RELOCATIONS`）→ 写入普通文件与结构化配置 → 执行 git diff 删除与 Todo/`ctx` 旧模块退休** 顺序落地。
+- 远端提交与 `.omp-config-applied` 相同时不应用任何文件，但仍对 `install-plugins.sh` 中每个不带 `#ref` 的 GitHub 条目执行 `omp install`：必装项，以及已经装上的可选项。默认分支有新提交的插件被升级（以 `~/.omp/plugins/bun.lock` 或 `omp-plugins.lock.json` 是否变化判定），缺失的必装项被装上，启动通知提示重启；npm 条目和带 `#ref` 固定的 URL 等下一次配置提交。安装失败发警告，下次启动重试，不改动 `.omp-config-applied`。
 - 移动或写入阶段只要出现任何错误，立即跳过整个删除阶段并报告 `Cutover incomplete; do not restart OMP`；仅当全程零错误时才更新 `.omp-config-applied`。
 
 ---

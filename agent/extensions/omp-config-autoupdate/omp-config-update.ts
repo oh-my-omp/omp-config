@@ -18,6 +18,8 @@
 //          any other origin is left untouched and reported.
 //          The apply code is imported from the freshly fetched clone, so a
 //          commit that changes apply rules is applied by its own rules.
+//          An unchanged commit still refreshes the plugins whose GitHub
+//          source moves on its own (see PLUGINS).
 //   apply  Run by /update-omp against a working checkout (`--source`).
 //          `--check` reports without writing.
 //
@@ -81,14 +83,20 @@
 // the loser skips. The lock records its holder's pid: a dead holder's lock is
 // taken over, and a process only releases a lock it holds.
 //
-// PLUGINS. Every entry of install-plugins.sh runs through `omp install` before
-// managed file operations: missing ones are installed, installed ones are
-// re-resolved (npm to the latest version, GitHub URLs to the default branch's
-// head). A plugin counts as changed when ~/.omp/plugins/bun.lock or
-// omp-plugins.lock.json changes; a change sets restartNeeded. A failed install
-// or upgrade is an error and stops the apply before file operations. Packages
-// are never enabled or disabled here. `auto` reaches this only when the commit
-// changed (see runAuto).
+// PLUGINS. Every required entry of install-plugins.sh (an uncommented quoted
+// line) runs through `omp install` before managed file operations: missing
+// ones are installed, installed ones are re-resolved (npm to the latest
+// version, GitHub URLs to the default branch's head). A plugin counts as
+// changed when ~/.omp/plugins/bun.lock or omp-plugins.lock.json changes; a
+// change sets restartNeeded. A failed install or upgrade is an error and stops
+// the apply before file operations. Packages are never enabled or disabled here.
+// When `auto` finds the config commit unchanged it still refreshes plugins
+// whose source moves on its own: every unpinned (no `#ref`) GitHub URL among
+// the required entries and the installed optional ones (a comment line holding
+// only a source). The same `omp install` re-resolves each one, so the plugin
+// manager, not this script, decides whether the default branch moved; npm
+// entries and pinned URLs wait for the next config commit. The result rides on
+// `up-to-date`; a failed install is reported there and never touches the marker.
 // Todo handover requires a fresh enabled npm catalog entry, its declared root
 // entry and the actual file. No plugin internals or Tern catalog are imported here.
 // Nothing is uninstalled; /update-omp handles uninstall candidates.
@@ -333,10 +341,17 @@ export interface ApplyReport {
 	restartNeeded: boolean;
 }
 
+/** Outcome of one `omp install` pass over a list of plugin specs. */
+export interface PluginRefresh {
+	readonly installed: string[];
+	readonly upgraded: string[];
+	readonly errors: string[];
+}
+
 export type AutoResult =
 	| { readonly kind: "busy" }
 	| { readonly kind: "offline"; readonly error: string }
-	| { readonly kind: "up-to-date"; readonly commit: string }
+	| { readonly kind: "up-to-date"; readonly commit: string; readonly plugins: PluginRefresh }
 	| { readonly kind: "applied"; readonly commit: string; readonly previous: string | undefined; readonly report: ApplyReport }
 	| { readonly kind: "failed"; readonly error: string };
 
@@ -852,21 +867,35 @@ function installLauncher(opts: ApplyOptions, report: ApplyReport): void {
 
 // --- plugins ------------------------------------------------------------------
 
-function declaredPlugins(source: string): string[] {
+/** install-plugins.sh `plugins=( … )`: quoted uncommented lines are required; a comment line holding only a source is optional. */
+interface DeclaredPlugins {
+	readonly required: string[];
+	readonly optional: string[];
+}
+
+function declaredPlugins(source: string): DeclaredPlugins {
+	const required: string[] = [];
+	const optional: string[] = [];
 	const path = join(source, "install-plugins.sh");
-	if (!existsSync(path)) return [];
-	const specs: string[] = [];
+	if (!existsSync(path)) return { required, optional };
 	let inside = false;
 	for (const line of readFileSync(path, "utf8").split("\n")) {
 		if (/^\s*plugins=\(/.test(line)) {
 			inside = true;
 			continue;
 		}
-		if (inside && /^\s*\)/.test(line)) break;
-		const match = inside ? /^\s*'([^']+)'/.exec(line) : null;
-		if (match) specs.push(match[1]!);
+		if (!inside) continue;
+		if (/^\s*\)/.test(line)) break;
+		const entry = /^\s*'([^']+)'/.exec(line);
+		if (entry) {
+			required.push(entry[1]!);
+			continue;
+		}
+		// Same rule as plugin-audit.sh: explanatory comments contain spaces and do not match.
+		const commented = /^\s*#\s*'?([^'\s]+)'?\s*$/.exec(line);
+		if (commented) optional.push(commented[1]!);
 	}
-	return specs;
+	return { required, optional };
 }
 
 /** Plugin names and dependency values recorded in ~/.omp/plugins/package.json. */
@@ -900,6 +929,10 @@ function npmName(spec: string): string {
 	}
 	const at = spec.indexOf("@");
 	return at === -1 ? spec : spec.slice(0, at);
+}
+
+function isInstalled(spec: string, installed: InstalledPluginSpecs): boolean {
+	return spec.includes("://") ? installed.values.has(spec.split("#", 1)[0]!) : installed.names.has(npmName(spec));
 }
 
 type TodoPluginReadiness =
@@ -961,16 +994,32 @@ function pluginResolutionState(): string {
 }
 
 /**
- * `omp install` for every declared plugin: missing ones are installed and
- * installed ones are re-resolved to npm's latest or a GitHub URL's default-branch
- * head. `omp plugin upgrade` is not used: for GitHub-sourced plugins it reports
- * "up to date" while the locked commit is stale.
+ * `omp install` for each spec: a missing one is installed, an installed one is
+ * re-resolved to npm's latest or a GitHub URL's default-branch head. `omp plugin
+ * upgrade` is not used: for GitHub-sourced plugins it reports "up to date" while
+ * the locked commit is stale.
  */
+function installPlugins(omp: string, specs: readonly string[]): PluginRefresh {
+	const installed = installedPluginSpecs();
+	const refresh: PluginRefresh = { installed: [], upgraded: [], errors: [] };
+	for (const spec of specs) {
+		const wasInstalled = isInstalled(spec, installed);
+		const before = pluginResolutionState();
+		const result = spawnSync(omp, ["install", spec], { encoding: "utf8" });
+		if (result.status !== 0) {
+			refresh.errors.push(`omp install ${spec}: ${(result.stderr || result.stdout || result.error?.message || "").trim()}`);
+			continue;
+		}
+		if (!wasInstalled) refresh.installed.push(spec);
+		else if (pluginResolutionState() !== before) refresh.upgraded.push(spec);
+	}
+	return refresh;
+}
+
+/** The apply's plugin step: every required plugin, before managed file operations. */
 function syncPlugins(opts: ApplyOptions, report: ApplyReport, declared: readonly string[]): void {
 	const installed = installedPluginSpecs();
-	const missing = declared.filter((spec) =>
-		spec.includes("://") ? !installed.values.has(spec.split("#", 1)[0]!) : !installed.names.has(npmName(spec)),
-	);
+	const missing = declared.filter((spec) => !isInstalled(spec, installed));
 	if (opts.check || !opts.plugins) {
 		report.pluginsMissing.push(...missing);
 		if (opts.check && opts.plugins && declared.length > 0)
@@ -985,23 +1034,29 @@ function syncPlugins(opts: ApplyOptions, report: ApplyReport, declared: readonly
 		report.errors.push("plugins not installed: omp is not on PATH");
 		return;
 	}
-	for (const spec of declared) {
-		const wasInstalled = !missing.includes(spec);
-		const before = pluginResolutionState();
-		const result = spawnSync(omp, ["install", spec], { encoding: "utf8" });
-		if (result.status !== 0) {
-			if (!wasInstalled) report.pluginsMissing.push(spec);
-			report.errors.push(`omp install ${spec}: ${(result.stderr || result.stdout || result.error?.message || "").trim()}`);
-			continue;
-		}
-		if (!wasInstalled) {
-			report.pluginsInstalled.push(spec);
-			report.restartNeeded = true;
-		} else if (pluginResolutionState() !== before) {
-			report.pluginsUpgraded.push(spec);
-			report.restartNeeded = true;
-		}
-	}
+	const refresh = installPlugins(omp, declared);
+	report.pluginsInstalled.push(...refresh.installed);
+	report.pluginsUpgraded.push(...refresh.upgraded);
+	report.pluginsMissing.push(...missing.filter((spec) => !refresh.installed.includes(spec)));
+	report.errors.push(...refresh.errors);
+	if (refresh.installed.length + refresh.upgraded.length > 0) report.restartNeeded = true;
+}
+
+/**
+ * Plugins whose source moves without a config commit: unpinned GitHub URLs among
+ * the required entries and the installed optional ones. Run by `auto` when the
+ * config commit is unchanged; npm entries and `#ref` pins wait for the next commit.
+ */
+function refreshMovingPlugins(source: string): PluginRefresh {
+	const { required, optional } = declaredPlugins(source);
+	const installed = installedPluginSpecs();
+	const specs = [...required, ...optional.filter((spec) => isInstalled(spec, installed))].filter(
+		(spec) => spec.includes("://") && !spec.includes("#"),
+	);
+	if (specs.length === 0) return { installed: [], upgraded: [], errors: [] };
+	const omp = Bun.which("omp");
+	if (!omp) return { installed: [], upgraded: [], errors: ["plugins not refreshed: omp is not on PATH"] };
+	return installPlugins(omp, specs);
 }
 
 // --- apply ------------------------------------------------------------------
@@ -1025,7 +1080,7 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 	let ctxReady = false;
 	try {
 		const sources = parseSources(opts, report);
-		declared = declaredPlugins(opts.source);
+		declared = declaredPlugins(opts.source).required;
 		todoRequired = declared.includes(TODO_PLUGIN_URL);
 		const planned = [
 			...planRelocations(opts, report),
@@ -1220,7 +1275,7 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 		const commit = head.out.trim();
 		const markerPath = join(agentDir, APPLIED_MARKER);
 		const applied = existsSync(markerPath) ? readFileSync(markerPath, "utf8").trim() : "";
-		if (applied === commit) return { kind: "up-to-date", commit };
+		if (applied === commit) return { kind: "up-to-date", commit, plugins: refreshMovingPlugins(CLONE_DIR) };
 		const previousCommit = applied && git(CLONE_DIR, ["cat-file", "-e", `${applied}^{commit}`]).ok ? applied : undefined;
 		// Apply with the fetched commit's own rules. Dynamic import is required:
 		// the module is the just-fetched clone's copy, chosen at runtime, not this file.
@@ -1290,11 +1345,25 @@ async function main(argv: readonly string[]): Promise<number> {
 		const result = await runAuto(agentDir, branch);
 		if (json) process.stdout.write(`${JSON.stringify(result)}\n`);
 		else if (result.kind === "applied") process.stdout.write(`applied ${result.commit}\n${formatReport(result.report, false)}\n`);
-		else
+		else if (result.kind === "up-to-date") {
+			const { plugins } = result;
+			const lines = [
+				`up-to-date ${result.commit}`,
+				...plugins.installed.map((spec) => `plugin installed: ${spec}`),
+				...plugins.upgraded.map((spec) => `plugin upgraded: ${spec}`),
+				...plugins.errors.map((error) => `error: ${error}`),
+			];
+			if (plugins.installed.length + plugins.upgraded.length > 0 && plugins.errors.length === 0) lines.push("restart OMP: plugins changed");
+			process.stdout.write(`${lines.join("\n")}\n`);
+		} else
 			process.stdout.write(
 				`${result.kind}${"commit" in result ? ` ${result.commit}` : ""}${"error" in result ? `: ${result.error}` : ""}\n`,
 			);
-		return result.kind === "failed" || (result.kind === "applied" && result.report.errors.length > 0) ? 1 : 0;
+		return result.kind === "failed" ||
+			(result.kind === "applied" && result.report.errors.length > 0) ||
+			(result.kind === "up-to-date" && result.plugins.errors.length > 0)
+			? 1
+			: 0;
 	}
 	if (mode === "apply") {
 		if (source === undefined) usage();

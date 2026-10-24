@@ -68,11 +68,14 @@ const applyReportSchema = z.object({
 	restartNeeded: z.boolean(),
 });
 
+/** Mirrors PluginRefresh in omp-config-update.ts. */
+const pluginRefreshSchema = z.object({ installed: z.array(z.string()), upgraded: z.array(z.string()), errors: z.array(z.string()) });
+
 /** Mirrors AutoResult in omp-config-update.ts; JSON drops an undefined `previous`. */
 const autoResultSchema = z.union([
 	z.object({ kind: z.literal("busy") }),
 	z.object({ kind: z.literal("offline"), error: z.string() }),
-	z.object({ kind: z.literal("up-to-date"), commit: z.string() }),
+	z.object({ kind: z.literal("up-to-date"), commit: z.string(), plugins: pluginRefreshSchema }),
 	z.object({ kind: z.literal("applied"), commit: z.string(), previous: z.string().optional(), report: applyReportSchema }),
 	z.object({ kind: z.literal("failed"), error: z.string() }),
 ]);
@@ -173,8 +176,25 @@ function detailedReport(outcome: RunOutcome, agentDir: string): string {
 			].join("\n");
 		case "failed":
 			return [...head, "- **Result:** failed; nothing was recorded as applied.", "", "```", result.error, "```"].join("\n");
-		case "up-to-date":
-			return [...head, `- **Result:** up to date at \`${short(result.commit)}\` (\`${result.commit}\`); nothing applied.`].join("\n");
+		case "up-to-date": {
+			const { plugins } = result;
+			const changed = plugins.installed.length + plugins.upgraded.length;
+			const outcomeLine =
+				plugins.errors.length > 0
+					? `config up to date; refreshing plugins hit ${plugins.errors.length} error(s), retried next start`
+					: changed > 0
+						? "config up to date; plugins updated"
+						: "up to date; config and plugins unchanged";
+			return [
+				...head,
+				`- **Result:** ${outcomeLine}`,
+				`- **Commit:** \`${short(result.commit)}\` (\`${result.commit}\`), nothing applied`,
+				`- **Restart needed:** ${changed > 0 ? "yes — plugins changed" : "no"}`,
+				...section("Errors", plugins.errors),
+				...section("Plugins installed", plugins.installed),
+				...section("Plugins upgraded", plugins.upgraded),
+			].join("\n");
+		}
 		case "applied": {
 			const { report } = result;
 			const changed =
@@ -329,9 +349,28 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 						case "offline":
 							pi.logger.info(`omp-config: fetch failed, not updated: ${result.error}`);
 							return;
-						case "up-to-date":
-							pi.logger.info(`omp-config: up to date at ${short(result.commit)}`);
+						case "up-to-date": {
+							const { plugins } = result;
+							if (plugins.errors.length > 0) {
+								notify(
+									ctx,
+									`omp-config: plugin refresh hit ${plugins.errors.length} error(s), will retry next start: ${plugins.errors[0]}; /omp-config-autoupdate run shows the full report`,
+									"warning",
+								);
+								return;
+							}
+							const changed = plugins.installed.length + plugins.upgraded.length;
+							if (changed === 0) {
+								pi.logger.info(`omp-config: up to date at ${short(result.commit)}, plugins current`);
+								return;
+							}
+							notify(
+								ctx,
+								`omp-config: ${plugins.installed.length} installed and ${plugins.upgraded.length} upgraded plugin(s) (${[...plugins.installed, ...plugins.upgraded].map((spec) => spec.split("/").at(-1)).join(", ")}); restart OMP to load them`,
+								"info",
+							);
 							return;
+						}
 						case "failed":
 							notify(ctx, `omp-config: auto-update failed: ${result.error}`, "warning");
 							return;
