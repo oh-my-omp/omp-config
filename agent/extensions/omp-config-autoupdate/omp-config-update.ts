@@ -338,7 +338,17 @@ export interface ApplyReport {
 	readonly pluginsInstalled: string[];
 	readonly pluginsUpgraded: string[];
 	readonly pluginsMissing: string[];
+	/** Versions behind pluginsInstalled/pluginsUpgraded, for display; added later, so readers default it to []. */
+	readonly pluginChanges: PluginChange[];
 	restartNeeded: boolean;
+}
+
+/** One plugin `omp install` installed or moved: versions from omp-plugins.lock.json, `from` null when newly installed. */
+export interface PluginChange {
+	readonly spec: string;
+	readonly name: string;
+	readonly from: string | null;
+	readonly to: string | null;
 }
 
 /** Outcome of one `omp install` pass over a list of plugin specs. */
@@ -346,6 +356,7 @@ export interface PluginRefresh {
 	readonly installed: string[];
 	readonly upgraded: string[];
 	readonly errors: string[];
+	readonly changes: PluginChange[];
 }
 
 export type AutoResult =
@@ -898,28 +909,22 @@ function declaredPlugins(source: string): DeclaredPlugins {
 	return { required, optional };
 }
 
-/** Plugin names and dependency values recorded in ~/.omp/plugins/package.json. */
-interface InstalledPluginSpecs {
-	readonly names: Set<string>;
-	readonly values: Set<string>;
-}
+/** Plugin name → dependency value (`#ref` stripped) recorded in ~/.omp/plugins/package.json. */
+type InstalledPlugins = ReadonlyMap<string, string>;
 
-function installedPluginSpecs(): InstalledPluginSpecs {
-	const path = join(homedir(), ".omp", "plugins", "package.json");
-	const names = new Set<string>();
-	const values = new Set<string>();
+function installedPlugins(): InstalledPlugins {
+	const installed = new Map<string, string>();
 	try {
-		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+		const parsed: unknown = JSON.parse(readFileSync(join(homedir(), ".omp", "plugins", "package.json"), "utf8"));
 		const deps = isMapping(parsed) && isMapping(parsed.dependencies) ? parsed.dependencies : {};
 		for (const [name, value] of Object.entries(deps)) {
-			names.add(name);
 			// Strip `#ref`: a host install pinned to a branch or commit still counts as installed.
-			if (typeof value === "string") values.add(value.split("#", 1)[0]!);
+			if (typeof value === "string") installed.set(name, value.split("#", 1)[0]!);
 		}
 	} catch {
 		// No plugins installed yet.
 	}
-	return { names, values };
+	return installed;
 }
 
 function npmName(spec: string): string {
@@ -931,8 +936,30 @@ function npmName(spec: string): string {
 	return at === -1 ? spec : spec.slice(0, at);
 }
 
-function isInstalled(spec: string, installed: InstalledPluginSpecs): boolean {
-	return spec.includes("://") ? installed.values.has(spec.split("#", 1)[0]!) : installed.names.has(npmName(spec));
+/** The package name a declared spec is installed under, or undefined when it is not installed. */
+function installedName(spec: string, installed: InstalledPlugins): string | undefined {
+	if (!spec.includes("://")) {
+		const name = npmName(spec);
+		return installed.has(name) ? name : undefined;
+	}
+	const source = spec.split("#", 1)[0]!;
+	for (const [name, value] of installed) if (value === source) return name;
+	return undefined;
+}
+
+/** Plugin name → version recorded in ~/.omp/plugins/omp-plugins.lock.json. */
+function pluginVersions(): ReadonlyMap<string, string> {
+	const versions = new Map<string, string>();
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(join(homedir(), ".omp", "plugins", "omp-plugins.lock.json"), "utf8"));
+		const plugins = isMapping(parsed) && isMapping(parsed.plugins) ? parsed.plugins : {};
+		for (const [name, entry] of Object.entries(plugins)) {
+			if (isMapping(entry) && typeof entry.version === "string") versions.set(name, entry.version);
+		}
+	} catch {
+		// No plugin installed yet, or a lock file omp is rewriting: versions are display-only.
+	}
+	return versions;
 }
 
 type TodoPluginReadiness =
@@ -1000,26 +1027,28 @@ function pluginResolutionState(): string {
  * the locked commit is stale.
  */
 function installPlugins(omp: string, specs: readonly string[]): PluginRefresh {
-	const installed = installedPluginSpecs();
-	const refresh: PluginRefresh = { installed: [], upgraded: [], errors: [] };
+	const refresh: PluginRefresh = { installed: [], upgraded: [], errors: [], changes: [] };
 	for (const spec of specs) {
-		const wasInstalled = isInstalled(spec, installed);
-		const before = pluginResolutionState();
+		const before = installedName(spec, installedPlugins());
+		const from = before === undefined ? null : (pluginVersions().get(before) ?? null);
+		const state = pluginResolutionState();
 		const result = spawnSync(omp, ["install", spec], { encoding: "utf8" });
 		if (result.status !== 0) {
 			refresh.errors.push(`omp install ${spec}: ${(result.stderr || result.stdout || result.error?.message || "").trim()}`);
 			continue;
 		}
-		if (!wasInstalled) refresh.installed.push(spec);
-		else if (pluginResolutionState() !== before) refresh.upgraded.push(spec);
+		if (before !== undefined && pluginResolutionState() === state) continue;
+		const name = installedName(spec, installedPlugins()) ?? before ?? spec;
+		(before === undefined ? refresh.installed : refresh.upgraded).push(spec);
+		refresh.changes.push({ spec, name, from, to: pluginVersions().get(name) ?? null });
 	}
 	return refresh;
 }
 
 /** The apply's plugin step: every required plugin, before managed file operations. */
 function syncPlugins(opts: ApplyOptions, report: ApplyReport, declared: readonly string[]): void {
-	const installed = installedPluginSpecs();
-	const missing = declared.filter((spec) => !isInstalled(spec, installed));
+	const installed = installedPlugins();
+	const missing = declared.filter((spec) => installedName(spec, installed) === undefined);
 	if (opts.check || !opts.plugins) {
 		report.pluginsMissing.push(...missing);
 		if (opts.check && opts.plugins && declared.length > 0)
@@ -1037,9 +1066,10 @@ function syncPlugins(opts: ApplyOptions, report: ApplyReport, declared: readonly
 	const refresh = installPlugins(omp, declared);
 	report.pluginsInstalled.push(...refresh.installed);
 	report.pluginsUpgraded.push(...refresh.upgraded);
+	report.pluginChanges.push(...refresh.changes);
 	report.pluginsMissing.push(...missing.filter((spec) => !refresh.installed.includes(spec)));
 	report.errors.push(...refresh.errors);
-	if (refresh.installed.length + refresh.upgraded.length > 0) report.restartNeeded = true;
+	if (refresh.changes.length > 0) report.restartNeeded = true;
 }
 
 /**
@@ -1049,13 +1079,13 @@ function syncPlugins(opts: ApplyOptions, report: ApplyReport, declared: readonly
  */
 function refreshMovingPlugins(source: string): PluginRefresh {
 	const { required, optional } = declaredPlugins(source);
-	const installed = installedPluginSpecs();
-	const specs = [...required, ...optional.filter((spec) => isInstalled(spec, installed))].filter(
+	const installed = installedPlugins();
+	const specs = [...required, ...optional.filter((spec) => installedName(spec, installed) !== undefined)].filter(
 		(spec) => spec.includes("://") && !spec.includes("#"),
 	);
-	if (specs.length === 0) return { installed: [], upgraded: [], errors: [] };
+	if (specs.length === 0) return { installed: [], upgraded: [], errors: [], changes: [] };
 	const omp = Bun.which("omp");
-	if (!omp) return { installed: [], upgraded: [], errors: ["plugins not refreshed: omp is not on PATH"] };
+	if (!omp) return { installed: [], upgraded: [], errors: ["plugins not refreshed: omp is not on PATH"], changes: [] };
 	return installPlugins(omp, specs);
 }
 
@@ -1072,6 +1102,7 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		pluginsInstalled: [],
 		pluginsUpgraded: [],
 		pluginsMissing: [],
+		pluginChanges: [],
 		restartNeeded: false,
 	};
 	let ops: Op[];
@@ -1298,6 +1329,12 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 
 // --- CLI ----------------------------------------------------------------------
 
+function pluginChangeLine(change: PluginChange): string {
+	return change.from === null
+		? `plugin installed: ${change.name} ${change.to ?? "?"}`
+		: `plugin upgraded: ${change.name} ${change.from} -> ${change.to ?? "?"}`;
+}
+
 function formatReport(report: ApplyReport, check: boolean): string {
 	const lines: string[] = [];
 	const verb = check ? "would write" : "wrote";
@@ -1305,8 +1342,7 @@ function formatReport(report: ApplyReport, check: boolean): string {
 	for (const { from, to } of report.moved) lines.push(`${check ? "would move" : "moved"}: ${from} -> ${to}`);
 	for (const path of report.deleted) lines.push(`${check ? "would delete" : "deleted"}: ${path}`);
 	for (const { path, reason } of report.skipped) lines.push(`skipped (${reason}): ${path}`);
-	for (const spec of report.pluginsInstalled) lines.push(`plugin installed: ${spec}`);
-	for (const spec of report.pluginsUpgraded) lines.push(`plugin upgraded: ${spec}`);
+	for (const change of report.pluginChanges) lines.push(pluginChangeLine(change));
 	for (const spec of report.pluginsMissing) lines.push(`plugin missing: ${spec}`);
 	for (const note of report.notes) lines.push(`note: ${note}`);
 	for (const error of report.errors) lines.push(`error: ${error}`);
@@ -1349,8 +1385,7 @@ async function main(argv: readonly string[]): Promise<number> {
 			const { plugins } = result;
 			const lines = [
 				`up-to-date ${result.commit}`,
-				...plugins.installed.map((spec) => `plugin installed: ${spec}`),
-				...plugins.upgraded.map((spec) => `plugin upgraded: ${spec}`),
+				...plugins.changes.map(pluginChangeLine),
 				...plugins.errors.map((error) => `error: ${error}`),
 			];
 			if (plugins.installed.length + plugins.upgraded.length > 0 && plugins.errors.length === 0) lines.push("restart OMP: plugins changed");

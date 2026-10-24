@@ -12,13 +12,13 @@
 // per-spawn files (APPEND_SYSTEM_MODEL.md, the system-prompt-replace section,
 // TURN-JUDGE-*.md, PROMPT-INJECT-*.md, agents/) and live-reloaded config.yml apply at once;
 // APPEND_SYSTEM.md, extensions (this one included) and plugins apply on the
-// next start, which the notification says.
+// next start, which the update widget says.
 //
-// VISIBILITY. Every automatic run ends in one UI notification (info, or a
-// warning for failures) and the footer status `omp-config: …` keeps the last
-// outcome for the rest of the session, so "up to date" is as visible as an
-// update. Missing bun or script, a busy lock, offline fetch, or an apply error
-// never affect the session.
+// VISIBILITY. Only a run that changed something shows anything: a widget above
+// the editor lists each update with its old and new version (omp-config by
+// commit, plugins by version) and disappears after 5 s. Up to date, a busy
+// lock and an offline fetch only log; failures warn. None of them affect the
+// session.
 // ============================================================================
 
 import { spawn } from "node:child_process";
@@ -56,6 +56,10 @@ function readSwitch(): Switch {
 	}
 }
 
+/** Mirrors PluginChange in omp-config-update.ts. */
+const pluginChangeSchema = z.object({ spec: z.string(), name: z.string(), from: z.string().nullable(), to: z.string().nullable() });
+type PluginChange = z.infer<typeof pluginChangeSchema>;
+
 /** Mirrors ApplyReport in omp-config-update.ts. */
 const applyReportSchema = z.object({
 	written: z.array(z.string()),
@@ -67,11 +71,17 @@ const applyReportSchema = z.object({
 	pluginsInstalled: z.array(z.string()),
 	pluginsUpgraded: z.array(z.string()).default(() => []),
 	pluginsMissing: z.array(z.string()),
+	pluginChanges: z.array(pluginChangeSchema).default(() => []),
 	restartNeeded: z.boolean(),
 });
 
 /** Mirrors PluginRefresh in omp-config-update.ts. */
-const pluginRefreshSchema = z.object({ installed: z.array(z.string()), upgraded: z.array(z.string()), errors: z.array(z.string()) });
+const pluginRefreshSchema = z.object({
+	installed: z.array(z.string()),
+	upgraded: z.array(z.string()),
+	errors: z.array(z.string()),
+	changes: z.array(pluginChangeSchema).default(() => []),
+});
 
 /** Mirrors AutoResult in omp-config-update.ts; JSON drops an undefined `previous`. */
 const autoResultSchema = z.union([
@@ -136,6 +146,16 @@ function section(title: string, items: readonly string[]): string[] {
 	return items.length === 0 ? [] : ["", `## ${title} (${items.length})`, ...items.map((item) => `- \`${item}\``)];
 }
 
+/** "0.1.10 → 0.1.12", "new 0.1.9", or "0.1.12 (new commit)" when omp install moved the commit but not the version. */
+function pluginVersionChange(change: PluginChange): string {
+	const to = change.to ?? "?";
+	if (change.from === null) return `new ${to}`;
+	return change.from === change.to ? `${to} (new commit)` : `${change.from} → ${to}`;
+}
+
+const pluginLines = (changes: readonly PluginChange[]): string[] =>
+	changes.map((change) => `${change.name} ${pluginVersionChange(change)}`);
+
 /** Markdown report of one manual run: every path and message the updater returned. */
 function detailedReport(outcome: RunOutcome, agentDir: string): string {
 	const head = ["# omp-config update", "", `- **Agent dir:** \`${agentDir}\``];
@@ -193,8 +213,7 @@ function detailedReport(outcome: RunOutcome, agentDir: string): string {
 				`- **Commit:** \`${short(result.commit)}\` (\`${result.commit}\`), nothing applied`,
 				`- **Restart needed:** ${changed > 0 ? "yes — plugins changed" : "no"}`,
 				...section("Errors", plugins.errors),
-				...section("Plugins installed", plugins.installed),
-				...section("Plugins upgraded", plugins.upgraded),
+				...section("Plugins", pluginLines(plugins.changes)),
 			].join("\n");
 		}
 		case "applied": {
@@ -227,8 +246,7 @@ function detailedReport(outcome: RunOutcome, agentDir: string): string {
 					"Skipped",
 					report.skipped.map((entry) => `${entry.path}\` — \`${entry.reason}`),
 				),
-				...section("Plugins installed", report.pluginsInstalled),
-				...section("Plugins upgraded", report.pluginsUpgraded),
+				...section("Plugins", pluginLines(report.pluginChanges)),
 				...section("Plugins still missing", report.pluginsMissing),
 				...section("Notes", report.notes),
 			];
@@ -306,29 +324,29 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 	});
 }
 
-/** What the startup run tells the user: a notification and the footer status that stays after it. */
-interface StartupMessage {
-	readonly level: "info" | "warning";
-	readonly text: string;
-	readonly status: string;
+/** One updated item: what it is and how its version moved. */
+interface UpdateRow {
+	readonly name: string;
+	readonly change: string;
 }
 
-function startupMessage(outcome: RunOutcome): StartupMessage {
+/** What a startup run shows: nothing (only a log line), the updates, or a failure. */
+type StartupOutcome =
+	| { readonly kind: "quiet"; readonly log: string }
+	| { readonly kind: "updated"; readonly rows: readonly UpdateRow[]; readonly restart: boolean }
+	| { readonly kind: "failed"; readonly text: string };
+
+const pluginRows = (changes: readonly PluginChange[]): UpdateRow[] =>
+	changes.map((change) => ({ name: change.name, change: pluginVersionChange(change) }));
+
+function startupOutcome(outcome: RunOutcome): StartupOutcome {
 	switch (outcome.kind) {
 		case "no-script":
-			return {
-				level: "warning",
-				text: `omp-config: ${outcome.script} missing; run /update-omp once to install the updater`,
-				status: "omp-config: updater missing",
-			};
+			return { kind: "failed", text: `omp-config: ${outcome.script} missing; run /update-omp once to install the updater` };
 		case "no-bun":
-			return { level: "warning", text: "omp-config: bun is not on PATH; auto-update skipped", status: "omp-config: no bun" };
+			return { kind: "failed", text: "omp-config: bun is not on PATH; auto-update skipped" };
 		case "no-result":
-			return {
-				level: "warning",
-				text: `omp-config: updater exited ${outcome.code} without a result: ${outcome.stderr.slice(0, 500)}`,
-				status: "omp-config: update failed",
-			};
+			return { kind: "failed", text: `omp-config: updater exited ${outcome.code} without a result: ${outcome.stderr.slice(0, 500)}` };
 		case "result":
 			break;
 		default: {
@@ -339,59 +357,42 @@ function startupMessage(outcome: RunOutcome): StartupMessage {
 	const result = outcome.result;
 	switch (result.kind) {
 		case "busy":
-			return { level: "info", text: "omp-config: another update is running; skipped this start", status: "omp-config: skipped (busy)" };
+			return { kind: "quiet", log: "omp-config: another update is running; skipped" };
 		case "offline":
-			return { level: "info", text: `omp-config: GitHub fetch failed, not updated: ${result.error}`, status: "omp-config: offline" };
+			return { kind: "quiet", log: `omp-config: fetch failed, not updated: ${result.error}` };
 		case "failed":
-			return { level: "warning", text: `omp-config: auto-update failed: ${result.error}`, status: "omp-config: update failed" };
+			return { kind: "failed", text: `omp-config: auto-update failed: ${result.error}` };
 		case "up-to-date": {
 			const { plugins } = result;
 			if (plugins.errors.length > 0)
 				return {
-					level: "warning",
-					text: `omp-config: config ${short(result.commit)} up to date; plugin refresh hit ${plugins.errors.length} error(s), will retry next start: ${plugins.errors[0]}; /omp-config-autoupdate run shows the full report`,
-					status: "omp-config: plugin refresh failed",
+					kind: "failed",
+					text: `omp-config: plugin refresh hit ${plugins.errors.length} error(s), will retry next start: ${plugins.errors[0]}; /omp-config-autoupdate run shows the full report`,
 				};
-			const changed = [...plugins.installed, ...plugins.upgraded];
-			if (changed.length === 0)
-				return {
-					level: "info",
-					text: `omp-config: up to date at ${short(result.commit)}; plugins current`,
-					status: `omp-config: ${short(result.commit)} ✓`,
-				};
-			return {
-				level: "info",
-				text: `omp-config: config ${short(result.commit)} up to date; ${plugins.installed.length} installed and ${plugins.upgraded.length} upgraded plugin(s) (${changed.map((spec) => spec.split("/").at(-1)).join(", ")}); restart OMP to load them`,
-				status: "omp-config: plugins updated, restart",
-			};
+			if (plugins.changes.length === 0) return { kind: "quiet", log: `omp-config: up to date at ${short(result.commit)}, plugins current` };
+			return { kind: "updated", rows: pluginRows(plugins.changes), restart: true };
 		}
 		case "applied": {
 			const { report } = result;
 			if (report.errors.length > 0)
 				return {
-					level: "warning",
+					kind: "failed",
 					text: `omp-config: applied ${short(result.commit)} with ${report.errors.length} error(s), will retry next start: ${report.errors[0]}; /omp-config-autoupdate run shows the full report`,
-					status: "omp-config: update failed",
 				};
-			const changed =
-				report.written.length +
-				report.moved.length +
-				report.deleted.length +
-				report.pluginsInstalled.length +
-				report.pluginsUpgraded.length;
-			if (changed === 0)
-				return {
-					level: "info",
-					text: `omp-config: applied ${short(result.commit)}; this machine already matched`,
-					status: `omp-config: ${short(result.commit)} ✓`,
-				};
-			return {
-				level: "info",
-				text: `omp-config: updated to ${short(result.commit)} (${report.written.length} written, ${report.moved.length} moved, ${report.deleted.length} deleted, ${report.pluginsInstalled.length} installed and ${report.pluginsUpgraded.length} upgraded plugin(s))${report.restartNeeded ? "; restart OMP to load extensions/APPEND_SYSTEM/plugins" : ""}`,
-				status: report.restartNeeded
-					? `omp-config: ${short(result.commit)} applied, restart`
-					: `omp-config: ${short(result.commit)} applied`,
-			};
+			const files = report.written.length + report.moved.length + report.deleted.length;
+			const rows: UpdateRow[] = [
+				...(files === 0
+					? []
+					: [
+							{
+								name: "omp-config",
+								change: `${result.previous ? short(result.previous) : "new"} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
+							},
+						]),
+				...pluginRows(report.pluginChanges),
+			];
+			if (rows.length === 0) return { kind: "quiet", log: `omp-config: ${short(result.commit)} applied, host already matched` };
+			return { kind: "updated", rows, restart: report.restartNeeded };
 		}
 		default: {
 			const exhaustive: never = result;
@@ -400,15 +401,26 @@ function startupMessage(outcome: RunOutcome): StartupMessage {
 	}
 }
 
-const STATUS_KEY = "omp-config";
+const WIDGET_KEY = "omp-config-update";
+const WIDGET_MS = 5_000;
+
+/** Show the updates above the editor for WIDGET_MS: a header, then one aligned "name  old → new" row each. */
+function showUpdates(ctx: ExtensionContext, rows: readonly UpdateRow[], restart: boolean): void {
+	const { theme } = ctx.ui;
+	const width = Math.max(...rows.map((row) => row.name.length));
+	ctx.ui.setWidget(WIDGET_KEY, [
+		`${theme.fg("accent", "omp-config updated")}${restart ? theme.fg("muted", " · restart OMP to load") : ""}`,
+		...rows.map((row) => `  ${row.name.padEnd(width)}  ${row.change}`),
+	]);
+	ctx.setTimeout(() => ctx.ui.setWidget(WIDGET_KEY, undefined), WIDGET_MS);
+}
 
 export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 	registerAutoupdateCommand(pi);
 
-	const notify = (ctx: ExtensionContext, text: string, level: "info" | "warning"): void => {
-		if (ctx.hasUI) ctx.ui.notify(text, level);
-		if (level === "warning") pi.logger.warn(text);
-		else pi.logger.info(text);
+	const warn = (ctx: ExtensionContext, text: string): void => {
+		if (ctx.hasUI) ctx.ui.notify(text, "warning");
+		pi.logger.warn(text);
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -416,18 +428,31 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 			if (started || ctx.agent.kind !== "main") return;
 			started = true;
 			const state = readSwitch();
-			if (state.kind === "invalid")
-				notify(ctx, `omp-config: ${switchLocation()} is invalid (${state.reason}); auto-update is off`, "warning");
+			if (state.kind === "invalid") warn(ctx, `omp-config: ${switchLocation()} is invalid (${state.reason}); auto-update is off`);
 			if (state.kind !== "on") return;
-			if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, "omp-config: checking…");
 			ctx.setTimeout(async () => {
 				try {
-					const message = startupMessage(await runUpdater(getAgentDir()));
-					notify(ctx, message.text, message.level);
-					if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, message.status);
+					const outcome = startupOutcome(await runUpdater(getAgentDir()));
+					switch (outcome.kind) {
+						case "quiet":
+							pi.logger.info(outcome.log);
+							return;
+						case "failed":
+							warn(ctx, outcome.text);
+							return;
+						case "updated":
+							pi.logger.info(
+								`omp-config: updated ${outcome.rows.map((row) => `${row.name} ${row.change}`).join("; ")}${outcome.restart ? "; restart to load" : ""}`,
+							);
+							if (ctx.hasUI) showUpdates(ctx, outcome.rows, outcome.restart);
+							return;
+						default: {
+							const exhaustive: never = outcome;
+							return exhaustive;
+						}
+					}
 				} catch (error) {
 					pi.logger.warn("omp-config: auto-update failed unexpectedly", { error: errorText(error) });
-					if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, "omp-config: update failed");
 				}
 			}, 0);
 		} catch (error) {

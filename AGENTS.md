@@ -457,8 +457,9 @@ exercised in a real omp session.
   `/omp-config-autoupdate` (`status` reads; `on`/`off` write) manages the machine-local switch: the `omp-config-autoupdate` section of the agent dir's `omomp.*` (`{"enabled": bool}`; missing or invalid = off), which neither the updater nor `/sync-omp-config` carries, and
   which the hook reads once per start. When on, the hook spawns the updater beside it with
   `bun` from a managed `ctx.setTimeout` (an in-process fault must not take OMP
-  down), ends every run in one UI notification (info, or a warning for
-  failures) and keeps the outcome in the footer status `omp-config: …`; `/omp-config-autoupdate run`
+  down); only a run that changed something shows a 5 s widget listing each
+  update with its old and new version (up to date, busy and offline only log;
+  failures warn); `/omp-config-autoupdate run`
   spawns the same child on demand, whatever the switch says, and posts the full
   report of that run only as a display-only transcript message. `auto` takes
   the lock dir `~/.omp/omp-config-update.lock`, fetches into
