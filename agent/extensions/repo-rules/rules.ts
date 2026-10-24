@@ -23,10 +23,19 @@ export interface UnscopedRule {
 	readonly kind: UnscopedKind;
 }
 
-/** Who discovered a path-scoped rule. Native rules keep OMP's agent scope and rulebook entry. */
+/**
+ * Where OMP itself puts a native rule (`bucketRules`: alwaysApply before description). When the
+ * rule has `paths`, the extension removes it from there and loads it by path instead.
+ */
+export type NativePlacement =
+	| { readonly kind: "always"; readonly content: string }
+	| { readonly kind: "rulebook" }
+	| { readonly kind: "dropped" };
+
+/** Who discovered a path-scoped rule. Native rules keep OMP's agent scope. */
 export type ScopedOrigin =
 	| { readonly kind: "scan" }
-	| { readonly kind: "native"; readonly agents: readonly string[] | undefined; readonly listed: boolean };
+	| { readonly kind: "native"; readonly agents: readonly string[] | undefined; readonly placement: NativePlacement };
 
 /** A rule with Claude Code `paths` frontmatter: loaded only when a matching file is touched. */
 export interface ScopedRule {
@@ -262,11 +271,10 @@ function nativeBase(rule: Rule, cwd: string): string | null {
 	return null;
 }
 
-/** Native rules OMP lists in its rulebook or drops: TTSR and alwaysApply rules keep OMP's placement. */
+/** Native rules `paths` can scope: all but OMP's bundled defaults and TTSR rules, which OMP triggers itself. */
 function nativeDefersToPaths(rule: Rule): boolean {
 	if (rule._source.provider === BUILTIN_DEFAULTS_PROVIDER_ID) return false;
-	if ((rule.condition?.length ?? 0) > 0 || (rule.astCondition?.length ?? 0) > 0 || rule.question !== undefined) return false;
-	return rule.alwaysApply !== true;
+	return !((rule.condition?.length ?? 0) > 0 || (rule.astCondition?.length ?? 0) > 0 || rule.question !== undefined);
 }
 
 interface NativeCollection {
@@ -278,8 +286,8 @@ interface NativeCollection {
 
 /**
  * Native rules re-read from disk for the `paths` field OMP does not parse. A file the scan already
- * holds as path-scoped keeps its scanned base but takes OMP's agent scope and rulebook entry, or
- * leaves the path-scoped set when OMP places it itself (TTSR, alwaysApply).
+ * holds as path-scoped keeps its scanned base but takes OMP's agent scope and placement, or leaves
+ * the path-scoped set when OMP triggers it itself (TTSR).
  */
 async function collectNative(cwd: string, scoped: Map<string, ScopedRule>): Promise<NativeCollection> {
 	const placed = new Set<string>();
@@ -288,9 +296,14 @@ async function collectNative(cwd: string, scoped: Map<string, ScopedRule>): Prom
 	for (const rule of result.items) {
 		const id = realpathOr(rule.path);
 		const defers = nativeDefersToPaths(rule);
-		const listed = rule.description !== undefined && rule.description !== "";
-		const origin: ScopedOrigin = { kind: "native", agents: rule.agents, listed };
-		if (!defers || listed) placed.add(id);
+		const placement: NativePlacement =
+			rule.alwaysApply === true
+				? { kind: "always", content: rule.content }
+				: rule.description !== undefined && rule.description !== ""
+					? { kind: "rulebook" }
+					: { kind: "dropped" };
+		const origin: ScopedOrigin = { kind: "native", agents: rule.agents, placement };
+		if (!defers || placement.kind !== "dropped") placed.add(id);
 		const scanned = scoped.get(id);
 		if (scanned !== undefined) {
 			if (defers) scoped.set(id, { ...scanned, name: rule.name, origin });

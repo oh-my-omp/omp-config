@@ -19,12 +19,13 @@
  * Sources are the scanned files above and every rule OMP discovers (`loadCapability`): project and
  * user `.omp`/`.agents` rules, cursor/windsurf/cline/GitHub rules, and plugin and extension-root
  * `rules/` directories (such as `~/.claude` listed in `config.yml` `extensions`). OMP itself ignores
- * `paths`, so a native rule that has it and that OMP would only list in its rulebook or drop is taken
- * over: its rulebook line is removed from the `<domain-rules>` block of the system prompt, and it
- * still obeys `ttsr.disabledRules` and its `agents` scope. A native rule OMP injects through
- * `alwaysApply` or registers as TTSR keeps OMP's placement. Patterns are relative to the cwd for
- * user-level rules, to the directory holding the rule's dot directory (`.claude`, `.omp`, …) for
- * project rules, and to the plugin or extension root for rules in its `rules/`.
+ * `paths`, so a native rule that has it is taken over: its alwaysApply body is removed from the
+ * `<generic-rules>` block or its rulebook line from the `<domain-rules>` block of the system prompt,
+ * and it still obeys `ttsr.disabledRules` and its `agents` scope. TTSR rules (`condition`,
+ * `astCondition`, `question`) and OMP's bundled rules keep OMP's own triggering. Patterns are
+ * relative to the cwd for user-level rules, to the directory holding the rule's dot directory
+ * (`.claude`, `.omp`, …) for project rules, and to the plugin or extension root for rules in its
+ * `rules/`.
  *
  * A matching rule is delivered as the `tool_result` `additionalContext` (a developer message after
  * the tool batch), once per context: a rule whose marker is already in the session's current context
@@ -102,30 +103,61 @@ function activeScoped(catalog: RuleCatalog, ctx: ExtensionContext): ScopedRule[]
 	});
 }
 
-const RULEBOOK_OPEN = "<domain-rules>\n";
-const RULEBOOK_CLOSE = "</domain-rules>";
+/** Rewrites the inner text of the first `<tag>\n…</tag>` block of `part`; a block left blank is removed. */
+function rewriteBlock(part: string, tag: string, rewrite: (inner: string) => string): string {
+	const open = `<${tag}>\n`;
+	const close = `</${tag}>`;
+	const start = part.indexOf(open);
+	if (start === -1) return part;
+	const end = part.indexOf(close, start);
+	if (end === -1) return part;
+	const inner = part.slice(start + open.length, end);
+	const next = rewrite(inner);
+	if (next === inner) return part;
+	if (next.trim() === "") return part.slice(0, start) + part.slice(end + close.length).replace(/^\n/, "");
+	return part.slice(0, start) + open + next + part.slice(end);
+}
 
 /**
- * Removes the rulebook lines (`- <name> (<globs>): <description>`, rendered by SYSTEM_TEMPLATE.md)
- * of native rules this extension loads by path, and the whole block when nothing is left.
+ * Removes native path-scoped rules from where OMP put them, as SYSTEM_TEMPLATE.md renders it: the
+ * rulebook line (`- <name> (<globs>): <description>`) in `<domain-rules>`, and the alwaysApply body
+ * (`{{content}}` plus a newline) in `<generic-rules>`. A block left empty is removed.
  */
-function stripRulebook(prompt: readonly string[], names: ReadonlySet<string>): string[] | null {
-	if (names.size === 0) return null;
-	const listed = (line: string): boolean => [...names].some((name) => line.startsWith(`- ${name} (`));
-	let changed = false;
+function removeNativePlacements(prompt: readonly string[], rules: readonly ScopedRule[]): string[] | null {
+	const names: string[] = [];
+	const contents: string[] = [];
+	for (const rule of rules) {
+		if (rule.origin.kind !== "native") continue;
+		const placement = rule.origin.placement;
+		switch (placement.kind) {
+			case "rulebook":
+				names.push(rule.name);
+				break;
+			case "always":
+				contents.push(placement.content);
+				break;
+			case "dropped":
+				break;
+			default: {
+				const exhaustive: never = placement;
+				throw new Error(`Unexpected native placement: ${JSON.stringify(exhaustive)}`);
+			}
+		}
+	}
+	if (names.length === 0 && contents.length === 0) return null;
+	const listed = (line: string): boolean => names.some((name) => line.startsWith(`- ${name} (`));
 	const out = prompt.map((part) => {
-		const start = part.indexOf(RULEBOOK_OPEN);
-		if (start === -1) return part;
-		const end = part.indexOf(RULEBOOK_CLOSE, start);
-		if (end === -1) return part;
-		const lines = part.slice(start + RULEBOOK_OPEN.length, end).split("\n");
-		const kept = lines.filter((line) => !listed(line));
-		if (kept.length === lines.length) return part;
-		changed = true;
-		if (kept.join("").trim() === "") return part.slice(0, start) + part.slice(end + RULEBOOK_CLOSE.length).replace(/^\n/, "");
-		return part.slice(0, start) + RULEBOOK_OPEN + kept.join("\n") + part.slice(end);
+		const withoutRulebook = rewriteBlock(part, "domain-rules", (inner) =>
+			inner
+				.split("\n")
+				.filter((line) => !listed(line))
+				.join("\n"),
+		);
+		return rewriteBlock(withoutRulebook, "generic-rules", (inner) =>
+			contents.reduce((text, content) => text.replace(`${content}\n`, ""), inner),
+		);
 	});
-	return changed ? out : null;
+	return out.some((part, index) => part !== prompt[index]) ? out : null;
 }
 
 function escapeAttr(value: string): string {
@@ -189,10 +221,7 @@ export default function repoRules(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (event, ctx) => {
 		try {
 			const rules = await rulesFor(ctx);
-			const listed = new Set(
-				activeScoped(rules, ctx).flatMap((rule) => (rule.origin.kind === "native" && rule.origin.listed ? [rule.name] : [])),
-			);
-			const prompt = stripRulebook(event.systemPrompt, listed) ?? event.systemPrompt;
+			const prompt = removeNativePlacements(event.systemPrompt, activeScoped(rules, ctx)) ?? event.systemPrompt;
 			const section = buildSection(rules.unscoped, prompt);
 			if (section === "" && prompt === event.systemPrompt) return;
 			return { systemPrompt: section === "" ? prompt : [...prompt, section] };
