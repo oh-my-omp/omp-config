@@ -39,6 +39,7 @@ import { basename, extname, isAbsolute, join, resolve as resolvePath } from "nod
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
+import { tr } from "../_shared/i18n.ts";
 import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
 import { modelLabel, type RoleModel, roleModels, roleName } from "../_shared/roles.ts";
 
@@ -128,11 +129,25 @@ function loadConfig(cwd: string): DocPolishConfig {
 // --- model resolution -------------------------------------------------------
 
 // Raised before any work when a role this call needs resolves no model.
-class DocPolishModelError extends Error {}
+class DocPolishModelError extends Error {
+	constructor(
+		message: string,
+		readonly englishMessage: string,
+	) {
+		super(message);
+	}
+}
 
 // Raised when a sub-agent request failed on every model of its chain. Surfaced
 // as a readable, self-contained error — distinct from the pre-run model check.
-class DocPolishRuntimeError extends Error {}
+class DocPolishRuntimeError extends Error {
+	constructor(
+		message: string,
+		readonly englishMessage: string,
+	) {
+		super(message);
+	}
+}
 
 function missingModelMessage(missing: readonly Stage[], fallbackRole: string | undefined): string {
 	const list = missing.map((stage) => `- \`@${stageRole(stage)}\``).join("\n");
@@ -151,12 +166,44 @@ function missingModelMessage(missing: readonly Stage[], fallbackRole: string | u
 	].join("\n");
 }
 
+function missingModelEnglishMessage(missing: readonly Stage[], fallbackRole: string | undefined): string {
+	const list = missing.map((stage) => `- \`@${stageRole(stage)}\``).join("\n");
+	return [
+		"doc-polish failed; no work was performed (no splitting, polishing, or file writes): these OMP model roles resolved to no usable models (only the model list was checked; no request was sent):",
+		list,
+		"",
+		"What the three roles do:",
+		`- \`@${stageRole("split")}\` (split): reads the document, divides it into relevant blocks, records each block's original line range, and extracts a keyword glossary; requires read+write tool access.`,
+		`- \`@${stageRole("polish")}\` (polish): reorders/polishes each batch into text that is easier for engineers to read without changing its meaning, and reports glossary changes; no tools.`,
+		`- \`@${stageRole("check")}\` (check): judges whether each regrouped block preserves its meaning and how it should be understood; no tools. When it has no model of its own, it uses the split role's models.`,
+		"",
+		fallbackRole === undefined
+			? "Assign models to these roles in `/model` and call again, or set `fallbackRole` in the `doc-polish` section of omomp."
+			: `Assign models to these roles or the fallback role \`@${roleName(fallbackRole)}\` in \`/model\` and call again.`,
+	].join("\n");
+}
+
+function stageLabel(stage: Stage, language: "en" | "zh"): string {
+	switch (stage) {
+		case "split":
+			return language === "en" ? "split" : "拆分";
+		case "polish":
+			return language === "en" ? "polish" : "润色";
+		case "check":
+			return language === "en" ? "check" : "校验";
+		default: {
+			const exhaustive: never = stage;
+			return exhaustive;
+		}
+	}
+}
+
 // --- sub-agent runner (createAgentSession, reusing host providers) ----------
 
 type SubSessionOptions = {
 	/** The stage's role chain, in order. */
 	models: readonly RoleModel[];
-	role: string;
+	stage: Stage;
 	toolNames: string[];
 	prompt: string;
 	agentId: string;
@@ -203,7 +250,10 @@ async function runSubSession(ctx: ExtensionContext, opts: SubSessionOptions): Pr
 			}
 		}
 	}
-	throw new DocPolishRuntimeError(`doc-polish：${opts.role}子代理在角色链的每个模型上都调用失败：${failures.join("；")}`);
+	throw new DocPolishRuntimeError(
+		`doc-polish：${stageLabel(opts.stage, "zh")}子代理在角色链的每个模型上都调用失败：${failures.join("；")}`,
+		`doc-polish: ${stageLabel(opts.stage, "en")} sub-agent failed on every model in its role chain: ${failures.join("; ")}`,
+	);
 }
 
 // --- JSON parsing (tolerant of code fences) ---------------------------------
@@ -413,7 +463,7 @@ function checkPrompt(original: string, polished: string): string {
 
 // --- core pipeline ----------------------------------------------------------
 
-type Progress = (message: string) => void;
+type Progress = (english: string, chinese: string) => void;
 type StageModels = Readonly<Record<Stage, readonly RoleModel[]>>;
 type StageUsed = Readonly<Record<Stage, Set<string>>>;
 
@@ -445,10 +495,10 @@ async function polishOneFile(
 	const used: StageUsed = { split: new Set(), polish: new Set(), check: new Set() };
 
 	// 1. Split agent (standard subagent: read + write only, no document text in prompt).
-	progress(`[${basename(absPath)}] 拆分中…`);
+	progress(`[${basename(absPath)}] Splitting…`, `[${basename(absPath)}] 拆分中…`);
 	await runSubSession(ctx, {
 		models: models.split,
-		role: "拆分",
+		stage: "split",
 		toolNames: ["read", "write"],
 		prompt: splitPrompt(absPath, splitOut, ext === ".md" ? "Markdown" : "plain-text", originalLines.length),
 		agentId: `docpolish-split-${stamp}`,
@@ -493,14 +543,17 @@ async function polishOneFile(
 		const kws = relevantKeywords(keywords, batchText);
 		const raw = await runSubSession(ctx, {
 			models: models.polish,
-			role: "润色",
+			stage: "polish",
 			toolNames: [],
 			prompt: polishPrompt(batch, kws),
 			agentId: `docpolish-polish-${stamp}-${i}`,
 			cwd: workspace,
 			used: used.polish,
 		});
-		progress(`[${basename(absPath)}] 润色 ${++polished}/${batches.length}…`);
+		progress(
+			`[${basename(absPath)}] Polishing ${++polished}/${batches.length}…`,
+			`[${basename(absPath)}] 润色 ${polished}/${batches.length}…`,
+		);
 		try {
 			const p = polishSchema.parse(JSON.parse(extractJson(raw)));
 			return { blocks: p.blocks, changes: p.keywordChanges, diagnostics: [] };
@@ -524,14 +577,14 @@ async function polishOneFile(
 	const reviews = await mapLimit<Group, string>(groups, concurrency, async (g, i) => {
 		const review = await runSubSession(ctx, {
 			models: models.check,
-			role: "校验",
+			stage: "check",
 			toolNames: [],
 			prompt: checkPrompt(g.original, g.polished),
 			agentId: `docpolish-check-${stamp}-${i}`,
 			cwd: workspace,
 			used: used.check,
 		});
-		progress(`[${basename(absPath)}] 校验 ${++checked}/${groups.length}…`);
+		progress(`[${basename(absPath)}] Checking ${++checked}/${groups.length}…`, `[${basename(absPath)}] 校验 ${checked}/${groups.length}…`);
 		return review;
 	});
 	reviews.forEach((review, i) => {
@@ -637,7 +690,11 @@ async function polishDocuments(
 	const missing: Stage[] = [];
 	if (split.length === 0) missing.push("split");
 	if (polish.length === 0) missing.push("polish");
-	if (missing.length > 0) throw new DocPolishModelError(missingModelMessage(missing, config.fallbackRole));
+	if (missing.length > 0)
+		throw new DocPolishModelError(
+			missingModelMessage(missing, config.fallbackRole),
+			missingModelEnglishMessage(missing, config.fallbackRole),
+		);
 	// A check role with no model of its own uses the whole split chain.
 	const check = roleModels(ctx, [stageRole("check")]).length === 0 ? split : chain("check");
 	const models: StageModels = { split, polish, check };
@@ -685,11 +742,11 @@ const polishOptionsSchema = z.object({
 });
 
 export default function docPolish(pi: ExtensionAPI): void {
-	pi.setLabel("Doc Polish");
+	pi.setLabel(tr("Doc Polish", "文档润色"));
 
 	pi.registerTool({
 		name: "polish_doc",
-		label: "Polish Doc",
+		label: tr("Polish Doc", "润色文档"),
 		description:
 			"Restructure a .md/.txt document for engineer readability WITHOUT changing its meaning. Use it when a " +
 			"document's content is settled and only readability remains — e.g. after finishing a draft and before " +
@@ -702,7 +759,7 @@ export default function docPolish(pi: ExtensionAPI): void {
 			"authoritative result: the caller must read the review and decide what, if anything, to adopt.",
 		parameters: polishOptionsSchema,
 		async execute(_toolCallId, params, _signal, onUpdate, ctx) {
-			const progress: Progress = (message) => onUpdate?.({ content: [{ type: "text", text: message }] });
+			const progress: Progress = (_english, chinese) => onUpdate?.({ content: [{ type: "text", text: chinese }] });
 			try {
 				const results = await polishDocuments(ctx, polishOptionsSchema.parse(params), progress);
 				return {
@@ -722,16 +779,28 @@ export default function docPolish(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("polish-doc", {
-		description: "润色文档：/polish-doc <path.md|path.txt> [更多路径…]",
+		description: tr(
+			"Polish documents: /polish-doc <path.md|path.txt> [more paths…]",
+			"润色文档：/polish-doc <path.md|path.txt> [更多路径…]",
+		),
 		handler: async (args, ctx) => {
 			const paths = args.trim().split(/\s+/).filter(Boolean);
 			if (paths.length === 0) {
-				ctx.ui.notify("用法：/polish-doc <path.md|path.txt> [更多路径…]", "warning");
+				ctx.ui.notify(
+					tr("Usage: /polish-doc <path.md|path.txt> [more paths…]", "用法：/polish-doc <path.md|path.txt> [更多路径…]"),
+					"warning",
+				);
 				return;
 			}
-			ctx.ui.notify(`doc-polish：开始处理 ${paths.length} 个文件，完成后把结果交给主 agent…`, "info");
+			ctx.ui.notify(
+				tr(
+					`doc-polish: processing ${paths.length} file(s); the result will be delivered to the main agent when complete…`,
+					`doc-polish：开始处理 ${paths.length} 个文件，完成后把结果交给主 agent…`,
+				),
+				"info",
+			);
 			try {
-				const results = await polishDocuments(ctx, { paths }, (message) => ctx.ui.setStatus?.("doc-polish", message));
+				const results = await polishDocuments(ctx, { paths }, (english, chinese) => ctx.ui.setStatus?.("doc-polish", tr(english, chinese)));
 				// Human invocation differs from an LLM tool call: deliver the result to the
 				// current session's main agent as fresh input (it decides how to use the
 				// reference), rather than displaying it to the human.
@@ -739,9 +808,10 @@ export default function docPolish(pi: ExtensionAPI): void {
 			} catch (err) {
 				pi.logger.warn("doc-polish command failed", { error: errorText(err) });
 				if (err instanceof DocPolishModelError || err instanceof DocPolishRuntimeError) {
-					ctx.ui.notify(err.message, "error");
+					ctx.ui.notify(tr(err.englishMessage, err.message), "error");
 				} else {
-					ctx.ui.notify(`doc-polish 失败：${String(err)}`, "error");
+					const message = String(err);
+					ctx.ui.notify(tr(`doc-polish failed: ${message}`, `doc-polish 失败：${message}`), "error");
 				}
 			} finally {
 				// Progress ran through ctx.ui.setStatus (a persistent footer entry, unlike
