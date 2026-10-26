@@ -38,6 +38,9 @@
 //   - app-managed files (`// @orca-managed-pi-extension` first line, or the
 //     Otty marker anywhere; see OTTY_MARKER), checked before every overwrite
 //     and delete;
+//   - branch-annotated files (carrying the BRANCH_MARKER tag for a branch the
+//     source copy does not carry), skipped on overwrite and delete so branch-
+//     isolated local modifications are preserved during upgrades;
 //   - symlinks: a symlinked target is written through to its resolved file.
 //
 // DELETIONS. Git-derived removals run only in `auto`, and only what the repo
@@ -423,6 +426,30 @@ function isAppManaged(path: string, strict = false): boolean {
 	return text.split("\n", 1)[0]?.trim() === "// @orca-managed-pi-extension" || text.includes(OTTY_MARKER);
 }
 
+// @branch emotional-personality: 来自 emotional-personality 分支的本地修改，升级时不要删除 (local modification from branch emotional-personality; do not delete when upgrading)
+/**
+ * A target file carrying `@branch <name>` is skipped when the source copy does
+ * not carry that same branch annotation, while updates from the same branch still apply.
+ */
+const BRANCH_MARKER = "@branch ";
+const BRANCH_TAG_RE = /@branch ([A-Za-z0-9._/-]+)/g;
+
+function missingBranchAnnotations(path: string, sourceText?: string): string[] {
+	let text: string;
+	try {
+		text = readFileSync(path, "utf8");
+	} catch {
+		return [];
+	}
+	const tags = new Set<string>();
+	for (const match of text.matchAll(BRANCH_TAG_RE)) {
+		if (match[1]) tags.add(match[1]);
+	}
+	if (tags.size === 0) return [];
+	if (sourceText === undefined) return [...tags];
+	return [...tags].filter((tag) => !sourceText.includes(`${BRANCH_MARKER}${tag}`));
+}
+
 /**
  * Resolve a symlinked target to the file it points at, so the link survives.
  * A dangling link resolves through readlink, so writing recreates its target.
@@ -561,6 +588,11 @@ function planPlain(opts: ApplyOptions, report: ApplyReport, todoRequired: boolea
 		if (existsSync(target)) {
 			if (isAppManaged(target)) {
 				report.skipped.push({ path: target, reason: "app-managed" });
+				continue;
+			}
+			const missingBranches = missingBranchAnnotations(target, content.toString("utf8"));
+			if (missingBranches.length > 0) {
+				report.skipped.push({ path: target, reason: `branch: ${missingBranches.join(", ")}` });
 				continue;
 			}
 			if (Buffer.from(readFileSync(target)).equals(content)) continue;
@@ -825,6 +857,11 @@ function planDeletions(opts: ApplyOptions, report: ApplyReport, todoRequired: bo
 		}
 		if (isAppManaged(target)) {
 			report.skipped.push({ path: target, reason: "app-managed" });
+			continue;
+		}
+		const missingBranches = missingBranchAnnotations(target);
+		if (missingBranches.length > 0) {
+			report.skipped.push({ path: target, reason: `branch: ${missingBranches.join(", ")}` });
 			continue;
 		}
 		ops.push({ kind: "delete", rel, target });

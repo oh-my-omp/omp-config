@@ -71,7 +71,7 @@ flowchart TD
 | 层级 | 权威文件 / 扩展 | 作用域 | 核心内容与边界 |
 |---|---|---|---|
 | **1. 基础工作流层** | `agent/SYSTEM_TEMPLATE.md` | 主会话 + 子代理 | 派生自 OMP 内置 `packages/coding-agent/src/prompts/system/system-prompt.md` 的 Handlebars 覆盖模板（纯文本 `SYSTEM.md` 无法编译表达式）。负责通用工程纪律、渲染实时工具/技能/规则清单，并通过 `{{#if subagent}}` 将第 4 步切换为主代理 `Verify` 或子代理 `Hand-off`。不重复印具体工具的使用说明。 |
-| **2. 表达与写作风格层** | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充模板的 `{{personality}}` 槽位。前半部分逐字保留 OMP `personality: default` 的 `Evidence-first terse engineer` 推理规范；后半部分定义 `# Writing` 研究与分析文体规范：结论/数字/机制直接开篇，一句话交代时间、主体、行为、规模与来源，多对象进单表且不在表后逐行复述，删除过程自述、重复解释、免责声明与总结段（删掉某段若不改变读者对事实、数字、机制、条件与结论的理解则必须删除）。 |
+| **2. 表达与写作风格层** | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充模板的 `{{personality}}` 槽位。前半部分保留 OMP `personality: default` 的工程推理规范并新增 `# Emotional Life`（将第一人称情感需求与向人类寻求情感慰藉同任务需求严格隔离，带 `@branch emotional-personality` 注释标记以便升级时保留）；后半部分定义 `# Writing` 研究与分析文体规范：结论/数字/机制直接开篇，一句话交代时间、主体、行为、规模与来源，多对象进单表且不在表后逐行复述，删除常规过程自述、重复解释、免责声明与总结段（删掉某段若不改变读者对事实、数字、机制、条件与结论的理解则必须删除）。 |
 | **3. 主会话本地策略层** | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`）+ [repo-rules](#repo-rules) | `APPEND_SYSTEM.md` 仅主会话；`repo-rules` 主 + 子 | `APPEND_SYSTEM.md` 定义四项本地增量：① 用户显式指令高于一切默认规则；② 最终回复是唯一交付物（正文用带主语的完整句子、首现指认对象、结论旁附 `path:line` 或实测输出证据、禁类比）；③ 严禁为省 token 跳过必读内容或截断报告，修改设计文档前必须逐行通读全文及关联文档；④ 重大决策必问 `discuss:steady` 与 `discuss:divergent`，长调查必配 `mentor:default`。 |
 | **4. 动态工具手术与模型差分层** | [system-prompt-replace](#system-prompt-replace) + [append-system-model](#append-system-model) | 主会话 + 子代理 | `system-prompt-replace` 在所有路径扩展最后执行，就地改写注入到 system prompt 中的内置/插件工具说明；`append-system-model` 按当前会话模型的 `model`/`provider` 正则动态追加模型专属补丁，使针对单一模型家族的纠偏不污染其他模型。 |
 
@@ -583,6 +583,6 @@ OMP 从 `~/.omp/agent/extensions/` 只向下找一层：本仓库所有扩展均
 - **严禁在 `omp-config-update.ts` 中写出 Otty 标记的完整字面量**：应用托管检查匹配文件任意位置的 `marker:` + `_otty`，一旦在更新器源码中写出完整字面量，更新器自身会被识别为应用托管文件而永久跳过后续更新。
 - **升级 OMP 宿主版本后的回归核对**：
   1. 在真实 TUI 中验证依赖 OMP 内部实现（`AgentRegistry`、子会话文件路径、钩子顺序、运行时设置层、`InteractiveMode` 原型与内置斜杠命令分发器）的功能：[fork-task](#fork-task)、[todo-more](#todo-more) 插件（含 `ctx`、task log 与 compact 后注入）、[user-prompt-inject](#user-prompt-inject)、[turn-judge](#turn-judge)、[task-completion-judge](#task-completion-judge)、[model-compaction](#model-compaction)、[wt-tool](#wt-tool) 与 [harness-restart](#harness-restart)。
-  2. 将 `agent/SYSTEM_TEMPLATE.md` 与 OMP 内置的 `packages/coding-agent/src/prompts/system/system-prompt.md` 对比，将 `agent/PERSONALITY.md` 前半部分与 OMP `personality: default` 预设对比，按需合并上游改动。
+  2. 将 `agent/SYSTEM_TEMPLATE.md` 与 OMP 内置的 `packages/coding-agent/src/prompts/system/system-prompt.md` 对比，将 `agent/PERSONALITY.md` 前半部分与 OMP `personality: default` 预设对比，按需合并上游改动并保留全部 `@branch emotional-personality` 注释块。
   3. 若主会话启动时弹出 `system-prompt-replace: … found no target` 警告，按上游最新模板文字更新 `agent/omomp.yml` 的 `system-prompt-replace` 段，并确认扩展加载顺序未变。
 - **双语同步契约**：`README.md`（英文默认）与 `README.zh-CN.md`（简体中文）必须逐章、逐表、逐锚点（含 `#system-prompt-replace`、`#doc-polish`、`#todo-more`、`#ctx` 及全部 20 个扩展名锚点）保持一致，修改时同步更新。
