@@ -170,7 +170,9 @@ function detailedReport(outcome: RunOutcome, agentDir: string): string {
 				)}`,
 			].join("\n");
 		case "no-bun":
-			return [...head, `- **${tr("Result", "结果")}:** ${tr("not run: `bun` is not on PATH.", "未运行：PATH 中找不到 `bun`。")}`].join("\n");
+			return [...head, `- **${tr("Result", "结果")}:** ${tr("not run: `bun` is not on PATH.", "未运行：PATH 中找不到 `bun`。")}`].join(
+				"\n",
+			);
 		case "no-result":
 			return [
 				...head,
@@ -349,10 +351,7 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 				}
 				if (action !== "status") {
 					ctx.ui.notify(
-						tr(
-							"Usage: /omp-config-autoupdate [status|on|off|run]",
-							"用法：/omp-config-autoupdate [status|on|off|run]",
-						),
+						tr("Usage: /omp-config-autoupdate [status|on|off|run]", "用法：/omp-config-autoupdate [status|on|off|run]"),
 						"warning",
 					);
 					return;
@@ -483,24 +482,19 @@ function startupOutcome(outcome: RunOutcome): StartupOutcome {
 					zh: `omp-config：已应用 ${short(result.commit)}，但出现 ${report.errors.length} 个错误，将在下次启动时重试：${report.errors[0]}；运行 /omp-config-autoupdate run 可查看完整报告`,
 				};
 			const files = report.written.length + report.moved.length + report.deleted.length;
-			const rows: UpdateRow[] = [
-				...(files === 0
-					? []
-					: (() => {
-							const previous = result.previous ? short(result.previous) : "new";
-							return [
-								{
-									name: "omp-config",
-									change: tr(
-										`${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
-										`${result.previous ? short(result.previous) : "新建"} → ${short(result.commit)}（${files} 个文件）`,
-									),
-									logChange: `${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
-								},
-							];
-						})()),
-				...pluginRows(report.pluginChanges),
-			];
+			const rows: UpdateRow[] = [];
+			if (files > 0) {
+				const previous = result.previous ? short(result.previous) : "new";
+				rows.push({
+					name: "omp-config",
+					change: tr(
+						`${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
+						`${result.previous ? short(result.previous) : "新建"} → ${short(result.commit)}（${files} 个文件）`,
+					),
+					logChange: `${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
+				});
+			}
+			rows.push(...pluginRows(report.pluginChanges));
 			if (rows.length === 0) return { kind: "quiet", log: `omp-config: ${short(result.commit)} applied, host already matched` };
 			return { kind: "updated", rows, restart: report.restartNeeded };
 		}
