@@ -14,6 +14,7 @@ Any non-minimal harness ships predefined text across its base template, built-in
 | [repo-rules](#repo-rules) | Main + Subagents | Loads rules from `.claude/rules`, `.agents/rules`, `.pi/rules`, and `~/.claude/rules`, and handles `paths` frontmatter across all rule sources. |
 | [system-prompt-replace](#system-prompt-replace) | Main + Subagents (full mode only) | Runs last among path-loaded extensions and rewrites rendered tool descriptions in the system prompt. |
 | [append-system-model](#append-system-model) | Main + Subagents | Appends model-specific prompt blocks from `APPEND_SYSTEM_MODEL.md` when the session's `model` or `provider` matches. |
+| [tool-topic-injection](extensions.md#tool-topic-injection) | Main + Subagents | Loads a topic only after a configured tool argument matches, once per rule in the actual uncompacted context; it adds developer context rather than growing the static tool description. |
 
 ### system-prompt-replace
 
@@ -36,7 +37,7 @@ Active rules in `agent/omomp.yml` (file lookup and edits are restricted to `read
 
 | Target | Change |
 |---|---|
-| `read` tool description | Documents `<source><:selector>` and `<source>?<query>` selectors, single-stream `.gz` archive members, hashline snapshots (`edit.mode: hashline` in `config.yml` requires a non-`:raw` read tag before anchored edits), the [`tool://read/<topic>`](extensions.md#read-topics) topic keys, and `omp://tools/read.md`. |
+| `read` tool description | Replaces the entire native description with an almost-universal reading overview, common selectors/snapshot guidance, supported URLs and the [`tool://read`](extensions.md#read-topics) topic index. Detailed syntax is read on demand or supplied by conditional topic injection, not appended to the original long description. |
 | `task` tier selection | Replaces `"Use most specific agent."` with cost and trust selection (`task:mid` default, `task:low` when cost outweighs extra judgment or to validate `task:free`, `task:free` for unvalidated probes). |
 | Subagent check/todo instructions | Removes `"Every task MUST skip build/lint/tests..."` and `"No TODO tracking, no progress updates."` from the native child prompt so they do not conflict with worker Todo or `fork_task` verification. |
 | Concurrent writers | Requires `isolated: true` when multiple writers run concurrently; keeps read-only research agents shared so they stay reachable via `write agent://<id>`. |
@@ -66,6 +67,8 @@ OMP scans `.omp/rules`, `.agent(s)/rules`, `.cursor/rules`, `.windsurf/rules`, `
 - **Unscoped rules**: scans non-hidden `.md` and `.mdc` files under `.claude/rules`, `.agents/rules`, and `.pi/rules` from `cwd` up to the git root (only `cwd` outside a git repository; closer to `cwd` wins, and within a directory level `.claude` → `.agents` → `.pi`), plus `~/.claude/rules`. On every `before_agent_start`, appends a `<repo-level-rules>` block: rules with no frontmatter, unparseable frontmatter, or `alwaysApply: true` include their full body; other frontmatter rules list name, `description`, and path. Files OMP already placed (alwaysApply, rulebook entry, or TTSR), bodies already present in the incoming system prompt after whitespace normalization, and listings whose `rule://<filename>` is already present are skipped.
 - **Path-scoped rules (`paths` frontmatter)**: rules with `paths` (YAML list or comma-separated globs, supporting `{…}` and `[…]`) load only after a matching file is read, written, edited, or read with a single-file `cat`/`head`/`tail` in `bash` (pipes, command chains, and multi-file commands do not trigger it). Applies to the scanned directories above and to rules OMP discovers itself (project/user `.omp` and `.agents`, cursor/windsurf/cline/GitHub rules, and plugin/extension `rules/`). Relative globs resolve against `cwd` for user rules, the parent of the dot directory for project rules, and the plugin/extension root for `rules/`. Native rules with `paths` are removed from `<generic-rules>` and `<domain-rules>` so they only load on file match, while still respecting `ttsr.disabledRules` and `agents` scope. TTSR rules (`condition`, `astCondition`, `question`) and bundled OMP rules stay with OMP. Matched rules are delivered once per context via `tool_result` `additionalContext` (`<path-scoped-rule path="…">`); if compaction, resume, or branch switching removes the marker from the active context, touching a matching file injects it again.
 - **Absolute `paths` patterns**: patterns starting with `/` or `~/` match the touched file's absolute path (`~` = home directory), allowing a user-level rule in `~/.claude/rules` to match a directory name anywhere on disk (for example `/**/{omp,.omp,omp-*,*-omp,*-omp-*}/**`).
+
+`repo-rules` and conditional topic injection share `_shared/context-delivery.ts`: persisted developer markers in the active-leaf model context decide whether content is already present; a temporary turn-local set only covers the host's pre-persistence batch window.
 
 ---
 

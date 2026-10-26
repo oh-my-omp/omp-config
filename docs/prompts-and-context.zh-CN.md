@@ -14,6 +14,7 @@
 | [repo-rules](#repo-rules) | 主会话 + 子代理 | 加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件，并处理所有规则来源的 `paths` 按路径触发。 |
 | [system-prompt-replace](#system-prompt-replace) | 主会话 + 子代理（仅完整模式） | 在所有按路径加载的扩展最后运行，原地改写渲染进 system prompt 的工具说明。 |
 | [append-system-model](#append-system-model) | 主会话 + 子代理 | 按当前会话的 `model` 或 `provider` 正则匹配 `APPEND_SYSTEM_MODEL.md`，追加模型专属提示词块。 |
+| [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection) | 主会话 + 子代理 | 配置的工具参数命中后才加载专题，每条规则在真实未压缩上下文中注入一次；追加 developer 上下文，而不是扩大常驻工具说明。 |
 
 ### system-prompt-replace
 
@@ -36,7 +37,7 @@ system-prompt-replace:
 
 | 目标 | 修改内容 |
 |---|---|
-| `read` 工具说明 | 说明 `<source><:selector>` 与 `<source>?<query>` 选择器、单流 `.gz` 归档成员、hashline 快照标签（配合 `config.yml` 的 `edit.mode: hashline`，非 `:raw` 读取拿到 4 位十六进制标签后才能执行锚点 `edit`）、[`tool://read/<topic>`](extensions.zh-CN.md#read-topics) 专题名以及 `omp://tools/read.md`。 |
+| `read` 工具说明 | 整段替换原生说明，改为几乎万能的阅读能力概览、常用选择器/快照要求、支持的 URL 与 [`tool://read`](extensions.zh-CN.md#read-topics) 列表入口。细节通过按需读取或条件专题注入提供，不再把长说明追加在旧正文之前。 |
 | `task` 选档说明 | 把 `"Use most specific agent."` 改为按成本与所需可信度选档：默认 `task:mid`，省成本或验证 `task:free` 用 `task:low`，无须独立验证的试探用 `task:free`。 |
 | 子代理检查与 Todo 说明 | 删去原生子代理提示词中的 `"Every task MUST skip build/lint/tests..."` 与 `"No TODO tracking, no progress updates."`，避免与子代理必填 Todo 及 `fork_task` 的验证要求冲突。 |
 | 并发写入隔离 | 要求并发写入的子代理设置 `isolated: true`，只读调查子代理保持共享以便后续用 `write agent://<id>` 续聊。 |
@@ -66,6 +67,8 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 - **无 `paths` 的规则**：从 `cwd` 向上至 git 根目录（不在 git 仓库内时只看 `cwd`）扫描 `.claude/rules`、`.agents/rules`、`.pi/rules` 下的非隐藏 `.md` 与 `.mdc`（离 `cwd` 越近越先，同级按 `.claude` → `.agents` → `.pi` 排序），并扫描 `~/.claude/rules`。每次 `before_agent_start` 追加 `<repo-level-rules>` 块：无 frontmatter、frontmatter 解析失败或 `alwaysApply: true` 的文件注入全文；其余带 frontmatter 的文件只列出名称、`description` 和路径。OMP 已经放进上下文的文件（alwaysApply、rulebook 条目或 TTSR）、正文空白归一后已在 system prompt 中的文件，以及 `rule://<文件名>` 已在列表中的条目均跳过。
 - **带 `paths` 的规则**：frontmatter 含 `paths`（YAML 列表或逗号分隔的 glob，支持 `{…}` 与 `[…]`）的规则，只在匹配文件被成功 `read`、`write`、`edit`，或被 `bash` 中读取单文件的纯 `cat`/`head`/`tail` 触及时才加载（含管道、命令串联或多文件的命令不计）。适用范围涵盖上述扫描目录和 OMP 原生发现的全部规则（项目/用户级 `.omp` 与 `.agents`、cursor/windsurf/cline/GitHub 规则、插件或扩展根目录下的 `rules/`）。相对路径 glob 的基准目录：用户级规则为 `cwd`，项目规则为点目录所在父目录，插件或扩展 `rules/` 为该插件或扩展根目录。OMP 原生发现的带 `paths` 规则会从 `<generic-rules>` 和 `<domain-rules>` 中移除，改由文件命中时加载，同时继续遵守 `ttsr.disabledRules` 与 `agents` 作用域。TTSR 规则（`condition`、`astCondition`、`question`）和 OMP 内置规则仍由 OMP 处理。命中的规则通过 `tool_result` 的 `additionalContext`（`<path-scoped-rule path="…">`）每个上下文注入一次；若 compaction、resume 或切分支使该标记离开当前上下文，再次触及匹配文件时会重新注入。
 - **绝对路径 `paths` 模式**：以 `/` 或 `~/` 开头的模式直接匹配被触及文件的绝对路径（`~` 为家目录），可用于在 `~/.claude/rules` 中按目录名匹配任意位置的仓库（如 `/**/{omp,.omp,omp-*,*-omp,*-omp-*}/**`）。
+
+`repo-rules` 和条件专题注入共用 `_shared/context-delivery.ts`：是否已经投递由活动叶节点模型上下文中的持久 developer 标记决定；临时 turn 集合只覆盖宿主尚未持久化的工具批次窗口。
 
 ---
 
