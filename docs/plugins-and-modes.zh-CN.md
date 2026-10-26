@@ -27,7 +27,7 @@
 
 [omp-todo-more](https://github.com/oh-my-omp/omp-todo-more) 在 `omp` 和 `omp-light` 中均由插件发现机制加载，原生 Todo 保持关闭（`agent/config.yml` 中 `todo.enabled: false`）：
 
-- **会话状态记录**：当前分支上的自定义条目 `mouriya.omp.todo-more` 保存 `{objective, measure, doneWhen}` 及每项的 `{title, explanation}`、分钟预算与 `DONE` 提交记录的 git commit SHA（宿主 `TodoTracker`、`/todo` 与历史卡片均从该条目派生）。插件的 `planning.ts` 在列表为空时拦截 `edit`，并在 `before_agent_start` 为 `task:*` 子代理挂回 `todo` 工具。
+- **会话状态与检查**：当前分支上的自定义条目 `mouriya.omp.todo-more` 保存 `{objective, measure, doneWhen}` 及每项的 `{title, explanation}`、分钟预算与 `DONE` 提交记录的 git commit SHA（宿主 `TodoTracker`、`/todo` 与历史卡片均从该条目派生）。`planning.ts` 在列表为空时拦截 `edit`，`reminders.ts` 在回合结束且仍有未完成项（非向用户提问）时自动提醒继续，工作区有未提交改动时 `DONE` 必须带 git commit 子句，`before_agent_start` 则为 `task:*` 子代理挂回 `todo` 工具。
 - **`/todo-more` 编辑器**：输入 `/todo-more` 直接修改 goal 或各项 explanation（Enter 换行、Tab/Shift+Tab 切换字段、Ctrl+Enter 保存、Esc 取消），只更新当前分支上的文字字段，不改动任务状态或触发模型回合。
 - **旧本地文件清理**：更新器确认 `omp-todo-more` 在 OMP 插件目录中已启用且 `./index.ts` 存在后，会 unlink 8 个旧本地 Todo 文件（`extensions/todo-more/{index,tool,render,reminders,planning}.ts`、`extensions/_shared/todo-more.ts`、`extensions/subagent-todo.ts`、`extensions/subagent-todo/index.ts`），并在插件含 `src/ctx` 时一并 unlink 5 个旧本地 ctx 文件（`extensions/ctx-tool/{index,inventory,post-compact-hint}.ts`、`extensions/ctx-tasklog/index.ts`、`extensions/_shared/task-log.ts`）。`/sync-omp-config` 同样排除这 13 个路径。
 

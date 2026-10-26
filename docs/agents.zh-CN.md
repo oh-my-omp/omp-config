@@ -38,8 +38,8 @@
 
 ## 派发规则与并行写入隔离
 
-- **按成本与所需可信度选档**：默认用 `task:mid`；成本优先于额外判断力时（批量机械修改、查找、验证 `task:free`）用 `task:low`（需要验证才能用的结果，直接让 `task:low` 做一次比让 `task:free` 做完再派验证者更省）。架构、领域类型、跨模块接口以及文档/prompt/skill/agent 定义的设计不派给 `task:free/low/mid`。
+- **按成本与所需可信度选档**：默认用 `task:mid`；成本优先于额外判断力时（批量机械修改、查找、验证 `task:free`）用 `task:low`（需要验证才能用的结果，直接让 `task:low` 做一次比让 `task:free` 做完再派验证者更省）。架构、领域类型、跨模块接口以及文档/prompt/skill/agent 定义的设计不得派给 `task:free/low/mid`。
 - **递归深度上限为 2**：主会话为 depth 0，其派出的子代理为 depth 1；只有 `task:high` 能再派 depth 2 子代理，而 depth 2 的 `task` 工具会被宿主移除（因此也无法再派 `mentor:default`），只能接收直接执行的叶子任务。
 - **显式填 `agent`，不传 `effort`**：每个任务项都显式指定 `agent`（省略会落到首个 `spawns` 项或已禁用的内置代理），用户未要求时不传 `effort`（`task.enableEffort: false` 隐藏了原生参数）。`config.yml` 中保留内置 `task` 与 `sonic` 的模型绑定仅用于 Vibe 模式的首层派发。
-- **worker 执行流程**：`task:*` 子代理在修改代码前先阅读相关代码并与 `mentor:default` 审阅计划（depth 2 除外），全程使用 `todo` 记录步骤，仍有未完成项时不提前 `yield`，也不用 `drop`/`rm` 缩小任务范围。
+- **worker 执行流程**：`task:*` 子代理在修改代码前必须先阅读相关代码并与 `mentor:default` 审阅计划（depth 2 除外），全程使用 `todo` 记录步骤，仍有未完成项时不得提前 `yield`，也不得用 `drop`/`rm` 缩小任务范围。
 - **并行写入隔离（`isolated: true`）**：同一仓库同时有 $\ge 2$ 个写入子代理运行（同批派出，或前序共享写入任务仍在运行）时，每个写入子代理都须设 `isolated: true`（`fork_task` 默认 `true`；只读调查设 `isolated: false` 以便续聊；plan mode 下强制共享目录）。传给隔离子代理的文件路径使用**仓库相对路径**（OMP 通过提示词约束工作目录，写绝对路径会让命令改回父工作区）。`task.isolation.merge: branch` 会把隔离子代理的提交逐个 cherry-pick 到父分支，保留提交说明和 todo-more 的 `Model` trailer；返回结果需检查是否有 `Merged branch: <name>`（或 `No changes to apply.`）。
