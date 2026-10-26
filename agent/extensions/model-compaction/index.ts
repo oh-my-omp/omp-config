@@ -66,6 +66,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { AgentRegistry, type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
 import { cfgCompactionModelThresholds, cfgExtendedContext } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { errorText } from "../_shared/errors.ts";
+import { tr } from "../_shared/i18n.ts";
 import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
 
 type MatchField = "provider" | "model";
@@ -238,7 +239,7 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 		warned = text;
 		if (text === null) return;
 		pi.logger.warn(text);
-		if (ctx.hasUI) ctx.ui.notify(text, "warning");
+		if (ctx.hasUI) ctx.ui.notify(tr(text, `模型压缩：${problems.join("；")}`), "warning");
 	};
 
 	/** Still ours: the runtime record is exactly what this extension last wrote. */
@@ -249,7 +250,14 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 		const text =
 			"model-compaction: the runtime compaction.modelThresholds record was changed by another writer; no longer managing it in this session";
 		pi.logger.warn(text);
-		if (ctx.hasUI) ctx.ui.notify(text, "warning");
+		if (ctx.hasUI)
+			ctx.ui.notify(
+				tr(
+					text,
+					"模型压缩：运行时的 compaction.modelThresholds 记录已被其他写入方修改；本会话将不再管理该记录",
+				),
+				"warning",
+			);
 		return false;
 	};
 
