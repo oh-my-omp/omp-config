@@ -4,7 +4,7 @@
 
 ## Prompt Files
 
-The system prompt is split across separate files and hooks because their update sources and session scopes differ: subagents run with `personality: none` and omit main-session reply and advisor defaults, built-in tool descriptions are injected dynamically by OMP and patched after rendering, and model-specific workarounds apply only to matching models:
+Any non-minimal harness ships predefined text across its base template, built-in tool descriptions, and subagent wrappers that easily duplicates or conflicts with local rules, and models ignore instructions that contradict each other. Using Pi/OMP's full customization across every stage of prompt assembly, the system prompt is split across the following files and hooks so that each instruction appears once without internal contradiction, while isolating main-session register/advisor rules and model-specific deltas to their respective scopes:
 
 | File / Extension | Scope | What it provides |
 |---|---|---|
