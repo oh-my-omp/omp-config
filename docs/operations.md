@@ -102,12 +102,57 @@ OMP discovers extensions one level deep under `~/.omp/agent/extensions/`: each e
 | `helper-session.ts` | `runHelperPrompt`: runs a one-shot prompt in a tool-less, extension-less in-memory session with `taskDepth: 1` and returns a result union without throwing |
 | `judge.ts` | `openJudge`: runs OMP's judge-role chain (`resolveJudge`), falling back to `omomp.yml#judge.fallbackRole` as `TextJudge` |
 | `spec-files.ts` | `discoverSpecFiles`, `parseFrontmatter`, `unquote`: discovers and parses `*-<label>.md` files in the extension directory and from `cwd` up to the git root |
+| `tool-topics.ts` | `registerToolTopics`, `ToolTopic`, `ToolTopicsRegistration`, `ToolTopicsRegistrationResult`: shared `tool://` registry, indexes, readers, search enumeration and completion; usable by external plugins |
 
 Code rules checked by `bun run check` (`biome check . && tsc --noEmit`):
 1. **Formatting and types**: format with `bun run format` (Biome: tabs, double quotes, semicolons, trailing commas, line width 140). `tsc` runs with `strict` and `noUncheckedIndexedAccess`; do not use `any`. Parse external input (files, tool args, session entries, event payloads, child-process stdout) at the boundary with `z` from `@oh-my-pi/pi-coding-agent` or a type guard; use `as` only for host types that cannot be checked at runtime, with a comment explaining why.
 2. **State and error handling**: represent state variants as discriminated unions on `kind` with an exhaustive `switch` (`never` default arm). Catch errors at hook and tool boundaries and log `pi.logger.warn(…, { error: errorText(error) })` rather than throwing into OMP.
 3. **`taskDepth: 1` on helper sessions**: any extension calling `createAgentSession` directly (such as `fork-task` during `shake`) must pass `taskDepth: 1`. Without it, `dispose()` treats the helper as a main session and tears down `AgentLifecycleManager`, disconnecting all idle and parked subagents (`Unknown agent`).
 4. **Imports and runtime load testing**: import only OMP host package roots (`pi-agent-core`, `pi-ai`, `pi-catalog`, `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins, and `.ts` relative paths (guard platform-specific native bindings by platform). Because `tsc` resolves packages from `node_modules/`, it does not catch unmapped host subpaths such as `@oh-my-pi/pi-tui/thinking`; apply changes to `~/.omp/agent`, restart `omp`, and trigger the modified extension in a real session.
+
+### Registering Tool Topics from Plugins
+
+Local extensions statically import `registerToolTopics` and its types from `../_shared/tool-topics.ts`. External plugins use a static relative import to the installed helper, with no copy of the implementation. For an external plugin at `~/.omp/plugins/example/index.ts` and the default `~/.omp/agent`, the import is:
+
+```ts
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { registerToolTopics } from "../../agent/extensions/_shared/tool-topics.ts";
+
+export default function exampleTopics(pi: ExtensionAPI): void {
+  try {
+    const result = registerToolTopics({
+      tool: "example",
+      owner: "my-plugin",
+      topics: [{
+        name: "usage",
+        title: "Usage",
+        read: () => "# Usage\nRun the example tool with its input path.\n",
+      }],
+    });
+    switch (result.kind) {
+      case "registered": return;
+      case "invalid":
+      case "conflict":
+        pi.logger.warn("example topics registration failed", { reason: result.reason });
+        return;
+      default: {
+        const unreachable: never = result;
+        throw new Error(`Unhandled registration result: ${unreachable}`);
+      }
+    }
+  } catch (error) {
+    pi.logger.warn("example topics initialization failed", { error: String(error) });
+  }
+}
+```
+
+Install the helper through `/update-omp` first. For another plugin location or custom agent directory, calculate the relative path from the plugin's real source directory to `<getAgentDir()>/extensions/_shared/tool-topics.ts` at deployment time. Keep it a static relative import: OMP's extension graph follows relative source dependencies, whereas absolute imports and standalone native dynamic imports can bypass host-package rewriting and fail with `Cannot find package '@oh-my-pi/pi-coding-agent'`. Report import/initialization failures rather than creating a separate registry.
+
+- `ToolTopic` contains `name`, `title` and `read(): string | Promise<string>`; `ToolTopicsRegistration` contains `tool`, stable `owner` and `topics`. Tool/topic names are case-sensitive `[A-Za-z0-9_.-]+`; owner/title must be non-blank, the topic list non-empty and topic names unique. The boundary validates registration metadata and reader return values.
+- `registerToolTopics` returns `registered`, `invalid` or `conflict`; the latter two include `reason`. A tool belongs to one owner. The same owner atomically replaces the entire topic snapshot, removing omitted topics; invalid/conflicting registrations preserve existing content. Owner names coordinate registrations; they are not authentication.
+- The router-held handler owns the registry. A versioned capability joins independent imports without replacing the handler; an OMP-owned, foreign or incompatible `tool` handler is never overwritten. Registration copies descriptors so later caller mutations do not alter the published snapshot.
+- `read tool://` lists tools; `read tool://example` lists topics; `read tool://example/usage` reads one body, including line/raw selectors. `grep`/`find` over a tool or the scheme root enumerate its leaves. Unknown tools/topics report the available names. Completion uses descriptors only; leaf reads and search call readers each time, and reader failures propagate rather than silently dropping leaves.
+- Registrations live for the OMP process, across sessions and extension disabling. Readers must not capture session UI, context, abort signals or temporary resources; no `pi` is retained by the helper. Each plugin owns any body caching and invalidation. Restart to remove registrations or load changed helper code; session shutdown does not unregister shared process state.
 
 ### CI Configuration Check (`bun ci/check.ts`)
 

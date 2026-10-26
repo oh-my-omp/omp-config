@@ -217,13 +217,13 @@ At root `session_start` (awaited up to 20 s; `before_agent_start` awaits the sam
 
 ### read-topics
 
-Source: `agent/extensions/read-topics/`.
+Source: `agent/extensions/read-topics/`; routing and registration come from [`_shared/tool-topics.ts`](operations.md#registering-tool-topics-from-plugins).
 
 Adds per-feature topics to the built-in `read` tool through a `tool://` internal-URL scheme: `read tool://read` lists the topics, `read tool://read/<topic>` returns one (line selectors apply, e.g. `tool://read/sqlite:1-40`), and an unknown topic fails with the available keys. `grep`/`find` over `tool://read` search every topic.
 
 - **Content**: each topic is one section of OMP's bundled `omp://tools/read.md`, fetched with `getEmbeddedDoc` and cut by a fixed key → heading table: `selectors` (`## Inputs`), `outputs`, `flow`, `local-files`, `directories`, `archives`, `executables`, `video`, `profiler-reports`, `sqlite`, `documents`, `notebooks`, `images`, `internal-urls`, `web-urls`, `side-effects`, `limits`, `errors`. The maintainer-only `Source`, `Registration / Visibility` and `Notes` sections are not topics. The text follows the installed OMP version; the repo keeps no copy.
-- **Lifecycle**: the factory registers the handler once per process in OMP's process-global `InternalUrlRouter`; the doc is loaded and cut on the first `tool://` read. The handler's `promptDoc` adds a `tool://read/<topic>` line to the system prompt's internal-URL list, and the `read` description in `omomp.yml#system-prompt-replace` names the topic keys.
-- **Failure**: an OMP-owned or another host's `tool` scheme is left alone with a log warning. When the doc is missing, or a heading in the table is missing or repeated, the read fails with that drift spelled out instead of serving partial topics.
+- **Lifecycle**: the factory calls the shared `registerToolTopics` API with read's descriptors and readers. The shared process-wide handler serves every registered tool through `tool://<tool>/<topic>`; `tool://` lists tools and `tool://<tool>` lists topics without loading bodies. Read's document is loaded and cut on its first leaf read or search. The handler advertises the generic scheme in the system prompt; `omomp.yml#system-prompt-replace` still names read's topic keys.
+- **Failure**: registration returns explicit `invalid` or `conflict` results, which the read factory logs as warnings. An OMP-owned or foreign `tool` handler is never replaced. When read's document is missing, or a heading is missing or repeated, the leaf read/search fails with that drift spelled out instead of serving partial topics.
 
 ### omomp-lang
 

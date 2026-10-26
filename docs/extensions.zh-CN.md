@@ -217,13 +217,13 @@ OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PR
 
 ### read-topics
 
-源码：`agent/extensions/read-topics/`。
+源码：`agent/extensions/read-topics/`；路由和注册由 [`_shared/tool-topics.ts`](operations.zh-CN.md#插件注册工具专题) 提供。
 
 通过 `tool://` 内部 URL scheme 为内置 `read` 工具提供按功能划分的专题：`read tool://read` 列出专题，`read tool://read/<topic>` 返回单个专题（支持行选择器，如 `tool://read/sqlite:1-40`），专题名不存在时报错并列出可用名称。对 `tool://read` 执行 `grep`/`find` 会搜索全部专题。
 
 - **内容**：每个专题是 OMP 内置 `omp://tools/read.md` 的一个章节，用 `getEmbeddedDoc` 读取，按固定的“专题名 → 标题”表切出：`selectors`（`## Inputs`）、`outputs`、`flow`、`local-files`、`directories`、`archives`、`executables`、`video`、`profiler-reports`、`sqlite`、`documents`、`notebooks`、`images`、`internal-urls`、`web-urls`、`side-effects`、`limits`、`errors`。仅面向维护者的 `Source`、`Registration / Visibility`、`Notes` 不作为专题。正文随已安装的 OMP 版本更新，仓库不保存副本。
-- **生命周期**：扩展工厂函数每个进程只向 OMP 进程全局的 `InternalUrlRouter` 注册一次 handler；文档在第一次读取 `tool://` 时加载并切分。handler 的 `promptDoc` 会在 system prompt 的内部 URL 列表中加一行 `tool://read/<topic>`，`omomp.yml#system-prompt-replace` 中的 `read` 说明会列出全部专题名。
-- **失败处理**：`tool` scheme 已归 OMP 内置或被其他宿主注册时不覆盖，只记一条日志警告。文档缺失，或表中某个标题在文档里缺失、重复时，读取会报错并写明哪处不一致，不返回残缺的专题。
+- **生命周期**：扩展工厂调用共享的 `registerToolTopics` API，提交 read 的专题描述和正文读取函数。共享的进程级 handler 通过 `tool://<tool>/<topic>` 服务所有已注册工具；`tool://` 列工具，`tool://<tool>` 列专题，两种索引都不加载正文。read 文档在首次读取专题正文或搜索时加载并切分。handler 在 system prompt 中声明通用 scheme；`omomp.yml#system-prompt-replace` 仍列出 read 的专题名。
+- **失败处理**：注册返回显式的 `invalid` 或 `conflict` 结果，read 工厂将其记录为 warning；OMP 内置或其他宿主的 `tool` handler 不会被覆盖。read 文档缺失，或某个标题缺失、重复时，专题读取或搜索会报错并写明哪处不一致，不返回残缺的专题。
 
 ### omomp-lang
 

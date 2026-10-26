@@ -1,6 +1,7 @@
 /**
  * Process-wide tool:// topic registration for extensions and external plugins.
- * Import this installed module via getAgentDir()/extensions/_shared/tool-topics.ts.
+ * Static-relative-import the installed extensions/_shared/tool-topics.ts through
+ * OMP's extension loader so bundled host packages resolve correctly.
  * The router-held handler owns the only registry; the versioned capability below
  * joins registrations even when OMP loads separate copies of this module.
  *
