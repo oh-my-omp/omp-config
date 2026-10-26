@@ -67,7 +67,7 @@ providers:
 | `task.eager` | `preferred` | `default` |
 | `disabledExtensions` | None | Disables 10 extensions: `doc-polish`, `fork-task`, `isolation-nudge`, `lang-nag`, `task-completion-judge`, `task-split-check`, `tool-policy-nag`, `turn-judge`, `user-prompt-inject`, `watchdog-agent` |
 | `config.yml` `extensions` path list | Loads `extensions-last/system-prompt-replace` | `config-light.yml` overrides `extensions: []` to skip `extensions-last/system-prompt-replace` (`disabledExtensions` only filters by module name, not file paths); `omp-light.ts` reads the machine's `config.yml` and passes any non-`/extensions-last/` entries (such as `~/.claude`) back via `-e` |
-| Remaining local extensions | Loaded | 11 loaded: `antigravity-wire-profiles`, `append-system-model`, `child-memory-warning`, `commandcode-model-spec`, `harness-restart`, `input-polish`, `model-compaction`, `omomp-lang`, `omp-config-autoupdate`, `repo-rules`, `wt-tool` |
+| Remaining local extensions | Loaded | 12 loaded: `antigravity-wire-profiles`, `append-system-model`, `child-memory-warning`, `commandcode-model-spec`, `harness-restart`, `input-polish`, `model-compaction`, `omomp-lang`, `omp-config-autoupdate`, `read-topics`, `repo-rules`, `wt-tool` |
 | Installed plugins | All loaded | All loaded (`disabledExtensions` does not affect plugins) |
 | Tools removed in light mode | — | `polish_doc`, `fork_task` (`todo`, `ctx`, `wt`, `wt_remove`, and `harness_restart` stay enabled) |
 

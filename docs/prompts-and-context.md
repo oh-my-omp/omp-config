@@ -36,7 +36,7 @@ Active rules in `agent/omomp.yml` (file lookup and edits are restricted to `read
 
 | Target | Change |
 |---|---|
-| `read` tool description | Documents `<source><:selector>` and `<source>?<query>` selectors, single-stream `.gz` archive members, hashline snapshots (`edit.mode: hashline` in `config.yml` requires a non-`:raw` read tag before anchored edits), and `omp://tools/read.md`. |
+| `read` tool description | Documents `<source><:selector>` and `<source>?<query>` selectors, single-stream `.gz` archive members, hashline snapshots (`edit.mode: hashline` in `config.yml` requires a non-`:raw` read tag before anchored edits), the [`tool://read/<topic>`](extensions.md#read-topics) topic keys, and `omp://tools/read.md`. |
 | `task` tier selection | Replaces `"Use most specific agent."` with cost and trust selection (`task:mid` default, `task:low` when cost outweighs extra judgment or to validate `task:free`, `task:free` for unvalidated probes). |
 | Subagent check/todo instructions | Removes `"Every task MUST skip build/lint/tests..."` and `"No TODO tracking, no progress updates."` from the native child prompt so they do not conflict with worker Todo or `fork_task` verification. |
 | Concurrent writers | Requires `isolated: true` when multiple writers run concurrently; keeps read-only research agents shared so they stay reachable via `write agent://<id>`. |

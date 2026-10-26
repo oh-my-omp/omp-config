@@ -36,7 +36,7 @@ system-prompt-replace:
 
 | 目标 | 修改内容 |
 |---|---|
-| `read` 工具说明 | 说明 `<source><:selector>` 与 `<source>?<query>` 选择器、单流 `.gz` 归档成员、hashline 快照标签（配合 `config.yml` 的 `edit.mode: hashline`，非 `:raw` 读取拿到 4 位十六进制标签后才能执行锚点 `edit`）以及 `omp://tools/read.md`。 |
+| `read` 工具说明 | 说明 `<source><:selector>` 与 `<source>?<query>` 选择器、单流 `.gz` 归档成员、hashline 快照标签（配合 `config.yml` 的 `edit.mode: hashline`，非 `:raw` 读取拿到 4 位十六进制标签后才能执行锚点 `edit`）、[`tool://read/<topic>`](extensions.zh-CN.md#read-topics) 专题名以及 `omp://tools/read.md`。 |
 | `task` 选档说明 | 把 `"Use most specific agent."` 改为按成本与所需可信度选档：默认 `task:mid`，省成本或验证 `task:free` 用 `task:low`，无须独立验证的试探用 `task:free`。 |
 | 子代理检查与 Todo 说明 | 删去原生子代理提示词中的 `"Every task MUST skip build/lint/tests..."` 与 `"No TODO tracking, no progress updates."`，避免与子代理必填 Todo 及 `fork_task` 的验证要求冲突。 |
 | 并发写入隔离 | 要求并发写入的子代理设置 `isolated: true`，只读调查子代理保持共享以便后续用 `write agent://<id>` 续聊。 |

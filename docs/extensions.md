@@ -28,6 +28,7 @@
 | 20 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | Root main (process-wide table) | Yes | Backend `fetchAvailableModels`; no file |
 | 21 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omomp.yml#omp-config-autoupdate` (machine-local) |
 | 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide (module load) | Yes | `omomp.yml#omomp-lang` (repo) |
+| 23 | `read-topics` | [read-topics](#read-topics) | Process-wide (`tool://` scheme) | Yes | Cuts OMP's bundled `omp://tools/read.md`; no file |
 
 ---
 
@@ -213,6 +214,16 @@ Source: `agent/extensions/antigravity-wire-profiles/`.
 OMP's `google-antigravity` provider only overrides the caller's `maxTokens` for wire ids present in its static `ANTIGRAVITY_MODEL_WIRE_PROFILES` table (`@oh-my-pi/pi-catalog/wire/gemini-headers`); newer wire ids (`gemini-4-argon-*`) were missing, so compaction's 512-token short summary request spent its entire budget on thinking and failed with `thought-only response without final output`.
 
 At root `session_start` (awaited up to 20 s; `before_agent_start` awaits the same promise), the extension calls `POST <baseUrl>/v1internal:fetchAvailableModels` for the session credential and every stored Antigravity account, merges served models (non-internal, non-disabled, positive integer `maxOutputTokens`), and updates `ANTIGRAVITY_MODEL_WIRE_PROFILES` in place (adding and overwriting entries, never deleting). If all accounts fail, it keeps the existing table, warns in the log and main UI, and retries on the next root session start.
+
+### read-topics
+
+Source: `agent/extensions/read-topics/`.
+
+Adds per-feature topics to the built-in `read` tool through a `tool://` internal-URL scheme: `read tool://read` lists the topics, `read tool://read/<topic>` returns one (line selectors apply, e.g. `tool://read/sqlite:1-40`), and an unknown topic fails with the available keys. `grep`/`find` over `tool://read` search every topic.
+
+- **Content**: each topic is one section of OMP's bundled `omp://tools/read.md`, fetched with `getEmbeddedDoc` and cut by a fixed key → heading table: `selectors` (`## Inputs`), `outputs`, `flow`, `local-files`, `directories`, `archives`, `executables`, `video`, `profiler-reports`, `sqlite`, `documents`, `notebooks`, `images`, `internal-urls`, `web-urls`, `side-effects`, `limits`, `errors`. The maintainer-only `Source`, `Registration / Visibility` and `Notes` sections are not topics. The text follows the installed OMP version; the repo keeps no copy.
+- **Lifecycle**: the factory registers the handler once per process in OMP's process-global `InternalUrlRouter`; the doc is loaded and cut on the first `tool://` read. The handler's `promptDoc` adds a `tool://read/<topic>` line to the system prompt's internal-URL list, and the `read` description in `omomp.yml#system-prompt-replace` names the topic keys.
+- **Failure**: an OMP-owned or another host's `tool` scheme is left alone with a log warning. When the doc is missing, or a heading in the table is missing or repeated, the read fails with that drift spelled out instead of serving partial topics.
 
 ### omomp-lang
 

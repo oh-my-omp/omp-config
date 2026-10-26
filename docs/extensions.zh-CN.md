@@ -28,6 +28,7 @@
 | 20 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话（表为进程全局） | 是 | 后端 `fetchAvailableModels`；无文件 |
 | 21 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） |
 | 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局（模块加载） | 是 | `omomp.yml#omomp-lang`（仓库） |
+| 23 | `read-topics` | [read-topics](#read-topics) | 进程全局（`tool://` scheme） | 是 | 切分 OMP 内置的 `omp://tools/read.md`；无文件 |
 
 ---
 
@@ -213,6 +214,16 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（`@oh-my-pi/pi-catalog/wire/gemini-headers`）中已有的 wire id 替换调用方的 `maxTokens`；表抓包之后新增的 id（如 `gemini-4-argon-*`）不在其中，导致 compaction 的 512 token 摘要请求原样发出，额度被 thinking 耗尽并报错 `thought-only response without final output`。
 
 在根会话 `session_start`（最多等待 20 秒，`before_agent_start` 等待同一次加载）时，扩展用当前会话凭据和本机已存的全部 Antigravity 账号调用 `POST <baseUrl>/v1internal:fetchAvailableModels`，合并非 internal、非 disabled 且 `maxOutputTokens` 为正整数的条目，原地更新 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（只新增或覆盖，不删除条目）。若所有账号均获取失败，则保留原表内容，记日志并弹一次主 UI 警告，下次根会话启动时重试。
+
+### read-topics
+
+源码：`agent/extensions/read-topics/`。
+
+通过 `tool://` 内部 URL scheme 为内置 `read` 工具提供按功能划分的专题：`read tool://read` 列出专题，`read tool://read/<topic>` 返回单个专题（支持行选择器，如 `tool://read/sqlite:1-40`），专题名不存在时报错并列出可用名称。对 `tool://read` 执行 `grep`/`find` 会搜索全部专题。
+
+- **内容**：每个专题是 OMP 内置 `omp://tools/read.md` 的一个章节，用 `getEmbeddedDoc` 读取，按固定的“专题名 → 标题”表切出：`selectors`（`## Inputs`）、`outputs`、`flow`、`local-files`、`directories`、`archives`、`executables`、`video`、`profiler-reports`、`sqlite`、`documents`、`notebooks`、`images`、`internal-urls`、`web-urls`、`side-effects`、`limits`、`errors`。仅面向维护者的 `Source`、`Registration / Visibility`、`Notes` 不作为专题。正文随已安装的 OMP 版本更新，仓库不保存副本。
+- **生命周期**：扩展工厂函数每个进程只向 OMP 进程全局的 `InternalUrlRouter` 注册一次 handler；文档在第一次读取 `tool://` 时加载并切分。handler 的 `promptDoc` 会在 system prompt 的内部 URL 列表中加一行 `tool://read/<topic>`，`omomp.yml#system-prompt-replace` 中的 `read` 说明会列出全部专题名。
+- **失败处理**：`tool` scheme 已归 OMP 内置或被其他宿主注册时不覆盖，只记一条日志警告。文档缺失，或表中某个标题在文档里缺失、重复时，读取会报错并写明哪处不一致，不返回残缺的专题。
 
 ### omomp-lang
 
