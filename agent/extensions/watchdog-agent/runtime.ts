@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { tr } from "../_shared/i18n.ts";
 import { errorText } from "../_shared/errors.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
 import {
@@ -309,6 +310,18 @@ function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, ta
 /** One line per watchdog file for `/watchdog list`. */
 function describe(runtime: Runtime, spec: WatchdogSpec): string {
 	const override = runtime.overrides.get(spec.filePath);
+	const state = !targetsHere(runtime, spec)
+		? tr("not for this session", "不适用于本会话")
+		: effectiveEnabled(runtime, spec)
+			? tr("ON", "开启")
+			: tr("OFF", "关闭");
+	const session = override === undefined ? "—" : override ? tr("on", "开启") : tr("off", "关闭");
+	const backend = spec.kind === "jev" ? tr("native @judge", "原生 @judge") : `${tr("chat", "聊天")} ${spec.model ?? "@advisor"}`;
+	return `${spec.name}: ${state} · ${tr("global", "全局")} ${spec.enabled ? tr("on", "开启") : tr("off", "关闭")} · ${tr("session", "会话")} ${session} · ${tr("target", "目标")} ${spec.targets.join(",")} · ${tr("every", "每")} ${spec.every} · ${tr("scope", "范围")} ${spec.scope === "full" ? tr("full", "全部") : tr("window", "窗口")} · ${backend}\n  ${spec.filePath}`;
+}
+/** Model-facing watchdog description kept in English for tool-result content. */
+function describeForToolResult(runtime: Runtime, spec: WatchdogSpec): string {
+	const override = runtime.overrides.get(spec.filePath);
 	const state = !targetsHere(runtime, spec) ? "not for this session" : effectiveEnabled(runtime, spec) ? "ON" : "OFF";
 	const session = override === undefined ? "—" : override ? "on" : "off";
 	const backend = spec.kind === "jev" ? "native @judge" : `chat ${spec.model ?? "@advisor"}`;
@@ -329,7 +342,7 @@ function fileStatus(runtime: Runtime, path: string): string {
 		: effectiveEnabled(runtime, spec)
 			? "active in this session now"
 			: "switched off in this session";
-	return `watchdog file ${path}: recognised, ${active}.\n${describe(runtime, spec)}`;
+	return `watchdog file ${path}: recognised, ${active}.\n${describeForToolResult(runtime, spec)}`;
 }
 
 /** The one discovered watchdog with this name (case-insensitive), or the error to show. */
@@ -338,15 +351,18 @@ function findByName(
 	name: string,
 ): { readonly kind: "found"; readonly spec: WatchdogSpec } | { readonly kind: "error"; readonly text: string } {
 	const matches = runtime.roster.filter((spec) => spec.name.toLowerCase() === name.toLowerCase());
-	if (matches.length === 0) return { kind: "error", text: `watchdog "${name}" not found (see /watchdog list)` };
+	if (matches.length === 0) return { kind: "error", text: tr(`watchdog "${name}" not found (see /watchdog list)`, `未找到 watchdog“${name}”（参见 /watchdog list）`) };
 	if (matches.length > 1) {
 		return {
 			kind: "error",
-			text: `watchdog name "${name}" is ambiguous; give each file a unique \`name:\`:\n${matches.map((s) => `  ${s.filePath}`).join("\n")}`,
+			text: tr(
+				`watchdog name "${name}" is ambiguous; give each file a unique \`name:\`:\n${matches.map((s) => `  ${s.filePath}`).join("\n")}`,
+				`watchdog 名称“${name}”有歧义；请为每个文件指定唯一的 \`name:\`：\n${matches.map((s) => `  ${s.filePath}`).join("\n")}`,
+			),
 		};
 	}
 	const spec = matches[0];
-	if (!spec) return { kind: "error", text: `watchdog "${name}" not found (see /watchdog list)` };
+	if (!spec) return { kind: "error", text: tr(`watchdog "${name}" not found (see /watchdog list)`, `未找到 watchdog“${name}”（参见 /watchdog list）`) };
 	return { kind: "found", spec };
 }
 
@@ -386,14 +402,21 @@ function draftPrompt(
 			return { kind: "prompt", text: buildAddPrompt(command.requirement, draft) };
 		case "edit": {
 			const target = splitEditTarget(runtime, command.rest);
-			if (target === null) return { kind: "error", text: `no watchdog named at the start of "${command.rest}" (see /watchdog list)` };
+			if (target === null)
+				return {
+					kind: "error",
+					text: tr(
+						`no watchdog named at the start of "${command.rest}" (see /watchdog list)`,
+						`在“${command.rest}”开头没有 watchdog 名称（参见 /watchdog list）`,
+					),
+				};
 			const found = findByName(runtime, target.name);
 			if (found.kind === "error") return found;
 			let current: string;
 			try {
 				current = readFileSync(found.spec.filePath, "utf8");
 			} catch (error) {
-				return { kind: "error", text: `cannot read ${found.spec.filePath}: ${errorText(error)}` };
+				return { kind: "error", text: tr(`cannot read ${found.spec.filePath}: ${errorText(error)}`, `无法读取 ${found.spec.filePath}：${errorText(error)}`) };
 			}
 			return { kind: "prompt", text: buildEditPrompt(found.spec, current, target.change, draft) };
 		}
@@ -414,17 +437,20 @@ async function remove(
 	const found = findByName(runtime, name);
 	if (found.kind === "error") return { level: "error", text: found.text };
 	const spec = found.spec;
-	const confirmed = await ctx.ui.confirm(`Delete watchdog "${spec.name}"?`, `${describe(runtime, spec)}\n\nThe file is deleted from disk.`);
-	if (!confirmed) return { level: "info", text: `watchdog "${spec.name}" kept` };
+	const confirmed = await ctx.ui.confirm(
+		tr(`Delete watchdog "${spec.name}"?`, `删除 watchdog“${spec.name}”？`),
+		`${describe(runtime, spec)}\n\n${tr("The file is deleted from disk.", "文件将从磁盘删除。")}`,
+	);
+	if (!confirmed) return { level: "info", text: tr(`watchdog "${spec.name}" kept`, `已保留 watchdog“${spec.name}”`) };
 	try {
 		unlinkSync(spec.filePath);
 	} catch (error) {
-		return { level: "error", text: `cannot delete ${spec.filePath}: ${errorText(error)}` };
+		return { level: "error", text: tr(`cannot delete ${spec.filePath}: ${errorText(error)}`, `无法删除 ${spec.filePath}：${errorText(error)}`) };
 	}
 	if (runtime.overrides.delete(spec.filePath))
 		runtime.pi.appendEntry<SessionOverride>(OVERRIDE_ENTRY_TYPE, { filePath: spec.filePath, enabled: null });
 	refresh(runtime, false);
-	return { level: "info", text: `watchdog "${spec.name}" deleted (${spec.filePath})` };
+	return { level: "info", text: tr(`watchdog "${spec.name}" deleted (${spec.filePath})`, `已删除 watchdog“${spec.name}”（${spec.filePath}）`) };
 }
 
 function toggle(
@@ -435,38 +461,42 @@ function toggle(
 	if (found.kind === "error") return { level: "error", text: found.text };
 	const spec = found.spec;
 	const enabled = command.toggle === "on";
+	const toggleWord = command.toggle === "on" ? tr("on", "开启") : tr("off", "关闭");
 	switch (command.scope) {
 		case "session": {
 			if (!targetsHere(runtime, spec)) {
 				return {
 					level: "error",
-					text: `watchdog "${spec.name}" does not target this session (target ${spec.targets.join(",")}); use \`global\``,
+					text: tr(
+						`watchdog "${spec.name}" does not target this session (target ${spec.targets.join(",")}); use \`global\``,
+						`watchdog“${spec.name}”未将本会话作为目标（目标 ${spec.targets.join(",")}）；请使用 \`global\``,
+					),
 				};
 			}
 			runtime.overrides.set(spec.filePath, enabled);
 			runtime.pi.appendEntry<SessionOverride>(OVERRIDE_ENTRY_TYPE, { filePath: spec.filePath, enabled });
 			refresh(runtime, false);
-			return { level: "info", text: `watchdog "${spec.name}" ${command.toggle} for this session` };
+			return { level: "info", text: tr(`watchdog "${spec.name}" ${command.toggle} for this session`, `watchdog“${spec.name}”已在本会话${toggleWord}`) };
 		}
 		case "global": {
 			let raw: string;
 			try {
 				raw = readFileSync(spec.filePath, "utf8");
 			} catch (error) {
-				return { level: "error", text: `cannot read ${spec.filePath}: ${errorText(error)}` };
+				return { level: "error", text: tr(`cannot read ${spec.filePath}: ${errorText(error)}`, `无法读取 ${spec.filePath}：${errorText(error)}`) };
 			}
 			const updated = setFrontmatterEnabled(raw, enabled);
-			if (updated === null) return { level: "error", text: `${spec.filePath} has no frontmatter` };
+			if (updated === null) return { level: "error", text: tr(`${spec.filePath} has no frontmatter`, `${spec.filePath} 没有 frontmatter`) };
 			try {
 				if (updated !== raw) writeFileSync(spec.filePath, updated);
 			} catch (error) {
-				return { level: "error", text: `cannot write ${spec.filePath}: ${errorText(error)}` };
+				return { level: "error", text: tr(`cannot write ${spec.filePath}: ${errorText(error)}`, `无法写入 ${spec.filePath}：${errorText(error)}`) };
 			}
 			// The file is now the switch; a session override would keep shadowing it here.
 			if (runtime.overrides.delete(spec.filePath))
 				runtime.pi.appendEntry<SessionOverride>(OVERRIDE_ENTRY_TYPE, { filePath: spec.filePath, enabled: null });
 			refresh(runtime, false);
-			return { level: "info", text: `watchdog "${spec.name}" ${command.toggle} globally (${spec.filePath})` };
+			return { level: "info", text: tr(`watchdog "${spec.name}" ${command.toggle} globally (${spec.filePath})`, `watchdog“${spec.name}”已全局${toggleWord}（${spec.filePath}）`) };
 		}
 		default: {
 			const unreachable: never = command.scope;
@@ -477,20 +507,22 @@ function toggle(
 
 function registerCommand(runtime: Runtime): void {
 	runtime.pi.registerCommand("watchdog", {
-		description:
+		description: tr(
 			"List, add, edit, remove or switch watchdogs: /watchdog [list] | add <requirement> | edit <name> [change] | rm <name> | on|off <name> [session|global]",
+			"列出、添加、编辑、删除或切换 watchdog：/watchdog [list] | add <requirement> | edit <name> [change] | rm <name> | on|off <name> [session|global]",
+		),
 		getArgumentCompletions: (prefix) => {
 			try {
 				refresh(runtime, false);
 				const lower = prefix.toLowerCase();
 				if (!/\s/.test(prefix)) {
 					const subs = [
-						{ value: "list", label: "list", description: "all watchdog files and their state" },
-						{ value: "on ", label: "on", description: "switch a watchdog on" },
-						{ value: "off ", label: "off", description: "switch a watchdog off" },
-						{ value: "add ", label: "add", description: "draft a new watchdog with the model from a requirement" },
-						{ value: "edit ", label: "edit", description: "revise a watchdog with the model" },
-						{ value: "rm ", label: "rm", description: "delete a watchdog file (asks first)" },
+						{ value: "list", label: tr("list", "列表"), description: tr("all watchdog files and their state", "所有 watchdog 文件及其状态") },
+						{ value: "on ", label: tr("on", "开启"), description: tr("switch a watchdog on", "开启 watchdog") },
+						{ value: "off ", label: tr("off", "关闭"), description: tr("switch a watchdog off", "关闭 watchdog") },
+						{ value: "add ", label: tr("add", "添加"), description: tr("draft a new watchdog with the model from a requirement", "根据需求让模型起草新的 watchdog") },
+						{ value: "edit ", label: tr("edit", "编辑"), description: tr("revise a watchdog with the model", "让模型修改 watchdog") },
+						{ value: "rm ", label: tr("rm", "删除"), description: tr("delete a watchdog file (asks first)", "删除 watchdog 文件（先询问）") },
 					];
 					return subs.filter((s) => s.value.startsWith(lower));
 				}
@@ -507,9 +539,20 @@ function registerCommand(runtime: Runtime): void {
 							for (const scope of scopes) {
 								const value = `${sub} ${spec.name} ${scope}`;
 								if (!value.toLowerCase().startsWith(lower)) continue;
-								const now = !targetsHere(runtime, spec) ? "not for this session" : effectiveEnabled(runtime, spec) ? "now ON" : "now OFF";
-								const where = scope === "session" ? "this session only" : `writes enabled: ${sub === "on"} to the file`;
-								items.push({ value, label: `${spec.name} ${scope}`, description: `${where} · ${now}` });
+								const now = !targetsHere(runtime, spec)
+									? tr("not for this session", "不适用于本会话")
+									: effectiveEnabled(runtime, spec)
+										? tr("now ON", "当前开启")
+										: tr("now OFF", "当前关闭");
+								const where =
+									scope === "session"
+										? tr("this session only", "仅本会话")
+										: tr(`writes enabled: ${sub === "on"} to the file`, `向文件写入 enabled: ${sub === "on"}`);
+								items.push({
+									value,
+									label: `${spec.name} ${scope === "session" ? tr("session", "会话") : tr("global", "全局")}`,
+									description: `${where} · ${now}`,
+								});
 							}
 							break;
 						}
@@ -538,7 +581,7 @@ function registerCommand(runtime: Runtime): void {
 						refresh(runtime, false);
 						ctx.ui.notify(
 							runtime.roster.length === 0
-								? "no WATCHDOG-*.md files found"
+								? tr("no WATCHDOG-*.md files found", "未找到 WATCHDOG-*.md 文件")
 								: runtime.roster.map((spec) => describe(runtime, spec)).join("\n"),
 							"info",
 						);

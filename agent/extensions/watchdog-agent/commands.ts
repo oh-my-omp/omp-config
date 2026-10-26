@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { tr } from "../_shared/i18n.ts";
 import { WATCHDOG_FILE_PATTERN, type WatchdogSpec } from "./spec.ts";
-
 type Toggle = "on" | "off";
 export type ToggleScope = "session" | "global";
 
@@ -16,7 +16,12 @@ export type WatchdogCommand =
 	| { readonly kind: "edit"; readonly rest: string }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-const WATCHDOG_USAGE = "usage: /watchdog [list] | on|off <name> [session|global] | add <requirement> | edit <name> [change] | rm <name>";
+function watchdogUsage(): string {
+	return tr(
+		"usage: /watchdog [list] | on|off <name> [session|global] | add <requirement> | edit <name> [change] | rm <name>",
+		"用法：/watchdog [list] | on|off <name> [session|global] | add <requirement> | edit <name> [change] | rm <name>",
+	);
+}
 
 export function parseWatchdogCommand(args: string): WatchdogCommand {
 	const tokens = args.trim().split(/\s+/).filter(Boolean);
@@ -24,26 +29,32 @@ export function parseWatchdogCommand(args: string): WatchdogCommand {
 	const rest = args.trim().slice(sub.length).trim();
 	switch (sub) {
 		case "list":
-			return tokens.length <= 1 ? { kind: "list" } : { kind: "invalid", reason: WATCHDOG_USAGE };
+			return tokens.length <= 1 ? { kind: "list" } : { kind: "invalid", reason: watchdogUsage() };
 		case "add":
 			return rest === ""
-				? { kind: "invalid", reason: "usage: /watchdog add <requirement> — describe what the watchdog should catch" }
+				? {
+						kind: "invalid",
+						reason: tr(
+							"usage: /watchdog add <requirement> — describe what the watchdog should catch",
+							"用法：/watchdog add <requirement> — 描述 watchdog 应捕获的内容",
+						),
+					}
 				: { kind: "add", requirement: rest };
 		case "rm":
-			return rest === "" ? { kind: "invalid", reason: "usage: /watchdog rm <name>" } : { kind: "rm", name: rest };
+			return rest === "" ? { kind: "invalid", reason: tr("usage: /watchdog rm <name>", "用法：/watchdog rm <name>") } : { kind: "rm", name: rest };
 		case "edit":
-			return rest === "" ? { kind: "invalid", reason: "usage: /watchdog edit <name> [change]" } : { kind: "edit", rest };
+			return rest === "" ? { kind: "invalid", reason: tr("usage: /watchdog edit <name> [change]", "用法：/watchdog edit <name> [change]") } : { kind: "edit", rest };
 		case "on":
 		case "off": {
 			const words = tokens.slice(1);
 			const last = words.at(-1)?.toLowerCase();
 			const scope: ToggleScope = last === "global" ? "global" : "session";
 			const nameTokens = last === "global" || last === "session" ? words.slice(0, -1) : words;
-			if (nameTokens.length === 0) return { kind: "invalid", reason: WATCHDOG_USAGE };
+			if (nameTokens.length === 0) return { kind: "invalid", reason: watchdogUsage() };
 			return { kind: "toggle", toggle: sub, name: nameTokens.join(" "), scope };
 		}
 		default:
-			return { kind: "invalid", reason: WATCHDOG_USAGE };
+			return { kind: "invalid", reason: watchdogUsage() };
 	}
 }
 
