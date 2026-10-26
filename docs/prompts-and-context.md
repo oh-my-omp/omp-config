@@ -32,7 +32,7 @@ system-prompt-replace:
       replace: "replacement text, $1 and $& supported"
 ```
 
-Active rules in `agent/omomp.yml` (the tool rules enforce `read` + hashline `edit` and forbid file lookup in `eval` because scripted or CLI lookup encourages passive reading and blind edits without surrounding context; the extra tokens of reading surrounding lines are negligible in long tasks, while blind commands and edits without compiler or test protection are destructive):
+Active rules in `agent/omomp.yml` (file lookup and edits are restricted to `read` + hashline `edit` and prohibited in `eval` so the model reads surrounding context before modifying target lines, avoiding blind edits in scripts, configs, and CLI operations that lack compiler or test coverage):
 
 | Target | Change |
 |---|---|

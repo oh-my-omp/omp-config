@@ -80,7 +80,7 @@ Runs at `tool_call` on terminal structured `yield` calls inside `task:low`, `tas
 
 Source: `agent/extensions/tool-policy-nag/`. Main session only.
 
-Inspects `bash`, `bash_bg`, `exec_command` (including writes to `xd://bash`, `xd://bash_bg`, `xd://exec_command`), and `eval` at `tool_call`. It only sends reminders and never blocks a tool call. Its purpose is to curb the passive-reading habit where models use inline scripts (`eval`/`python -c`) or bundled shell commands to bypass `read`/`edit`/`grep` and edit files blindly, and to flag multi-program write commands that run without compiler or test protection.
+Inspects `bash`, `bash_bg`, `exec_command` (including writes to `xd://bash`, `xd://bash_bg`, `xd://exec_command`), and `eval` at `tool_call`. It only sends reminders and never blocks a tool call, nudging the model to use `read`/`edit`/`grep`/`glob` instead of inline scripts or shell pipelines for local file operations and flagging multi-program write commands.
 
 Reads `omomp.yml#tool-policy-nag` on every watched call (project `.omp/omomp.*` before agent-dir `omomp.*`; without a valid section, nothing runs):
 
