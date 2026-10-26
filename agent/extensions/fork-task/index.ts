@@ -58,6 +58,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { ensurePersistedRoster } from "@oh-my-pi/pi-coding-agent/registry/persisted-agents";
 import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
+import { tr } from "../_shared/i18n.ts";
 import { errorText } from "../_shared/errors.ts";
 
 const itemSchema = z.object({
@@ -473,7 +474,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		name: "fork_task",
-		label: "Fork Task",
+		label: tr("Fork Task", "分派任务"),
 		description: DESCRIPTION,
 		loadMode: "essential",
 		parameters: paramsSchema,
