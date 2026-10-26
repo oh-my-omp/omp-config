@@ -25,6 +25,7 @@ import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, Interacti
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { errorText } from "../_shared/errors.ts";
+import { tr } from "../_shared/i18n.ts";
 
 const TOOL = "harness_restart";
 const ENTRY_TYPE = "mouriya.omp.harness-restart.request";
@@ -120,7 +121,7 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 			return;
 		}
 		runtime.pi.appendEntry(ENTRY_TYPE, request.marker);
-		if (ctx.hasUI) ctx.ui.notify("Restarting omp…", "info");
+		if (ctx.hasUI) ctx.ui.notify(tr("Restarting omp…", "正在重启 omp…"), "info");
 		await live.mode.restart();
 	} catch (error) {
 		runtime.pi.logger.warn("harness-restart: restart failed", { error: errorText(error) });
@@ -208,7 +209,7 @@ function onAgentEnd(runtime: Runtime, event: AgentEndEvent, ctx: ExtensionContex
 	const last = event.messages.findLast((message) => message.role === "assistant");
 	if (last?.role === "assistant" && last.stopReason === "aborted" && isUserInterruptAbort(last)) {
 		runtime.state = { kind: "idle" };
-		ctx.ui.notify("Queued harness restart cancelled: the turn was interrupted.", "info");
+		ctx.ui.notify(tr("Queued harness restart cancelled: the turn was interrupted.", "已取消排队的 Harness 重启：本轮被中断。"), "info");
 		runtime.pi.sendUserMessage("The queued harness restart was cancelled because the user interrupted the turn; nothing changed.", {
 			attribution: "agent",
 		});
@@ -239,7 +240,7 @@ export default function harnessRestart(pi: ExtensionAPI): void {
 	pi.on("agent_end", (event, ctx) => guardHook(pi, "agent_end", () => onAgentEnd(runtime, event, ctx)));
 	pi.registerTool({
 		name: TOOL,
-		label: "Harness Restart",
+		label: tr("Harness Restart", "重启 Harness"),
 		description: DESCRIPTION,
 		approval: "exec",
 		loadMode: "essential",
