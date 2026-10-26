@@ -4,7 +4,7 @@
 
 `agent/config.yml` 在 `task.disabledAgents` 中禁用了 OMP 内置的 5 个子代理（`task`、`scout`、`sonic`、`reviewer`、`security-reviewer`；即使写进 `spawns` 也会在 preflight 被拒）。所有子代理调用均使用 `agent/agents/*.md` 中的 7 个自定义子代理（frontmatter 规则与常见陷阱见 [`agent/agents/README.zh-CN.txt`](../agent/agents/README.zh-CN.txt)；该目录下的说明文件必须使用 `.txt` 后缀，否则会被当作 agent 定义解析并报错）。
 
-子代理体系基于三项设计原则：
+子代理体系基于以下设计原则：
 1. **跨模型特性互补**：以少量调用延迟换取不同模型的特性组合——如 `gpt-*-sol` 偏稳健保守（`discuss:steady`、`mentor:default`、`task:mid`）、`gpt-*-luna` 成本低（`task:low` 及各角色回退链）、`claude-opus` 适合发散设计（`discuss:divergent`、`task:high`）——通过跨模型校验收敛单一模型的推理偏差。
 2. **跨订阅分摊综合成本**：将不同子代理档位与回退链分布到多个订阅与免费渠道（`anthropic`、`openai-codex`、`opencode-go`、`bansos`），分摊调用额度以降低整体成本。
 3. **无状态 `task` 执行器与受机制约束的少量顾问角色**：主代理编写子代理 prompt 时会将自身假设带入子代理，因此常规任务不使用预设人设或固定工作流节点（禁用 `scout`、`reviewer`、`security-reviewer` 等内置角色），统一由主代理编排无状态的通用 `task` 执行器（按成本与可信度分为 `task:high/mid/low/free`）。非 `task` 角色仅在需要严格隔离职责边界时设立（使顾问既不受主代理转述偏差主导，也不替代主代理决策），并通过 [`user-prompt-inject`](#user-prompt-inject) 注入根会话用户消息、`discuss:*` 限制只读工具、`mentor:default` 移除全部工具在运行期约束边界，因此仅定义 `discuss:steady`、`discuss:divergent` 与 `mentor:default` 三个非 `task` 角色。
@@ -25,7 +25,7 @@
 
 ## 顾问上下文与 `user-prompt-inject`
 
-默认情况下，子代理只看到调用方写在 `task` 和 `context` 里的转述。针对 `mentor:default`、`discuss:steady` 与 `discuss:divergent` 的三项约定：
+默认情况下，子代理只看到调用方写在 `task` 和 `context` 里的转述。针对 `mentor:default`、`discuss:steady` 与 `discuss:divergent` 的约定：
 
 1. [`user-prompt-inject`](#user-prompt-inject) 从根主会话提取用户原始输入，插入这三个顾问的每次模型请求开头，让顾问直接对照用户原话核对计划。
 2. 重大决策同时询问 `discuss:steady` 与 `discuss:divergent`；同一话题后续追问通过 `write agent://<id>` 发给原代理，不重复新建。

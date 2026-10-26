@@ -4,7 +4,7 @@
 
 `agent/config.yml` disables OMP's 5 built-in subagents (`task`, `scout`, `sonic`, `reviewer`, `security-reviewer`) in `task.disabledAgents`; they are rejected at preflight even if listed in `spawns`. All subagent calls go through the 7 definitions in `agent/agents/*.md` (see [`agent/agents/README.txt`](../agent/agents/README.txt) for frontmatter rules and pitfalls; keep notes in `agent/agents/` as `.txt` so OMP does not parse them as agent definitions).
 
-The subagent setup follows three design principles:
+The subagent setup follows these design principles:
 1. **Cross-model complementarity**: trading a small amount of call latency across subagents combines distinct model traits — `gpt-*-sol` for conservative analysis (`discuss:steady`, `mentor:default`, `task:mid`), `gpt-*-luna` for low-cost execution and fallbacks (`task:low`), and `claude-opus` for open-ended design (`discuss:divergent`, `task:high`) — keeping reasoning variance bounded across models.
 2. **Cost distribution across subscriptions**: binding worker and advisor chains across separate subscriptions and free channels (`anthropic`, `openai-codex`, `opencode-go`, `bansos`) spreads quota usage to lower blended cost.
 3. **Stateless `task` runners vs runtime-bounded advisor roles**: because a parent agent's prompt passes its own framing into the child, general execution uses stateless `task` runners (`task:high/mid/low/free`, differentiated by cost and trust) orchestrated by the main agent rather than fixed workflow nodes or role-play personas (built-in `scout`, `reviewer`, and `security-reviewer` are disabled). Predefined non-`task` roles are introduced only when a strict role boundary is required — keeping advisors independent of the caller's summary without taking over the main agent's decision — and are enforced through runtime constraints ([`user-prompt-inject`](#user-prompt-inject) injecting root user prompts, read-only tools on `discuss:*`, and `tools: []` on `mentor:default`), limiting non-`task` roles to `discuss:steady`, `discuss:divergent`, and `mentor:default`.
@@ -25,7 +25,7 @@ Responsibilities, tool limits, and `spawns` lists live in `agent/agents/<name>.m
 
 ## Advisor Context and `user-prompt-inject`
 
-By default, a subagent only sees the prompt its caller passes in `task` and `context`. Three settings keep `mentor:default`, `discuss:steady`, and `discuss:divergent` grounded in the user's actual request and the repository's code:
+By default, a subagent only sees the prompt its caller passes in `task` and `context`. The following settings keep `mentor:default`, `discuss:steady`, and `discuss:divergent` grounded in the user's actual request and the repository's code:
 
 1. [`user-prompt-inject`](#user-prompt-inject) prepends the human user's prompts from the root main session to every model call of `mentor:default`, `discuss:steady`, and `discuss:divergent`.
 2. Consequential decisions consult both `discuss:steady` and `discuss:divergent`; follow-ups on the same topic message the existing agent via `write agent://<id>`.
