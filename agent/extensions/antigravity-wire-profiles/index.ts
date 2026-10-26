@@ -41,6 +41,7 @@ import {
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 
 import { errorText } from "../_shared/errors.ts";
+import { tr } from "../_shared/i18n.ts";
 
 const PROVIDER = "google-antigravity";
 const API = "google-gemini-cli";
@@ -179,7 +180,13 @@ function applyProfiles(profiles: Profiles): readonly string[] {
 function warn(pi: ExtensionAPI, ctx: ExtensionContext, reason: string): void {
 	pi.logger.warn("antigravity-wire-profiles: backend model list unavailable; the wire table keeps its previous contents", { reason });
 	if (ctx.hasUI)
-		ctx.ui.notify(`Antigravity wire profiles not refreshed from the backend (${reason}); retried at next session start`, "warning");
+		ctx.ui.notify(
+			tr(
+				`Antigravity wire profiles not refreshed from the backend (${reason}); retried at next session start`,
+				`Antigravity 线路配置未从后端刷新（${reason}）；将在下次会话启动时重试`,
+			),
+			"warning",
+		);
 }
 
 async function load(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
@@ -221,7 +228,7 @@ async function load(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 }
 
 export default function antigravityWireProfiles(pi: ExtensionAPI): void {
-	pi.setLabel("Antigravity wire profiles");
+	pi.setLabel(tr("Antigravity wire profiles", "Antigravity 线路配置"));
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.agent.kind !== "main") return;
