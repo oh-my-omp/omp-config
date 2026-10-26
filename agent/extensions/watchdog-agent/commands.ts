@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { tr } from "../_shared/i18n.ts";
 import { WATCHDOG_FILE_PATTERN, type WatchdogSpec } from "./spec.ts";
+
 type Toggle = "on" | "off";
 export type ToggleScope = "session" | "global";
 
@@ -41,9 +42,13 @@ export function parseWatchdogCommand(args: string): WatchdogCommand {
 					}
 				: { kind: "add", requirement: rest };
 		case "rm":
-			return rest === "" ? { kind: "invalid", reason: tr("usage: /watchdog rm <name>", "用法：/watchdog rm <name>") } : { kind: "rm", name: rest };
+			return rest === ""
+				? { kind: "invalid", reason: tr("usage: /watchdog rm <name>", "用法：/watchdog rm <name>") }
+				: { kind: "rm", name: rest };
 		case "edit":
-			return rest === "" ? { kind: "invalid", reason: tr("usage: /watchdog edit <name> [change]", "用法：/watchdog edit <name> [change]") } : { kind: "edit", rest };
+			return rest === ""
+				? { kind: "invalid", reason: tr("usage: /watchdog edit <name> [change]", "用法：/watchdog edit <name> [change]") }
+				: { kind: "edit", rest };
 		case "on":
 		case "off": {
 			const words = tokens.slice(1);
