@@ -80,7 +80,7 @@
 
 源码：`agent/extensions/tool-policy-nag/`。仅在主会话运行。
 
-在 `tool_call` 阶段检查 `bash`、`bash_bg`、`exec_command`（含写往 `xd://bash`、`xd://bash_bg`、`xd://exec_command` 的调用）和 `eval`。只发提醒，不拦截命令。
+在 `tool_call` 阶段检查 `bash`、`bash_bg`、`exec_command`（含写往 `xd://bash`、`xd://bash_bg`、`xd://exec_command` 的调用）和 `eval`。只发提醒，不拦截命令。设计目的是抑制模型用内联脚本（`eval`/`python -c`）或打包 shell 命令绕过 `read`/`edit`/`grep` 的消极阅读与盲改习惯，并对没有编译器和测试保护的多程序长写命令发出风险提醒。
 
 每次调用重读 `omomp.yml#tool-policy-nag`（项目 `.omp/omomp.*` 优先于 agent 目录 `omomp.*`；无有效配置段时不运行）：
 
