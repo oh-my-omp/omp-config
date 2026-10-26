@@ -19,7 +19,7 @@ description: 用本仓库工作区更新本机 OMP 配置和 pi-bansos 状态（
    agent 目录默认取 `PI_CODING_AGENT_DIR`，否则 `~/.omp/agent`；使用 named profile 时加 `--agent-dir <omp config path 的输出>`。脚本报告 `another update holds …` 时，说明有一次自动更新正在进行，稍后重跑。
    更新器先完整 preflight，再对每个声明插件执行 `omp install`（缺的补装，已装的升级），并向 OMP owner 核对 `omp-todo-more` 的 enabled、manifest entry 与实际入口；就绪后才写消费者并退休已知八路径。插件无法安装或升级、disabled、坏 entry、app-managed/父链接/异常退休对象时不切换。报告 errors 时停止后续卸载和初始化项流程：保留实际部分结果，先修复并重跑；出现 `Cutover incomplete; do not restart OMP` 时不能重启混合状态。
 2. 跑 `./plugin-audit.sh`，只处理 `[卸载候选]`：问用户是否 `omp plugin uninstall <name>`，并告知作者从脚本移除通常已经验证过，可以直接删。`[安装]` 已由更新器补装，`[保留]` 不动。没有安装任何插件时，审计仍正常输出分类报告并成功退出：`已安装` 为 `(无)`，`[安装]` 列出当前全部声明插件。
-3. 本机初始化项（`omomp.yml` 里的 `doc-polish` 段，以及 `commandcode-model-spec` 依赖的 `commandcode-models.json`）脚本不碰。已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。仓库不带 `doc-polish` 段，示例见 `README.md` 的 doc-polish 一节。
+3. 本机初始化项（`omomp.yml` 里的 `doc-polish` 段，以及 `commandcode-model-spec` 依赖的 `commandcode-models.json`）脚本不碰。已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。仓库不带 `doc-polish` 段，示例见 `docs/extensions.zh-CN.md` 的 `doc-polish` 一节。
 4. 报告脚本输出的写入、移动、删除、跳过（应用托管文件）、安装和升级的插件、note 和 error，以及卸载结果和初始化项的处理。
 
 ## 手动更新与自动更新的差别

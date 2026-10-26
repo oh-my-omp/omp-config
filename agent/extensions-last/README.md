@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 The extensions here must run after every other path-loaded extension, so they are not placed in `extensions/`; instead `config.yml`'s `extensions` loads them by path, as the last entry of the list. Each extension is one directory with `<name>/index.ts` as its entry and its config as a section of the omomp file (`omomp.yml`) named after the directory; `config.yml` holds the full path of `index.ts` (a file path rather than the directory, so it loads as it did when flat, and `disabledExtensions` cannot filter it by name). Shared code is imported from `../../extensions/_shared/`.
 
-`system-prompt-replace/` patches the rendered tool descriptions from `toolInventory` and `xdevDocs`; it does not replace the Handlebars template or the separately transmitted tool schemas. For prompt-layer ownership and the current read/task/eval/bash rewrites, see the root README's [system-prompt-replace section](../../README.md#system-prompt-replace).
+`system-prompt-replace/` patches the rendered tool descriptions from `toolInventory` and `xdevDocs`; it does not replace the Handlebars template or the separately transmitted tool schemas. For prompt-layer ownership and the current read/task/eval/bash rewrites, see [system-prompt-replace](../../docs/prompts-and-context.md#system-prompt-replace).
 
 ## Load order
 

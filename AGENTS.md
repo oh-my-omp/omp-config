@@ -200,7 +200,7 @@ flowchart LR
 | `agent/extensions/append-system-model/APPEND_SYSTEM_MODEL.md` | Per-model system-prompt appendix for `append-system-model` (`---`-fenced YAML headers with `model`/`provider` regexes, each followed by its body). Host-owned: the repo ships none, and the updater and `/sync-omp-config` leave it alone. Read per prompt, so edits apply without restart. |
 | `pi/agent/pi-bansos-relay-state.json` | `pi-bansos` plugin state (relay on/off, relay URL, saved relays, `statusBar`), read by the plugin from `~/.pi/agent/`, not `~/.omp/agent`. Written by the plugin's `/bansos` command; no credentials. Portable regular item in both directions. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
-| repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (English, the default) with its section-for-section Simplified Chinese translation `README.zh-CN.md` — change both together — and the dev tooling `package.json` / `biome.json` / `tsconfig.json` (`bun run check`). |
+| repo root, `docs/` | `install-plugins.sh`, `plugin-audit.sh`, Wiki home `README.md` / `README.zh-CN.md` and topic pages `docs/<topic>.md` / `docs/<topic>.zh-CN.md` (English default and section-for-section Simplified Chinese translation — change both together), and the dev tooling `package.json` / `biome.json` / `tsconfig.json` (`bun run check`). |
 | `ci/`, `.github/workflows/config-check.yml` | The configuration check (CI): `ci/check.ts` installs the latest omp in a throwaway HOME, applies the repo with its own updater (plugins included), runs one real RPC session per mode (full, `omp-light`) on a keyless free model, and collects updater and session diagnostics (every session stderr line, `extension_error`) and omp log warn/error; install output is collected only when a step fails. The report groups them into findings keyed by a SHA-256 of kind + normalized text, so one fault appears once with its per-phase counts and keeps its id across runs while kind and normalized text stay the same. `ci/README.md` holds its design, criteria, and coverage boundary. |
 | `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; the updater copies them to `~/.omp/agent` and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
 | `agent/extensions/omp-config-autoupdate/omp-config-update.ts` | The repo → machine updater: a standalone Bun script that sits beside the extension that spawns it (not an extension module; only `index.ts` is loaded), copied like the extension's other modules. `auto` mode runs at every start when the machine's auto-update switch is on; `apply --source <dir> [--check]` backs `/update-omp`. Its header documents what it touches, deletes, and never touches. |
@@ -570,7 +570,7 @@ exercised in a real omp session.
   contracts; read these for exact copy/exclusion/validation rules. `update-omp.md`
   only wraps the updater, whose header and code are the repo → machine rules.
 
-Direct-migration copy set (never copy the whole `agent/`; `README.md`):
+Direct-migration copy set (never copy the whole `agent/`; `docs/operations.md`):
 
 ```bash
 mkdir -p "$HOME/.omp/agent"

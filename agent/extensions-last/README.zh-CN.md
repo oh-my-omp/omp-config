@@ -4,7 +4,7 @@
 
 这里的扩展必须在其他按路径加载的扩展之后执行，所以不放进 `extensions/`，而是由 `config.yml` 的 `extensions` 按路径加载，并且写在列表的最后一项。每个扩展一个目录，入口是 `<名字>/index.ts`，自己的配置是 omomp 文件（`omomp.yml`）里以目录名命名的一段；`config.yml` 里写的是 `index.ts` 的完整路径（写文件路径而不是目录，加载方式与平铺时相同，`disabledExtensions` 按名字过滤不到它）。共享代码从 `../../extensions/_shared/` 导入。
 
-`system-prompt-replace/` 修订 `toolInventory`、`xdevDocs` 渲染出来的工具描述，不替换 Handlebars 模板，也不修改单独发送的工具 schema。提示词分层和当前 read/task/eval/bash 修订见根 README 的 [system-prompt-replace 一节](../../README.zh-CN.md#system-prompt-replace)。
+`system-prompt-replace/` 修订 `toolInventory`、`xdevDocs` 渲染出来的工具描述，不替换 Handlebars 模板，也不修改单独发送的工具 schema。提示词分层和当前 read/task/eval/bash 修订见 [system-prompt-replace](../../docs/prompts-and-context.zh-CN.md#system-prompt-replace)。
 
 ## 加载顺序
 
