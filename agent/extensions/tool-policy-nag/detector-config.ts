@@ -60,6 +60,7 @@ export type Lanes = {
 	readonly tool: ToolLanes | null;
 	readonly risk: RiskLane | null;
 };
+export type LaneWarning = { readonly en: string; readonly zh: string };
 
 const NO_LANES: Lanes = { tool: null, risk: null };
 
@@ -123,9 +124,12 @@ function lanesOf(value: z.infer<typeof lanesSchema>): Lanes {
 }
 
 /** Re-read every watched call; the project's omomp section overrides the agent-dir one. */
-export function loadLanes(cwd: string): { readonly lanes: Lanes; readonly warnings: readonly string[] } {
+export function loadLanes(cwd: string): { readonly lanes: Lanes; readonly warnings: readonly LaneWarning[] } {
 	const loaded = loadOmompSection(omompSection, cwd);
-	const warnings = loaded.skipped.map(({ path, reason }) => `tool-policy-nag: 跳过 ${path}：${reason}`);
+	const warnings = loaded.skipped.map(({ path, reason }) => ({
+		en: `tool-policy-nag: skipped ${path}: ${reason}`,
+		zh: `tool-policy-nag：跳过 ${path}：${reason}`,
+	}));
 	switch (loaded.kind) {
 		case "found":
 			return { lanes: lanesOf(loaded.value), warnings };

@@ -55,10 +55,11 @@ import type { Judge } from "@oh-my-pi/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
 import { cfgBashInterceptorEnabled } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import { errorText } from "../_shared/errors.ts";
+import { tr } from "../_shared/i18n.ts";
 import { openJudge } from "../_shared/judge.ts";
 import { sessionSettings } from "../_shared/settings.ts";
 import { type WatchedCall, watchedCallOf } from "./calls.ts";
-import { type FormLane, type IntentLane, type Lanes, loadLanes } from "./detector-config.ts";
+import { type FormLane, type IntentLane, type LaneWarning, type Lanes, loadLanes } from "./detector-config.ts";
 import { detectEvalViolations, detectShellViolations } from "./heuristic.ts";
 import { type IntentSpec, intentReminder, intentViolation, JUDGE_TIMEOUT_MS, judgeIntent, loadIntentSpec } from "./intent.ts";
 import { inspectRisk, riskReminder } from "./risk.ts";
@@ -160,9 +161,14 @@ function heuristicCheck(
 	if (!deliver) return;
 	pi.sendUserMessage(form.prompt, { deliverAs: "steer", attribution: "agent" });
 	ctx.ui.notify(
-		`Shell policy nag ${nagsSent}/${form.maxNags} sent for hit #${hits} (${programs.join(", ")}) — detector ${
-			detectorArmed ? "still armed" : "exhausted until compaction"
-		}`,
+		tr(
+			`Shell policy nag ${nagsSent}/${form.maxNags} sent for hit #${hits} (${programs.join(", ")}) — detector ${
+				detectorArmed ? "still armed" : "exhausted until compaction"
+			}`,
+			`Shell 策略提醒已发送 ${nagsSent}/${form.maxNags} 次，命中 #${hits}（${programs.join("、")}）—检测器${
+				detectorArmed ? "仍在工作" : "已耗尽，直到压缩后重新启用"
+			}`,
+		),
 		"warning",
 	);
 }
@@ -200,11 +206,11 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		pi.logger.info("Tool-policy nag state restored", { reason, state });
 	};
 
-	const warnOnce = (ctx: ExtensionContext, text: string): void => {
-		if (warned.has(text)) return;
-		warned.add(text);
-		pi.logger.warn(text);
-		if (ctx.hasUI) ctx.ui.notify(text, "warning");
+	const warnOnce = (ctx: ExtensionContext, warning: LaneWarning): void => {
+		if (warned.has(warning.en)) return;
+		warned.add(warning.en);
+		pi.logger.warn(warning.en);
+		if (ctx.hasUI) ctx.ui.notify(tr(warning.en, warning.zh), "warning");
 	};
 
 	/** Resolve all activation inputs once, before deciding which tool lane owns delivery. */
@@ -212,10 +218,16 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		const loaded = await loadIntentSpec(SPEC_DIR);
 		switch (loaded.kind) {
 			case "missing":
-				warnOnce(ctx, `tool-policy-nag: 意向 spec 缺失（${SPEC_DIR}/INTENT-*.md），意向通道不提醒`);
+				warnOnce(ctx, {
+					en: `tool-policy-nag: intent spec missing (${SPEC_DIR}/INTENT-*.md); intent lane will not remind`,
+					zh: `tool-policy-nag：意向 spec 缺失（${SPEC_DIR}/INTENT-*.md），意向通道不提醒`,
+				});
 				return null;
 			case "invalid":
-				warnOnce(ctx, `tool-policy-nag: 意向 spec 无效（${loaded.reason}），意向通道不提醒`);
+				warnOnce(ctx, {
+					en: `tool-policy-nag: invalid intent spec (${loaded.reason}); intent lane will not remind`,
+					zh: `tool-policy-nag：意向 spec 无效（${loaded.reason}），意向通道不提醒`,
+				});
 				return null;
 			case "disabled":
 				return null;
@@ -236,7 +248,10 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		const verdict = await judgeIntent(judge, spec, call, AbortSignal.timeout(JUDGE_TIMEOUT_MS));
 		switch (verdict.kind) {
 			case "failed":
-				warnOnce(ctx, `tool-policy-nag: 意向判定失败（${verdict.reason}）`);
+				warnOnce(ctx, {
+					en: `tool-policy-nag: intent judgment failed (${verdict.reason})`,
+					zh: `tool-policy-nag：意向判定失败（${verdict.reason}）`,
+				});
 				return;
 			case "ok":
 				break;
@@ -262,16 +277,26 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		if (!fired) return;
 		const option = spec.options.find((candidate) => candidate.label === verdict.label);
 		if (option === undefined) return;
-		const summary = `tool-policy-nag 意向：${tool} → ${verdict.label} ${verdict.probability.toFixed(2)}（${option.title}）`;
+		const summary = {
+			en: `tool-policy-nag intent: ${tool} → ${verdict.label} ${verdict.probability.toFixed(2)} (${option.title})`,
+			zh: `tool-policy-nag 意向：${tool} → ${verdict.label} ${verdict.probability.toFixed(2)}（${option.title}）`,
+		};
 		if (epoch !== startedAt) {
-			if (ctx.hasUI) ctx.ui.notify(`${summary}；判断返回前会话已切换，未发送提醒`, "info");
+			if (ctx.hasUI)
+				ctx.ui.notify(
+					tr(
+						`${summary.en}; session switched before judgment returned; reminder not sent`,
+						`${summary.zh}；判断返回前会话已切换，未发送提醒`,
+					),
+					"info",
+				);
 			return;
 		}
 		pi.sendUserMessage(
 			intentReminder(call, option),
 			ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "aside", attribution: "agent" },
 		);
-		if (ctx.hasUI) ctx.ui.notify(summary, "warning");
+		if (ctx.hasUI) ctx.ui.notify(tr(summary.en, summary.zh), "warning");
 	};
 
 	/** Settings carrying this extension's interceptor override; only this override is ever cleared. */
@@ -321,7 +346,7 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 			if (call === null) return;
 			// The device re-dispatches its payload as a nested tool call with the same id.
 			if (event.toolName === "write") nestedDeviceCalls.add(event.toolCallId);
-			const { lanes, warnings }: { lanes: Lanes; warnings: readonly string[] } = loadLanes(ctx.cwd);
+			const { lanes, warnings }: { lanes: Lanes; warnings: readonly LaneWarning[] } = loadLanes(ctx.cwd);
 			for (const warning of warnings) warnOnce(ctx, warning);
 			// The tool runs after this hook, so the override reaches this very call.
 			const settings = syncInterceptor(ctx, lanes);
@@ -336,7 +361,10 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 					);
 					if (ctx.hasUI) {
 						ctx.ui.notify(
-							`tool-policy-nag 风险：${call.tool} ${finding.commands} 段 / ${finding.programs.length} 个程序，会写 ${finding.writes.join("、")}`,
+							tr(
+								`tool-policy-nag risk: ${call.tool}, ${finding.commands} command segments / ${finding.programs.length} programs, writes ${finding.writes.join(", ")}`,
+								`tool-policy-nag 风险：${call.tool} ${finding.commands} 段 / ${finding.programs.length} 个程序，会写 ${finding.writes.join("、")}`,
+							),
 							"warning",
 						);
 					}
@@ -351,7 +379,10 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 				case "jev": {
 					const startedAt = epoch;
 					const intent = await prepareIntent(ctx).catch((error) => {
-						warnOnce(ctx, `tool-policy-nag: JUDGE 准备失败（${errorText(error)}）`);
+						warnOnce(ctx, {
+							en: `tool-policy-nag: JUDGE preparation failed (${errorText(error)})`,
+							zh: `tool-policy-nag: JUDGE 准备失败（${errorText(error)}）`,
+						});
 						return null;
 					});
 					if (epoch !== startedAt) return;
