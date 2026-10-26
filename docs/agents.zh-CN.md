@@ -4,6 +4,10 @@
 
 `agent/config.yml` 在 `task.disabledAgents` 中禁用了 OMP 内置的 5 个子代理（`task`、`scout`、`sonic`、`reviewer`、`security-reviewer`；即使写进 `spawns` 也会在 preflight 被拒）。所有子代理调用均使用 `agent/agents/*.md` 中的 7 个自定义子代理（frontmatter 规则与常见陷阱见 [`agent/agents/README.zh-CN.txt`](../agent/agents/README.zh-CN.txt)；该目录下的说明文件必须使用 `.txt` 后缀，否则会被当作 agent 定义解析并报错）。
 
+子代理体系按两个方向设计：
+1. **轻微牺牲运行时长，换取不同模型取长补短与思路收敛**：通过不同子代理组合模型特性——如 GPT `sol` 的保守稳健（`discuss:steady`、`mentor:default`、`task:mid`）、GPT `luna` 的低廉成本（`task:low` 及各角色回退链）、Claude Opus 的发散设计（`discuss:divergent`、`task:high`）——让不同模型互相校验、取长补短，把各模型在思路上的差异控制在较小范围内。
+2. **利用不同订阅分摊调用，压低综合成本**：将不同子代理档位与回退链分散绑定到多个订阅及免费渠道（`anthropic`、`openai-codex`、`opencode-go`、`bansos`），并行消耗各订阅额度以降低整体综合成本。
+
 ## 子代理定义与模型绑定
 
 子代理的职责、工具限制和 `spawns` 列表写在 `agent/agents/<name>.md` 中，具体模型链写在 `agent/config.yml` 的 `task.agentModelOverrides` 下（修改模型绑定若改变了档位或成本量级，需同步更新 `agent/agents/<name>.md` 的 `description` 与下表）：

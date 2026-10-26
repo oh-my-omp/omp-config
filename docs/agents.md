@@ -4,6 +4,10 @@
 
 `agent/config.yml` disables OMP's 5 built-in subagents (`task`, `scout`, `sonic`, `reviewer`, `security-reviewer`) in `task.disabledAgents`; they are rejected at preflight even if listed in `spawns`. All subagent calls go through the 7 definitions in `agent/agents/*.md` (see [`agent/agents/README.txt`](../agent/agents/README.txt) for frontmatter rules and pitfalls; keep notes in `agent/agents/` as `.txt` so OMP does not parse them as agent definitions).
 
+The subagent setup is designed around two directions:
+1. **Cross-model complementarity at a slight runtime cost**: routing plans, reviews, and task slices through specialized subagents trades a small amount of wall-clock latency so different models complement and check one another — pairing GPT `sol`'s conservatism (`discuss:steady`, `mentor:default`, `task:mid`), GPT `luna`'s low cost (`task:low` and fallbacks), and Claude Opus's open-ended design (`discuss:divergent`, `task:high`) — keeping different models' reasoning within a narrow variance range.
+2. **Spreading load across subscriptions to lower blended cost**: binding worker and advisor chains across separate subscriptions and free channels (`anthropic`, `openai-codex`, `opencode-go`, `bansos`) uses multiple subscription quotas in parallel to reduce overall cost.
+
 ## Subagent Definitions and Model Bindings
 
 Responsibilities, tool limits, and `spawns` lists live in `agent/agents/<name>.md`; model chains live in `agent/config.yml` under `task.agentModelOverrides` (when a model change alters a tier's class or cost, update its `description` in `agent/agents/<name>.md` and this table together):
