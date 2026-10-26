@@ -16,6 +16,7 @@
  */
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
+import { tr } from "../_shared/i18n.ts";
 import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
 import { type ProcessRecord, type ProcessSource, ProcessTracker } from "./tracker.ts";
 
@@ -66,14 +67,22 @@ function warn(pi: ExtensionAPI, message: string, error: unknown): void {
 
 function loadThreshold(cwd: string): ThresholdLoad {
 	const loaded = loadOmompSection(omompSection, cwd);
-	const skipped = loaded.skipped.map(({ path, reason }) => `跳过 ${path}：${reason}`).join("；");
+	const skipped = loaded.skipped
+		.map(({ path, reason }) => tr(`Skipped ${path}: ${reason}`, `跳过 ${path}：${reason}`))
+		.join(tr("; ", "；"));
 	switch (loaded.kind) {
 		case "found": {
 			const gib = loaded.value.thresholdGiB;
 			return { kind: "found", threshold: { gib, bytes: BigInt(Math.round(gib * 1024 ** 3)) }, problem: skipped || null };
 		}
 		case "none":
-			return { kind: "none", problem: `没有有效的 omomp ${omompSection.id} 配置段，告警暂停${skipped ? `（${skipped}）` : ""}` };
+			return {
+				kind: "none",
+				problem: tr(
+					`No valid omomp ${omompSection.id} configuration section; alerts paused${skipped ? ` (${skipped})` : ""}`,
+					`没有有效的 omomp ${omompSection.id} 配置段，告警暂停${skipped ? `（${skipped}）` : ""}`,
+				),
+			};
 		default: {
 			const unreachable: never = loaded;
 			return unreachable;
@@ -86,7 +95,7 @@ function reportConfigProblem(monitor: Monitor, problem: string | null): void {
 	if (problem === monitor.configProblem) return;
 	monitor.configProblem = problem;
 	if (problem === null) return;
-	const text = `child-memory-warning: ${problem}`;
+	const text = tr(`child-memory-warning: ${problem}`, `child-memory-warning：${problem}`);
 	try {
 		monitor.pi.logger.warn(text);
 	} catch {
@@ -101,16 +110,23 @@ function reportConfigProblem(monitor: Monitor, problem: string | null): void {
 
 function deliver(monitor: Monitor, current: ProcessRecord, bytes: bigint, command: string, threshold: Threshold): void {
 	const { pi, ctx } = monitor;
-	const text =
+	const uiText = tr(
+		`Child process memory limit exceeded: PID ${current.pid}, PPID ${current.parentPid}, orphan: ${
+			current.parentPid === 1 ? "yes" : "no"
+		}; phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB (${bytes} bytes), threshold > ${threshold.gib} GiB.\nCommand: ${command}\nWarning only; process was not terminated.`,
+		`子进程内存超限：PID ${current.pid}，PPID ${current.parentPid}，孤儿：${current.parentPid === 1 ? "是" : "否"}；` +
+			`phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB（${bytes} bytes），阈值 > ${threshold.gib} GiB。\n命令：${command}\n仅告警，未结束该进程。`,
+	);
+	const agentText =
 		`子进程内存超限：PID ${current.pid}，PPID ${current.parentPid}，孤儿：${current.parentPid === 1 ? "是" : "否"}；` +
 		`phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB（${bytes} bytes），阈值 > ${threshold.gib} GiB。\n命令：${command}\n仅告警，未结束该进程。`;
 	try {
-		ctx.ui.notify(text, "warning");
+		ctx.ui.notify(uiText, "warning");
 	} catch (error) {
 		warn(pi, "UI warning failed", error);
 	}
 	try {
-		pi.sendUserMessage(text, ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "aside", attribution: "agent" });
+		pi.sendUserMessage(agentText, ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "aside", attribution: "agent" });
 	} catch (error) {
 		warn(pi, "main-agent warning failed", error);
 	}
