@@ -118,6 +118,7 @@ import { basename } from "node:path";
 import type { AssistantMessage, Judge } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
+import { tr } from "../_shared/i18n.ts";
 import { openJudge } from "../_shared/judge.ts";
 import { textOf } from "../_shared/messages.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
@@ -225,28 +226,39 @@ function parseOptions(fields: Readonly<Record<string, string>>): OptionsParse {
 		if (suffix === undefined) {
 			criteria.set(label, value || null);
 		} else if (suffix === "prompt") {
-			if (!value) return { kind: "invalid", reason: `option.${label}.prompt is empty` };
+			if (!value) return { kind: "invalid", reason: tr(`option.${label}.prompt is empty`, `option.${label}.prompt 为空`) };
 			prompts.set(label, value);
 		} else if (suffix === "threshold") {
 			thresholds.set(label, value);
 		}
 	}
-	if (criteria.size < 2) return { kind: "invalid", reason: "needs at least two option.<label> entries" };
+	if (criteria.size < 2)
+		return { kind: "invalid", reason: tr("needs at least two option.<label> entries", "至少需要两个 option.<label> 条目") };
 	for (const label of [...prompts.keys(), ...thresholds.keys()]) {
-		if (!criteria.has(label)) return { kind: "invalid", reason: `option.${label} is not declared` };
+		if (!criteria.has(label)) return { kind: "invalid", reason: tr(`option.${label} is not declared`, `option.${label} 未声明`) };
 	}
 	const options: JudgeOption[] = [];
 	for (const [label, rubric] of criteria) {
 		const prompt = prompts.get(label);
 		const rawThreshold = thresholds.get(label);
 		if (prompt === undefined) {
-			if (rawThreshold !== undefined) return { kind: "invalid", reason: `option.${label}.threshold set without option.${label}.prompt` };
+			if (rawThreshold !== undefined)
+				return {
+					kind: "invalid",
+					reason: tr(
+						`option.${label}.threshold set without option.${label}.prompt`,
+						`option.${label}.threshold 已设置，但未设置 option.${label}.prompt`,
+					),
+				};
 			options.push({ label, criteria: rubric, outcome: { kind: "info" } });
 			continue;
 		}
 		const threshold = rawThreshold === undefined ? Number.NaN : Number(rawThreshold);
 		if (!(threshold > 0 && threshold <= 1)) {
-			return { kind: "invalid", reason: `option.${label}.threshold must be a number in (0, 1]` };
+			return {
+				kind: "invalid",
+				reason: tr(`option.${label}.threshold must be a number in (0, 1]`, `option.${label}.threshold 必须是 (0, 1] 范围内的数字`),
+			};
 		}
 		options.push({ label, criteria: rubric, outcome: { kind: "prompt", prompt, threshold } });
 	}
@@ -283,7 +295,7 @@ function parseTargets(raw: string | undefined): TargetsParse {
 		.split(",")
 		.map((item) => unquote(item).toLowerCase())
 		.filter((item) => item !== "");
-	if (items.length === 0) return { kind: "invalid", reason: "target lists nothing" };
+	if (items.length === 0) return { kind: "invalid", reason: tr("target lists nothing", "target 未列出任何目标") };
 	return { kind: "ok", targets: items.map(toTarget) };
 }
 
@@ -297,11 +309,15 @@ function parseConstraints(fields: Readonly<Record<string, string>>): Constraints
 		const raw = fields[field];
 		if (raw === undefined) continue;
 		const source = unquote(raw);
-		if (source === "") return { kind: "invalid", reason: `${field} must be a non-empty regex` };
+		if (source === "") return { kind: "invalid", reason: tr(`${field} must be a non-empty regex`, `${field} 必须是非空正则表达式`) };
 		try {
 			constraints.push({ field, pattern: new RegExp(source) });
 		} catch (error) {
-			return { kind: "invalid", reason: `${field} is not a valid regex: ${errorText(error)}` };
+			const detail = errorText(error);
+			return {
+				kind: "invalid",
+				reason: tr(`${field} is not a valid regex: ${detail}`, `${field} 不是有效正则表达式：${detail}`),
+			};
 		}
 	}
 	return { kind: "ok", constraints };
@@ -315,7 +331,7 @@ function parseSkipTools(raw: string | undefined): SkipToolsParse {
 		.split(",")
 		.map((item) => unquote(item))
 		.filter((item) => item !== "");
-	if (tools.length === 0) return { kind: "invalid", reason: "skipTools lists nothing" };
+	if (tools.length === 0) return { kind: "invalid", reason: tr("skipTools lists nothing", "skipTools 未列出任何工具") };
 	return { kind: "ok", tools: new Set(tools) };
 }
 
@@ -324,18 +340,20 @@ function parseSpecFile(path: string): SpecParse {
 	try {
 		raw = readFileSync(path, "utf8");
 	} catch (error) {
-		return { kind: "invalid", reason: `unreadable: ${String(error)}` };
+		const detail = String(error);
+		return { kind: "invalid", reason: tr(`unreadable: ${detail}`, `无法读取：${detail}`) };
 	}
 	const parsed = parseFrontmatter(raw);
-	if (!parsed) return { kind: "invalid", reason: "missing frontmatter" };
+	if (!parsed) return { kind: "invalid", reason: tr("missing frontmatter", "缺少 frontmatter") };
 	const { fields, body } = parsed;
 	if (fields.enabled !== undefined && !/^(true|yes|on|1)$/i.test(unquote(fields.enabled))) return { kind: "disabled" };
 	const question = body.trim();
-	if (question === "") return { kind: "invalid", reason: "empty body (the body is the question)" };
+	if (question === "") return { kind: "invalid", reason: tr("empty body (the body is the question)", "正文为空（正文就是问题）") };
 	let maxChars = DEFAULT_MAX_CHARS;
 	if (fields.maxchars !== undefined) {
 		maxChars = Number(unquote(fields.maxchars));
-		if (!Number.isInteger(maxChars) || maxChars <= 0) return { kind: "invalid", reason: "maxChars must be a positive integer" };
+		if (!Number.isInteger(maxChars) || maxChars <= 0)
+			return { kind: "invalid", reason: tr("maxChars must be a positive integer", "maxChars 必须是正整数") };
 	}
 	const targets = parseTargets(fields.target);
 	if (targets.kind === "invalid") return targets;
@@ -414,7 +432,7 @@ function applyingSpecs(pi: ExtensionAPI, ctx: ExtensionContext, message: Assista
 				const key = `${path}\0${parsed.reason}`;
 				if (warnedFiles.has(key)) break;
 				warnedFiles.add(key);
-				warnings.push(`turn-judge: 跳过 ${path}：${parsed.reason}`);
+				warnings.push(tr(`turn-judge: skipped ${path}: ${parsed.reason}`, `turn-judge：跳过 ${path}：${parsed.reason}`));
 				break;
 			}
 			default: {
@@ -549,7 +567,10 @@ function decide(spec: TurnJudgeSpec, verdict: Verdict): Action {
 
 function describeVerdict(spec: TurnJudgeSpec, verdict: Verdict): string {
 	const parts = spec.options.map((o) => `${o.label} ${(verdict.probabilities[o.label] ?? 0).toFixed(2)}`);
-	return `turn-judge ${spec.name}：${verdict.choice}（${parts.join(" · ")}）`;
+	return tr(
+		`turn-judge ${spec.name}: ${verdict.choice} (${parts.join(" · ")})`,
+		`turn-judge ${spec.name}：${verdict.choice}（${parts.join(" · ")}）`,
+	);
 }
 
 async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, context: Before, reply: string, signal: AbortSignal): Promise<Judged> {
@@ -557,7 +578,10 @@ async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, context: Before, rep
 	const result = await runJudge(judge, spec, state, signal);
 	switch (result.kind) {
 		case "failed":
-			return { kind: "failed", line: `turn-judge ${spec.name}：判断失败（${result.reason}）` };
+			return {
+				kind: "failed",
+				line: tr(`turn-judge ${spec.name}: judgment failed (${result.reason})`, `turn-judge ${spec.name}：判断失败（${result.reason}）`),
+			};
 		case "ok":
 			break;
 		default: {
@@ -603,9 +627,11 @@ async function deliverToSubagent(
 	judgedTimestamp: number,
 	deadline: AbortSignal,
 ): Promise<Delivery> {
-	if (deadline.aborted) return { kind: "unsent", reason: "判断超出时限" };
-	if (!(await waitUntil(() => ctx.isIdle(), deadline))) return { kind: "unsent", reason: "时限内子会话未空闲" };
-	if (hasMessageAfter(ctx, judgedTimestamp)) return { kind: "unsent", reason: "判断返回前已有新消息" };
+	if (deadline.aborted) return { kind: "unsent", reason: tr("judgment timed out", "判断超出时限") };
+	if (!(await waitUntil(() => ctx.isIdle(), deadline)))
+		return { kind: "unsent", reason: tr("subagent did not become idle in time", "时限内子会话未空闲") };
+	if (hasMessageAfter(ctx, judgedTimestamp))
+		return { kind: "unsent", reason: tr("a new message arrived before the judgment returned", "判断返回前已有新消息") };
 	pi.sendUserMessage(prompt, { attribution: "agent" });
 	const admitted = await waitUntil(() => !ctx.isIdle() || hasMessageAfter(ctx, judgedTimestamp), deadline);
 	return admitted ? { kind: "sent" } : { kind: "unconfirmed" };
@@ -632,13 +658,24 @@ async function judgeSubagentTurn(
 		const tag = `${ctx.agent.name} (${ctx.agent.id})`;
 		switch (delivery.kind) {
 			case "sent":
-				infos.push(...triggered.map((t) => `${t.line} → prompt（${tag}）`));
+				infos.push(...triggered.map((t) => tr(`${t.line} → prompt (${tag})`, `${t.line} → 提示（${tag}）`)));
 				break;
 			case "unsent":
-				infos.push(...triggered.map((t) => `${t.line}；${delivery.reason}，未发送 prompt（${tag}）`));
+				infos.push(
+					...triggered.map((t) =>
+						tr(`${t.line}; ${delivery.reason}, prompt not sent (${tag})`, `${t.line}；${delivery.reason}，未发送提示（${tag}）`),
+					),
+				);
 				break;
 			case "unconfirmed":
-				warnings.push(...triggered.map((t) => `${t.line} → prompt（${tag}）；时限内未确认新回合开始，父代理可能收到原回复`));
+				warnings.push(
+					...triggered.map((t) =>
+						tr(
+							`${t.line} → prompt (${tag}); the start of a new turn was not confirmed within the deadline, so the parent agent may receive the original reply`,
+							`${t.line} → 提示（${tag}）；时限内未确认新回合开始，父代理可能收到原回复`,
+						),
+					),
+				);
 				break;
 			default: {
 				const unreachable: never = delivery;
@@ -663,7 +700,14 @@ export default function turnJudge(pi: ExtensionAPI): void {
 			case "info":
 				return { kind: "info", line: judged.line };
 			case "prompt":
-				if (epoch !== startedAt) return { kind: "info", line: `${judged.line}；判断返回前已有新输入，未发送 prompt` };
+				if (epoch !== startedAt)
+					return {
+						kind: "info",
+						line: tr(
+							`${judged.line}; new input arrived before the judgment returned, prompt not sent`,
+							`${judged.line}；判断返回前已有新输入，未发送提示`,
+						),
+					};
 				pi.logger.info(`${judged.line} → prompt`);
 				pi.sendUserMessage(judged.prompt, ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "followUp", attribution: "agent" });
 				return { kind: "sent" };
