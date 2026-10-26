@@ -4,6 +4,8 @@
 
 ## 提示词文件
 
+系统提示词拆在不同文件与扩展中，是因为它们的更新来源和生效范围不同：子代理固定以 `personality: none` 运行且不需要主会话的回复文体与顾问规则，内置工具说明由 OMP 动态注入需在渲染后原地修改，针对特定模型家族的补丁也只应对匹配的模型生效：
+
 | 文件 / 扩展 | 作用域 | 内容与职责 |
 |---|---|---|
 | `agent/SYSTEM_TEMPLATE.md` | 主会话 + 子代理 | 基于 OMP 内置 `packages/coding-agent/src/prompts/system/system-prompt.md` 维护的 Handlebars 模板（纯文本 `SYSTEM.md` 不解析 Handlebars 表达式）。负责工作流规范、渲染当前工具/技能/规则列表，并通过 `{{#if subagent}}` 将第 4 步切换为主会话 `Verify` 或子代理 `Hand-off`。不重复打印单个工具的使用说明。 |

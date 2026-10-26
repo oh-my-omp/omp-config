@@ -4,6 +4,8 @@
 
 ## Prompt Files
 
+The system prompt is split across separate files and hooks because their update sources and session scopes differ: subagents run with `personality: none` and omit main-session reply and advisor defaults, built-in tool descriptions are injected dynamically by OMP and patched after rendering, and model-specific workarounds apply only to matching models:
+
 | File / Extension | Scope | What it provides |
 |---|---|---|
 | `agent/SYSTEM_TEMPLATE.md` | Main + Subagents | Handlebars base template derived from OMP's `packages/coding-agent/src/prompts/system/system-prompt.md` (plain-text `SYSTEM.md` does not evaluate Handlebars expressions). Renders workflow rules, live tools, skills, and rule files; switches Step 4 between parent `Verify` and subagent `Hand-off` with `{{#if subagent}}`. Does not duplicate per-tool instructions. |

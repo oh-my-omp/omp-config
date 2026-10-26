@@ -4,7 +4,7 @@
 
 ## Plugins (`install-plugins.sh`)
 
-`install-plugins.sh` declares 8 required plugins and 2 commented-out optional plugins, installed into `~/.omp/plugins/` via `omp install` (none are version-pinned, and `~/.omp/plugins/` is not tracked in git).
+Lightweight policy and lifecycle hooks live in `agent/extensions/`, while stateful engines, provider transports, cross-platform PTY backends, and Tern side-pane UIs are packaged as independent plugins installed into `~/.omp/plugins/` via `install-plugins.sh` (8 required + 2 commented-out optional, none version-pinned, and `~/.omp/plugins/` is not tracked in git).
 
 - Every updater apply runs `omp install` on all required entries, installing missing plugins and upgrading installed ones.
 - When startup auto-update sees an unchanged config commit, it still runs `omp install` on every unpinned GitHub entry (required plugins and already-installed optional plugins) so they track their default branch without waiting for a config commit.
@@ -25,9 +25,9 @@
 
 ### todo-more
 
-[omp-todo-more](https://github.com/oh-my-omp/omp-todo-more) loads in both `omp` and `omp-light` while native Todo is disabled (`todo.enabled: false` in `agent/config.yml`):
+[omp-todo-more](https://github.com/oh-my-omp/omp-todo-more) loads in both `omp` and `omp-light` while native Todo is disabled (`todo.enabled: false` in `agent/config.yml`). It sits between an ordinary chat session and `/goal`: it keeps `/goal`'s supervisory loop (`objective`/`measure`/`doneWhen`, blocking `edit` before a plan exists, and reminding the agent to continue while open items remain), stays flexible enough to revise goals, phases, explanations, estimates, and blocked states mid-session, creates a logical checkpoint on each `DONE`, and re-injects state across compaction rounds:
 
-- **Session state and checks**: stores `{objective, measure, doneWhen}` and each item's `{title, explanation}`, minute estimate, and `DONE` commit SHA in the custom session entry `mouriya.omp.todo-more` on the active branch (`TodoTracker`, `/todo`, and history cards are derived from it). `planning.ts` blocks `edit` when the list is empty, `reminders.ts` reminds the agent to continue at turn end while open items remain (unless asking the user), `DONE` requires a git commit clause when the checkout has uncommitted changes, and `before_agent_start` re-attaches `todo` to `task:*` subagents.
+- **Branch snapshot, logical checkpoints, and reminders**: stores `{objective, measure, doneWhen}` and each item's `{title, explanation}`, minute estimate, and `DONE` commit SHA in the custom session entry `mouriya.omp.todo-more` on the active branch (`TodoTracker`, `/todo`, and history cards are derived from it). `planning.ts` blocks `edit` when the list is empty; `reminders.ts` reminds the agent to continue at turn end while open items remain (unless asking the user); `DONE` requires a git commit clause when the checkout has uncommitted changes, turning each completed item into a logical checkpoint in both git and the [`Task log`](prompts-and-context.md#task-log); [`after-compact injection`](prompts-and-context.md#after-compact-injection) restores `ctx list` and `ctx show` after compaction; and `before_agent_start` re-attaches `todo` to `task:*` subagents.
 - **`/todo-more` editor**: edits the goal or item explanations in place (Enter inserts a newline, Tab/Shift+Tab switches fields, Ctrl+Enter saves, Esc cancels) without changing item status or starting a model turn.
 - **Retiring old local files**: once the updater confirms `omp-todo-more` is enabled in OMP's plugin catalog with `./index.ts` present, it unlinks the 8 old local Todo files (`extensions/todo-more/{index,tool,render,reminders,planning}.ts`, `extensions/_shared/todo-more.ts`, `extensions/subagent-todo.ts`, `extensions/subagent-todo/index.ts`) and, when the plugin ships `src/ctx`, the 5 old local ctx files (`extensions/ctx-tool/{index,inventory,post-compact-hint}.ts`, `extensions/ctx-tasklog/index.ts`, `extensions/_shared/task-log.ts`). `/sync-omp-config` excludes all 13 paths.
 
@@ -59,7 +59,7 @@ providers:
 
 ## Full Mode (`omp`) vs Light Mode (`omp-light`)
 
-`omp` loads all 22 local extensions. `omp-light` applies `agent/config-light.yml` and `agent/APPEND_SYSTEM_LIGHT.md` to the launched process without modifying files on disk:
+`omp` loads all 22 local extensions, dispatch/yield checks, and advisor hooks for multi-step engineering; short tasks and quick questions do not need those checks. `omp-light` applies `agent/config-light.yml` and `agent/APPEND_SYSTEM_LIGHT.md` to the launched process without modifying files on disk:
 
 | Setting | `omp` (full mode) | `omp-light` (light mode) |
 |---|---|---|
