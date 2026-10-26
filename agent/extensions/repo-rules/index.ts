@@ -42,9 +42,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { ruleAppliesToAgent } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { cfgTtsr } from "@oh-my-pi/pi-coding-agent/export/ttsr-settings";
-import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
+import { createContextDelivery } from "../_shared/context-delivery.ts";
 import { errorText } from "../_shared/errors.ts";
-import { textOf } from "../_shared/messages.ts";
 import { sessionSettings } from "../_shared/settings.ts";
 import { collectRules, type RuleCatalog, ruleMatches, type ScopedRule, type UnscopedRule } from "./rules.ts";
 import { touchedFiles } from "./touched.ts";
@@ -170,16 +169,6 @@ function marker(rule: ScopedRule): string {
 	return `<path-scoped-rule path="${escapeAttr(rule.id)}" `;
 }
 
-/** Developer-message text of the messages OMP would send to the model now. */
-function contextDeveloperText(ctx: ExtensionContext): string {
-	const { messages } = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
-	const texts: string[] = [];
-	for (const message of messages) {
-		if ("role" in message && message.role === "developer") texts.push(textOf(message.content, "\n"));
-	}
-	return texts.join("\n");
-}
-
 function renderRules(rules: readonly ScopedRule[], files: readonly string[]): string {
 	const parts = [
 		"<path-scoped-rules>",
@@ -194,8 +183,7 @@ function renderRules(rules: readonly ScopedRule[], files: readonly string[]): st
 
 export default function repoRules(pi: ExtensionAPI): void {
 	let catalog: RuleCatalog | null = null;
-	/** Rules delivered by earlier calls of the current turn, before their developer message is persisted. */
-	const deliveredThisTurn = new Set<string>();
+	const claimDelivery = createContextDelivery(pi);
 
 	const rulesFor = async (ctx: ExtensionContext): Promise<RuleCatalog> => {
 		if (catalog?.cwd === ctx.cwd) return catalog;
@@ -231,24 +219,15 @@ export default function repoRules(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("turn_start", () => {
-		deliveredThisTurn.clear();
-	});
-
 	pi.on("tool_result", async (event, ctx) => {
 		try {
 			const rules = await rulesFor(ctx);
 			if (rules.scoped.length === 0) return;
 			const files = touchedFiles(event, ctx.cwd);
 			if (files.length === 0) return;
-			const matched = activeScoped(rules, ctx).filter(
-				(rule) => !deliveredThisTurn.has(rule.id) && files.some((file) => ruleMatches(rule, file)),
-			);
-			if (matched.length === 0) return;
-			const delivered = contextDeveloperText(ctx);
-			const fresh = matched.filter((rule) => !delivered.includes(marker(rule)));
+			const matched = activeScoped(rules, ctx).filter((rule) => files.some((file) => ruleMatches(rule, file)));
+			const fresh = matched.filter((rule) => claimDelivery(ctx, marker(rule)));
 			if (fresh.length === 0) return;
-			for (const rule of fresh) deliveredThisTurn.add(rule.id);
 			return { additionalContext: renderRules(fresh, files) };
 		} catch (error) {
 			pi.logger.warn("repo-rules: failed to load path-scoped rules", { error: errorText(error) });

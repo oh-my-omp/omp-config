@@ -41,6 +41,7 @@ const TOPICS: readonly TopicSection[] = [
 	{ key: "limits", level: 2, heading: "Limits & Caps" },
 	{ key: "errors", level: 2, heading: "Errors" },
 ];
+const SSH_TOPIC = { key: "ssh", heading: "SSH reading" };
 
 interface Topic {
 	readonly key: string;
@@ -93,6 +94,10 @@ function cutTopics(doc: string): Cut {
 		const end = headings.find((h) => h.line > start.line && h.level <= section.level)?.line ?? lines.length;
 		topics.set(section.key, { key: section.key, heading: section.heading, body: lines.slice(start.line, end).join("\n").trimEnd() });
 	}
+	const sshLines = lines.filter((line) => line.startsWith("   - `ssh://host/<path>`"));
+	const ssh = sshLines[0];
+	if (sshLines.length !== 1 || ssh === undefined) problems.push(`SSH URL entry found ${sshLines.length} times`);
+	else topics.set(SSH_TOPIC.key, { ...SSH_TOPIC, body: `# ${SSH_TOPIC.heading}\n\n${ssh.trim()}` });
 	if (problems.length > 0) return { kind: "drift", reason: `omp://${READ_DOC} no longer matches the topic table: ${problems.join("; ")}` };
 	return { kind: "ok", topics };
 }
@@ -126,7 +131,7 @@ export default function readTopics(pi: ExtensionAPI): void {
 		const result = registerToolTopics({
 			tool: "read",
 			owner: "omp-config/read-topics",
-			topics: TOPICS.map((section) => ({
+			topics: [...TOPICS, SSH_TOPIC].map((section) => ({
 				name: section.key,
 				title: section.heading,
 				async read() {
