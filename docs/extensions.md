@@ -29,6 +29,7 @@
 | 21 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omomp.yml#omp-config-autoupdate` (machine-local) |
 | 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide (module load) | Yes | `omomp.yml#omomp-lang` (repo) |
 | 23 | `read-topics` | [read-topics](#read-topics) | Process-wide (`tool://` scheme) | Yes | Cuts OMP's bundled `omp://tools/read.md`; no file |
+| 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | Main + Sub | Yes | `omomp.yml#tool-topic-injection` (repo) |
 
 ---
 
@@ -221,9 +222,41 @@ Source: `agent/extensions/read-topics/`; routing and registration come from [`_s
 
 Adds per-feature topics to the built-in `read` tool through a `tool://` internal-URL scheme: `read tool://read` lists the topics, `read tool://read/<topic>` returns one (line selectors apply, e.g. `tool://read/sqlite:1-40`), and an unknown topic fails with the available keys. `grep`/`find` over `tool://read` search every topic.
 
-- **Content**: each topic is one section of OMP's bundled `omp://tools/read.md`, fetched with `getEmbeddedDoc` and cut by a fixed key → heading table: `selectors` (`## Inputs`), `outputs`, `flow`, `local-files`, `directories`, `archives`, `executables`, `video`, `profiler-reports`, `sqlite`, `documents`, `notebooks`, `images`, `internal-urls`, `web-urls`, `side-effects`, `limits`, `errors`. The maintainer-only `Source`, `Registration / Visibility` and `Notes` sections are not topics. The text follows the installed OMP version; the repo keeps no copy.
-- **Lifecycle**: the factory calls the shared `registerToolTopics` API with read's descriptors and readers. The shared process-wide handler serves every registered tool through `tool://<tool>/<topic>`; `tool://` lists tools and `tool://<tool>` lists topics without loading bodies. Read's document is loaded and cut on its first leaf read or search. The handler advertises the generic scheme in the system prompt; `omomp.yml#system-prompt-replace` still names read's topic keys.
+- **Content**: sections of OMP's bundled `omp://tools/read.md`, fetched with `getEmbeddedDoc` and cut by a fixed key → heading table: `selectors` (`## Inputs`), `outputs`, `flow`, `local-files`, `directories`, `archives`, `executables`, `video`, `profiler-reports`, `sqlite`, `documents`, `notebooks`, `images`, `internal-urls`, `web-urls`, `side-effects`, `limits`, `errors`. `ssh` extracts the same document's exact SSH URL entry. The maintainer-only `Source`, `Registration / Visibility` and `Notes` sections are not topics. Text follows the installed OMP version; the repo keeps no copy.
+- **Lifecycle**: the factory calls shared `registerToolTopics` with read's descriptors/readers. Indexes do not load bodies; the document is loaded and cut on the first leaf read/search. In full mode, `omomp.yml#system-prompt-replace` replaces the entire native read description with its common use, supported URLs and `tool://read` index, leaving details to on-demand topics and [conditional injection](#tool-topic-injection).
 - **Failure**: registration returns explicit `invalid` or `conflict` results, which the read factory logs as warnings. An OMP-owned or foreign `tool` handler is never replaced. When read's document is missing, or a heading is missing or repeated, the leaf read/search fails with that drift spelled out instead of serving partial topics.
+
+### tool-topic-injection
+
+Source: `agent/extensions/tool-topic-injection/`; the reusable rule engine is `_shared/tool-topic-injection.ts`. Main/sub and full/light sessions load it. It observes `tool_result`, does not block or change execution, and returns matched topics as trusted developer context after the tool batch, before the next model call. Failed tool calls also receive guidance.
+
+The shipped rules live in `omomp.yml` and are re-read per result (project `.omp/omomp.*` before agent-dir `omomp.*`). No valid section means off; invalid copies warn and are skipped. An empty `rules` list disables injection:
+
+```yaml
+tool-topic-injection:
+  rules:
+    - id: read-ssh
+      tool: read
+      parameter: path
+      pattern: '^ssh://'
+      topic: tool://read/ssh
+    - id: eval-ssh-cat
+      tool: eval
+      parameter: code
+      pattern: '\bssh\b[^\n;|&]*\bcat\b'
+      topic: tool://read/ssh
+    - id: bash-ssh-cat
+      tool: bash
+      parameter: command
+      pattern: '\bssh\b[^\n;|&]*\bcat\b'
+      topic: tool://read/ssh
+```
+
+`tool` is an exact tool name; `parameter` names a string argument (or dotted property path). `pattern` is JavaScript regex source, without slash delimiters or flags; it is a text matcher, not a shell parser. Missing/non-string parameters do not match. `topic` is a registered `tool://<tool>/<topic>` leaf. Rule ids must be unique and stable within the owner.
+
+Each rule injects once while its marker remains in the actual model context reconstructed from the active leaf. The shared `_shared/context-delivery.ts` guard is also used by `repo-rules`; its only temporary set covers the current turn before the host persists the developer message. Compaction that drops a marker makes the rule eligible again; retained-tail markers still suppress duplicates. Resume and tree navigation follow the current branch, not the entire transcript. Two rules pointing to one topic each get one injection. A missing/empty/failed topic is warned and does not consume eligibility; other rules still run.
+
+External plugins can use the [exported engine and schema](operations.md#progressive-topic-injection-api) with their own owner and rule provider; they do not need to import this extension.
 
 ### omomp-lang
 

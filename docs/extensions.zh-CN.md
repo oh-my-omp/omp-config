@@ -29,6 +29,7 @@
 | 21 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） |
 | 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局（模块加载） | 是 | `omomp.yml#omomp-lang`（仓库） |
 | 23 | `read-topics` | [read-topics](#read-topics) | 进程全局（`tool://` scheme） | 是 | 切分 OMP 内置的 `omp://tools/read.md`；无文件 |
+| 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection`（仓库） |
 
 ---
 
@@ -221,9 +222,41 @@ OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PR
 
 通过 `tool://` 内部 URL scheme 为内置 `read` 工具提供按功能划分的专题：`read tool://read` 列出专题，`read tool://read/<topic>` 返回单个专题（支持行选择器，如 `tool://read/sqlite:1-40`），专题名不存在时报错并列出可用名称。对 `tool://read` 执行 `grep`/`find` 会搜索全部专题。
 
-- **内容**：每个专题是 OMP 内置 `omp://tools/read.md` 的一个章节，用 `getEmbeddedDoc` 读取，按固定的“专题名 → 标题”表切出：`selectors`（`## Inputs`）、`outputs`、`flow`、`local-files`、`directories`、`archives`、`executables`、`video`、`profiler-reports`、`sqlite`、`documents`、`notebooks`、`images`、`internal-urls`、`web-urls`、`side-effects`、`limits`、`errors`。仅面向维护者的 `Source`、`Registration / Visibility`、`Notes` 不作为专题。正文随已安装的 OMP 版本更新，仓库不保存副本。
-- **生命周期**：扩展工厂调用共享的 `registerToolTopics` API，提交 read 的专题描述和正文读取函数。共享的进程级 handler 通过 `tool://<tool>/<topic>` 服务所有已注册工具；`tool://` 列工具，`tool://<tool>` 列专题，两种索引都不加载正文。read 文档在首次读取专题正文或搜索时加载并切分。handler 在 system prompt 中声明通用 scheme；`omomp.yml#system-prompt-replace` 仍列出 read 的专题名。
+- **内容**：通过 `getEmbeddedDoc` 读取 OMP 内置 `omp://tools/read.md`，按固定的“专题名 → 标题”表切出：`selectors`（`## Inputs`）、`outputs`、`flow`、`local-files`、`directories`、`archives`、`executables`、`video`、`profiler-reports`、`sqlite`、`documents`、`notebooks`、`images`、`internal-urls`、`web-urls`、`side-effects`、`limits`、`errors`。`ssh` 提取同一文档中的 SSH URL 原文条目。面向维护者的 `Source`、`Registration / Visibility`、`Notes` 不作为专题。正文随已安装的 OMP 版本更新，仓库不保存副本。
+- **生命周期**：扩展工厂调用共享 `registerToolTopics` 提交 read 的描述和读取函数。索引不加载正文；文档在首次读取专题或搜索时加载并切分。完整模式的 `omomp.yml#system-prompt-replace` 整段替换原生 read 说明，只保留常用用法、支持的 URL 和 `tool://read` 列表入口，细节交给按需读取的专题与[条件注入](#tool-topic-injection)。
 - **失败处理**：注册返回显式的 `invalid` 或 `conflict` 结果，read 工厂将其记录为 warning；OMP 内置或其他宿主的 `tool` handler 不会被覆盖。read 文档缺失，或某个标题缺失、重复时，专题读取或搜索会报错并写明哪处不一致，不返回残缺的专题。
+
+### tool-topic-injection
+
+源码：`agent/extensions/tool-topic-injection/`；可复用规则引擎位于 `_shared/tool-topic-injection.ts`。主会话、子代理及完整/轻量模式均加载。扩展监听 `tool_result`，不阻塞或修改工具执行；在工具批次结束后、下一次模型调用前，将命中的专题作为可信 developer 上下文注入。工具报错时也会提供说明。
+
+仓库规则存于 `omomp.yml`，每次工具结果到达时重读（项目 `.omp/omomp.*` 优先于 agent 目录的 `omomp.*`）。没有有效配置段时不运行；无效副本记 warning 并跳过。设置空 `rules` 数组可关闭注入：
+
+```yaml
+tool-topic-injection:
+  rules:
+    - id: read-ssh
+      tool: read
+      parameter: path
+      pattern: '^ssh://'
+      topic: tool://read/ssh
+    - id: eval-ssh-cat
+      tool: eval
+      parameter: code
+      pattern: '\bssh\b[^\n;|&]*\bcat\b'
+      topic: tool://read/ssh
+    - id: bash-ssh-cat
+      tool: bash
+      parameter: command
+      pattern: '\bssh\b[^\n;|&]*\bcat\b'
+      topic: tool://read/ssh
+```
+
+`tool` 精确匹配工具名；`parameter` 指定字符串参数名，也支持点分属性路径。`pattern` 是不带斜杠定界符和 flags 的 JavaScript 正则源码，只匹配文本，不解释 shell 语义。参数缺失或不是字符串时不匹配。`topic` 指向已注册的 `tool://<tool>/<topic>` 正文。规则 id 在同一 owner 内须唯一且稳定。
+
+每条规则在活动叶节点重建的真实模型上下文中保有自身标记时只注入一次。共享 `_shared/context-delivery.ts` 也服务 `repo-rules`；临时集合只覆盖当前 turn 中宿主尚未持久化 developer 消息的窗口。compact 移除标记后，该规则可再次注入；若标记仍在保留尾部，则不重复注入。resume 和树导航按当前分支判断，不扫描整份历史。两条规则即使指向同一专题，也各有一次注入机会。专题缺失、为空或加载失败时记 warning，不消耗资格，也不妨碍其他规则执行。
+
+外部插件可通过[导出的引擎和 schema](operations.zh-CN.md#渐进式专题注入-api)提供自己的 owner 和规则读取函数，无需导入本扩展。
 
 ### omomp-lang
 
