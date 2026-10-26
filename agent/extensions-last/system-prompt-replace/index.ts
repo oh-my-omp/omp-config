@@ -52,6 +52,7 @@
 
 import { type ExtensionAPI, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../../extensions/_shared/errors.ts";
+import { tr } from "../../extensions/_shared/i18n.ts";
 import { defineOmompSection, loadOmompSection } from "../../extensions/_shared/omomp.ts";
 
 // Keep validation sequential so the first failure retains the original reason.
@@ -187,8 +188,12 @@ export default function systemPromptReplace(pi: ExtensionAPI): void {
 					changed = true;
 				} else if (ctx.agent.kind === "main" && !reportedMisses.has(rule.label)) {
 					reportedMisses.add(rule.label);
-					const notice = `system-prompt-replace: ${rule.label} found no target in the system prompt; update ${sourcePath}`;
-					pi.logger.warn(notice);
+					const logNotice = `system-prompt-replace: ${rule.label} found no target in the system prompt; update ${sourcePath}`;
+					const notice = tr(
+						`system-prompt-replace: ${rule.label} found no target in the system prompt; update ${sourcePath}`,
+						`system-prompt-replace：系统提示词中未找到 ${rule.label} 的目标；请更新 ${sourcePath}`,
+					);
+					pi.logger.warn(logNotice);
 					if (ctx.hasUI) ctx.ui.notify(notice, "warning");
 					else process.stderr.write(`${notice}\n`);
 				}
