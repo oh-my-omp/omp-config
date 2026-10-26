@@ -50,8 +50,8 @@ Runs at `tool_call` on `task` and `fork_task`. Evaluates two yes/no checks per i
 
 | Check | Scope | Question | Cache and retry behavior |
 |---|---|---|---|
-| `split` | Items for `task:low`, `task:mid`, or `task:free` in main-session `task` calls | Checks the item's `task` text alone (shared `context` is background): does it combine multiple unrelated topics in one worker (by topic, not file count)? | Caches all verdicts (`pass-repeats`): if the caller confirms it is one topic and resends the same `task` text, the second call passes. |
-| `report-limit` | Items with `agent` set to `task:*` or omitted, in `task` and `fork_task` of any session | Checks both shared `context` and item `task`: does it cap the length of the worker's report (words, lines, paragraphs, tokens, or "brief report"; length limits on files the worker writes do not count)? | Caches only passing verdicts (`skip-clear`): the cap must be removed (long reports can be written to `local://<name>.md`); unchanged retries stay blocked. |
+| `split` | Items for `task:low`, `task:mid`, or `task:free` in main-session `task` calls | Checks the item's `task` text alone (shared `context` is background): does it combine multiple unrelated topics in one worker (by topic, not file count)? | Caches all verdicts (`pass-repeats`): because topic boundaries can be a judgment call, if the caller confirms it is one topic and resends the same `task` text, the second call passes. |
+| `report-limit` | Items with `agent` set to `task:*` or omitted, in `task` and `fork_task` of any session | Checks both shared `context` and item `task`: does it cap the length of the worker's report (words, lines, paragraphs, tokens, or "brief report"; length limits on files the worker writes do not count)? | Caches only passing verdicts (`skip-clear`): capping a worker's report truncates evidence the parent needs, so the cap must be removed (long reports can be written to `local://<name>.md`) and unchanged retries stay blocked. |
 
 ### task-completion-judge
 
@@ -64,7 +64,7 @@ Runs at `tool_call` on terminal structured `yield` calls inside `task:low`, `tas
 - **Bounce rules**:
   1. The first `NOT_DONE` blocks `yield` with the reason so the worker finishes and verifies the work.
   2. After `DONE`, the extension queries `omp-todo-more:read` and blocks once if any `pending` or `in_progress` items remain (`blocked` items do not block), listing their explanations so the worker updates its Todo list first.
-  3. Each of the two bounces happens at most once per subagent session; after passing, subsequent `yield` calls in that session are not judged. When `yield` data is an open object without a custom `outputSchema`, passing results attach `data.completion_judge = { verdict, reason, bounced }` (`bounced` reflects only the `NOT_DONE` bounce). Config, model, or plugin-read errors log a warning and fail open.
+  3. Each of the two bounces happens at most once per subagent session so a blocked worker cannot get trapped in an infinite bounce loop; after passing, subsequent `yield` calls in that session are not judged. When `yield` data is an open object without a custom `outputSchema`, passing results attach `data.completion_judge = { verdict, reason, bounced }` (`bounced` reflects only the `NOT_DONE` bounce). Config, model, or plugin-read errors log a warning and fail open.
 
 ---
 

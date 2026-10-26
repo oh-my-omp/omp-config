@@ -50,8 +50,8 @@
 
 | 检查项 | 适用范围 | 判定问题 | 缓存与重试行为 |
 |---|---|---|---|
-| `split` | 主会话 `task` 调用中派给 `task:low`、`task:mid`、`task:free` 的项 | 只看该项的 `task` 文本（共享 `context` 仅作背景）：是否把多个互不相关的主题塞进了同一个子代理（按主题而非文件数判断）？ | 缓存所有结论（`pass-repeats`）：被拦后若主会话确认属于同一主题并原样重发，第二次调用放行。 |
-| `report-limit` | 任意会话 `task` 与 `fork_task` 中派给 `task:*` 或未填 `agent` 的项 | 同时看共享 `context` 与该项 `task`：是否限制了子代理返回报告的长度（字数、行数、段落数、token 数或“简短汇报”；对写入仓库文件的交付物限制长度不算）？ | 只缓存通过结论（`skip-clear`）：必须删掉报告字数限制（长报告可写到 `local://<name>.md`），原样重发继续拦截。 |
+| `split` | 主会话 `task` 调用中派给 `task:low`、`task:mid`、`task:free` 的项 | 只看该项的 `task` 文本（共享 `context` 仅作背景）：是否把多个互不相关的主题塞进了同一个子代理（按主题而非文件数判断）？ | 缓存所有结论（`pass-repeats`）：单主题边界可能存在判断分歧，被拦后若主会话确认属于同一主题并原样重发，第二次调用放行。 |
+| `report-limit` | 任意会话 `task` 与 `fork_task` 中派给 `task:*` 或未填 `agent` 的项 | 同时看共享 `context` 与该项 `task`：是否限制了子代理返回报告的长度（字数、行数、段落数、token 数或“简短汇报”；对写入仓库文件的交付物限制长度不算）？ | 只缓存通过结论（`skip-clear`）：限制报告长度会截断父会话验收所需的证据，必须删掉字数限制（长报告可写到 `local://<name>.md`），原样重发继续拦截。 |
 
 ### task-completion-judge
 
@@ -64,7 +64,7 @@
 - **退回规则**：
   1. 首次判为 `NOT_DONE` 时拦截 `yield` 并返回原因，要求子代理继续完成并验证。
   2. 判为 `DONE` 后，同步触发 `omp-todo-more:read` 读取最新 Todo 列表；若仍有 `pending` 或 `in_progress` 项（`blocked` 项不计），再拦截一次并列出这些项的说明，要求先更新 Todo 状态。
-  3. 两种退回在每个子代理会话中各最多发生一次；通过后，该会话后续 `yield` 不再拦截。若 `yield` 数据是无自定义 `outputSchema` 的开放对象，放行时写入 `data.completion_judge = { verdict, reason, bounced }`（`bounced` 仅记录是否发生过 `NOT_DONE` 退回）。配置、模型或插件读取失败时记 warning 并放行。
+  3. 两种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；通过后，该会话后续 `yield` 不再拦截。若 `yield` 数据是无自定义 `outputSchema` 的开放对象，放行时写入 `data.completion_judge = { verdict, reason, bounced }`（`bounced` 仅记录是否发生过 `NOT_DONE` 退回）。配置、模型或插件读取失败时记 warning 并放行。
 
 ---
 
