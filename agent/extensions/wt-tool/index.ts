@@ -70,6 +70,7 @@ import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages
 import { cfgWorktreeCleanSource } from "@oh-my-pi/pi-coding-agent/task/settings";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { errorText } from "../_shared/errors.ts";
+import { tr } from "../_shared/i18n.ts";
 import { captureInteractiveMode, describeShown, runSlashCommand } from "./interactive.ts";
 import { formatCheck, git, inspect, parsePorcelain, realpathOr, recheck, type WorktreeCheck } from "./worktree.ts";
 
@@ -359,7 +360,13 @@ function onAgentEnd(runtime: Runtime, event: AgentEndEvent, ctx: ExtensionContex
 	const last = event.messages.findLast((message) => message.role === "assistant");
 	if (last?.role === "assistant" && last.stopReason === "aborted" && isUserInterruptAbort(last)) {
 		runtime.state = { kind: "idle" };
-		ctx.ui.notify(`Queued ${requestLabel(request).replaceAll("`", "")} cancelled: the turn was interrupted.`, "info");
+		ctx.ui.notify(
+			tr(
+				`Queued ${requestLabel(request).replaceAll("`", "")} cancelled: the turn was interrupted.`,
+				`已取消排队的 ${request.kind === "create" ? "/wt" : "工作树移除"}：本轮被中断。`,
+			),
+			"info",
+		);
 		report(runtime.pi, `The queued ${requestLabel(request)} was cancelled because the user interrupted the turn; nothing changed.`, {
 			deliverAs: "nextTurn",
 		});
@@ -390,7 +397,7 @@ export default function wtTool(pi: ExtensionAPI): void {
 	pi.on("agent_end", (event, ctx) => guardHook(pi, "agent_end", () => onAgentEnd(runtime, event, ctx)));
 	pi.registerTool({
 		name: CREATE_TOOL,
-		label: "Worktree",
+		label: tr("Worktree", "工作树"),
 		description: CREATE_DESCRIPTION,
 		approval: "exec",
 		loadMode: "essential",
@@ -407,7 +414,7 @@ export default function wtTool(pi: ExtensionAPI): void {
 	});
 	pi.registerTool({
 		name: REMOVE_TOOL,
-		label: "Remove Worktree",
+		label: tr("Remove Worktree", "移除工作树"),
 		description: REMOVE_DESCRIPTION,
 		approval: "exec",
 		loadMode: "essential",
