@@ -34,6 +34,7 @@ import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding
 import { type Component, isKeyRelease, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
+import { tr } from "../_shared/i18n.ts";
 import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
 import { modelLabel, type RoleModel, roleModels, roleName } from "../_shared/roles.ts";
 
@@ -123,18 +124,34 @@ async function polish(
 			case "canceled":
 				throw new PolishCanceled();
 			case "provider-error":
-				failures.push(`${modelLabel(model)}: ${result.message || "the model returned an error"}`);
+				failures.push(
+					tr(
+						`${modelLabel(model)}: ${result.message || "the model returned an error"}`,
+						`${modelLabel(model)}：${result.message || "模型返回错误"}`,
+					),
+				);
 				continue;
 			case "failed":
-				failures.push(`${modelLabel(model)}: ${result.message}`);
+				failures.push(tr(`${modelLabel(model)}: ${result.message}`, `${modelLabel(model)}：${result.message}`));
 				continue;
 			case "text": {
 				const text = stripVTControlCharacters(result.text);
-				if (text === "") return { kind: "failed", message: "The model returned an empty rewrite." };
+				if (text === "") {
+					return {
+						kind: "failed",
+						message: tr("The model returned an empty rewrite.", "模型返回空的润色稿。"),
+					};
+				}
 				const want = placeholders(draft);
 				const got = placeholders(text);
 				if (want.length !== got.length || want.some((token) => !got.includes(token))) {
-					return { kind: "failed", message: "The rewrite dropped or changed an attachment/paste placeholder; nothing was applied." };
+					return {
+						kind: "failed",
+						message: tr(
+							"The rewrite dropped or changed an attachment/paste placeholder; nothing was applied.",
+							"润色结果丢失或修改了附件/粘贴占位符；未应用任何更改。",
+						),
+					};
 				}
 				return { kind: "ready", text };
 			}
@@ -144,7 +161,10 @@ async function polish(
 			}
 		}
 	}
-	return { kind: "failed", message: `Every model failed: ${failures.join("; ")}` };
+	return {
+		kind: "failed",
+		message: tr(`Every model failed: ${failures.join("; ")}`, `所有模型均失败：${failures.join("；")}`),
+	};
 }
 
 // --- preview overlay --------------------------------------------------------
@@ -171,11 +191,11 @@ class PreviewView implements Component {
 	private hint(): string {
 		switch (this.preview.kind) {
 			case "polishing":
-				return "润色中… · Esc 取消";
+				return tr("Polishing… · Esc to cancel", "润色中… · Esc 取消");
 			case "ready":
-				return "Enter 发送润色稿 · Esc 取消，保留原文";
+				return tr("Enter to send polished text · Esc to cancel and keep original", "Enter 发送润色稿 · Esc 取消，保留原文");
 			case "failed":
-				return "Esc 关闭，保留原文";
+				return tr("Esc to close and keep original", "Esc 关闭，保留原文");
 			default: {
 				const unreachable: never = this.preview;
 				return unreachable;
@@ -218,14 +238,19 @@ class PreviewView implements Component {
 		const streaming = this.preview.kind === "polishing";
 		let shown = wrapped;
 		if (wrapped.length > maxBody) {
-			// Streaming follows the tail; a finished preview shows the head and says how much is cut.
 			shown = streaming
 				? wrapped.slice(wrapped.length - maxBody)
-				: [...wrapped.slice(0, maxBody - 1), t.fg("dim", `… 另有 ${wrapped.length - (maxBody - 1)} 行未显示`)];
+				: [
+						...wrapped.slice(0, maxBody - 1),
+						t.fg(
+							"dim",
+							tr(`… ${wrapped.length - (maxBody - 1)} more lines not shown`, `… 另有 ${wrapped.length - (maxBody - 1)} 行未显示`),
+						),
+					];
 		}
 		const colorLine = (line: string): string => (this.preview.kind === "failed" ? t.fg("error", line) : line);
 
-		const title = this.preview.kind === "failed" ? "润色失败" : "润色预览";
+		const title = this.preview.kind === "failed" ? tr("Polish failed", "润色失败") : tr("Polish preview", "润色预览");
 		const lines = [
 			rule("┌", "┐"),
 			frame(` ${t.fg("accent", t.bold(title))}`),
@@ -290,11 +315,14 @@ export default function inputPolish(pi: ExtensionAPI): void {
 			try {
 				models = roleModels(ctx, cfg.fallbackRole === undefined ? [ROLE] : [ROLE, cfg.fallbackRole]);
 			} catch (error) {
-				ctx.ui.notify(`input-polish: ${errorText(error)}`, "warning");
+				ctx.ui.notify(tr(`input-polish: ${errorText(error)}`, `input-polish：${errorText(error)}`), "warning");
 				return;
 			}
 			if (models.length === 0) {
-				ctx.ui.notify(`input-polish: no model — assign @${ROLE} in /model`, "warning");
+				ctx.ui.notify(
+					tr(`input-polish: no model — assign @${ROLE} in /model`, `input-polish：未配置模型 — 在 /model 中指定 @${ROLE}`),
+					"warning",
+				);
 				return;
 			}
 			const controller = new AbortController();
