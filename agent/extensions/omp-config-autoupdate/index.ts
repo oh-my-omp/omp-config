@@ -27,6 +27,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getAgentDir, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
+import { tr } from "../_shared/i18n.ts";
 import { defineOmompSection, loadOmompSection, writeOmompSection } from "../_shared/omomp.ts";
 
 const SCRIPT = "omp-config-update.ts";
@@ -149,8 +150,8 @@ function section(title: string, items: readonly string[]): string[] {
 /** "0.1.10 → 0.1.12", "new 0.1.9", or "0.1.12 (new commit)" when omp install moved the commit but not the version. */
 function pluginVersionChange(change: PluginChange): string {
 	const to = change.to ?? "?";
-	if (change.from === null) return `new ${to}`;
-	return change.from === change.to ? `${to} (new commit)` : `${change.from} → ${to}`;
+	if (change.from === null) return tr(`new ${to}`, `新增 ${to}`);
+	return change.from === change.to ? tr(`${to} (new commit)`, `${to}（新提交）`) : `${change.from} → ${to}`;
 }
 
 const pluginLines = (changes: readonly PluginChange[]): string[] =>
@@ -158,22 +159,28 @@ const pluginLines = (changes: readonly PluginChange[]): string[] =>
 
 /** Markdown report of one manual run: every path and message the updater returned. */
 function detailedReport(outcome: RunOutcome, agentDir: string): string {
-	const head = ["# omp-config update", "", `- **Agent dir:** \`${agentDir}\``];
+	const head = [tr("# omp-config update", "# omp-config 更新"), "", `- **${tr("Agent dir", "Agent 目录")}:** \`${agentDir}\``];
 	switch (outcome.kind) {
 		case "no-script":
 			return [
 				...head,
-				`- **Result:** not run: \`${outcome.script}\` is missing. Run \`/update-omp\` once from the omp-config checkout to install the updater.`,
+				`- **${tr("Result", "结果")}:** ${tr(
+					`not run: \`${outcome.script}\` is missing. Run \`/update-omp\` once from the omp-config checkout to install the updater.`,
+					`未运行：找不到 \`${outcome.script}\`。请在 omp-config 检出目录中运行一次 \`/update-omp\` 以安装更新器。`,
+				)}`,
 			].join("\n");
 		case "no-bun":
-			return [...head, "- **Result:** not run: `bun` is not on PATH."].join("\n");
+			return [...head, `- **${tr("Result", "结果")}:** ${tr("not run: `bun` is not on PATH.", "未运行：PATH 中找不到 `bun`。")}`].join("\n");
 		case "no-result":
 			return [
 				...head,
-				`- **Result:** the updater exited ${outcome.code} without a result.`,
+				`- **${tr("Result", "结果")}:** ${tr(
+					`the updater exited ${outcome.code} without a result.`,
+					`更新器退出码为 ${outcome.code}，未返回结果。`,
+				)}`,
 				"",
 				"```",
-				outcome.stderr || "(no stderr)",
+				outcome.stderr || tr("(no stderr)", "（无标准错误输出）"),
 				"```",
 			].join("\n");
 		case "result":
@@ -186,34 +193,53 @@ function detailedReport(outcome: RunOutcome, agentDir: string): string {
 	const result = outcome.result;
 	switch (result.kind) {
 		case "busy":
-			return [...head, "- **Result:** skipped: another update holds `~/.omp/omp-config-update.lock`. Retry when it finishes."].join("\n");
+			return [
+				...head,
+				`- **${tr("Result", "结果")}:** ${tr(
+					"skipped: another update holds `~/.omp/omp-config-update.lock`. Retry when it finishes.",
+					"已跳过：另一个更新正在持有 `~/.omp/omp-config-update.lock`。请在其完成后重试。",
+				)}`,
+			].join("\n");
 		case "offline":
 			return [
 				...head,
-				"- **Result:** not updated: fetching GitHub failed, so nothing was compared or applied.",
+				`- **${tr("Result", "结果")}:** ${tr(
+					"not updated: fetching GitHub failed, so nothing was compared or applied.",
+					"未更新：获取 GitHub 失败，因此未进行比较或应用。",
+				)}`,
 				"",
 				"```",
 				result.error,
 				"```",
 			].join("\n");
 		case "failed":
-			return [...head, "- **Result:** failed; nothing was recorded as applied.", "", "```", result.error, "```"].join("\n");
+			return [
+				...head,
+				`- **${tr("Result", "结果")}:** ${tr("failed; nothing was recorded as applied.", "失败；未记录应用结果。")}`,
+				"",
+				"```",
+				result.error,
+				"```",
+			].join("\n");
 		case "up-to-date": {
 			const { plugins } = result;
 			const changed = plugins.installed.length + plugins.upgraded.length;
 			const outcomeLine =
 				plugins.errors.length > 0
-					? `config up to date; refreshing plugins hit ${plugins.errors.length} error(s), retried next start`
+					? tr(
+							`config up to date; refreshing plugins hit ${plugins.errors.length} error(s), retried next start`,
+							`配置已是最新；刷新插件时遇到 ${plugins.errors.length} 个错误，下次启动将重试`,
+						)
 					: changed > 0
-						? "config up to date; plugins updated"
-						: "up to date; config and plugins unchanged";
+						? tr("config up to date; plugins updated", "配置已是最新；插件已更新")
+						: tr("up to date; config and plugins unchanged", "已是最新；配置和插件均未改变");
 			return [
 				...head,
-				`- **Result:** ${outcomeLine}`,
-				`- **Commit:** \`${short(result.commit)}\` (\`${result.commit}\`), nothing applied`,
-				`- **Restart needed:** ${changed > 0 ? "yes — plugins changed" : "no"}`,
-				...section("Errors", plugins.errors),
-				...section("Plugins", pluginLines(plugins.changes)),
+				`- **${tr("Result", "结果")}:** ${outcomeLine}`,
+				`- **${tr("Commit", "提交")}:** \`${short(result.commit)}\` (\`${result.commit}\`)${tr(", nothing applied", "，未应用任何更改")}`,
+				`- **${tr("Restart needed", "需要重启")}:** ${changed > 0 ? tr("yes — plugins changed", "是 — 插件发生变化") : tr("no", "否")}`,
+				...section(tr("Errors", "错误"), plugins.errors),
+				...section(tr("Plugins", "插件"), pluginLines(plugins.changes)),
 			].join("\n");
 		}
 		case "applied": {
@@ -226,29 +252,32 @@ function detailedReport(outcome: RunOutcome, agentDir: string): string {
 				report.pluginsUpgraded.length;
 			const outcomeLine =
 				report.errors.length > 0
-					? `applied with ${report.errors.length} error(s); the applied commit is not recorded, so the next run retries`
+					? tr(
+							`applied with ${report.errors.length} error(s); the applied commit is not recorded, so the next run retries`,
+							`已应用，但出现 ${report.errors.length} 个错误；未记录已应用的提交，因此下次运行将重试`,
+						)
 					: changed === 0
-						? "applied; this machine already matched, nothing written"
-						: "updated";
+						? tr("applied; this machine already matched, nothing written", "已应用；此机器已经匹配，未写入任何内容")
+						: tr("updated", "已更新");
 			const lines = [
 				...head,
-				`- **Result:** ${outcomeLine}`,
-				`- **Commit:** ${result.previous ? `\`${short(result.previous)}\` → ` : "(no previous record) → "}\`${short(result.commit)}\` (\`${result.commit}\`)`,
-				`- **Restart needed:** ${report.restartNeeded ? "yes — extensions, APPEND_SYSTEM.md or plugins changed" : "no"}`,
-				...section("Errors", report.errors),
-				...section("Written", report.written),
+				`- **${tr("Result", "结果")}:** ${outcomeLine}`,
+				`- **${tr("Commit", "提交")}:** ${result.previous ? `\`${short(result.previous)}\` → ` : tr("(no previous record) → ", "（无先前记录）→ ")}\`${short(result.commit)}\` (\`${result.commit}\`)`,
+				`- **${tr("Restart needed", "需要重启")}:** ${report.restartNeeded ? tr("yes — extensions, APPEND_SYSTEM.md or plugins changed", "是 — 扩展、APPEND_SYSTEM.md 或插件发生变化") : tr("no", "否")}`,
+				...section(tr("Errors", "错误"), report.errors),
+				...section(tr("Written", "已写入"), report.written),
 				...section(
-					"Moved",
+					tr("Moved", "已移动"),
 					report.moved.map((entry) => `${entry.from}\` → \`${entry.to}`),
 				),
-				...section("Deleted", report.deleted),
+				...section(tr("Deleted", "已删除"), report.deleted),
 				...section(
-					"Skipped",
+					tr("Skipped", "已跳过"),
 					report.skipped.map((entry) => `${entry.path}\` — \`${entry.reason}`),
 				),
-				...section("Plugins", pluginLines(report.pluginChanges)),
-				...section("Plugins still missing", report.pluginsMissing),
-				...section("Notes", report.notes),
+				...section(tr("Plugins", "插件"), pluginLines(report.pluginChanges)),
+				...section(tr("Plugins still missing", "仍缺少的插件"), report.pluginsMissing),
+				...section(tr("Notes", "备注"), report.notes),
 			];
 			return lines.join("\n");
 		}
@@ -261,12 +290,24 @@ function detailedReport(outcome: RunOutcome, agentDir: string): string {
 
 function registerAutoupdateCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("omp-config-autoupdate", {
-		description:
+		description: tr(
 			"omp-config auto-update: /omp-config-autoupdate [status|on|off|run] (run = update from GitHub now and show the full report)",
+			"omp-config 自动更新：/omp-config-autoupdate [status|on|off|run]（run = 立即从 GitHub 更新并显示完整报告）",
+		),
 		getArgumentCompletions: (prefix) => {
 			const matches = ["status", "on", "off", "run"]
 				.filter((value) => value.startsWith(prefix.trim().toLowerCase()))
-				.map((value) => ({ value, label: value }));
+				.map((value) => ({
+					value,
+					label:
+						value === "status"
+							? tr("status", "状态")
+							: value === "on"
+								? tr("on", "开启")
+								: value === "off"
+									? tr("off", "关闭")
+									: tr("run", "运行"),
+				}));
 			return matches.length ? matches : null;
 		},
 		handler: async (args, ctx) => {
@@ -274,7 +315,7 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 				const action = args.trim().toLowerCase() || "status";
 				if (action === "run") {
 					const agentDir = getAgentDir();
-					ctx.ui.notify("omp-config: updating from GitHub…", "info");
+					ctx.ui.notify(tr("omp-config: updating from GitHub…", "omp-config：正在从 GitHub 更新…"), "info");
 					const outcome = await runUpdater(agentDir);
 					await ctx.waitForIdle();
 					pi.sendMessage(
@@ -288,29 +329,62 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 						writeOmompSection(switchSection.id, { enabled: action === "on" });
 					} catch (error) {
 						pi.logger.warn("omp-config: cannot write auto-update switch", { error: errorText(error) });
-						ctx.ui.notify(`omp-config: cannot write ${switchLocation()}: ${errorText(error)}`, "error");
+						ctx.ui.notify(
+							tr(
+								`omp-config: cannot write ${switchLocation()}: ${errorText(error)}`,
+								`omp-config：无法写入 ${switchLocation()}：${errorText(error)}`,
+							),
+							"error",
+						);
 						return;
 					}
-					ctx.ui.notify(`omp-config: auto-update ${action}; takes effect from the next OMP start (${switchLocation()})`, "info");
+					ctx.ui.notify(
+						tr(
+							`omp-config: auto-update ${action}; takes effect from the next OMP start (${switchLocation()})`,
+							`omp-config：自动更新已${action === "on" ? "开启" : "关闭"}；将从下次 OMP 启动时生效（${switchLocation()}）`,
+						),
+						"info",
+					);
 					return;
 				}
 				if (action !== "status") {
-					ctx.ui.notify("Usage: /omp-config-autoupdate [status|on|off|run]", "warning");
+					ctx.ui.notify(
+						tr(
+							"Usage: /omp-config-autoupdate [status|on|off|run]",
+							"用法：/omp-config-autoupdate [status|on|off|run]",
+						),
+						"warning",
+					);
 					return;
 				}
 				const state = readSwitch();
 				switch (state.kind) {
 					case "on":
-						ctx.ui.notify(`omp-config: auto-update is on (${switchLocation()}); /omp-config-autoupdate run updates now`, "info");
+						ctx.ui.notify(
+							tr(
+								`omp-config: auto-update is on (${switchLocation()}); /omp-config-autoupdate run updates now`,
+								`omp-config：自动更新已开启（${switchLocation()}）；运行 /omp-config-autoupdate run 立即更新`,
+							),
+							"info",
+						);
 						return;
 					case "off":
 						ctx.ui.notify(
-							`omp-config: auto-update is off (${switchLocation()}); enable with /omp-config-autoupdate on, or update once now with /omp-config-autoupdate run`,
+							tr(
+								`omp-config: auto-update is off (${switchLocation()}); enable with /omp-config-autoupdate on, or update once now with /omp-config-autoupdate run`,
+								`omp-config：自动更新已关闭（${switchLocation()}）；请使用 /omp-config-autoupdate on 启用，或使用 /omp-config-autoupdate run 立即更新`,
+							),
 							"info",
 						);
 						return;
 					case "invalid":
-						ctx.ui.notify(`omp-config: ${switchLocation()} is invalid (${state.reason}); auto-update is off`, "warning");
+						ctx.ui.notify(
+							tr(
+								`omp-config: ${switchLocation()} is invalid (${state.reason}); auto-update is off`,
+								`omp-config：${switchLocation()} 无效（${state.reason}）；自动更新已关闭`,
+							),
+							"warning",
+						);
 						return;
 					default: {
 						const exhaustive: never = state;
@@ -328,25 +402,48 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 interface UpdateRow {
 	readonly name: string;
 	readonly change: string;
+	readonly logChange: string;
 }
 
 /** What a startup run shows: nothing (only a log line), the updates, or a failure. */
 type StartupOutcome =
 	| { readonly kind: "quiet"; readonly log: string }
 	| { readonly kind: "updated"; readonly rows: readonly UpdateRow[]; readonly restart: boolean }
-	| { readonly kind: "failed"; readonly text: string };
+	| { readonly kind: "failed"; readonly en: string; readonly zh: string };
+
+function pluginVersionChangeEnglish(change: PluginChange): string {
+	const to = change.to ?? "?";
+	if (change.from === null) return `new ${to}`;
+	return change.from === change.to ? `${to} (new commit)` : `${change.from} → ${to}`;
+}
 
 const pluginRows = (changes: readonly PluginChange[]): UpdateRow[] =>
-	changes.map((change) => ({ name: change.name, change: pluginVersionChange(change) }));
+	changes.map((change) => ({
+		name: change.name,
+		change: pluginVersionChange(change),
+		logChange: pluginVersionChangeEnglish(change),
+	}));
 
 function startupOutcome(outcome: RunOutcome): StartupOutcome {
 	switch (outcome.kind) {
 		case "no-script":
-			return { kind: "failed", text: `omp-config: ${outcome.script} missing; run /update-omp once to install the updater` };
+			return {
+				kind: "failed",
+				en: `omp-config: ${outcome.script} missing; run /update-omp once to install the updater`,
+				zh: `omp-config：缺少 ${outcome.script}；请运行一次 /update-omp 以安装更新器`,
+			};
 		case "no-bun":
-			return { kind: "failed", text: "omp-config: bun is not on PATH; auto-update skipped" };
+			return {
+				kind: "failed",
+				en: "omp-config: bun is not on PATH; auto-update skipped",
+				zh: "omp-config：PATH 中找不到 bun；已跳过自动更新",
+			};
 		case "no-result":
-			return { kind: "failed", text: `omp-config: updater exited ${outcome.code} without a result: ${outcome.stderr.slice(0, 500)}` };
+			return {
+				kind: "failed",
+				en: `omp-config: updater exited ${outcome.code} without a result: ${outcome.stderr.slice(0, 500)}`,
+				zh: `omp-config：更新器退出码为 ${outcome.code}，未返回结果：${outcome.stderr.slice(0, 500)}`,
+			};
 		case "result":
 			break;
 		default: {
@@ -361,13 +458,18 @@ function startupOutcome(outcome: RunOutcome): StartupOutcome {
 		case "offline":
 			return { kind: "quiet", log: `omp-config: fetch failed, not updated: ${result.error}` };
 		case "failed":
-			return { kind: "failed", text: `omp-config: auto-update failed: ${result.error}` };
+			return {
+				kind: "failed",
+				en: `omp-config: auto-update failed: ${result.error}`,
+				zh: `omp-config：自动更新失败：${result.error}`,
+			};
 		case "up-to-date": {
 			const { plugins } = result;
 			if (plugins.errors.length > 0)
 				return {
 					kind: "failed",
-					text: `omp-config: plugin refresh hit ${plugins.errors.length} error(s), will retry next start: ${plugins.errors[0]}; /omp-config-autoupdate run shows the full report`,
+					en: `omp-config: plugin refresh hit ${plugins.errors.length} error(s), will retry next start: ${plugins.errors[0]}; /omp-config-autoupdate run shows the full report`,
+					zh: `omp-config：刷新插件时遇到 ${plugins.errors.length} 个错误，将在下次启动时重试：${plugins.errors[0]}；运行 /omp-config-autoupdate run 可查看完整报告`,
 				};
 			if (plugins.changes.length === 0) return { kind: "quiet", log: `omp-config: up to date at ${short(result.commit)}, plugins current` };
 			return { kind: "updated", rows: pluginRows(plugins.changes), restart: true };
@@ -377,18 +479,26 @@ function startupOutcome(outcome: RunOutcome): StartupOutcome {
 			if (report.errors.length > 0)
 				return {
 					kind: "failed",
-					text: `omp-config: applied ${short(result.commit)} with ${report.errors.length} error(s), will retry next start: ${report.errors[0]}; /omp-config-autoupdate run shows the full report`,
+					en: `omp-config: applied ${short(result.commit)} with ${report.errors.length} error(s), will retry next start: ${report.errors[0]}; /omp-config-autoupdate run shows the full report`,
+					zh: `omp-config：已应用 ${short(result.commit)}，但出现 ${report.errors.length} 个错误，将在下次启动时重试：${report.errors[0]}；运行 /omp-config-autoupdate run 可查看完整报告`,
 				};
 			const files = report.written.length + report.moved.length + report.deleted.length;
 			const rows: UpdateRow[] = [
 				...(files === 0
 					? []
-					: [
-							{
-								name: "omp-config",
-								change: `${result.previous ? short(result.previous) : "new"} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
-							},
-						]),
+					: (() => {
+							const previous = result.previous ? short(result.previous) : "new";
+							return [
+								{
+									name: "omp-config",
+									change: tr(
+										`${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
+										`${result.previous ? short(result.previous) : "新建"} → ${short(result.commit)}（${files} 个文件）`,
+									),
+									logChange: `${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
+								},
+							];
+						})()),
 				...pluginRows(report.pluginChanges),
 			];
 			if (rows.length === 0) return { kind: "quiet", log: `omp-config: ${short(result.commit)} applied, host already matched` };
@@ -409,7 +519,7 @@ function showUpdates(ctx: ExtensionContext, rows: readonly UpdateRow[], restart:
 	const { theme } = ctx.ui;
 	const width = Math.max(...rows.map((row) => row.name.length));
 	ctx.ui.setWidget(WIDGET_KEY, [
-		`${theme.fg("accent", "omp-config updated")}${restart ? theme.fg("muted", " · restart OMP to load") : ""}`,
+		`${theme.fg("accent", tr("omp-config updated", "omp-config 已更新"))}${restart ? theme.fg("muted", tr(" · restart OMP to load", " · 重启 OMP 以加载")) : ""}`,
 		...rows.map((row) => `  ${row.name.padEnd(width)}  ${row.change}`),
 	]);
 	ctx.setTimeout(() => ctx.ui.setWidget(WIDGET_KEY, undefined), WIDGET_MS);
@@ -418,9 +528,9 @@ function showUpdates(ctx: ExtensionContext, rows: readonly UpdateRow[], restart:
 export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 	registerAutoupdateCommand(pi);
 
-	const warn = (ctx: ExtensionContext, text: string): void => {
-		if (ctx.hasUI) ctx.ui.notify(text, "warning");
-		pi.logger.warn(text);
+	const warn = (ctx: ExtensionContext, en: string, zh: string): void => {
+		if (ctx.hasUI) ctx.ui.notify(tr(en, zh), "warning");
+		pi.logger.warn(en);
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -428,7 +538,12 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 			if (started || ctx.agent.kind !== "main") return;
 			started = true;
 			const state = readSwitch();
-			if (state.kind === "invalid") warn(ctx, `omp-config: ${switchLocation()} is invalid (${state.reason}); auto-update is off`);
+			if (state.kind === "invalid")
+				warn(
+					ctx,
+					`omp-config: ${switchLocation()} is invalid (${state.reason}); auto-update is off`,
+					`omp-config：${switchLocation()} 无效（${state.reason}）；自动更新已关闭`,
+				);
 			if (state.kind !== "on") return;
 			ctx.setTimeout(async () => {
 				try {
@@ -438,11 +553,11 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 							pi.logger.info(outcome.log);
 							return;
 						case "failed":
-							warn(ctx, outcome.text);
+							warn(ctx, outcome.en, outcome.zh);
 							return;
 						case "updated":
 							pi.logger.info(
-								`omp-config: updated ${outcome.rows.map((row) => `${row.name} ${row.change}`).join("; ")}${outcome.restart ? "; restart to load" : ""}`,
+								`omp-config: updated ${outcome.rows.map((row) => `${row.name} ${row.logChange}`).join("; ")}${outcome.restart ? "; restart to load" : ""}`,
 							);
 							if (ctx.hasUI) showUpdates(ctx, outcome.rows, outcome.restart);
 							return;
