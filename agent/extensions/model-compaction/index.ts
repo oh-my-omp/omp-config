@@ -251,13 +251,7 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 			"model-compaction: the runtime compaction.modelThresholds record was changed by another writer; no longer managing it in this session";
 		pi.logger.warn(text);
 		if (ctx.hasUI)
-			ctx.ui.notify(
-				tr(
-					text,
-					"模型压缩：运行时的 compaction.modelThresholds 记录已被其他写入方修改；本会话将不再管理该记录",
-				),
-				"warning",
-			);
+			ctx.ui.notify(tr(text, "模型压缩：运行时的 compaction.modelThresholds 记录已被其他写入方修改；本会话将不再管理该记录"), "warning");
 		return false;
 	};
 
