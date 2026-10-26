@@ -1,39 +1,15 @@
-// ============================================================================
-// read-topics — topic lookup for the built-in `read` tool through `tool://`.
-//
-// `read tool://read` lists the topics, `read tool://read/<topic>` returns one
-// (line selectors apply: `tool://read/sqlite:1-40`), `read tool://` lists the
-// tools that have topics. The text is not a copy: each topic is one section of
-// OMP's own bundled `omp://tools/read.md` (`getEmbeddedDoc`), cut by the fixed
-// heading table `TOPICS`, so it follows the installed OMP version. The doc is
-// loaded and cut once, on the first `tool://` read; a missing doc or a heading
-// the table names that the doc no longer has exactly once fails that read with
-// the drift spelled out, instead of serving partial topics.
-//
-// The factory registers one `tool://` handler in OMP's process-global
-// `InternalUrlRouter`, which `read`, `grep` and prompt completion consult, and
-// whose `promptDoc` line the system prompt lists. Registration is per process
-// and idempotent (the handler carries `OWNER`); an OMP-owned `tool` scheme or
-// one another host registered is left alone with a warning. Nothing is
-// unregistered: every session of the process shares the router.
-//
-// Registers no tools, commands or hooks; reads no files of its own; main and
-// sub sessions alike. Failures are logged; nothing throws into omp.
-// ============================================================================
+// read-topics — register read-specific content through _shared/tool-topics.ts.
+// The shared module owns tool:// routing, indexes, search and completion.
+// This factory supplies only the stable chapter mapping and session-independent
+// readers of OMP's bundled tools/read.md. The first leaf read cuts the entire
+// doc once per module load; missing/duplicate headings fail without partial text.
+// No tools, commands, hooks or files; main/sub and full/light alike.
+// Registration failures are warned at the factory boundary, never thrown to OMP.
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getEmbeddedDoc } from "@oh-my-pi/pi-coding-agent/internal-urls/docs-index";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
-import type {
-	InternalResource,
-	InternalUrl,
-	ProtocolHandler,
-	SchemeSpec,
-	UrlCompletion,
-} from "@oh-my-pi/pi-coding-agent/internal-urls/types";
 import { errorText } from "../_shared/errors.ts";
+import { registerToolTopics } from "../_shared/tool-topics.ts";
 
-const SCHEME = "tool";
-const OWNER = "omp-config/read-topics";
 const READ_DOC = "tools/read.md";
 
 /** One topic: a stable key and the exact `##`/`###` heading of `omp://tools/read.md` it cuts. */
@@ -145,79 +121,35 @@ async function topicsOrThrow(): Promise<ReadonlyMap<string, Topic>> {
 	}
 }
 
-function markdown(url: string, content: string): InternalResource {
-	return { url, content, contentType: "text/markdown", size: Buffer.byteLength(content) };
-}
-
-/** `tool://<tool>[/<topic>]` → tool name and optional topic; throws on deeper paths. */
-function target(url: InternalUrl): { readonly tool: string; readonly topic: string | undefined } {
-	const tool = url.rawHost || url.hostname;
-	const segments = (url.rawPathname ?? url.pathname).split("/").filter((segment) => segment.length > 0);
-	if (segments.length > 1) throw new Error(`Invalid ${SCHEME}:// URL: ${url.href}. Use ${SCHEME}://<tool> or ${SCHEME}://<tool>/<topic>.`);
-	return { tool, topic: segments[0] };
-}
-
-function topicIndex(topics: ReadonlyMap<string, Topic>): string {
-	const rows = [...topics.values()].map((topic) => `- [${topic.key}](${SCHEME}://read/${topic.key}) — ${topic.heading}`);
-	return [
-		"# read topics",
-		"",
-		`Sections of omp://${READ_DOC}; read ${SCHEME}://read/<topic> (line selectors apply).`,
-		"",
-		...rows,
-		"",
-	].join("\n");
-}
-
-class ToolTopicsHandler implements ProtocolHandler {
-	readonly scheme = SCHEME;
-	readonly owner = OWNER;
-	readonly spec: SchemeSpec = { backing: "virtual", selectors: "lines", immutable: true };
-
-	promptDoc(): string {
-		return `\`${SCHEME}://read/<topic>\`: per-feature \`read\` docs (selectors, sqlite, archives, images, web-urls, limits, …); \`${SCHEME}://read\` lists topics.`;
-	}
-
-	async resolve(url: InternalUrl): Promise<InternalResource> {
-		const { tool, topic } = target(url);
-		if (!tool) return markdown(url.href, `# ${SCHEME}://\n\nTools with topics:\n\n- [read](${SCHEME}://read)\n`);
-		if (tool !== "read") throw new Error(`Tool '${tool}' has no ${SCHEME}:// topics. Tools with topics: read.`);
-		const topics = await topicsOrThrow();
-		if (topic === undefined) return markdown(url.href, topicIndex(topics));
-		const found = topics.get(topic);
-		if (!found) throw new Error(`Unknown topic '${topic}' for read. Available: ${[...topics.keys()].join(", ")}.`);
-		return markdown(url.href, found.body);
-	}
-
-	/** `grep`/`find` leaves: every read topic under `tool://` and `tool://read`, else the one topic. */
-	async enumerate(url: InternalUrl): Promise<Array<{ url: string; content: string }>> {
-		const { tool, topic } = target(url);
-		if (tool && tool !== "read") throw new Error(`Tool '${tool}' has no ${SCHEME}:// topics. Tools with topics: read.`);
-		const topics = await topicsOrThrow();
-		const leaves = topic === undefined ? [...topics.values()] : [topics.get(topic)].filter((found) => found !== undefined);
-		if (leaves.length === 0) throw new Error(`Unknown topic '${topic}' for read. Available: ${[...topics.keys()].join(", ")}.`);
-		return leaves.map((leaf) => ({ url: `${SCHEME}://read/${leaf.key}`, content: leaf.body }));
-	}
-
-	async complete(): Promise<UrlCompletion[]> {
-		return [{ value: "read" }, ...TOPICS.map((section) => ({ value: `read/${section.key}`, description: section.heading }))];
-	}
-}
-
 export default function readTopics(pi: ExtensionAPI): void {
 	try {
-		const router = InternalUrlRouter.instance();
-		if (router.isBuiltin(SCHEME)) {
-			pi.logger.warn(`read-topics: OMP now owns ${SCHEME}://; topic handler not registered`);
-			return;
+		const result = registerToolTopics({
+			tool: "read",
+			owner: "omp-config/read-topics",
+			topics: TOPICS.map((section) => ({
+				name: section.key,
+				title: section.heading,
+				async read() {
+					const topics = await topicsOrThrow();
+					const topic = topics.get(section.key);
+					if (!topic) throw new Error(`Read topic '${section.key}' missing from the chapter table`);
+					return topic.body;
+				},
+			})),
+		});
+		switch (result.kind) {
+			case "registered":
+				return;
+			case "invalid":
+			case "conflict":
+				pi.logger.warn("read-topics: registration failed", { reason: result.reason });
+				return;
+			default: {
+				const unreachable: never = result;
+				throw new Error(`Unhandled registration result: ${unreachable}`);
+			}
 		}
-		const existing = router.getHandler(SCHEME);
-		if (existing && Reflect.get(existing, "owner") !== OWNER) {
-			pi.logger.warn(`read-topics: ${SCHEME}:// is registered by another host; topic handler not registered`);
-			return;
-		}
-		router.register(new ToolTopicsHandler());
 	} catch (error) {
-		pi.logger.warn("read-topics: registering tool:// failed", { error: errorText(error) });
+		pi.logger.warn("read-topics: registration failed", { error: errorText(error) });
 	}
 }
