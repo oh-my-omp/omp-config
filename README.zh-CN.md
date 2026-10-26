@@ -36,7 +36,7 @@ flowchart TD
 
 ### 失效模式与运行时对策全景矩阵
 
-仓库中的全部 **21 个本地扩展**、**10+1 个外部插件**与核心配置项均对应明确的模型失效模式或宿主能力缺口，不存在无归属的装饰性脚本：
+仓库中的全部 **22 个本地扩展**、**10+1 个外部插件**与核心配置项均对应明确的模型失效模式或宿主能力缺口，不存在无归属的装饰性脚本：
 
 | 控制环路 | 真实模型失效模式 / 宿主能力缺口 | 拦截 / 触发时机 | 对策载体 | 运行时控制动作 | 轻量模式 |
 |---|---|---|---|---|---|
@@ -59,6 +59,7 @@ flowchart TD
 | **宿主环境与运维补齐** | `--model` 指定 `commandcode` 模型时因宿主缓存遮蔽或内置 provider 同名冲突报鉴权失败 | `session_start` | [commandcode-model-spec](#commandcode-model-spec) | 识别 `commandcode-models.json` 中的模型并在 `api !== "commandcode-custom"` 时重选回插件实时注册模型 | 启用 |
 | **宿主环境与运维补齐** | OMP 手工抓包的 Antigravity wire 表缺少较新的 wire id（`gemini-4-argon-*`），调用方的小输出预算（如 compaction short summary 的 512 token）原样发出，被 Gemini 的 thinking 全部耗尽 | 根会话 `session_start` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 按每个 Antigravity 账号拉取 `fetchAvailableModels`，把每个在服 wire id 的 `maxOutputTokens` / `model_enum` 原地写入 provider 读取的表 | 启用 |
 | **人机协同与多机同步** | 人类草稿需激励性润色、长文档需无损重排审校、多机配置需原子同步 | 按键 / 命令 / 启动时 | [input-polish](#input-polish) + [doc-polish](#doc-polish) + [omp-config-autoupdate](#omp-config-autoupdate) | `Ctrl+Enter` 浮层流式润色输入；三代理流水线生成 `/tmp/doc-polish` 对照审校报告；启动时子进程拉取默认分支自动应用 | `doc-polish` 禁用，其余启用 |
+| **人机协同与多机同步** | 扩展与插件的界面文字中英混杂；由扩展导出的语言又会晚于 OMP 在首帧前绑定的插件 | 模块加载 / 每条界面文字 | [omomp-lang](#omomp-lang) + `_shared/i18n.ts` + 各插件的 i18n 模块 | 把 `omomp.yml#omomp-lang.language` 导出为 `OMOMP_LANG`；每条面向人的文字在产生时按 `OMOMP_LANG` → 该配置段 → locale → 英文 解析 | 启用 |
 
 ---
 
@@ -367,6 +368,15 @@ doc-polish:
 
 让每个 Antigravity（`google-antigravity`）请求的 `generationConfig.maxOutputTokens` 与 `labels.model_enum` 以后端模型列表为准，而不是 OMP 手工抓包的 `ANTIGRAVITY_MODEL_WIRE_PROFILES` 表（`@oh-my-pi/pi-catalog/wire/gemini-headers`）。provider 只对表里有的 wire id 替换调用方的 `maxTokens`；抓包之后新增的 id（`gemini-4-argon-*`）不在表里，于是 compaction 的 short summary 以 512 输出 token、high thinking 发出，报 `thought-only response without final output`。扩展在根会话 `session_start`（同步等待，预算 20 s；`before_agent_start` 等待同一次加载）用本会话凭据和全部已存 Antigravity 账号调用 `POST <baseUrl>/v1internal:fetchAvailableModels`，合并在服的行（非 internal、非 disabled、`maxOutputTokens` 为正整数），原地写入导出的表。只新增或覆盖条目、从不删除，因为一个账号的列表不能证明别的账号没有该模型。provider 每次请求都读这张表，所以普通轮次、compaction 和同进程子代理都用后端值；表里有的 wire id 会忽略调用方的 `maxTokens`（这张表原有的约定）。所有账号都拿不到可用列表时，表保持原内容，日志与主 UI 各出一条警告，下次根会话启动时重试。
 
+#### omomp-lang
+
+决定本地扩展与 omp 插件所有面向人的文字使用的语言（`en` 或 `zh`）：通知、widget、状态栏条目、对话框、浮层、命令与快捷键说明、工具标签和渲染器。发给模型的文字（prompt、steer、工具描述、工具结果内容）、日志和用户数据保持原文。
+
+- **配置**：`omomp.yml#omomp-lang.language`（仓库值 `zh`），只读 agent 目录的 `omomp.*`：语言属于整个进程，因此不读项目 `.omp/` 副本。修改从下次 OMP 启动起生效。
+- **导出**：扩展在模块加载时把 `process.env.OMOMP_LANG` 设为该值，除非启动环境已指定语言（`OMOMP_LANG=en omp`，或 omp-playbooks 以自身语言启动的 Tern 面板）；显式的启动值优先。子进程继承该变量。第一个主会话把无效的 `omomp.*` 副本报告一次（日志 + 界面警告）。
+- **解析**（`_shared/i18n.ts` 的 `tr(en, zh)`，在文字产生处调用）：`OMOMP_LANG` 为 `en`/`zh`（不分大小写）→ `omomp-lang` 配置段 → `LC_ALL`、`LC_MESSAGES`、`LANG` 中第一个非空值（以 `zh` 开头为中文）→ 英文。每个使用方除了读导出的变量，还会自己读配置段，因为 OMP 并发导入扩展模块，且在交互模式下把不注册 provider、快捷键、composer 形态或文件回退的扩展推迟到首帧之后才绑定（`startup-deferral.ts`）；`omomp-lang` 加载之前产生的文字同样遵循 `omomp.yml`。
+- **插件**：只运行在 OMP 中的插件（`omp-todo-more`、`omp-playbooks`、`omp-thinking-translator`、`omp-codex-image-gen`、`omp-remote-build`）在各自的 i18n 模块中按同一条链解析。兼容 Pi 的插件（`omp-unified-exec`、`pi-bansos`）只读环境变量，因此它们在 `omomp-lang` 加载前注册的文字跟随 locale。omp-playbooks 把自身语言传给它启动的 Tern 面板（`env OMOMP_LANG=…`）。npm 插件 `pi-commandcode-provider` 与 `pi-package-search` 属于第三方，只显示英文。
+
 ### 本地扩展总览表
 
 | 序号 | 扩展目录 | 所属章节 | 作用域 | 轻量模式 | 配置源（`omomp.yml` 段或同目录文件） |
@@ -392,6 +402,7 @@ doc-polish:
 | 19 | `commandcode-model-spec` | [§4.3](#commandcode-model-spec) | 主 + 子 | 是 | 读取本机 `commandcode-models.json` |
 | 20 | `antigravity-wire-profiles` | [§4.3](#antigravity-wire-profiles) | 根主会话（表为进程全局） | 是 | 后端 `fetchAvailableModels` 列表；无文件 |
 | 21 | `omp-config-autoupdate` | [§7.2](#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机独占） |
+| 22 | `omomp-lang` | [§4.3](#omomp-lang) | 进程全局（模块加载） | 是 | `omomp.yml#omomp-lang`（仓库托管） |
 
 ---
 
@@ -448,7 +459,7 @@ providers:
 
 ## 6. 双轨运行模式：Full 模式与 omp-light
 
-Full 模式（直接运行 `omp`）挂载了全套派发门禁、旁路判定器与强制顾问，适合重型长程工程；而日常简单问答或小修小补不需要承担这套流程税。`omp-light` 启动一个仅对当前进程生效、不改写任何磁盘文件的精简模式，将全部 21 个本地扩展精确划分为 **10 个禁用 + 1 个路径排除 + 10 个保留**：
+Full 模式（直接运行 `omp`）挂载了全套派发门禁、旁路判定器与强制顾问，适合重型长程工程；而日常简单问答或小修小补不需要承担这套流程税。`omp-light` 启动一个仅对当前进程生效、不改写任何磁盘文件的精简模式，将全部 22 个本地扩展精确划分为 **10 个禁用 + 1 个路径排除 + 11 个保留**：
 
 | 维度 | Full 模式（`omp`） | 轻量模式（`omp-light`） |
 |---|---|---|
@@ -456,7 +467,7 @@ Full 模式（直接运行 `omp`）挂载了全套派发门禁、旁路判定器
 | 主动委派倾向 (`task.eager`) | `preferred` | `default`（减弱主动派工，但不关闭 subagent） |
 | 经 `disabledExtensions` 禁用的 **10** 个本地扩展 | 全部启用 | 禁用：`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
 | 经 `extensions: []` 排除的 **1** 个末尾扩展 | 启用 `system-prompt-replace` | `config-light.yml` 将 `extensions` 置空以排除 `extensions-last/system-prompt-replace`（`disabledExtensions` 按模块名过滤，管不到写成文件路径的条目）；启动器 `omp-light.ts` 读取本机 `config.yml`，将其余路径不含 `/extensions-last/` 的本机条目（如 `~/.claude`）通过 `-e` 补回 |
-| 保留启用的 **10** 个本地扩展 | 启用 | 启用：`antigravity-wire-profiles`、`append-system-model`、`child-memory-warning`、`commandcode-model-spec`、`harness-restart`、`input-polish`、`model-compaction`、`omp-config-autoupdate`、`repo-rules`、`wt-tool` |
+| 保留启用的 **11** 个本地扩展 | 启用 | 启用：`antigravity-wire-profiles`、`append-system-model`、`child-memory-warning`、`commandcode-model-spec`、`harness-restart`、`input-polish`、`model-compaction`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`wt-tool` |
 | 已安装插件（含 `omp-todo-more` 的 `todo` 与 `ctx`） | 全部加载 | 全部加载（`disabledExtensions` 不作用于插件） |
 | 工具差异 | 全量工具 | 仅 `polish_doc` 与 `fork_task` 消失；`todo`、`ctx`、`wt`、`wt_remove`、`harness_restart` 均照常可用 |
 
@@ -488,7 +499,7 @@ flowchart LR
 | `PROMPT-INJECT-*.md`、`TURN-JUDGE-*.md`、`INTENT-*.md` | 仓库带则归仓库；本机自建归本机 | 覆盖仓库自带模板；本机在同目录自建的模板文件绝不触碰或删除 | 仅收回仓库已有的同名模板 | 下次派发 / 下一轮 / 下次调用 |
 | `APPEND_SYSTEM_MODEL.md`、`WATCHDOG-*.md` | 本机独占 | 绝不写入或删除（仅在旧平铺迁移时从根目录移入扩展目录） | 绝不收回仓库 | 下一条 prompt / 写入即刻重读 |
 | `agent/config.yml`（4 个结构化文件之一） | 仓库 + 本机按字段合并 | 仓库键覆盖本机同名键；**本机字段 `LOCAL_CONFIG_FIELDS`**（`providers.webSearchOrder`、`modelRoles`、`defaultThinkingLevel`、`skills`、`symbolPreset`、`theme`、`colorBlindMode`、`hideThinkingBlock`、`statusLine`、`terminal`、`tui`、`display`、`worktree`、`compaction.thresholdTokens`、`compaction.thresholdPercent`、`compaction.idleThresholdTokens`）及本机独有键保留不动；**共享列表 `MACHINE_LIST_FIELDS`（`extensions`）** 将本机独有条目（如 `~/.claude`）保留在仓库条目**之前** | 先 `read` 两边，仅用 `edit` 修改非本机字段的差异行，绝不整文件重序列化；本机字段与 `extensions` 本机条目不写回仓库 | OMP 实时热重载 |
-| `agent/omomp.yml`（4 个结构化文件之二） | 仓库 8 段 + 本机 3 段按段合并 | 覆盖仓库托管的 8 个段（`judge`、`lang-nag`、`input-polish`、`tool-policy-nag`、`task-completion-judge`、`task-split-check`、`child-memory-warning`、`system-prompt-replace`）；保留本机独占的 3 个段 `LOCAL_OMOMP_SECTIONS`（`doc-polish`、`model-compaction`、`omp-config-autoupdate`） | 仅用 `edit` 修改仓库托管 8 个段的差异行；本机 3 个段不写回仓库 | 随各扩展读取时机生效 |
+| `agent/omomp.yml`（4 个结构化文件之二） | 仓库 9 段 + 本机 3 段按段合并 | 覆盖仓库托管的 9 个段（`omomp-lang`、`judge`、`lang-nag`、`input-polish`、`tool-policy-nag`、`task-completion-judge`、`task-split-check`、`child-memory-warning`、`system-prompt-replace`）；保留本机独占的 3 个段 `LOCAL_OMOMP_SECTIONS`（`doc-polish`、`model-compaction`、`omp-config-autoupdate`） | 仅用 `edit` 修改仓库托管 9 个段的差异行；本机 3 个段不写回仓库 | 随各扩展读取时机生效 |
 | `agent/thinking-translator.json`（4 个结构化文件之三） | 仓库 + 本机按字段合并 | 按字段合并覆盖仓库键，保留本机额外键 | 仅用 `edit` 修改差异字段 | 下一条消息开始时 |
 | `pi/agent/pi-bansos-relay-state.json`（4 个结构化文件之四） | 仓库 + 本机按字段合并 | 写入 `~/.pi/agent/pi-bansos-relay-state.json` | 从 `~/.pi/agent/` 按字段比对写回（本机文件不存在时不视为删除，保持仓库原样） | 下次会话启动或 `/bansos` |
 | 应用托管文件（首行 `// @orca-managed-pi-extension` 或含 `marker: _otty`） | 外部应用（Orca / Otty）独占 | 每次覆盖与删除前检查标记并跳过（记入 `skipped`） | 跳过不收回 | — |
@@ -557,6 +568,7 @@ OMP 从 `~/.omp/agent/extensions/` 只向下找一层：本仓库所有扩展均
 |---|---|
 | `errors.ts` | `errorText(error)`：将任意异常安全格式化为字符串 |
 | `messages.ts` | `textOf`、`lastAssistantText`：提取消息中的纯文本内容块 |
+| `i18n.ts` | `tr`、`language`、`resolveLanguage`、`parseLanguage`、`configuredLanguage`、`omompLangSection`、`LANGUAGE_ENV`：面向人的文字使用的界面语言（`OMOMP_LANG` → agent 目录 `omomp-lang` 段 → locale → 英文），每次调用时解析；不得在模块顶层调用 `tr` |
 | `omomp.ts` | `defineOmompSection`、`defineSharedOmompSection`、`loadOmompSection`、`writeOmompSection`：按 `import.meta.dir` 目录名，或 `_shared` 模块的文件名（`import.meta.path`，如 `judge`），读写 `omomp.{yml,yaml,json,toml}` 对应段（项目 `<cwd>/.omp/omomp.*` 优先于 `<agentDir>/omomp.*`） |
 | `models.ts` | `Model`、`ThinkingLevel`：宿主模型类型与辅助会话思考强度类型 |
 | `roles.ts` | `roleModels`、`roleName`、`modelLabel`：按角色链顺序取 OMP 模型角色的聊天模型（先 `modelRoles.<role>`，再 `retry.fallbackChains.<role>`，内置角色再用 OMP 默认链；未指定模型的自定义角色不贡献任何模型），每次调用都从当前会话的实时设置解析，`/model` 改动立即生效。扩展角色命名为 `<扩展名>` 或 `<扩展名>.<部分>`（用 `.` 是因为 `/` 会让 `retry.fallbackChains` 的键变成模型选择器，`:` 是思考强度后缀）；`agent/config.yml` 的 `modelTags` 列出这些角色，未指定模型前 `/model` 也能看到 |
@@ -585,4 +597,4 @@ OMP 从 `~/.omp/agent/extensions/` 只向下找一层：本仓库所有扩展均
   1. 在真实 TUI 中验证依赖 OMP 内部实现（`AgentRegistry`、子会话文件路径、钩子顺序、运行时设置层、`InteractiveMode` 原型与内置斜杠命令分发器）的功能：[fork-task](#fork-task)、[todo-more](#todo-more) 插件（含 `ctx`、task log 与 compact 后注入）、[user-prompt-inject](#user-prompt-inject)、[turn-judge](#turn-judge)、[task-completion-judge](#task-completion-judge)、[model-compaction](#model-compaction)、[wt-tool](#wt-tool) 与 [harness-restart](#harness-restart)。
   2. 将 `agent/SYSTEM_TEMPLATE.md` 与 OMP 内置的 `packages/coding-agent/src/prompts/system/system-prompt.md` 对比，将 `agent/PERSONALITY.md` 前半部分与 OMP `personality: default` 预设对比，按需合并上游改动。
   3. 若主会话启动时弹出 `system-prompt-replace: … found no target` 警告，按上游最新模板文字更新 `agent/omomp.yml` 的 `system-prompt-replace` 段，并确认扩展加载顺序未变。
-- **双语同步契约**：`README.md`（英文默认）与 `README.zh-CN.md`（简体中文）必须逐章、逐表、逐锚点（含 `#system-prompt-replace`、`#doc-polish`、`#todo-more`、`#ctx` 及全部 20 个扩展名锚点）保持一致，修改时同步更新。
+- **双语同步契约**：`README.md`（英文默认）与 `README.zh-CN.md`（简体中文）必须逐章、逐表、逐锚点（含 `#system-prompt-replace`、`#doc-polish`、`#todo-more`、`#ctx` 及全部 21 个扩展名锚点）保持一致，修改时同步更新。
