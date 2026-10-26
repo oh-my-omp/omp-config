@@ -36,6 +36,7 @@ import { join } from "node:path";
 import { type ExtensionAPI, getAgentDir, z } from "@oh-my-pi/pi-coding-agent";
 
 import { errorText } from "../_shared/errors.ts";
+import { tr } from "../_shared/i18n.ts";
 
 const COMMANDCODE = "commandcode";
 const MODEL_PREFIX = `${COMMANDCODE}/`;
@@ -101,7 +102,7 @@ function classifyCorrection(current: ModelRef | undefined, available: readonly M
 }
 
 export default function commandcodeModelSpec(pi: ExtensionAPI): void {
-	pi.setLabel("Command Code --model spec");
+	pi.setLabel(tr("Command Code --model spec", "Command Code --model 规格"));
 
 	pi.on("session_start", async (_event, ctx) => {
 		try {
@@ -127,8 +128,14 @@ export default function commandcodeModelSpec(pi: ExtensionAPI): void {
 					if (!switched) return;
 					const notice =
 						decision.reason === "collision"
-							? `--model "${decision.id}" hit credential-less ${decision.from}; selected ${MODEL_PREFIX}${decision.id}`
-							: `--model "${decision.id}" was cache-shadowed onto ${decision.from}; selected ${MODEL_PREFIX}${decision.id} (${COMMANDCODE_API})`;
+							? tr(
+									`--model "${decision.id}" hit credential-less ${decision.from}; selected ${MODEL_PREFIX}${decision.id}`,
+									`--model "${decision.id}" 命中无凭据的 ${decision.from}；已选择 ${MODEL_PREFIX}${decision.id}`,
+								)
+							: tr(
+									`--model "${decision.id}" was cache-shadowed onto ${decision.from}; selected ${MODEL_PREFIX}${decision.id} (${COMMANDCODE_API})`,
+									`--model "${decision.id}" 被缓存影子映射到 ${decision.from}；已选择 ${MODEL_PREFIX}${decision.id}（${COMMANDCODE_API}）`,
+								);
 					pi.logger.info(`commandcode-model-spec: ${notice}`);
 					// Surface the redirect: notify in interactive, stderr in headless (-p),
 					// so a re-selection is never silent in the mode the user actually runs.
