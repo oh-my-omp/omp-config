@@ -474,7 +474,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		name: "fork_task",
-		label: tr("Fork Task", "分派任务"),
+		label: tr("Fork Task", "分叉任务"),
 		description: DESCRIPTION,
 		loadMode: "essential",
 		parameters: paramsSchema,
