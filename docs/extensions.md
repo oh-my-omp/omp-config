@@ -80,7 +80,7 @@ Runs at `tool_call` on terminal structured `yield` calls inside `task:low`, `tas
 
 Source: `agent/extensions/tool-policy-nag/`. Main session only.
 
-Inspects `bash`, `bash_bg`, `exec_command` (including writes to `xd://bash`, `xd://bash_bg`, `xd://exec_command`), and `eval` at `tool_call`. It only sends reminders and never blocks a tool call, nudging the model to use `read`/`edit`/`grep`/`glob` instead of inline scripts or shell pipelines for local file operations and flagging multi-program write commands.
+Inspects `bash`, `bash_bg`, `exec_command` (including writes to `xd://bash`, `xd://bash_bg`, `xd://exec_command`), and `eval` at `tool_call`. It only sends reminders and never blocks a tool call. By design, it uses tool-routing violations as an observable signal that the model has drifted from the static system prompt (frontier models, Claude Opus included, frequently ignore static system prompts in long sessions): `form.prompt` is injected not as a system notice, but as a user-role steer phrased as a direct user observation, which receives higher instruction priority across opaque provider schemas and pulls the model back to the system prompt. The heuristic detector intentionally does not minimize false positives: line-by-line inspection of post-trigger thinking blocks shows that false triggers cost only a small number of self-reflection tokens without other adverse effects.
 
 Reads `omomp.yml#tool-policy-nag` on every watched call (project `.omp/omomp.*` before agent-dir `omomp.*`; without a valid section, nothing runs):
 

@@ -80,7 +80,7 @@
 
 源码：`agent/extensions/tool-policy-nag/`。仅在主会话运行。
 
-在 `tool_call` 阶段检查 `bash`、`bash_bg`、`exec_command`（含写往 `xd://bash`、`xd://bash_bg`、`xd://exec_command` 的调用）和 `eval`。只发提醒，不拦截命令，用于提醒模型使用 `read`/`edit`/`grep`/`glob` 而非内联脚本或 shell 管道读写本地文件，并对多程序长写命令发出风险提示。
+在 `tool_call` 阶段检查 `bash`、`bash_bg`、`exec_command`（含写往 `xd://bash`、`xd://bash_bg`、`xd://exec_command` 的调用）和 `eval`。只发提醒，不拦截命令。设计上，它把工具调用不规范当作模型偏离静态 system prompt 的可观测信号（包括 Claude Opus 在内的模型在长会话中均会高频忽略静态 system prompt）：`form.prompt` 并非以系统提示注入，而是作为伪装成用户观察的 user 角色 steer 消息发送（在各模型厂商不透明的指令权重体系下，user 消息通常享有更高优先级），促使模型重新审视并遵守 system prompt。启发式检测刻意不压低误报率：对触发后的 thinking 记录逐条检查表明，误报仅增加少量自检思考 token，未观察到其他负面副作用。
 
 每次调用重读 `omomp.yml#tool-policy-nag`（项目 `.omp/omomp.*` 优先于 agent 目录 `omomp.*`；无有效配置段时不运行）：
 
