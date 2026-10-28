@@ -3,11 +3,13 @@
 // conversation, or of another agent's named by an item's `from`.
 //
 // Registers fork_task plus before_subagent_spawn and session_shutdown hooks in
-// main and sub sessions. Reads the source agent's persisted session; writes
-// temporary JSONL under the OS temp directory and moves it into the caller's
-// artifact store.
-// Staging failures are tool errors; spawn preparation failures block the child
-// and warn, while shutdown cleanup failures warn without rejecting the hook.
+// main and sub sessions. Reads the source agent's persisted session and the
+// `fork-task` section of `omomp.yml` (project `.omp/` first, then the agent
+// dir; re-read per call); writes temporary JSONL under the OS temp directory
+// and moves it into the caller's artifact store.
+// Staging failures and over-cap sources are tool errors; spawn preparation
+// failures block the child and warn, while shutdown cleanup failures warn
+// without rejecting the hook.
 //
 // The spawn itself is the built-in `task` tool, called with the same batch
 // shape, so each child is an ordinary task subagent: its own agent definition
@@ -38,6 +40,18 @@
 //      executor opens the fork instead of an empty session. Each item gets a
 //      unique name, so the allocated id is predictable and matched exactly.
 //
+//   5. Before anything is staged, every item without `shake: true` measures
+//      its source's context with OMP's own measure (a live session's
+//      `getContextUsage()`, the same provider-anchored count compaction uses;
+//      for a parked source, the newest assistant `contextSnapshot.promptTokens`
+//      of its active branch plus the tokenizer count of later messages). Any
+//      source over `maxInheritedTokens` (default 120000), or one that cannot
+//      be measured, rejects the whole call: each child's first request writes
+//      its whole inherited context to the provider cache at full price,
+//      because the child's own tools and system prompt come before the copied
+//      messages, so siblings share no more than the fixed prefix before the
+//      fork point. `shake: true` items are exempt; shake stays opt-in.
+//
 // Relies on omp internals (AgentRegistry, the executor's session-file path and
 // hook ordering, session entry types); re-verify after every omp upgrade.
 // ============================================================================
@@ -45,6 +59,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import {
 	type AgentSession,
 	createAgentSession,
@@ -60,6 +75,15 @@ import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
+import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
+
+/** Used when no `omomp.*` copy holds a valid `fork-task` section: the bound is a cost guard, not an optional lane. */
+const DEFAULT_MAX_INHERITED_TOKENS = 120_000;
+
+const configSchema = z.object({
+	maxInheritedTokens: z.number().refine((value) => Number.isInteger(value) && value > 0, "must be a positive integer"),
+});
+const omompSection = defineOmompSection(import.meta.dir, configSchema);
 
 const itemSchema = z.object({
 	from: z.string().optional(),
@@ -119,7 +143,9 @@ Recommended per item: keep \`isolated\` at its default \`true\` and pass \`shake
 - Each item's \`name\` gets a short unique suffix; address the child by the id reported in the result.
 - \`from\`: an agent id as in \`agent://<id>\` (running, idle or parked) whose conversation the child copies instead of this one; omit it to fork this conversation. An item with \`from\` MUST set \`agent\`; the child does not inherit the source's agent type or model, and a call with an item missing it is rejected whole. The child is still this session's child: its result, follow-up, and patch come back here, and its workspace derives from this session's checkout, not the source's, so edits the source made in an isolated workspace of its own are not in it unless already merged here. A running source is copied as persisted so far.
 
-\`context\` and each item's \`task\` follow the same rules as \`task\`. The conversation copy is background, so the assignment is a directive — what to do, what is in and out, what siblings handle — not a restatement of it, and still states the target, change, and acceptance.`;
+\`context\` and each item's \`task\` follow the same rules as \`task\`. The conversation copy is background, so the assignment is a directive — what to do, what is in and out, what siblings handle — not a restatement of it, and still states the target, change, and acceptance.
+
+Cost: each child's first request writes its whole inherited conversation to the provider cache at full price, because the child's own tools and system prompt come before the copied messages. Siblings of one batch share no more than the fixed prefix before the fork point, so a batch of N children over a T-token conversation costs about N × T cache-write tokens; do not fork for batches of similar, independent judgments — use \`task\` with a brief. An item without \`shake: true\` whose source context (OMP's context-usage count, system prompt and tools included) exceeds the configured cap (\`maxInheritedTokens\`, default 120000) rejects the whole call before anything is dispatched; use \`task\` with a self-contained brief, or retry that item with \`shake: true\`.`;
 
 /**
  * Where the forked transcript comes from. `caller` is the session calling
@@ -129,7 +155,17 @@ Recommended per item: keep \`isolated\` at its default \`true\` and pass \`shake
  */
 type ForkSource =
 	| { readonly kind: "caller"; readonly file: string; readonly cwd: string }
-	| { readonly kind: "agent"; readonly id: string; readonly file: string; readonly cwd: string | undefined };
+	| {
+			readonly kind: "agent";
+			readonly id: string;
+			readonly file: string;
+			readonly cwd: string | undefined;
+			/** Live session of a running or idle agent; null when parked. */
+			readonly session: AgentSession | null;
+	  };
+
+/** A source's context size in OMP's context-usage measure, or why it has none. */
+type SourceSize = { readonly kind: "measured"; readonly tokens: number } | { readonly kind: "unmeasured"; readonly reason: string };
 
 function workspaceNotice(source: ForkSource, parentCwd: string, isolated: boolean): string[] {
 	switch (source.kind) {
@@ -418,11 +454,141 @@ async function resolveSource(from: string | undefined, parent: AgentSession, par
 	const file = ref.session?.sessionManager.getSessionFile() ?? ref.sessionFile;
 	if (!file) return { kind: "error", message: `agent \`${ref.id}\` has no persisted transcript to fork.` };
 	const cwd = ref.session?.sessionManager.getCwd() ?? (await headerCwd(file));
-	return { kind: "agent", id: ref.id, file, cwd };
+	return { kind: "agent", id: ref.id, file, cwd, session: ref.session };
+}
+
+/** OMP's context-usage count of a source: its live session's own, or read from a parked source's persisted active branch. */
+async function measureSource(source: ForkSource, parent: AgentSession, ctx: ExtensionContext): Promise<SourceSize> {
+	switch (source.kind) {
+		case "caller":
+			return liveSize(parent);
+		case "agent":
+			return source.session ? liveSize(source.session) : await persistedSize(source.file, new Tokenizer(parent.model ?? ctx.model));
+		default: {
+			const unreachable: never = source;
+			return unreachable;
+		}
+	}
+}
+
+function liveSize(session: AgentSession): SourceSize {
+	const usage = session.getContextUsage();
+	return usage ? { kind: "measured", tokens: usage.tokens } : { kind: "unmeasured", reason: "the session reports no context usage" };
+}
+
+/**
+ * A parked source has no live stats tracker. Mirror its anchor: the newest
+ * assistant provider snapshot of the active context (after the latest
+ * compaction, as `buildSessionContext` returns it), less the history rewrites
+ * recorded against it, plus the tokenizer count of the messages after it.
+ */
+async function persistedSize(file: string, tokenizer: Tokenizer): Promise<SourceSize> {
+	const manager = await SessionManager.open(file, undefined, undefined, { suppressBreadcrumb: true, throwIfMissing: true });
+	try {
+		const { messages } = manager.buildSessionContext();
+		for (let index = messages.length - 1; index >= 0; index--) {
+			const message = messages[index];
+			if (message?.role !== "assistant" || !message.contextSnapshot) continue;
+			const snapshot = message.contextSnapshot;
+			const base = Math.max(0, snapshot.promptTokens - (snapshot.historyRewriteTokensRemoved ?? 0));
+			return { kind: "measured", tokens: base + tokenizer.countMessages(messages.slice(index + 1)) };
+		}
+		return { kind: "unmeasured", reason: "its transcript records no provider context snapshot" };
+	} finally {
+		await manager.close();
+	}
+}
+
+function sourceLabel(source: ForkSource): string {
+	switch (source.kind) {
+		case "caller":
+			return "this conversation";
+		case "agent":
+			return `from \`${source.id}\``;
+		default: {
+			const unreachable: never = source;
+			return unreachable;
+		}
+	}
+}
+
+type ItemParams = z.infer<typeof itemSchema>;
+
+type Preflight = { readonly kind: "ok"; readonly sources: readonly ForkSource[] } | { readonly kind: "rejected"; readonly message: string };
+
+/**
+ * Resolve every item's source and measure each one an item without
+ * `shake: true` would copy whole, before anything is staged. One source file
+ * is measured once per call.
+ */
+async function preflight(
+	items: readonly ItemParams[],
+	parent: AgentSession,
+	parentFile: string,
+	ctx: ExtensionContext,
+	cap: number,
+): Promise<Preflight> {
+	const sources: ForkSource[] = [];
+	for (const item of items) {
+		const source = await resolveSource(item.from, parent, parentFile);
+		if (source.kind === "error") return { kind: "rejected", message: `fork_task: ${source.message} Nothing was dispatched.` };
+		sources.push(source);
+	}
+	const sizes = new Map<string, Promise<SourceSize>>();
+	const offending: string[] = [];
+	for (const [index, item] of items.entries()) {
+		const source = sources[index];
+		if (!source || item.shake === true) continue;
+		let size = sizes.get(source.file);
+		if (!size) {
+			size = measureSource(source, parent, ctx).catch((error: unknown): SourceSize => ({ kind: "unmeasured", reason: errorText(error) }));
+			sizes.set(source.file, size);
+		}
+		const measured = await size;
+		const label = `#${index} (${item.name ?? "unnamed"}, ${sourceLabel(source)})`;
+		switch (measured.kind) {
+			case "measured":
+				if (measured.tokens > cap) offending.push(`${label}: ${measured.tokens} tokens`);
+				break;
+			case "unmeasured":
+				offending.push(`${label}: size unknown (${measured.reason})`);
+				break;
+			default: {
+				const unreachable: never = measured;
+				return unreachable;
+			}
+		}
+	}
+	if (offending.length === 0) return { kind: "ok", sources };
+	return {
+		kind: "rejected",
+		message:
+			`fork_task: inherited context over the cap of ${cap} tokens (\`maxInheritedTokens\`, omomp.yml section \`fork-task\`; ` +
+			`OMP's context-usage count of the source, its system prompt and tools included): ${offending.join("; ")}. Nothing was dispatched. ` +
+			"Each child's first request would write that whole context to the provider cache at full price, and siblings share only the prefix before the fork point. " +
+			"Use `task` with a self-contained brief instead, or retry those items with `shake: true`.",
+	};
 }
 
 export default function forkTask(pi: ExtensionAPI): void {
 	const pending: PendingFork[] = [];
+	/** The configured cap; every invalid copy the loader passed over is logged. */
+	const inheritedTokenCap = (cwd: string): number => {
+		const loaded = loadOmompSection(omompSection, cwd);
+		for (const problem of loaded.skipped) {
+			pi.logger.warn("fork_task: skipped an invalid fork-task section", { path: problem.path, reason: problem.reason });
+		}
+		switch (loaded.kind) {
+			case "found":
+				return loaded.value.maxInheritedTokens;
+			case "none":
+				return DEFAULT_MAX_INHERITED_TOKENS;
+			default: {
+				const unreachable: never = loaded;
+				return unreachable;
+			}
+		}
+	};
 
 	const discard = async (entry: PendingFork): Promise<void> => {
 		const index = pending.indexOf(entry);
@@ -506,13 +672,16 @@ export default function forkTask(pi: ExtensionAPI): void {
 			const artifactsDir = parentFile.slice(0, -".jsonl".length);
 			const planMode = parent.getPlanModeState()?.enabled === true;
 
+			const checked = await preflight(params.tasks, parent, parentFile, ctx, inheritedTokenCap(ctx.cwd));
+			if (checked.kind === "rejected") return fail(checked.message);
+
 			const staged: PendingFork[] = [];
 			const notes: string[] = [];
 			const tasks: TaskItem[] = [];
 			try {
 				for (const [index, item] of params.tasks.entries()) {
-					const source = await resolveSource(item.from, parent, parentFile);
-					if (source.kind === "error") throw new Error(source.message);
+					const source = checked.sources[index];
+					if (!source) throw new Error(`item #${index} has no resolved source.`);
 					const name = `${sanitizeName(item.name) ?? "Fork"}_${randomUUID().slice(0, 4)}`;
 					const isolated = !planMode && (item.isolated ?? true);
 					const { staging, shakeSummary } = await stageFork(ctx, parent, source, item.shake === true, isolated);
