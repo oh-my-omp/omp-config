@@ -443,8 +443,9 @@ exercised in a real omp session.
   the unified read overview; bash's brush-shell routing); every tool with `TOPIC-*.md`
   files gets a `Topics` index of `name: when` lines, and `SYSTEM_TEMPLATE.md` requires
   reading the matching `tool://<tool>/<topic>` before such a call. Tools covered: read,
-  bash, edit (hashline topics), eval, grep, find, task, write, ask, fork_task, and the
-  devices ast_edit, debug, github, checkpoint. Simple tools (`wait`, `glob`,
+  bash, edit (hashline topics), eval, grep, find, task, write, ask, fork_task, the
+  devices ast_edit, debug, github, checkpoint, and `exec_command` (waiting, terminal
+  lifecycle, interactive input). Simple tools (`wait`, `glob`,
   `web_search`, `ast_grep`, `wt`, `wt_remove`, `harness_restart`) keep their native
   description and have no topics.
   Topics are call instructions checked against the OMP version in each file's
