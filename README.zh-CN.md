@@ -40,7 +40,7 @@
 omp                           # 完整模式
 omp-light                     # 轻量模式（跳过 10 个扩展与 system-prompt-replace）
 bun run check                 # biome check . && tsc --noEmit
-bun run test                  # bun test ci：session-urls 扫描器的差分测试
+bun run test                  # bun test ci：session-urls 扫描器差分测试与 type 过滤测试
 ./plugin-audit.sh             # 只读比对 install-plugins.sh 与 `omp plugin list`
 bun ci/check.ts               # 隔离 HOME 安装 + 免费模型跑完整模式与轻量模式 RPC 会话检查
 ```

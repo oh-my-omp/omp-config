@@ -99,12 +99,7 @@ function bucketRoute(bucket: BucketRef, rest: readonly string[], url: string): R
 	return sessionRoute({ kind: "listed", bucket, date, sid }, more, "", url);
 }
 
-/** Parses a session:// URL's host and path (query handled by the caller). */
-export function parseRoute(host: string, pathname: string, url: string): Route {
-	const rest = pathname
-		.split("/")
-		.filter((part) => part !== "")
-		.map((part) => decodeURIComponent(part));
+function route(host: string, rest: readonly string[], url: string): Route {
 	switch (host) {
 		case "":
 			if (rest.length > 0) throw invalid(url, "the root has no path");
@@ -126,6 +121,29 @@ export function parseRoute(host: string, pathname: string, url: string): Route {
 			if (!ID_PREFIX.test(host)) throw invalid(url, `"${host}" is not a session id prefix`);
 			return sessionRoute({ kind: "prefix", prefix: host }, rest, "", url);
 	}
+}
+
+/** A parsed URL: its route plus the `type` filter written as a `type/<filter>/` path prefix (empty when absent). */
+export interface Target {
+	readonly route: Route;
+	readonly pathTypes: readonly string[];
+}
+
+/**
+ * Parses a session:// URL's host and path (query handled by the caller).
+ * `session://type/<filter>/<any other session:// path>` carries a type filter in
+ * the path, where a glob can reach it (`?type=` after a glob segment is glob text).
+ */
+export function parseTarget(host: string, pathname: string, url: string): Target {
+	const rest = pathname
+		.split("/")
+		.filter((part) => part !== "")
+		.map((part) => decodeURIComponent(part));
+	if (host !== "type") return { route: route(host, rest, url), pathTypes: [] };
+	const [filter, innerHost, ...inner] = rest;
+	if (filter === undefined || innerHost === undefined)
+		throw invalid(url, "use session://type/<filter>/<path>, e.g. session://type/thinking/here/");
+	return { route: route(innerHost, inner, url), pathTypes: [filter] };
 }
 
 /** A located root session file. */

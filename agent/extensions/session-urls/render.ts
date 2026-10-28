@@ -3,6 +3,7 @@
 // loaded session; `base` is the session:// URL the reader used for this session
 // (or subagent), so every pointer printed here can be read back directly.
 import { type Call, type EntryDetail, type LoadedSession, rewriteRefs, type SessionEvent, type Text } from "./events.ts";
+import { keeps, type TypeFilter } from "./filter.ts";
 import { Clipped, type Projected, type ProjectedObject } from "./scanner.ts";
 
 const IDLE_MS = 5 * 60_000;
@@ -207,9 +208,12 @@ function eventLines(event: Exclude<SessionEvent, { kind: "call" }>, time: string
  * calls of one assistant entry share a `calls` header. `root` is the root
  * session's canonical URL (subagent results point under it); `title` is OMP's
  * indexed title, else the journal's, else the first prompt (as OMP's own
- * session listing names untitled sessions).
+ * session listing names untitled sessions). With a `filter`, only matching
+ * events are printed; turn lines keep the whole turn's span and counts, turns
+ * without a match are left out, and an idle gap or date change that fell on a
+ * hidden event is printed before the next shown one.
  */
-export function renderTimeline(loaded: LoadedSession, base: string, root: string, title: string | null): string {
+export function renderTimeline(loaded: LoadedSession, base: string, root: string, title: string | null, filter: TypeFilter | null): string {
 	const { meta, events } = loaded;
 	const firstPrompt = events.find((event) => event.kind === "user");
 	const fallback = firstPrompt?.kind === "user" ? textOf(firstPrompt.text).split("\n", 1)[0]?.slice(0, 120) : undefined;
@@ -224,22 +228,34 @@ export function renderTimeline(loaded: LoadedSession, base: string, root: string
 			`warning ${plural(meta.stats.invalidLines.length, "unparsable line")} skipped: ${meta.stats.invalidLines.slice(0, 20).join(", ")}`,
 		);
 	if (meta.stats.incompleteTail !== null) lines.push(`warning line ${meta.stats.incompleteTail} is still being written and is not shown`);
+	if (filter !== null) {
+		const shown = events.filter((event) => keeps(filter, event)).length;
+		lines.push(`filter type=${filter.source} · ${shown} of ${plural(events.length, "event")} shown`);
+	}
 	lines.push("");
 
 	const turns = new Map<number, SessionEvent[]>();
 	for (const event of events) turns.set(event.turn, [...(turns.get(event.turn) ?? []), event]);
 	let previousAt: number | null = null;
-	let previousDate: string | null = null;
+	let shownDate: string | null = null;
+	let gap = 0;
 	for (const [turn, turnEvents] of turns) {
-		lines.push(turnHeader(turn, turnEvents));
+		let headerDone = false;
 		let callsEntry: string | null = null;
 		for (const event of turnEvents) {
 			const at = Date.parse(event.t);
-			const parts = localParts(event.t);
-			if (previousAt !== null && !Number.isNaN(at) && at - previousAt >= IDLE_MS) lines.push(`── idle ${duration(at - previousAt)} ──`);
-			if (parts && previousDate !== null && parts.date !== previousDate) lines.push(`── ${parts.date} ──`);
+			if (previousAt !== null && !Number.isNaN(at)) gap = Math.max(gap, at - previousAt);
 			if (!Number.isNaN(at)) previousAt = at;
-			if (parts) previousDate = parts.date;
+			if (filter !== null && !keeps(filter, event)) continue;
+			if (!headerDone) {
+				lines.push(turnHeader(turn, turnEvents));
+				headerDone = true;
+			}
+			const parts = localParts(event.t);
+			if (gap >= IDLE_MS) lines.push(`── idle ${duration(gap)} ──`);
+			gap = 0;
+			if (parts && shownDate !== null && parts.date !== shownDate) lines.push(`── ${parts.date} ──`);
+			if (parts) shownDate = parts.date;
 			const time = parts?.time ?? "--:--:--";
 			if (event.kind === "call") {
 				if (callsEntry !== event.entry) lines.push(`${time} calls #${event.entry}`);
@@ -310,10 +326,11 @@ function eventFields(event: SessionEvent): Record<string, unknown> {
 	}
 }
 
-/** One JSON object per event, for jq. */
-export function eventRecords(loaded: LoadedSession, base: string): Array<Record<string, unknown>> {
+/** One JSON object per event (those `filter` keeps, when given), for jq. */
+export function eventRecords(loaded: LoadedSession, base: string, filter: TypeFilter | null): Array<Record<string, unknown>> {
 	const { meta } = loaded;
-	return loaded.events.map((event) => ({
+	const events = filter === null ? loaded.events : loaded.events.filter((event) => keeps(filter, event));
+	return events.map((event) => ({
 		sid: meta.sid,
 		agent: meta.agent,
 		turn: event.turn,

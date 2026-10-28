@@ -40,7 +40,7 @@ Shell commands run from the repository root:
 omp                           # full mode
 omp-light                     # light mode (skips 10 extensions and system-prompt-replace)
 bun run check                 # biome check . && tsc --noEmit
-bun run test                  # bun test ci: the session-urls scanner differential tests
+bun run test                  # bun test ci: session-urls scanner differential and type-filter tests
 ./plugin-audit.sh             # compare install-plugins.sh against `omp plugin list`
 bun ci/check.ts               # isolated HOME install + full and light RPC session check
 ```

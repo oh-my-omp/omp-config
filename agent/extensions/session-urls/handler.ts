@@ -7,6 +7,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadEntry, loadSession } from "./events.ts";
+import { parseTypeFilter, type TypeFilter } from "./filter.ts";
 import {
 	executeJsonQuery,
 	getSessionsDir,
@@ -35,16 +36,18 @@ import {
 	childDir,
 	localDate,
 	locateSession,
-	parseRoute,
+	parseTarget,
 	type Route,
 	type SessionPath,
 	type SessionRef,
+	type Target,
 } from "./routes.ts";
 
 export const HANDLER_MARK = Symbol.for("omp-config.session-urls.handler.v1");
 
 const JQ_KEYS: Readonly<Record<string, true>> = { q: true, query: true, raw: true, compact: true, offset: true, limit: true };
 const FIND_KEYS: Readonly<Record<string, true>> = { text: true, project: true, max: true };
+const TYPE_KEYS: Readonly<Record<string, true>> = { type: true };
 const ALL_SESSIONS = 1_000_000;
 const DEFAULT_FIND = 20;
 
@@ -56,8 +59,8 @@ interface Located {
 	readonly root: string;
 }
 
-function routeOf(url: InternalUrl): Route {
-	return parseRoute(url.rawHost || url.hostname, url.rawPathname ?? url.pathname, url.href);
+function targetOf(url: InternalUrl): Target {
+	return parseTarget(url.rawHost || url.hostname, url.rawPathname ?? url.pathname, url.href);
 }
 
 function query(url: InternalUrl): URLSearchParams {
@@ -87,16 +90,59 @@ function jsonl(records: readonly unknown[]): string {
 	return records.map((record) => JSON.stringify(record)).join("\n");
 }
 
-/** JSONL content, or OMP's jq output over it when the URL carries a JSON selector. */
-async function jsonlResource(url: InternalUrl, records: readonly unknown[], signal: AbortSignal | undefined): Promise<InternalResource> {
+/**
+ * JSONL content, or OMP's jq output over it when the URL carries a JSON selector.
+ * jq's continuation hint names only its own parameters; `keep` (e.g. `type=…`) is
+ * carried into it so the next page keeps the same input.
+ */
+async function jsonlResource(
+	url: InternalUrl,
+	records: readonly unknown[],
+	signal: AbortSignal | undefined,
+	keep = "",
+): Promise<InternalResource> {
 	const selector = parseJsonSelector(url.search.startsWith("?") ? url.search.slice(1) : url.search);
 	if (!selector) return text(url.href, jsonl(records));
 	const scratch = path.join(os.tmpdir(), `session-urls-${crypto.randomUUID()}.jsonl`);
 	try {
 		await Bun.write(scratch, jsonl(records));
-		return text(url.href, await executeJsonQuery(scratch, selector, signal));
+		const output = await executeJsonQuery(scratch, selector, signal);
+		return text(url.href, keep === "" ? output : output.replaceAll("; append ?", `; append ?${keep}&`));
 	} finally {
 		await fs.rm(scratch, { force: true });
+	}
+}
+
+/** The type filter of a URL: its `type/<filter>/` path prefix and every `?type=` value, as one union. */
+function typeFilter(url: InternalUrl, target: Target): TypeFilter | null {
+	return parseTypeFilter([...target.pathTypes, ...query(url).getAll("type")]);
+}
+
+/** Whether a route takes a type filter: the event views it filters, and the directories a glob walks to reach them. */
+function takesType(route: Route): boolean {
+	switch (route.kind) {
+		case "timeline":
+		case "events":
+		case "root":
+		case "projects":
+		case "bucket":
+		case "date":
+		case "sessionDir":
+		case "agentsDir":
+			return true;
+		case "readme":
+		case "bucketSessions":
+		case "allSessions":
+		case "find":
+		case "raw":
+		case "entry":
+		case "artifact":
+		case "local":
+			return false;
+		default: {
+			const unreachable: never = route;
+			throw new Error(`Unhandled route ${String(unreachable)}`);
+		}
 	}
 }
 
@@ -230,7 +276,8 @@ async function hostFile(route: Route, url: InternalUrl, cwd: string | undefined)
 	}
 }
 
-async function leaf(route: Route, url: InternalUrl, context: ResolveContext | undefined): Promise<InternalResource> {
+async function leaf(target: Target, url: InternalUrl, context: ResolveContext | undefined): Promise<InternalResource> {
+	const { route } = target;
 	const cwd = context?.cwd;
 	const signal = context?.signal;
 	switch (route.kind) {
@@ -243,16 +290,19 @@ async function leaf(route: Route, url: InternalUrl, context: ResolveContext | un
 		case "find":
 			return jsonlResource(url, await find(url, cwd), signal);
 		case "timeline": {
+			const filter = typeFilter(url, target);
 			const located = await locate(route.at, cwd);
 			const loaded = await loadSession(located.file, located.ref.sid, route.at.agent, signal);
 			// OMP keeps generated titles in its session index; the journal's own title slot is often empty.
 			const title = route.at.agent === "" && !loaded.meta.title ? ((await readSessionInfo(located.file))?.title ?? null) : null;
-			return text(url.href, renderTimeline(loaded, located.base, located.root, title));
+			return text(url.href, renderTimeline(loaded, located.base, located.root, title, filter));
 		}
 		case "events": {
+			const filter = typeFilter(url, target);
 			const located = await locate(route.at, cwd);
 			const loaded = await loadSession(located.file, located.ref.sid, route.at.agent, signal);
-			return jsonlResource(url, eventRecords(loaded, located.base), signal);
+			const keep = filter === null ? "" : `type=${filter.source.replaceAll("%", "%25").replaceAll("&", "%26")}`;
+			return jsonlResource(url, eventRecords(loaded, located.base, filter), signal, keep);
 		}
 		case "entry": {
 			const located = await locate(route.at, cwd);
@@ -286,7 +336,10 @@ async function leaf(route: Route, url: InternalUrl, context: ResolveContext | un
 
 function allowedKeys(route: Route): readonly Readonly<Record<string, true>>[] {
 	switch (route.kind) {
+		case "timeline":
+			return [TYPE_KEYS];
 		case "events":
+			return [JQ_KEYS, TYPE_KEYS];
 		case "allSessions":
 		case "bucketSessions":
 			return [JQ_KEYS];
@@ -305,34 +358,40 @@ export class SessionUrlHandler implements ProtocolHandler {
 	readonly spec: SchemeSpec = { backing: "file", selectors: "lines", immutable: true, linkable: false };
 
 	promptDoc(): string {
-		return "`session://`: other OMP sessions on this machine (read-only). Find: `session://find?text=<words>`, `session://sessions.jsonl?q=<jq>`; read: `session://<id>/timeline` (thinking, speech, IRC, calls as signatures), `…/entry/<id>` for one call's full args/result, `…/events.jsonl?q=<jq>`; grep `session://here/<date>/*/timeline`. Grammar: `read session://README`.";
+		return "`session://`: other OMP sessions on this machine (read-only). Find: `session://find?text=<words>`, `session://sessions.jsonl?q=<jq>`; read: `session://<id>/timeline` (thinking, speech, IRC, calls as signatures; `?type=thinking,irc` filters), `…/entry/<id>` for one call's full args/result, `…/events.jsonl?q=<jq>`; grep `session://here/<date>/*/timeline` (filtered: `session://type/<types>/here/…`). Grammar: `read session://README`.";
 	}
 
 	async locate(url: InternalUrl, context?: ResolveContext): Promise<string | null> {
-		const route = routeOf(url);
 		try {
-			return await hostFile(route, url, context?.cwd);
+			const target = targetOf(url);
+			// A type prefix makes the leaf a filtered view; resolve rejects it where no view applies.
+			if (target.pathTypes.length > 0) return null;
+			return await hostFile(target.route, url, context?.cwd);
 		} catch {
-			// Unknown or ambiguous sessions are reported by resolve with the full reason.
+			// Malformed, unknown or ambiguous: resolve reports the full reason.
 			return null;
 		}
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
-		const route = routeOf(url);
-		checkKeys(url, allowedKeys(route));
-		const entries = await listing(route, context?.cwd);
+		const target = targetOf(url);
+		checkKeys(url, allowedKeys(target.route));
+		if (target.pathTypes.length > 0 && !takesType(target.route))
+			throw new Error(`session://type/<filter>/ applies to timeline and events.jsonl (and the directories above them), not ${url.href}`);
+		// Parse the filter here too, so a mistyped one fails on the directory a glob starts from.
+		typeFilter(url, target);
+		const entries = await listing(target.route, context?.cwd);
 		if (entries) {
 			const content = context?.skipDirectoryListing
 				? ""
 				: entries.map((entry) => (entry.fileType === ShellFsFileType.Dir ? `${entry.name}/` : entry.name)).join("\n");
 			return { ...text(url.href, content), isDirectory: true };
 		}
-		return leaf(route, url, context);
+		return leaf(target, url, context);
 	}
 
 	async readDirectory(url: InternalUrl, context?: ResolveContext): Promise<ShellFsDirEntry[]> {
-		const entries = await listing(routeOf(url), context?.cwd);
+		const entries = await listing(targetOf(url).route, context?.cwd);
 		if (!entries) throw new Error(`${url.href} is not a directory`);
 		return entries;
 	}
