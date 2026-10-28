@@ -113,6 +113,8 @@ Code rules checked by `bun run check` (`biome check . && tsc --noEmit`):
 3. **`taskDepth: 1` on helper sessions**: any extension calling `createAgentSession` directly (such as `fork-task` during `shake`) must pass `taskDepth: 1`. Without it, `dispose()` treats the helper as a main session and tears down `AgentLifecycleManager`, disconnecting all idle and parked subagents (`Unknown agent`).
 4. **Imports and runtime load testing**: import only OMP host package roots (`pi-agent-core`, `pi-ai`, `pi-catalog`, `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins, and `.ts` relative paths (guard platform-specific native bindings by platform). Because `tsc` resolves packages from `node_modules/`, it does not catch unmapped host subpaths such as `@oh-my-pi/pi-tui/thinking`; apply changes to `~/.omp/agent`, restart `omp`, and trigger the modified extension in a real session.
 
+`bun run test` (`bun test ci`) runs the unit tests in `ci/`, currently the differential tests of the `session-urls` JSONL scanner against `JSON.parse`; CI runs it in the `code` job after `bun run check`.
+
 ### Registering Tool Topics from Plugins
 
 Local extensions statically import `registerToolTopics` and its types from `../_shared/tool-topics.ts`. External plugins use a static relative import to the installed helper, with no copy of the implementation. For an external plugin at `~/.omp/plugins/example/index.ts` and the default `~/.omp/agent`, the import is:
@@ -167,7 +169,7 @@ The built-in adapter's live configuration and default SSH triggers are documente
 
 ### CI Configuration Check (`bun ci/check.ts`)
 
-`.github/workflows/config-check.yml` runs `code` (`bun install && bun run check`) and `omp-session` (`bun ci/check.ts`). `ci/check.ts` creates an isolated temporary `HOME`, installs the latest `@oh-my-pi/pi-coding-agent`, applies this repository with the updater (plugins included), wires Kilo's anonymous free model `nvidia/nemotron-3-ultra-550b-a55b:free` and a local loopback shadow proxy for referenced paid models, and runs one RPC session each in `omp` and `omp-light`. Any stderr line, `extension_error` event, or OMP log `warn`/`error` outside `HOST_LOG_WARNINGS` fails the check (exit `0` clean, `1` config/environment error, `2` free-model provider failure). Full details: [`ci/README.md`](../ci/README.md).
+`.github/workflows/config-check.yml` runs `code` (`bun install && bun run check && bun run test`) and `omp-session` (`bun ci/check.ts`). `ci/check.ts` creates an isolated temporary `HOME`, installs the latest `@oh-my-pi/pi-coding-agent`, applies this repository with the updater (plugins included), wires Kilo's anonymous free model `nvidia/nemotron-3-ultra-550b-a55b:free` and a local loopback shadow proxy for referenced paid models, and runs one RPC session each in `omp` and `omp-light`. Any stderr line, `extension_error` event, or OMP log `warn`/`error` outside `HOST_LOG_WARNINGS` fails the check (exit `0` clean, `1` config/environment error, `2` free-model provider failure). Full details: [`ci/README.md`](../ci/README.md).
 
 ### Upgrade and Maintenance Notes
 

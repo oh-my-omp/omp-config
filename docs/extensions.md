@@ -30,6 +30,7 @@
 | 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide (module load) | Yes | `omomp.yml#omomp-lang` (repo) |
 | 23 | `tool-topics` | [tool-topics](#tool-topics) | Main + Sub (prompt); process-wide (`tool://` scheme) | Yes | `TOPIC-*.md` / `SURFACE-*.md` beside it (repo) |
 | 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | Main + Sub | Yes | `omomp.yml#tool-topic-injection` (repo) |
+| 25 | `session-urls` | [session-urls](#session-urls) | Process-wide (`session://` scheme) | Yes | Reads the session files, recap journal and prompt history; no config |
 
 ---
 
@@ -257,6 +258,17 @@ Shipped rules cover only calls that change nothing and are cheap to repeat (read
 Each rule injects once while its marker remains in the actual model context reconstructed from the active leaf. The shared `_shared/context-delivery.ts` guard is also used by `repo-rules`; its only temporary set covers the current turn before the host persists the developer message. Compaction that drops a marker makes the rule eligible again; retained-tail markers still suppress duplicates. Resume and tree navigation follow the current branch, not the entire transcript. Two rules pointing to one topic each get one injection. A missing/empty/failed topic is warned and does not consume eligibility; other rules still run.
 
 External plugins can use the [exported engine and schema](operations.md#progressive-topic-injection-api) with their own owner and rule provider; they do not need to import this extension.
+
+### session-urls
+
+Source: `agent/extensions/session-urls/`. Registers the read-only `session://` scheme in OMP's process-global URL router, so main sessions, subagents (`task`, `fork_task`, seance) and light mode all read other sessions on this machine with `read` and `grep` instead of locating JSONL files by hand. `read session://README` returns the full grammar.
+
+- **Find**: `session://find?text=<words>[&project=.|<bucket>|<path>][&max=N]` matches prompt history (OMP's FTS index in `history.db`), titles and recaps; `session://sessions.jsonl`, `session://here/sessions.jsonl` and `session://projects/<bucket>/sessions.jsonl` list session metadata (sid, cwd, title, created, modified, status, size, recap, parent) as JSONL.
+- **Read**: `session://<id-prefix>/timeline` renders the active branch as a timeline: column-0 headers `HH:MM:SS <kind> #<entry>[.<block>]`, every body line indented two spaces, a `── turn N` line per user turn and `── idle` marks for gaps of 5 minutes or more. User, developer, thinking, assistant text, IRC in and out, task dispatches and subagent results (as the parent received them) are shown in full; every other tool call is one line, `tool(args) status #<result entry> // intent`, without its output. `…/entry/<id>` (or `…/entry/@<raw line>`) shows one entry in full, a tool result together with its arguments, intent and timing. `…/events.jsonl` is the same events as JSONL; `…/raw.jsonl` is the session file; `…/agents/<AgentId>/…` repeats the tree for subagents; `…/artifacts/<N>` and `…/local/<path>` are that session's `artifact://` and `local://`, and references to them inside a timeline are rewritten to these URLs.
+- **jq**: `?q=<filter>&raw=&compact=&offset=&limit=` on `events.jsonl`, `sessions.jsonl` and `find` runs OMP's embedded jaq (`executeJsonQuery`) on a per-call temp JSONL. OMP's own `read …?q=` reaches only `local://`/`artifact://` files, so the scheme runs it itself; `raw.jsonl` takes no query.
+- **grep**: one traversable tree, `session://projects/<bucket>/<YYYY-MM-DD>/<full-id>/timeline` (plus `…/agents/<AgentId>/timeline`) and its alias `session://here/…` for the current project, listed through the router's `readDirectory`; hits keep the `session://` path and line, readable directly. Each session directory lists only `timeline` and `agents/`, so a grep never searches one session twice or walks tool output; one grep call covers about 7 GB of session files within its 30 s budget, so scope by project and date.
+- **Reading model**: nothing is cached or written beside the sessions. Each read streams the file once through a projecting JSON tokenizer (`scanner.ts`) that builds only the fields the view needs and measures skipped strings without materializing them, then picks the active branch with OMP's `resolveSessionLeafId`. On the largest session here (731 MB, 3850 entries) a scan takes about 6 s with a peak of +12 to +35 MB RSS, where OMP's own loader peaks at +2.6 GB. Unparsable lines and a still-being-written last line are reported in the timeline header, not dropped silently. `ci/session-urls-scanner.test.ts` (`bun run test`) checks the tokenizer against `JSON.parse` under every chunking.
+- **Host coupling**: every OMP-internal import (router, session listing/index/loader helpers, `tools/read-json`) sits in `omp-adapter.ts`; a host upgrade that moves one fails there at load. The handler never replaces an OMP-owned `session` scheme or another host's handler.
 
 ### omomp-lang
 

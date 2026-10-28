@@ -30,6 +30,7 @@
 | 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局（模块加载） | 是 | `omomp.yml#omomp-lang`（仓库） |
 | 23 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子（提示词）；进程全局（`tool://` scheme） | 是 | 同目录的 `TOPIC-*.md` / `SURFACE-*.md`（仓库） |
 | 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection`（仓库） |
+| 25 | `session-urls` | [session-urls](#session-urls) | 进程全局（`session://` scheme） | 是 | 读取会话文件、recap 记录与 prompt 历史；无配置 |
 
 ---
 
@@ -257,6 +258,17 @@ tool-topic-injection:
 每条规则在活动叶节点重建的真实模型上下文中保有自身标记时只注入一次。共享 `_shared/context-delivery.ts` 也服务 `repo-rules`；临时集合只覆盖当前 turn 中宿主尚未持久化 developer 消息的窗口。compact 移除标记后，该规则可再次注入；若标记仍在保留尾部，则不重复注入。resume 和树导航按当前分支判断，不扫描整份历史。两条规则即使指向同一专题，也各有一次注入机会。专题缺失、为空或加载失败时记 warning，不消耗资格，也不妨碍其他规则执行。
 
 外部插件可通过[导出的引擎和 schema](operations.zh-CN.md#渐进式专题注入-api)提供自己的 owner 和规则读取函数，无需导入本扩展。
+
+### session-urls
+
+源码：`agent/extensions/session-urls/`。在 OMP 进程全局的 URL 路由里注册只读的 `session://` scheme，主会话、子代理（`task`、`fork_task`、seance）和轻量模式都能直接用 `read` 与 `grep` 读本机的其他会话，不必手动定位 JSONL 文件。`read session://README` 返回完整语法。
+
+- **查找**：`session://find?text=<词>[&project=.|<bucket>|<路径>][&max=N]` 匹配 prompt 历史（`history.db` 中 OMP 的 FTS 索引）、标题和 recap；`session://sessions.jsonl`、`session://here/sessions.jsonl`、`session://projects/<bucket>/sessions.jsonl` 以 JSONL 列出会话元数据（sid、cwd、title、created、modified、status、size、recap、parent）。
+- **阅读**：`session://<id 前缀>/timeline` 把当前分支渲染成时间线：行头顶格写 `HH:MM:SS <类型> #<条目>[.<块>]`，正文每行缩进两格，每个用户回合一行 `── turn N`，间隔 5 分钟以上插一行 `── idle`。用户、developer、thinking、assistant 正文、收发的 IRC、task 派发和子代理结果（父会话实际收到的内容）全文显示；其余工具调用每个一行 `tool(参数) 状态 #<结果条目> // 意图`，不含输出。`…/entry/<id>`（或 `…/entry/@<原始行号>`）完整显示一个条目，工具结果连同其参数、意图和耗时。`…/events.jsonl` 是同一组事件的 JSONL；`…/raw.jsonl` 是会话文件本身；`…/agents/<AgentId>/…` 对子代理重复这套结构；`…/artifacts/<N>` 与 `…/local/<路径>` 是该会话的 `artifact://` 与 `local://`，时间线里对它们的引用已改写成这些 URL。
+- **jq**：`events.jsonl`、`sessions.jsonl` 与 `find` 接受 `?q=<filter>&raw=&compact=&offset=&limit=`，用 OMP 内置的 jaq（`executeJsonQuery`）对每次调用生成的临时 JSONL 执行。OMP 自带的 `read …?q=` 只对 `local://`/`artifact://` 文件生效，所以由本 scheme 自己执行；`raw.jsonl` 不接受查询。
+- **grep**：只有一棵可遍历的树，`session://projects/<bucket>/<YYYY-MM-DD>/<完整 id>/timeline`（及 `…/agents/<AgentId>/timeline`），当前项目可写作别名 `session://here/…`，经路由的 `readDirectory` 列出；命中保留 `session://` 路径与行号，可直接读取。每个会话目录只列 `timeline` 和 `agents/`，因此一次 grep 不会把同一会话搜两遍，也不会扫工具输出；单次 grep 在 30 秒预算内约能覆盖 7 GB 会话文件，需按项目和日期限定范围。
+- **读取方式**：不缓存，也不在会话旁写任何文件。每次读取用投影式 JSON tokenizer（`scanner.ts`）流式扫一遍文件，只构建视图需要的字段，跳过的字符串只计长度不落内存，再用 OMP 的 `resolveSessionLeafId` 选出当前分支。本机最大的会话（731 MB、3850 个条目）扫描约 6 秒，RSS 峰值增加 12 至 35 MB，而 OMP 自带加载器峰值增加 2.6 GB。无法解析的行和仍在写入的最后一行会在时间线头部注明，不会静默丢弃。`ci/session-urls-scanner.test.ts`（`bun run test`）在各种分块下把 tokenizer 与 `JSON.parse` 逐行对照。
+- **宿主耦合**：所有 OMP 内部 import（路由、会话列表/索引/加载辅助函数、`tools/read-json`）集中在 `omp-adapter.ts`；宿主升级挪动其中任何一个时会在加载时报错。若 OMP 已自带 `session` scheme 或其他宿主已注册，则不覆盖。
 
 ### omomp-lang
 

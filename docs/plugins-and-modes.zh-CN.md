@@ -73,7 +73,7 @@ providers:
 | `task.eager` | `preferred` | `default` |
 | `disabledExtensions` | 无 | 禁用 10 个本地扩展：`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
 | `config.yml` 的 `extensions` 路径列表 | 加载 `extensions-last/system-prompt-replace` | `config-light.yml` 将 `extensions` 设为空列表以跳过 `extensions-last/system-prompt-replace`（`disabledExtensions` 只按模块名过滤，不能过滤文件路径）；`omp-light.ts` 读取本机 `config.yml`，把不含 `/extensions-last/` 的本机条目（如 `~/.claude`）通过 `-e` 传回 |
-| 其余本地扩展 | 启用 | 保留：`antigravity-wire-profiles`、`append-system-model`、`child-memory-warning`、`commandcode-model-spec`、`harness-restart`、`input-polish`、`model-compaction`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`tool-topic-injection`、`tool-topics`、`wt-tool`（轻量模式下工具说明同样有表层文本与 `Topics` 索引） |
+| 其余本地扩展 | 启用 | 保留：`antigravity-wire-profiles`、`append-system-model`、`child-memory-warning`、`commandcode-model-spec`、`harness-restart`、`input-polish`、`model-compaction`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`session-urls`、`tool-topic-injection`、`tool-topics`、`wt-tool`（轻量模式下工具说明同样有表层文本与 `Topics` 索引） |
 | 已安装插件 | 全部加载 | 全部加载（`disabledExtensions` 不影响插件） |
 | 轻量模式减少的工具 | — | 仅少 `polish_doc` 与 `fork_task`；`todo`、`ctx`、`wt`、`wt_remove`、`harness_restart` 仍可用 |
 

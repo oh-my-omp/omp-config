@@ -4,7 +4,8 @@
 	"type": "module",
 	"scripts": {
 		"check": "biome check . && tsc --noEmit -p tsconfig.json",
-		"format": "biome check --write ."
+		"format": "biome check --write .",
+		"test": "bun test ci"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "latest",

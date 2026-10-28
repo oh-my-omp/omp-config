@@ -198,6 +198,7 @@ flowchart LR
 | `agent/extensions/_shared/tool-topics.ts` | Exports `registerToolTopics`, `ToolTopic`, `ToolTopicsRegistration` and `ToolTopicsRegistrationResult` for local extensions and external plugins. The router-held handler combines registrations for arbitrary tools; `tool-topics/` supplies the authored topics of built-in and local tools. The optional `ToolTopic.when` is the one-line “when to read” that indexes and completion show. External plugins use a static relative import to the installed helper so OMP rewrites its host-package dependencies; deployment computes that path against `getAgentDir()`. The API, import example, ownership and process-lifetime contract are in `docs/operations.md` / `docs/operations.zh-CN.md`. |
 | `agent/extensions/tool-topic-injection/` | Loads repo-managed `omomp.yml#tool-topic-injection` rules per tool result (project before agent dir) and calls `_shared/tool-topic-injection.ts`. Each rule names a tool, string argument/dotted path, regex and `tool://<tool>/<topic>` target; shipped rules cover only retry-safe tools (read/grep/glob/web_search, plus the eval/bash SSH misuse rules that inject `tool://read/ssh`); `task`, `fork_task`, `edit`, `write` and mutating devices have none, since a topic arriving after their call is too late. Main/sub and full/light; errors still receive guidance. |
 | `agent/extensions/_shared/context-delivery.ts`, `_shared/tool-topic-injection.ts` | Export `createContextDelivery`, `installToolTopicInjection`, `ToolTopicInjectionRule`, `toolTopicInjectionRulesSchema`. `repo-rules` and topic injection share actual active-leaf developer-marker detection; a turn-local set only bridges batch persistence. Retained-tail markers prevent repeats after compaction; removed markers become eligible again. External plugins install under their own stable owner via static-relative imports. |
+| `agent/extensions/session-urls/` | Registers the read-only `session://` scheme in OMP's process-global `InternalUrlRouter` (never over an OMP-owned or another host's `session` scheme), so main, subagent, seance and light sessions read this machine's other sessions with `read`/`grep`. `find?text=` (prompt-history FTS, titles, recaps) and `sessions.jsonl` find sessions; `<id>/timeline` renders the active branch (speech, thinking, IRC, dispatches and subagent results in full; other tool calls as one-line signatures); `<id>/entry/<id\|@line>` shows one entry in full; `events.jsonl?q=<jq>` runs OMP's jaq (`executeJsonQuery`) on the events, because `read`'s own `?q=` reaches only `local://`/`artifact://` files. `grep` walks one tree, `projects/<bucket>/<date>/<id>/timeline` (alias `here/`), through `readDirectory`. Nothing is cached: `scanner.ts` streams each file once with a projecting JSON tokenizer (bounded memory on 700 MB sessions; `ci/session-urls-scanner.test.ts` diffs it against `JSON.parse`). All OMP-internal imports sit in `omp-adapter.ts`; `read session://README` documents the grammar. |
 | `agent/extensions-last/` | Extensions that must run after every other path-loaded extension, loaded as the last `config.yml` `extensions` entry (`~/.omp/agent/extensions-last/system-prompt-replace/index.ts`). Its English/Chinese READMEs are repo-only. The `system-prompt-replace` section of `omomp.yml` makes wording-level edits (template lines, the eval file-reading rule, the `xd://` call line, the sub-only `scope: sub` removal of the child no-Todo sentence) on every `before_agent_start` in main and sub sessions; whole tool descriptions belong to `tool-topics/`, which runs earlier in the native lane. The JSON is field-synced both ways and read per prompt; missing main-session targets warn once per rule per process. Light mode excludes it with an empty `extensions` override; `omp-light` passes other machine entries back with `-e`. |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls (Chinese translation `README.zh-CN.txt`; both synced with the rest of `agents/`). |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator` (the plugin fixes its path). Portable regular item: `/sync-omp-config` carries machine → repo, the updater carries repo → machine. |
@@ -206,7 +207,7 @@ flowchart LR
 | `agent/extensions/append-system-model/APPEND_SYSTEM_MODEL.md` | Per-model system-prompt appendix for `append-system-model` (`---`-fenced YAML headers with `model`/`provider` regexes, each followed by its body). Host-owned: the repo ships none, and the updater and `/sync-omp-config` leave it alone. Read per prompt, so edits apply without restart. |
 | `pi/agent/pi-bansos-relay-state.json` | `pi-bansos` plugin state (relay on/off, relay URL, saved relays, `statusBar`), read by the plugin from `~/.pi/agent/`, not `~/.omp/agent`. Written by the plugin's `/bansos` command; no credentials. Portable regular item in both directions. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
-| repo root, `docs/` | `install-plugins.sh`, `plugin-audit.sh`, Wiki home `README.md` / `README.zh-CN.md` and topic pages `docs/<topic>.md` / `docs/<topic>.zh-CN.md` (English default and section-for-section Simplified Chinese translation — change both together), and the dev tooling `package.json` / `biome.json` / `tsconfig.json` (`bun run check`). |
+| repo root, `docs/` | `install-plugins.sh`, `plugin-audit.sh`, Wiki home `README.md` / `README.zh-CN.md` and topic pages `docs/<topic>.md` / `docs/<topic>.zh-CN.md` (English default and section-for-section Simplified Chinese translation — change both together), and the dev tooling `package.json` / `biome.json` / `tsconfig.json` (`bun run check`, `bun run test`). |
 | `ci/`, `.github/workflows/config-check.yml` | The configuration check (CI): `ci/check.ts` installs the latest omp in a throwaway HOME, applies the repo with its own updater (plugins included), runs one real RPC session per mode (full, `omp-light`) on a keyless free model, and collects updater and session diagnostics (every session stderr line, `extension_error`) and omp log warn/error; install output is collected only when a step fails. The report groups them into findings keyed by a SHA-256 of kind + normalized text, so one fault appears once with its per-phase counts and keeps its id across runs while kind and normalized text stay the same. `ci/README.md` holds its design, criteria, and coverage boundary. |
 | `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; the updater copies them to `~/.omp/agent` and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
 | `agent/extensions/omp-config-autoupdate/omp-config-update.ts` | The repo → machine updater: a standalone Bun script that sits beside the extension that spawns it (not an extension module; only `index.ts` is loaded), copied like the extension's other modules. `auto` mode runs at every start when the machine's auto-update switch is on; `apply --source <dir> [--check]` backs `/update-omp`. Its header documents what it touches, deletes, and never touches. |
@@ -231,6 +232,7 @@ bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source .
 bun ~/.omp/agent/extensions/omp-config-autoupdate/omp-config-update.ts auto [--branch NAME]                                   # what the startup hook runs
 bun install                   # dev dependencies (Biome, TypeScript, omp host packages for types); node_modules/ and bun.lock are not committed
 bun run check                 # biome check . && tsc --noEmit: format, lint and type-check agent/**/*.ts and ci/**/*.ts
+bun run test                  # bun test ci: the unit tests in ci/ (the session-urls scanner differential tests)
 bun run format                # biome check --write .: apply formatting and safe fixes
 ```
 
@@ -242,8 +244,8 @@ omp plugin list --json        # confirm plugin names/versions/enabled
 git status --short            # confirm no runtime/db/cache files leaked into the repo
 ```
 
-There is no build or unit-test command. `bun run check` must pass before a
-change lands; CI runs it as the `code` job. The configuration check runs locally with
+There is no build command. `bun run check` and `bun run test` must pass before a
+change lands; CI runs both in the `code` job. The configuration check runs locally with
 `bun ci/check.ts` (writes a throwaway temp root plus the report on stdout, and `$GITHUB_STEP_SUMMARY` when set; exit 0 clean, 1 diagnostics, 2 free model
 unavailable) and in GitHub Actions on push to `main`, pull requests, daily, and on
 dispatch (see Testing & QA).
@@ -470,7 +472,7 @@ exercised in a real omp session.
   the owning main's shutdown clears its timer and closes libproc.
 - `agent/config-light.yml` — declarative light-mode config overlay: disables ten
   optional behavior extensions (`doc-polish`, `fork-task`, `isolation-nudge`, `lang-nag`, `task-completion-judge`, `task-split-check`, `tool-policy-nag`, `turn-judge`, `user-prompt-inject`, `watchdog-agent`) and sets `task.eager` to `default` (`config.yml` has `preferred`); unfiltered local extensions (`append-system-model`, `model-compaction`,
-  `input-polish`, `repo-rules`, `omomp-lang`, `tool-topics`, `tool-topic-injection`,
+  `input-polish`, `repo-rules`, `omomp-lang`, `session-urls`, `tool-topics`, `tool-topic-injection`,
   `child-memory-warning`, `omp-config-autoupdate`, `harness-restart`, `wt-tool`, and the
   `commandcode-model-spec` and `antigravity-wire-profiles` compatibility fixes) stay loaded. The independent Todo
   plugin stays loaded through ordinary plugin discovery; no launcher or `-e`
@@ -656,10 +658,12 @@ restart, whose first automatic apply (no `.omp-config-applied` yet) installs
 
 ## Testing & QA
 
-- **No unit-test suite and no git hooks** (no `*.test.*`/`*.spec.*`). Static
-  checks are `bun run check`: Biome (format + lint, `biome.json`) and
+- **Unit tests live in `ci/*.test.ts`; there are no git hooks.** `bun run test`
+  (`bun test ci`) runs them; today that is `ci/session-urls-scanner.test.ts`,
+  which diffs the session-urls JSONL tokenizer against `JSON.parse` under every
+  chunking. Static checks are `bun run check`: Biome (format + lint, `biome.json`) and
   `tsc --noEmit` (`tsconfig.json`, strict, `noUncheckedIndexedAccess`) over
-  `agent/**/*.ts` and `ci/**/*.ts`, run in CI as the `code` job. Type-checking
+  `agent/**/*.ts` and `ci/**/*.ts`. CI's `code` job runs both. Type-checking
   resolves host packages from `node_modules/`, so it cannot prove an import
   loads inside omp.
 - **The configuration check (`ci/check.ts`, workflow `config-check`)** proves the
@@ -673,7 +677,7 @@ restart, whose first automatic apply (no `.omp-config-applied` yet) installs
 - **`plugin-audit.sh` validates the plugin *list*, not extension code** — it
   cannot prove anything about a `.ts` edit.
 - **How to validate a change here:**
-  1. `bun run check`, and a `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`) — including `agent/omomp.yml`, `agent/thinking-translator.json`, and `pi/agent/pi-bansos-relay-state.json` via `JSON.parse` on both sync and update paths.
+  1. `bun run check`, `bun run test`, and a `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`) — including `agent/omomp.yml`, `agent/thinking-translator.json`, and `pi/agent/pi-bansos-relay-state.json` via `JSON.parse` on both sync and update paths.
   2. For an extension change, the only real proof is runtime: apply via
      `/update-omp` (or the `cp` set), **restart `omp`**, and exercise the actual
      tool/command/hook (e.g. run `ctx list`, `/polish-doc <file>`, trigger the

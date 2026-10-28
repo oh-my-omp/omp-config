@@ -1,5 +1,6 @@
 # Configuration check. `code`: Biome and tsc over the extensions, the updater
-# and ci/ (`bun run check`). `omp-session`: install the latest omp, apply this
+# and ci/ (`bun run check`), then the unit tests in ci/ (`bun run test`).
+# `omp-session`: install the latest omp, apply this
 # repo with its own updater, run one real session per mode on a free model,
 # and report every fault or warning. Design and criteria: ci/README.md.
 name: config-check
@@ -21,7 +22,7 @@ concurrency:
 
 jobs:
   code:
-    name: format, lint and type check
+    name: format, lint, type check and tests
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -35,6 +36,8 @@ jobs:
         run: bun install
       - name: Check
         run: bun run check
+      - name: Test
+        run: bun run test
 
   omp-session:
     name: omp session with the repo config

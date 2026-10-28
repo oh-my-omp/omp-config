@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-本节点设计 omp-config 的配置检查：在一次性环境里安装最新 omp，用仓库自己的更新器应用配置，再用免费模型跑真实 session，把 omp 和扩展打印的故障与警告去重后逐个报告出来。同一个 workflow 另有一个 `code` job，跑 `bun install` 和 `bun run check`（Biome 格式与 lint、`tsc --noEmit`），它的规则在仓库 `AGENTS.md` 的代码规范一节，不属于本节点。
+本节点设计 omp-config 的配置检查：在一次性环境里安装最新 omp，用仓库自己的更新器应用配置，再用免费模型跑真实 session，把 omp 和扩展打印的故障与警告去重后逐个报告出来。同一个 workflow 另有一个 `code` job，跑 `bun install`、`bun run check`（Biome 格式与 lint、`tsc --noEmit`）和 `bun run test`（`ci/` 下的单元测试，如 `ci/session-urls-scanner.test.ts`），它的规则在仓库 `AGENTS.md` 的代码规范一节，不属于本节点。
 
 - **拥有**：检查运行的阶段、诊断的判据与分类、免费模型和影子模型的接入、workflow 的触发事件与权限。
 - **不拥有**：配置项本身的规则（仓库 `README.zh-CN.md` 与 `docs/*.zh-CN.md`，英文版 `README.md` 与 `docs/*.md`）；更新器写什么、删什么（`agent/extensions/omp-config-autoupdate/omp-config-update.ts` 头注释）；各扩展的行为（`docs/prompts-and-context.zh-CN.md`、`docs/agents.zh-CN.md` 与 `docs/extensions.zh-CN.md`）。

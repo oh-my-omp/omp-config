@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-This node designs omp-config's configuration check: in a throwaway environment it installs the latest omp, applies the config with the repository's own updater, runs real sessions on a free model, and reports the faults and warnings that omp and the extensions print, deduplicated, one by one. The same workflow has another job, `code`, which runs `bun install` and `bun run check` (Biome formatting and lint, `tsc --noEmit`); its rules are in the code conventions section of the repository's `AGENTS.md` and are not part of this node.
+This node designs omp-config's configuration check: in a throwaway environment it installs the latest omp, applies the config with the repository's own updater, runs real sessions on a free model, and reports the faults and warnings that omp and the extensions print, deduplicated, one by one. The same workflow has another job, `code`, which runs `bun install`, `bun run check` (Biome formatting and lint, `tsc --noEmit`) and `bun run test` (the unit tests in `ci/`, such as `ci/session-urls-scanner.test.ts`); its rules are in the code conventions section of the repository's `AGENTS.md` and are not part of this node.
 
 - **Owns**: the stages of a check run, the criteria and classification of diagnostics, how the free model and shadow models are wired in, and the workflow's trigger events and permissions.
 - **Does not own**: the rules of the config items themselves (`README.md` and `docs/*.md`, Chinese version `README.zh-CN.md` and `docs/*.zh-CN.md`); what the updater writes and deletes (the header comment of `agent/extensions/omp-config-autoupdate/omp-config-update.ts`); the behavior of each extension (`docs/prompts-and-context.md`, `docs/agents.md`, and `docs/extensions.md`).
