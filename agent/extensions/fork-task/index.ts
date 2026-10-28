@@ -2,18 +2,31 @@
 // fork_task — native `task` subagents that start from a copy of the caller's
 // conversation, or of another agent's named by an item's `from`.
 //
-// Registers fork_task plus before_subagent_spawn and session_shutdown hooks in
-// main and sub sessions. Reads the source agent's persisted session; writes
-// temporary JSONL under the OS temp directory and moves it into the caller's
-// artifact store.
+// Registers fork_task plus before_subagent_spawn, before_agent_start and
+// session_shutdown hooks in main and sub sessions. Reads the source agent's
+// persisted session; writes temporary JSONL under the OS temp directory and
+// moves it into the caller's artifact store.
 // Staging failures are tool errors; spawn preparation failures block the child
 // and warn, while shutdown cleanup failures warn without rejecting the hook.
 //
+// An item has one of two meanings:
+//   - With `agent`: hand the conversation to that agent. It continues from the
+//     investigation another agent already did, usually on a cheaper model, so
+//     it runs under its own agent definition (system prompt, model binding,
+//     tools); no cache reuse is expected across a model change.
+//   - Without `agent`: fork the caller itself through internal `fork:self`.
+//     Pin the model in before_subagent_spawn; self.ts captures the caller's
+//     actual provider-neutral Context through Agent.streamFn and reuses its
+//     system, tools, message prefix and request controls in the child. Child
+//     tools execute against the child's session; an available yield follows
+//     the caller's tools. Assignments are new user messages, never system text.
+//     Self forks share cwd by default. No inheritance-size or cost gate exists.
+//
 // The spawn itself is the built-in `task` tool, called with the same batch
-// shape, so each child is an ordinary task subagent: its own agent definition
-// (system prompt, model binding, tools), Agent Hub row, `agent://`/`history://`,
-// idle/park/revive lifecycle, isolation and its merge-back. Only the child's
-// starting transcript differs:
+// shape, so each child is an ordinary task subagent: Agent Hub row,
+// `agent://`/`history://`, idle/park/revive lifecycle, isolation and its
+// merge-back. Only the child's starting transcript (and, for a self fork, its
+// model, prompt and tools) differs:
 //
 //   1. At call time the source's persisted conversation (the caller's, or the
 //      registered agent `from` names, resolved like `history://<id>`) is forked
@@ -60,6 +73,7 @@ import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
+import { applySelf, captureSelf, observeRequests, type SelfFork } from "./self.ts";
 
 const itemSchema = z.object({
 	from: z.string().optional(),
@@ -106,20 +120,20 @@ const RUNTIME_STATE_TYPES: Record<string, true> = {
 
 const SESSION_EXIT_CUSTOM_TYPE = "session_exit";
 
-const DESCRIPTION = `Spawn subagents exactly like \`task\` — same batch shape, agent types, models, lifecycle, result delivery, \`write agent://\` follow-up, \`agent://\`/\`history://\` — except each child starts with a copy of THIS conversation up to this call (or, with \`from\`, of another agent's conversation), followed by its assignment.
+const DESCRIPTION = `Fork a conversation into a native task child, with two meanings selected by each item's \`agent\`:
+- Omit \`agent\` to fork yourself: the child uses your current model and thinking/request controls, system prompt and tools. It reuses your actual request prefix and prompt-cache key; \`context\` and \`task\` follow the inherited conversation as new messages, not system-prompt additions. An available \`yield\` tool follows your tools. The default is a shared working directory (\`isolated: false\`).
+- Set \`agent\` to hand the conversation to that agent under its own model, system prompt and tools. Use this when an investigating agent has already established the facts and a cheaper worker should continue from them; cross-model cache reuse is not expected. The default is \`isolated: true\`.
 
-Prefer it over \`task\` for complex work: multi-step implementation, debugging, or design follow-through whose assignment depends on what this conversation already established (requirements, decisions, findings, file contents read so far), where restating that in \`context\`/\`task\` would be long or lossy. Use \`task\` when independence matters — second opinions, reviews, acceptance verifiers — or the needed background is short. A forked child inherits this conversation's reasoning and anchors on it; a fresh \`task\` child does not, so hand it the code, artifacts, and question, not the conclusion.
+Both modes keep native task result delivery, Agent Hub, \`agent://\`/\`history://\`, \`write agent://\` and isolated merge-back. Self forks support idle/park/revive while their originating process and snapshot remain alive; after restart, create a fresh self fork rather than cold-reviving one without its snapshot. Use ordinary \`task\` for an independent fresh perspective or when a short brief suffices.
 
-Recommended per item: keep \`isolated\` at its default \`true\` and pass \`shake: true\`.
-- \`isolated\` (default true): the child works in its own workspace and returns a patch; like any isolated task child it is not resumable afterwards. Pass \`isolated: false\` only for research-only children you want to keep messaging after they finish. In plan mode every child shares this workspace, whatever \`isolated\` says.
-- \`shake: true\` runs \`/shake\` on the inherited copy before the child starts, cutting its starting context.
-- \`effort\`: omit unless the user explicitly asks; the agent's configured binding decides model and effort.
-- The child runs its own agent's system prompt and model; it sees the conversation as background and its own assignment as the task. It does not inherit this session's todo list.
-- Verification is mandatory for forked workers: the fork notice explicitly requires scoped build/lint/test and real runtime checks before handoff, overriding ordinary task's no-verification default. The parent still owns final acceptance and may verify itself or assign an independent verifier.
-- Each item's \`name\` gets a short unique suffix; address the child by the id reported in the result.
-- \`from\`: an agent id as in \`agent://<id>\` (running, idle or parked) whose conversation the child copies instead of this one; omit it to fork this conversation. An item with \`from\` MUST set \`agent\`; the child does not inherit the source's agent type or model, and a call with an item missing it is rejected whole. The child is still this session's child: its result, follow-up, and patch come back here, and its workspace derives from this session's checkout, not the source's, so edits the source made in an isolated workspace of its own are not in it unless already merged here. A running source is copied as persisted so far.
+- \`shake\` defaults to false. Explicit \`shake: true\` elides the inherited copy and writes recovery artifacts; it deliberately gives up exact inherited-message prefix reuse. There is no source-token or source-cost check.
+- \`isolated\` overrides the mode's default. Concurrent writers must explicitly use isolated workspaces. Plan mode forces shared, read-only children. Isolated children cannot be resumed after completion.
+- \`from\` selects another registered agent's persisted conversation (running, idle or parked), and requires an explicit \`agent\`. Omit it for the caller's conversation. The child's workspace still derives from the caller, not from the source's isolated checkout.
+- Omit \`effort\` unless the user asks. Self forks inherit caller request controls unless effort is explicitly overridden. Self forks preserve the caller's tool surface; use an explicit \`agent\` to import additional eval \`tools\`.
+- Each \`name\` gets a short unique suffix; use the returned id for follow-ups. The child has its own Todo and only owns the assignment, not unfinished work in inherited history.
+- Forked workers must run relevant scoped checks and real runtime verification before returning; read-only roles remain read-only. The parent owns final acceptance.
 
-\`context\` and each item's \`task\` follow the same rules as \`task\`. The conversation copy is background, so the assignment is a directive — what to do, what is in and out, what siblings handle — not a restatement of it, and still states the target, change, and acceptance.`;
+\`context\` and each item's \`task\` follow the same scoping rules as \`task\`: state target, change and acceptance. Cache reuse requires the same model and compatible request parameters, and remains subject to the provider's cache policy; adding completion tools can invalidate caches on providers without append-only tool support.`;
 
 /**
  * Where the forked transcript comes from. `caller` is the session calling
@@ -169,15 +183,18 @@ function workspaceNotice(source: ForkSource, parentCwd: string, isolated: boolea
 	}
 }
 
-const forkNotice = (source: ForkSource, parentCwd: string, isolated: boolean): string => {
+const forkNotice = (source: ForkSource, parentCwd: string, isolated: boolean, self: boolean): string => {
 	const origin =
 		source.kind === "caller"
 			? "Above: the conversation of the parent agent that spawned you, copied as background."
 			: `Above: the conversation of agent \`${source.id}\`, copied as background. \`${source.id}\` is not your parent: the agent that spawned you receives your result.`;
 	const owner = source.kind === "caller" ? "the parent" : `\`${source.id}\``;
+	const contract = self
+		? "You are a fork of the parent: the same model, system prompt and tools. The parent keeps the conversation with the user. Deliver your result with `yield` when available, otherwise finish with your final report."
+		: "It ran under its own role, tools, and rules; yours are the ones in your system prompt.";
 	return [
 		`<system-notice cause="fork_task">`,
-		`${origin} It ran under its own role, tools, and rules; yours are the ones in your system prompt.`,
+		`${origin} ${contract}`,
 		"- Use it only for the facts, decisions, and constraints it established.",
 		`- Your job is the assignment that follows this notice, nothing else. NEVER continue, resume, or complete other work from the conversation; its todo lists and plans belong to ${owner}.`,
 		"- Verification is explicitly required for this fork_task assignment: run the relevant scoped build, lint, tests, and real runtime smoke path before handoff. This overrides ordinary task's default to leave verification to the parent. Observe the changed behavior and report commands, outputs, and limitations; do not claim completion while required runtime verification is missing. Read-only roles remain read-only: report evidence from their permitted inspection instead of running execution tools.",
@@ -189,11 +206,24 @@ const forkNotice = (source: ForkSource, parentCwd: string, isolated: boolean): s
 	].join("\n");
 };
 
+/** Agent definition a self fork is dispatched as; its prompt and tools are replaced by the caller's. */
+const SELF_AGENT = "fork:self";
+
+/**
+ * Self forks by child session file. Child sessions rebind this module's
+ * factory in the same process, so the parent's write is visible to the child.
+ * Entries live until the parent session shuts down, so a revived child keeps
+ * its clone contract.
+ */
+const selfForks = new Map<string, SelfFork>();
+
 type PendingFork = {
 	/** Exact requested name; the allocated id's last dot-segment. */
 	readonly name: string;
 	readonly artifactsDir: string;
 	readonly staging: string;
+	/** Set for an item without `agent`. */
+	readonly self?: SelfFork;
 };
 
 type StagedFork = {
@@ -308,6 +338,7 @@ async function stageFork(
 	source: ForkSource,
 	shake: boolean,
 	isolated: boolean,
+	self: boolean,
 ): Promise<StagedFork> {
 	const parentCwd = parent.sessionManager.getCwd();
 	const stagingDir = path.join(STAGING_ROOT, randomUUID());
@@ -327,7 +358,7 @@ async function stageFork(
 			manager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
 			manager.appendMessage({
 				role: "developer",
-				content: forkNotice(source, parentCwd, isolated),
+				content: forkNotice(source, parentCwd, isolated, self),
 				attribution: "agent",
 				timestamp: Date.now(),
 			});
@@ -423,6 +454,8 @@ async function resolveSource(from: string | undefined, parent: AgentSession, par
 
 export default function forkTask(pi: ExtensionAPI): void {
 	const pending: PendingFork[] = [];
+	/** Child session files of the self forks each parent spawned, by parent artifacts dir. */
+	const selfChildren = new Map<string, string[]>();
 
 	const discard = async (entry: PendingFork): Promise<void> => {
 		const index = pending.indexOf(entry);
@@ -452,10 +485,39 @@ export default function forkTask(pi: ExtensionAPI): void {
 			await fs.mkdir(artifactsDir, { recursive: true });
 			await moveFile(entry.staging, target);
 			await discard(entry);
-			return undefined;
+			if (!entry.self) return undefined;
+			selfForks.set(target, entry.self);
+			selfChildren.set(artifactsDir, [...(selfChildren.get(artifactsDir) ?? []), target]);
+			return { model: entry.self.model };
 		} catch (error) {
 			pi.logger.warn("fork_task: preparing the child conversation failed", { error: errorText(error) });
 			return { block: true, reason: `fork_task: preparing the child conversation failed: ${errorText(error)}` };
+		}
+	});
+
+	/** Child sessions whose per-call hook is installed. */
+	const cloned = new WeakSet<AgentSession>();
+
+	pi.on("before_agent_start", (_event, ctx) => {
+		const session = findCallerSession(ctx);
+		if (!session) return;
+		try {
+			observeRequests(session);
+			const file = ctx.sessionManager.getSessionFile();
+			const spec = file ? selfForks.get(file) : undefined;
+			if (!spec && ctx.agent.name === SELF_AGENT) {
+				throw new Error("the self-fork request snapshot is no longer available in this process; create a fresh fork from the parent");
+			}
+			if (!spec || cloned.has(session)) return;
+			applySelf(session, spec);
+			cloned.add(session);
+		} catch (error) {
+			const reason = `fork_task: preparing self-fork request replication failed: ${errorText(error)}`;
+			pi.logger.warn(reason);
+			// Do not run a different child contract after replication failed.
+			session.agent.addBeforeModelCallHook(() => {
+				throw new Error(reason);
+			});
 		}
 	});
 
@@ -463,6 +525,8 @@ export default function forkTask(pi: ExtensionAPI): void {
 		const parentFile = ctx.sessionManager.getSessionFile();
 		if (!parentFile) return;
 		const artifactsDir = parentFile.slice(0, -".jsonl".length);
+		for (const child of selfChildren.get(artifactsDir) ?? []) selfForks.delete(child);
+		selfChildren.delete(artifactsDir);
 		for (const entry of pending.filter((p) => p.artifactsDir === artifactsDir)) {
 			try {
 				await discard(entry);
@@ -489,6 +553,11 @@ export default function forkTask(pi: ExtensionAPI): void {
 					`fork_task: items with \`from\` must name \`agent\` explicitly; missing on ${missingAgent.join(", ")}. Nothing was dispatched.`,
 				);
 			}
+			if (params.tasks.some((item) => !item.agent?.trim() && (item.tools?.length ?? 0) > 0)) {
+				return fail(
+					"fork_task: a self fork preserves the caller's tools; set an explicit agent to import additional eval tools. Nothing was dispatched.",
+				);
+			}
 
 			const parent = findCallerSession(ctx);
 			if (!parent) return fail("fork_task: could not resolve the calling session in the agent registry.");
@@ -513,17 +582,26 @@ export default function forkTask(pi: ExtensionAPI): void {
 				for (const [index, item] of params.tasks.entries()) {
 					const source = await resolveSource(item.from, parent, parentFile);
 					if (source.kind === "error") throw new Error(source.message);
+					const agent = item.agent?.trim() || undefined;
+					let self: SelfFork | undefined;
+					if (!agent) {
+						const captured = captureSelf(parent, item.shake === true, item.effort !== undefined);
+						if (captured.kind === "unavailable") throw new Error(captured.reason);
+						self = captured.fork;
+					}
 					const name = `${sanitizeName(item.name) ?? "Fork"}_${randomUUID().slice(0, 4)}`;
-					const isolated = !planMode && (item.isolated ?? true);
-					const { staging, shakeSummary } = await stageFork(ctx, parent, source, item.shake === true, isolated);
-					const entry: PendingFork = { name, artifactsDir, staging };
+					// A self fork shares the caller's workspace unless explicitly isolated.
+					const isolated = !planMode && (item.isolated ?? !self);
+					const { staging, shakeSummary } = await stageFork(ctx, parent, source, item.shake === true, isolated, self !== undefined);
+					const entry: PendingFork = { name, artifactsDir, staging, ...(self ? { self } : {}) };
 					staged.push(entry);
 					pending.push(entry);
 					if (shakeSummary) notes.push(`${name}: ${shakeSummary}`);
 					tasks[index] = {
 						name,
-						task: item.task,
-						...(item.agent !== undefined ? { agent: item.agent } : {}),
+						// A self fork's prompt is the caller's, so the shared context rides on the assignment.
+						task: self && params.context.trim() ? `${params.context}\n\n${item.task}` : item.task,
+						agent: agent ?? SELF_AGENT,
 						...(planMode ? {} : { isolated }),
 						...(item.effort !== undefined ? { effort: item.effort } : {}),
 						...(item.tools !== undefined ? { tools: item.tools } : {}),

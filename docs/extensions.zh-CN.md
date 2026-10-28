@@ -39,7 +39,7 @@
 
 源码：`agent/extensions/isolation-nudge/`。
 
-在主会话与子代理的 `tool_call` 阶段检查 `task` 调用（`fork_task` 默认 `isolated: true`，不检查）。当一次调用会让 $\ge 2$ 个可写代理（`task:*`、内置 `task`、未填 `agent` 的项、`m1` 等，合并计算本次批次与当前会话仍在运行的共享写入任务）在未设 `isolated: true` 的情况下共用同一工作目录，且其中有未显式填写 `isolated` 的项时，按该项 `task` 文本的 SHA-256 拦截一次，提示写入任务设 `isolated: true`、只读任务设 `isolated: false`；相同 `task` 文本再次调用时放行。
+在主会话与子代理的 `tool_call` 阶段检查 `task` 调用；本扩展不检查 `fork_task`。显式 agent 路径默认隔离，分身默认共享 cwd，因此并发写入的 fork 必须显式设 `isolated: true`。当一次 `task` 调用会让 $\ge 2$ 个可写代理（`task:*`、内置 `task`、未填 `agent` 的项、`m1` 等，合并计算本次批次与当前会话仍在运行的共享写入任务）在未设 `isolated: true` 的情况下共用同一工作目录，且其中有未显式填写 `isolated` 的项时，按该项 `task` 文本的 SHA-256 拦截一次，提示写入任务设 `isolated: true`、只读任务设 `isolated: false`；相同 `task` 文本再次调用时放行。
 
 ### task-split-check
 
