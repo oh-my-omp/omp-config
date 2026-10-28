@@ -225,7 +225,7 @@ OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PR
 
 - **文件**：`TOPIC-<tool>-<name>.md` 带严格 YAML 头（`tool`、`name`、`title`、`when`、`upstream`）和 Markdown 正文；`SURFACE-<tool>.md`（头为 `tool`、`upstream`）整段替换该工具的说明。专题写调用说明——参数、语法、取值、前置条件、结果、出错后的改法——不写实现细节。`when` 是索引显示的一行（“before …”“when …”）。`upstream` 记录核对时依据的 OMP 版本与来源。
 - **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；有专题的工具：read、bash、edit（hashline 模式）、eval、grep、find、task、write、ask、fork_task，设备 ast_edit、debug、github、checkpoint，以及 `exec_command` 插件设备（等待外部条件、终端生命周期与回收、交互输入与监视）。简单工具 `wait`、`glob`、`web_search`、`ast_grep`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。
-- **生命周期**：扩展加载时读取一次文件，以 owner `omp-config/tool-topics` 注册各工具的专题；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引。没有 `read` 的会话保留原生说明。
+- **生命周期**：扩展加载时读取一次文件，以 owner `omp-config/tool-topics` 注册各工具的专题；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引。其他 owner（插件）为自己的工具注册的专题，每次 `before_agent_start` 从注册表读取，保留该工具原生说明并在其后加索引，所以插件的专题由插件自己维护（见[插件注册工具专题](operations.zh-CN.md#插件注册工具专题)）。没有 `read` 的会话保留原生说明。
 - **失败处理**：解析失败的文件跳过并记 warning。找不到工具格式或 `{{native:…}}` 段时，该工具保留原生说明，记 warning，主会话按工具与原因各提示一次。注册失败的工具不显示索引。
 
 ### tool-topic-injection

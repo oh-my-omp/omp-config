@@ -158,6 +158,8 @@ export default function exampleTopics(pi: ExtensionAPI): void {
 - 注册表由 router 持有的 handler 保存；带版本的能力标识让不同导入实例加入同一个 handler，而不是覆盖它。OMP 内置、其他宿主或不兼容的 `tool` handler 不会被覆盖。注册会复制描述，调用方之后修改原对象不会改变已发布快照。
 - `read tool://` 列工具，`read tool://example` 列专题，`read tool://example/usage` 读正文，支持行号和 raw 选择器。对工具或 scheme 根执行 `grep`/`find` 会枚举对应正文；未知工具或专题报错并列出可用名称。补全只读描述，正文读取和搜索每次调用 reader；reader 失败会使请求失败，不静默漏掉专题。
 - 注册生命周期是整个 OMP 进程，跨会话保留，禁用扩展也不删除。reader 不得捕获会话 UI、context、abort signal 或临时资源；helper 不保留 `pi`。各插件自行决定正文缓存和失效方式。删除注册或加载新的 helper 代码需重启；会话关闭不会注销共享的进程状态。
+- `tool-topics` 扩展在每个提示词里把其他 owner 注册的专题列成索引，接在该工具原生说明后面（显示 `when`，没有时显示 `title`）；工具不在本次提示词里时不加。插件因此只需让自己的工具说明保持简短（OMP 只显示插件设备说明的前 200 个字符），细节写成专题。`registeredToolTopics()` 返回当前全部注册的元数据（`tool`、`owner`、各专题的 `name`/`title`/`when`，不含正文），由 `Symbol.for("omp-config.tool-topics.index.v1")` 能力提供；没有注册表或注册表不支持该能力时返回空。
+- 不便静态相对导入 helper 的插件（例如开发目录与安装目录布局不同、需要在开发目录做类型检查），可直接调用 router 上的注册表：`InternalUrlRouter.instance().getHandler("tool")` 带有 `Symbol.for("omp-config.tool-topics.registration.v1")` 为 `true` 的属性时，调用它的 `registerTopics(registration)`，参数与返回值同 `registerToolTopics`。没有这样的 handler 时（omp-config 未安装，或 `tool-topics` 尚未加载）只报告、不另建注册表；在 `session_start` 注册可保证 omp-config 的扩展已加载。`omp-playbooks` 用的就是这种方式。
 
 ### 渐进式专题注入 API
 

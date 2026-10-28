@@ -43,7 +43,16 @@ export type ToolTopicsRegistrationResult =
 	| { readonly kind: "invalid"; readonly reason: string }
 	| { readonly kind: "conflict"; readonly reason: string };
 
+/** One tool's registered topics without their bodies, as an index lists them. */
+export interface RegisteredToolTopics {
+	readonly tool: string;
+	readonly owner: string;
+	readonly topics: readonly Pick<ToolTopic, "name" | "title" | "when">[];
+}
+
 const REGISTRATION = Symbol.for("omp-config.tool-topics.registration.v1");
+/** Lists registered topics' metadata, so an index can be shown for tools other owners registered. */
+const INDEX = Symbol.for("omp-config.tool-topics.index.v1");
 const NAME = /^[A-Za-z0-9_.-]+$/;
 const nameSchema = z.string().refine((name) => NAME.test(name), "Expected [A-Za-z0-9_.-]+");
 const textSchema = z.string().refine((text) => text.trim().length > 0, "Expected non-empty text");
@@ -69,6 +78,15 @@ function isTopicsRegistry(handler: ProtocolHandler): handler is TopicsRegistry {
 	);
 }
 
+interface TopicsIndex extends ProtocolHandler {
+	readonly [INDEX]: true;
+	topicIndex(): readonly RegisteredToolTopics[];
+}
+
+function isTopicsIndex(handler: ProtocolHandler): handler is TopicsIndex {
+	return INDEX in handler && handler[INDEX] === true && "topicIndex" in handler && typeof handler.topicIndex === "function";
+}
+
 function target(url: InternalUrl): { readonly tool: string; readonly topic: string | undefined } {
 	const tool = url.rawHost || url.hostname;
 	const segments = (url.rawPathname ?? url.pathname).split("/").filter((segment) => segment.length > 0);
@@ -82,9 +100,10 @@ function markdown(url: string, content: string): InternalResource {
 	return { url, content, contentType: "text/markdown", size: Buffer.byteLength(content) };
 }
 
-class ToolTopicsHandler implements TopicsRegistry {
+class ToolTopicsHandler implements TopicsRegistry, TopicsIndex {
 	readonly scheme = "tool";
 	readonly [REGISTRATION] = true;
+	readonly [INDEX] = true;
 	readonly spec: SchemeSpec = { backing: "virtual", selectors: "lines", immutable: true };
 	readonly #tools = new Map<string, { readonly owner: string; readonly topics: ReadonlyMap<string, ToolTopic> }>();
 
@@ -109,6 +128,14 @@ class ToolTopicsHandler implements TopicsRegistry {
 
 	promptDoc(): string {
 		return "`tool://<tool>/<topic>`: tool topics; `tool://` lists registered tools, `tool://<tool>` lists their topics. Line selectors apply.";
+	}
+
+	topicIndex(): readonly RegisteredToolTopics[] {
+		return [...this.#tools].map(([tool, entry]) => ({
+			tool,
+			owner: entry.owner,
+			topics: [...entry.topics.values()].map((topic) => ({ name: topic.name, title: topic.title, when: topic.when })),
+		}));
 	}
 
 	#topics(tool: string): ReadonlyMap<string, ToolTopic> {
@@ -187,4 +214,13 @@ export function registerToolTopics(registration: ToolTopicsRegistration): ToolTo
 	const result = handler.registerTopics(registration);
 	if (result.kind === "registered") router.register(handler);
 	return result;
+}
+
+/**
+ * Every tool's registered topics now, metadata only (no bodies): what an index shows. Empty when no
+ * registry is on the router, or when the registry is an older copy without the index capability.
+ */
+export function registeredToolTopics(): readonly RegisteredToolTopics[] {
+	const handler = InternalUrlRouter.instance().getHandler("tool");
+	return handler && isTopicsIndex(handler) ? handler.topicIndex() : [];
 }

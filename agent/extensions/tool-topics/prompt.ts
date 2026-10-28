@@ -32,8 +32,8 @@ function nativeSection(native: string, heading: string): string | undefined {
 		.trimEnd();
 }
 
-/** Index lines for the description; the same topic objects back the tool:// registration. */
-export function renderIndex(tool: string, topics: readonly Topic[]): string {
+/** Index lines for the description: each topic's name and when to read it, as registered for tool://. */
+export function renderIndex(tool: string, topics: readonly Pick<Topic, "name" | "when">[]): string {
 	return [
 		`Topics — before a call that needs one, read \`tool://${tool}/<topic>\`:`,
 		...topics.map((topic) => `- \`${topic.name}\`: ${topic.when}`),

@@ -14,16 +14,18 @@
 // `read`, each tool with authored docs that the prompt renders gets its description replaced by
 // its surface (or kept native when it has none) followed by its index. `{{native:<Heading>}}` in
 // a surface splices that native `# Heading` section, for content OMP generates per session
-// (task's agent list). Sessions without `read` keep the native descriptions: they could not
-// read the topics. The tool is located by name in OMP's rendered layout (prompt.ts), not by
-// wording; when a rendered tool cannot be rewritten (layout change, missing native section),
-// its native description stays and a warning is logged, and shown once in the main session.
+// (task's agent list). Tools whose topics another owner (a plugin) registered keep their native
+// description and get the index of those topics, read from the registry at each prompt. Sessions
+// without `read` keep the native descriptions: they could not read the topics. The tool is located
+// by name in OMP's rendered layout (prompt.ts), not by wording; when a rendered tool cannot be
+// rewritten (layout change, missing native section), its native description stays and a warning is
+// logged, and shown once in the main session.
 //
 // FAILURE. Bad files are skipped with one warning each. Hooks never throw into omp.
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { registerToolTopics } from "../_shared/tool-topics.ts";
+import { registeredToolTopics, registerToolTopics } from "../_shared/tool-topics.ts";
 import { type Catalog, loadCatalog, type ToolDocs } from "./catalog.ts";
 import { composeDescription, renderIndex, rewriteTool } from "./prompt.ts";
 
@@ -106,6 +108,40 @@ function rewritePrompt(
 	return changed ? current : undefined;
 }
 
+/**
+ * Index the topics other owners (plugins) registered for their own tools: the native description
+ * stays, the index follows it. Read per prompt, so registrations made after this extension loaded
+ * count. A tool not in this prompt is skipped; a layout it no longer matches is reported.
+ */
+function indexRegistered(pi: ExtensionAPI, ctx: ExtensionContext, blocks: string[], catalog: Catalog): string[] | undefined {
+	let current = blocks;
+	let changed = false;
+	for (const entry of registeredToolTopics()) {
+		if (entry.owner === OWNER || catalog.tools.has(entry.tool)) continue;
+		const index = renderIndex(
+			entry.tool,
+			entry.topics.map((topic) => ({ name: topic.name, when: topic.when ?? topic.title })),
+		);
+		const result = rewriteTool(current, entry.tool, (native) => ({ kind: "ok", text: `${native.trim()}\n\n${index}` }));
+		switch (result.kind) {
+			case "rewritten":
+				current = result.blocks;
+				changed = true;
+				break;
+			case "drift":
+				report(pi, ctx, entry.tool, result.reason);
+				break;
+			case "absent":
+				break;
+			default: {
+				const unreachable: never = result;
+				return unreachable;
+			}
+		}
+	}
+	return changed ? current : undefined;
+}
+
 export default function toolTopics(pi: ExtensionAPI): void {
 	let catalog: Catalog;
 	let indexed: ReadonlySet<string>;
@@ -122,8 +158,9 @@ export default function toolTopics(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", (event, ctx) => {
 		try {
 			if (!pi.getActiveTools().includes("read")) return;
-			const systemPrompt = rewritePrompt(pi, ctx, event.systemPrompt, docsList, indexed);
-			if (systemPrompt) return { systemPrompt };
+			const authored = rewritePrompt(pi, ctx, event.systemPrompt, docsList, indexed);
+			const systemPrompt = indexRegistered(pi, ctx, authored ?? event.systemPrompt, catalog);
+			if (systemPrompt ?? authored) return { systemPrompt: systemPrompt ?? authored };
 		} catch (error) {
 			pi.logger.warn("tool-topics: before_agent_start failed", { error: errorText(error) });
 		}
