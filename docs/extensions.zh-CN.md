@@ -201,7 +201,7 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 
 源码：`agent/extensions/harness-restart/`。仅在主会话交互式 TUI 启用（轻量模式同样启用）。
 
-使用与 `wt-tool` 相同的 `InteractiveMode` 队列触发 `InteractiveMode.restart()`，但只在终止型 `agent_end` 时武装（等待后台任务的回合结束不会执行重启）。在调用 `restart()` 前向当前分支写入自定义条目 `mouriya.omp.harness-restart.request`（记录 `reason` 与时间戳）；新进程恢复会话时，在 `session_start` 读到该条目并发送 `"Harness restart completed（<时间>）。Reason was: <原因>。Continue what you were doing."`（`attribution: "agent"`）。
+使用与 `wt-tool` 相同的空闲队列机制与武装条件触发 `InteractiveMode.restart()`。在调用 `restart()` 前向当前分支写入自定义条目 `mouriya.omp.harness-restart.request`（记录 `reason` 与时间戳）；新进程恢复会话时，在 `session_start` 读到该条目并发送 `"Harness restart completed（<时间>）。Reason was: <原因>。Continue what you were doing."`（`attribution: "agent"`）。
 
 ### commandcode-model-spec
 
@@ -224,7 +224,7 @@ OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PR
 渐进式工具说明。被覆盖的工具在 system prompt 里的说明只保留常用调用说明，末尾附 `Topics` 索引；详细调用说明是按需读取的专题 `tool://<tool>/<topic>`（支持行选择器；`read tool://<tool>` 列出该工具的专题及读取条件；对 `tool://` 执行 `grep`/`find` 可检索全部专题）。`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题；[tool-topic-injection](#tool-topic-injection) 另在只读工具调用后补送专题。
 
 - **文件**：`TOPIC-<tool>-<name>.md` 带严格 YAML 头（`tool`、`name`、`title`、`when`、`upstream`）和 Markdown 正文；`SURFACE-<tool>.md`（头为 `tool`、`upstream`）整段替换该工具的说明。专题写调用说明——参数、语法、取值、前置条件、结果、出错后的改法——不写实现细节。`when` 是索引显示的一行（“before …”“when …”）。`upstream` 记录核对时依据的 OMP 版本与来源。
-- **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；有专题的工具：read、bash、edit（hashline 模式）、eval、glob、grep、find、task、wait、web_search、write、ask、fork_task，以及设备 ast_grep、ast_edit、debug、github、checkpoint。`wt`、`wt_remove`、`harness_restart` 不拆专题：现有说明已写全调用契约。
+- **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；有专题的工具：read、bash、edit（hashline 模式）、eval、grep、find、task、write、ask、fork_task，以及设备 ast_edit、debug、github、checkpoint。简单工具 `wait`、`glob`、`web_search`、`ast_grep`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。
 - **生命周期**：扩展加载时读取一次文件，以 owner `omp-config/tool-topics` 注册各工具的专题；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引。没有 `read` 的会话保留原生说明。
 - **失败处理**：解析失败的文件跳过并记 warning。找不到工具格式或 `{{native:…}}` 段时，该工具保留原生说明，记 warning，主会话按工具与原因各提示一次。注册失败的工具不显示索引。
 
@@ -248,10 +248,10 @@ tool-topic-injection:
       pattern: '\.(sqlite3?|db3?)(:|\?|$)'
       topic: tool://read/sqlite
     # … read-archives、read-json、read-documents、read-forge、read-runtime、read-web、
-    #   grep-regex、grep-scopes、glob-patterns、web-search-query、eval-ssh-cat、bash-ssh-cat
+    #   grep-regex、grep-scopes、eval-ssh-cat、bash-ssh-cat
 ```
 
-仓库规则只覆盖不改动任何东西、重来没有代价的调用（read、grep、glob、web_search），外加 eval/bash 里 `ssh … cat` 的误用提醒：调用后送达的专题用于改进下一次调用。`task`、`fork_task`、`edit`、`write` 和会改动状态的设备没有规则：调用之后再送专题已经晚了，它们的专题要在调用前读。
+仓库规则只覆盖不改动任何东西、重来没有代价的调用（read、grep），外加 eval/bash 里 `ssh … cat` 的误用提醒：调用后送达的专题用于改进下一次调用。`task`、`fork_task`、`edit`、`write` 和会改动状态的设备没有规则：调用之后再送专题已经晚了，它们的专题要在调用前读。
 
 `tool` 精确匹配工具名；`parameter` 指定字符串参数名，也支持点分属性路径。`pattern` 是不带斜杠定界符和 flags 的 JavaScript 正则源码，只匹配文本，不解释 shell 语义。参数缺失或不是字符串时不匹配。`topic` 指向已注册的 `tool://<tool>/<topic>` 正文。规则 id 在同一 owner 内须唯一且稳定。
 

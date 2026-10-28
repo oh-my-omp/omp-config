@@ -93,16 +93,6 @@ tool-topic-injection:
       parameter: path
       pattern: '(^|;)!|://|\.(zip|jar|whl|tar|tgz|gz|zst):'
       topic: tool://grep/scopes
-    - id: glob-patterns
-      tool: glob
-      parameter: path
-      pattern: '://|/$'
-      topic: tool://glob/patterns
-    - id: web-search-query
-      tool: web_search
-      parameter: query
-      pattern: '(^|\s)-?(site|domain|host|after|before|since|until|intitle|title|inurl|url|filetype|ext|lang|from):'
-      topic: tool://web_search/query
 system-prompt-replace:
   replacements:
     - regex: "No TODO tracking, no progress updates\\."

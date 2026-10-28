@@ -201,7 +201,7 @@ OMP's `/wt` and `/move` reject calls while a turn is streaming, and `ExtensionAP
 
 Source: `agent/extensions/harness-restart/`. Main interactive TUI only (enabled in light mode).
 
-Queues a restart with the same `InteractiveMode` queue as `wt-tool`, but arms it only on a terminal `agent_end` (an end that waits on background jobs does not run it). Right before calling `InteractiveMode.restart()`, appends custom session entry `mouriya.omp.harness-restart.request` (`reason` and timestamp); when the restarted process resumes the session, `session_start` sends `"Harness restart completed (<time>). Reason was: <reason>. Continue what you were doing."` with `attribution: "agent"`.
+Queues a restart using the same idle-turn `InteractiveMode` mechanism and arming rule as `wt-tool`. Right before calling `InteractiveMode.restart()`, appends custom session entry `mouriya.omp.harness-restart.request` (`reason` and timestamp); when the restarted process resumes the session, `session_start` sends `"Harness restart completed (<time>). Reason was: <reason>. Continue what you were doing."` with `attribution: "agent"`.
 
 ### commandcode-model-spec
 
@@ -224,7 +224,7 @@ Source: `agent/extensions/tool-topics/`; routing and registration come from [`_s
 Progressive tool instructions. Each covered tool's description in the system prompt keeps its common call instructions and ends with a `Topics` index; the detailed call instructions are topics read on demand as `tool://<tool>/<topic>` (line selectors apply; `read tool://<tool>` lists one tool's topics with their conditions; `grep`/`find` over `tool://` search them). `SYSTEM_TEMPLATE.md` requires reading the matching topic before a call that needs it; [tool-topic-injection](#tool-topic-injection) additionally delivers a topic after calls to read-only tools.
 
 - **Files**: `TOPIC-<tool>-<name>.md` with a strict YAML header (`tool`, `name`, `title`, `when`, `upstream`) and a Markdown body; `SURFACE-<tool>.md` (header `tool`, `upstream`) replaces the tool's whole description. Topics are call instructions — parameters, syntax, values, preconditions, results, error recovery — never implementation detail. `when` is the one line the index shows (“before …”, “when …”). `upstream` names the OMP version and the sources the text was checked against.
-- **Coverage**: surfaces for `read`, `bash`, `task` (which splices the native `# Available Agents` section with `{{native:Available Agents}}`); topics for read, bash, edit (hashline mode), eval, glob, grep, find, task, wait, web_search, write, ask, fork_task, and the devices ast_grep, ast_edit, debug, github, checkpoint. `wt`, `wt_remove` and `harness_restart` have no topics: their descriptions already hold the call contract.
+- **Coverage**: surfaces for `read`, `bash`, `task` (which splices the native `# Available Agents` section with `{{native:Available Agents}}`); topics for read, bash, edit (hashline mode), eval, grep, find, task, write, ask, fork_task, and the devices ast_edit, debug, github, checkpoint. Simple tools — `wait`, `glob`, `web_search`, `ast_grep`, `wt`, `wt_remove`, `harness_restart` — have no topics: their native description already holds the call contract.
 - **Lifecycle**: files are read once when the extension loads and each tool's topics are registered under owner `omp-config/tool-topics`; changes need a restart. On every `before_agent_start` (main and sub, full and light) the extension locates each tool by name in OMP's rendered layout — inline `//` comment lines above `type <tool> =`, or a `## <tool>` device section before `### Schema` — and replaces its description with the surface (or keeps the native text) plus the index. Sessions without `read` keep native descriptions.
 - **Failure**: a bad file is skipped with a warning. A tool whose layout or `{{native:…}}` section is not found keeps its native description, with a log warning and one main-session notice per tool and reason. A tool whose registration fails gets no index.
 
@@ -248,10 +248,10 @@ tool-topic-injection:
       pattern: '\.(sqlite3?|db3?)(:|\?|$)'
       topic: tool://read/sqlite
     # … read-archives, read-json, read-documents, read-forge, read-runtime, read-web,
-    #   grep-regex, grep-scopes, glob-patterns, web-search-query, eval-ssh-cat, bash-ssh-cat
+    #   grep-regex, grep-scopes, eval-ssh-cat, bash-ssh-cat
 ```
 
-Shipped rules cover only calls that change nothing and are cheap to repeat (read, grep, glob, web_search) plus the eval/bash `ssh … cat` misuse rules: a topic delivered after the call improves the next one. `task`, `fork_task`, `edit`, `write` and mutating devices have no rules, since a topic arriving after their call is too late; their topics are read before the call.
+Shipped rules cover only calls that change nothing and are cheap to repeat (read, grep) plus the eval/bash `ssh … cat` misuse rules: a topic delivered after the call improves the next one. `task`, `fork_task`, `edit`, `write` and mutating devices have no rules, since a topic arriving after their call is too late; their topics are read before the call.
 
 `tool` is an exact tool name; `parameter` names a string argument (or dotted property path). `pattern` is JavaScript regex source, without slash delimiters or flags; it is a text matcher, not a shell parser. Missing/non-string parameters do not match. `topic` is a registered `tool://<tool>/<topic>` leaf. Rule ids must be unique and stable within the owner.
 
