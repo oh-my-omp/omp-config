@@ -35,19 +35,25 @@ Lightweight policy and lifecycle hooks live in `agent/extensions/`, while statef
 
 `omp-thinking-translator` reads its model list from `~/.omp/agent/thinking-translator.json`, trying candidates in order on each request and re-reading the file at the start of the next message. Shipped chain:
 
-1. `futureppo-pool/deepseek-v4.1-flash` (`effort: "low"`)
-2. `futureppo-pool/grok-4.7` (`effort: "minimal"`)
-3. `commandcode/inclusionai/ling-3.1-flash:free` (`effort: "minimal"`)
-4. `commandcode/poolside/laguna-s-2.1-free` (`effort: "minimal"`)
-5. `commandcode/stealth/glyph-cluster:free` (`effort: "minimal"`)
+1. `futureppo-pool/glm-5.3-flash` (`effort: "low"`)
+2. `futureppo-pool/minimax-m3.1-flash` (`effort: "low"`)
+3. `futureppo-pool/grok-4.7` (`effort: "minimal"`)
+4. `commandcode/inclusionai/ling-3.1-flash:free` (`effort: "minimal"`)
+5. `commandcode/poolside/laguna-s-2.1-free` (`effort: "minimal"`)
+6. `commandcode/stealth/glyph-cluster:free` (`effort: "minimal"`)
 
-Auto-discovered `futureppo-pool` models omit `reasoning_effort` support. To use the first two entries, add `supportsReasoningEffort: true` under `providers.futureppo-pool` in the machine's `~/.omp/agent/models.yml` (machine-local, not synced), restart `omp`, and check `/thinking-translator status`:
+`deepseek-v4.1-flash` is no longer served by the pool; `qwen3.8-27b` rejects `reasoning_effort`, and `qwen3.8-flash-next` / `Index-Translate-35B-A3B` fail OMP's `max_completion_tokens` request shape. None of them is in the chain.
+
+Auto-discovered `futureppo-pool` models omit `reasoning_effort` support. To use the `futureppo-pool` entries, add `supportsReasoningEffort: true` under `providers.futureppo-pool` in the machine's `~/.omp/agent/models.yml` (machine-local, not synced), restart `omp`, and check `/thinking-translator status`:
 
 ```yaml
 providers:
   futureppo-pool:
     modelOverrides:
-      deepseek-v4.1-flash:
+      glm-5.3-flash:
+        compat:
+          supportsReasoningEffort: true
+      minimax-m3.1-flash:
         compat:
           supportsReasoningEffort: true
       grok-4.7:
