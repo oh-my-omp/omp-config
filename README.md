@@ -15,7 +15,7 @@ This configuration is organized around the following design choices:
 | Page | Contents |
 |---|---|
 | [Prompts and Context](docs/prompts-and-context.md) | Prompt layering (`SYSTEM_TEMPLATE.md`, `PERSONALITY.md`, `APPEND_SYSTEM.md`, `tool-topics`, `system-prompt-replace`, `append-system-model`, `repo-rules`) and context retention (`fork-task`, `model-compaction`, `ctx`, `Task log`) |
-| [Subagents](docs/agents.md) | The 7 custom subagents in `agent/agents/*.md`, model bindings, advisor setup (`user-prompt-inject`, `discuss:steady` / `discuss:divergent`, `mentor:default`), dispatch rules, and worktree isolation |
+| [Subagents](docs/agents.md) | The 7 selectable worker/advisor definitions plus internal `fork:self`, model bindings, advisor context, dispatch rules, and worktree isolation |
 | [Local Extensions](docs/extensions.md) | 25-extension index, dispatch/yield gates (`isolation-nudge`, `task-split-check`, `task-completion-judge`), `JUDGE`-backed monitors (`tool-policy-nag`, `watchdog-agent`, `turn-judge`, `lang-nag`), host/TUI extensions, and the `session://` reader for other sessions (`session-urls`) |
 | [Plugins and Runtime Modes](docs/plugins-and-modes.md) | External plugins in `install-plugins.sh` (`omp-todo-more`, `omp-thinking-translator`, etc.) and `omp` vs `omp-light` |
 | [Setup, Sync and Maintenance](docs/operations.md) | Repo ↔ machine ownership rules, `/update-omp`, `/sync-omp-config`, `omp-config-autoupdate`, `_shared` modules, and upgrade checks |
