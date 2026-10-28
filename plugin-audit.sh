@@ -7,7 +7,7 @@
 # 归一后直接与 `omp plugin list --json` 对比并给出分类结论，无需再人工跑一遍。
 #
 # plugins=( … ) 内的未注释条目是必装插件；只含一个源的注释行（如
-# `# https://github.com/oh-my-omp/omp-playbooks`）是 HEAD 的可选插件，不算缺失、
+# `# https://github.com/oh-my-omp/omp-remote-build`）是 HEAD 的可选插件，不算缺失、
 # 不进卸载候选，本机已装时归入 [保留]。
 set -euo pipefail
 

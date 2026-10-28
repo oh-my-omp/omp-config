@@ -4,7 +4,7 @@
 
 ## Plugins (`install-plugins.sh`)
 
-Lightweight policy and lifecycle hooks live in `agent/extensions/`, while stateful engines, provider transports, cross-platform PTY backends, and Tern side-pane UIs are packaged as independent plugins installed into `~/.omp/plugins/` via `install-plugins.sh` (8 required + 2 commented-out optional, none version-pinned, and `~/.omp/plugins/` is not tracked in git).
+Lightweight policy and lifecycle hooks live in `agent/extensions/`, while stateful engines, provider transports, cross-platform PTY backends, and Tern side-pane UIs are packaged as independent plugins installed into `~/.omp/plugins/` via `install-plugins.sh` (9 required + 1 commented-out optional, none version-pinned, and `~/.omp/plugins/` is not tracked in git).
 
 - Every updater apply runs `omp install` on all required entries, installing missing plugins and upgrading installed ones.
 - When startup auto-update sees an unchanged config commit, it still runs `omp install` on every unpinned GitHub entry (required plugins and already-installed optional plugins) so they track their default branch without waiting for a config commit.
@@ -20,8 +20,8 @@ Lightweight policy and lifecycle hooks live in `agent/extensions/`, while statef
 | `https://github.com/oh-my-omp/omp-codex-image-gen` | `omp-codex-image-gen` | Required (GitHub) | `xd://` tool: `codex_generate_image`; skill: `imagegen` | Calls `gpt-image-2` with the local ChatGPT Codex subscription to generate or edit PNGs from 1–5 reference images |
 | `pi-package-search` | `pi-package-search` | Required (npm) | `xd://` tools: `search_pi_packages`, `install_pi_package`; skill: `pi-package-search` | Searches npm for `pi-package` packages and installs them when requested |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | Required (npm) | TUI `Markdown.prototype.render` patch | Hides Markdown code fences in the TUI and removes default 2-column code indentation while keeping source indentation and syntax highlighting |
+| `https://github.com/oh-my-omp/omp-playbooks` | `omp-playbooks` | Required (GitHub) | `xd://` tools: `playbook_open`, `playbook_read`, `playbook_edit`, `playbook_compile`, `playbook_check`, `playbook_run`, `playbook_timeline`, `playbook_launch`; CLI: `omp-playbook` | YAML Playbook service and Tern side-pane UI. Its install checks for `tern` on `PATH` (from the Tern desktop app) and links its Tern plugin; without `tern` the install fails, which aborts the updater apply. An omp outside a Tern pane (no numeric `TERN_PANE`) gets no tools, topics or commands from it |
 | `# https://github.com/oh-my-omp/omp-remote-build` | `omp-remote-build` | Optional (commented out) | `xd://` tools: `container_exec`, `container_write_stdin`, `container_list_sessions`, `container_kill_session`, `remote_env_init`, `remote_env_build_image` | Per-worktree Mutagen sync and Komodo build container on a remote Docker host. Requires `omp-unified-exec`, Mutagen, `km` CLI, and an SSH build host |
-| `# https://github.com/oh-my-omp/omp-playbooks` | `omp-playbooks` | Optional (commented out) | `xd://` tools: `playbook_open`, `playbook_read`, `playbook_edit`, `playbook_compile`, `playbook_check`, `playbook_run`, `playbook_timeline`, `playbook_launch`; CLI: `omp-playbook` | YAML Playbook service and Tern side-pane UI. Install validation requires `tern` on `PATH` (from the Tern desktop app), and a failed plugin install aborts the updater apply, so uncomment only on machines with Tern |
 
 ### todo-more
 

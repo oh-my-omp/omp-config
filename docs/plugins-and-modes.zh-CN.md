@@ -4,7 +4,7 @@
 
 ## 插件（`install-plugins.sh`）
 
-轻量策略与生命周期钩子放在 `agent/extensions/`，而带持久状态的引擎、模型 provider 适配层、跨平台 PTY 终端与 Tern 侧边栏界面则作为独立插件通过 `install-plugins.sh` 安装到 `~/.omp/plugins/`（8 个必装 + 2 个默认注释掉的可选，不固定版本号，`~/.omp/plugins/` 不纳入本仓库）。
+轻量策略与生命周期钩子放在 `agent/extensions/`，而带持久状态的引擎、模型 provider 适配层、跨平台 PTY 终端与 Tern 侧边栏界面则作为独立插件通过 `install-plugins.sh` 安装到 `~/.omp/plugins/`（9 个必装 + 1 个默认注释掉的可选，不固定版本号，`~/.omp/plugins/` 不纳入本仓库）。
 
 - 每次运行更新器都会对全部必装项执行 `omp install`，安装缺失插件并升级已安装插件。
 - 启动自动更新在远端配置提交未变时，仍会对每个不带 `#ref` 的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，使其跟随各自仓库的默认分支。
@@ -20,8 +20,8 @@
 | `https://github.com/oh-my-omp/omp-codex-image-gen` | `omp-codex-image-gen` | 必装（GitHub） | `xd://` 工具：`codex_generate_image`；Skill：`imagegen` | 使用本机 ChatGPT Codex 订阅凭据调用 `gpt-image-2` 生成或根据 1–5 张参考图修改 PNG |
 | `pi-package-search` | `pi-package-search` | 必装（npm） | `xd://` 工具：`search_pi_packages`, `install_pi_package`；Skill：`pi-package-search` | 检索 npm 上的 `pi-package` 扩展包，并在用户要求时安装 |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | 必装（npm） | TUI `Markdown.prototype.render` 补丁 | 隐藏 TUI 中 Markdown 代码块的围栏行并去掉默认 2 列缩进，保留源码缩进与语法高亮 |
+| `https://github.com/oh-my-omp/omp-playbooks` | `omp-playbooks` | 必装（GitHub） | `xd://` 工具：`playbook_open`, `playbook_read`, `playbook_edit`, `playbook_compile`, `playbook_check`, `playbook_run`, `playbook_timeline`, `playbook_launch`；CLI：`omp-playbook` | YAML Playbook 文档服务与 Tern 侧边栏界面。安装时检查 `PATH` 上有无 Tern 桌面应用提供的 `tern` 命令并链接其 Tern 插件；没有 `tern` 则安装失败，并中止整次更新器 apply。不在 Tern pane 中运行的 omp（没有数字 `TERN_PANE`）不会从它得到工具、专题或命令 |
 | `# https://github.com/oh-my-omp/omp-remote-build` | `omp-remote-build` | 可选（默认注释） | `xd://` 工具：`container_exec`, `container_write_stdin`, `container_list_sessions`, `container_kill_session`, `remote_env_init`, `remote_env_build_image` | 按 git worktree 在远端 Docker 主机维护 Mutagen 同步副本与 Komodo 构建容器。依赖 `omp-unified-exec`、Mutagen、`km` CLI 与 SSH 构建主机 |
-| `# https://github.com/oh-my-omp/omp-playbooks` | `omp-playbooks` | 可选（默认注释） | `xd://` 工具：`playbook_open`, `playbook_read`, `playbook_edit`, `playbook_compile`, `playbook_check`, `playbook_run`, `playbook_timeline`, `playbook_launch`；CLI：`omp-playbook` | YAML Playbook 文档服务与 Tern 侧边栏界面。安装校验要求 `PATH` 上有 Tern 桌面应用提供的 `tern` 命令，而插件安装失败会中止整次更新器 apply，因此默认注释；装有 Tern 的机器取消注释即可 |
 
 ### todo-more
 
