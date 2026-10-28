@@ -31,6 +31,8 @@ task-split-check:
   fallbackRole: smol
 child-memory-warning:
   thresholdGiB: 4
+fork-task:
+  maxInheritedTokens: 120000
 tool-topic-injection:
   rules:
     - id: read-ssh

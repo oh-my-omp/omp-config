@@ -9,7 +9,7 @@
 | 1 | `system-prompt-replace` | [Prompts and Context](prompts-and-context.md#system-prompt-replace) | Main + Sub | No | `omomp.yml#system-prompt-replace` (repo) |
 | 2 | `append-system-model` | [Prompts and Context](prompts-and-context.md#append-system-model) | Main + Sub | Yes | `APPEND_SYSTEM_MODEL.md` (machine-local) |
 | 3 | `repo-rules` | [Prompts and Context](prompts-and-context.md#repo-rules) | Main + Sub | Yes | Scans `.claude/rules`, `.agents/rules`, `.pi/rules`, `~/.claude/rules`, and native rules for `paths` |
-| 4 | `fork-task` | [Prompts and Context](prompts-and-context.md#fork-task) | Main + Sub | No | None |
+| 4 | `fork-task` | [Prompts and Context](prompts-and-context.md#fork-task) | Main + Sub | No | `omomp.yml#fork-task` (repo) |
 | 5 | `model-compaction` | [Prompts and Context](prompts-and-context.md#model-compaction) | Main writes / Sub reads | Yes | `omomp.yml#model-compaction` (machine-local) |
 | 6 | `user-prompt-inject` | [Subagents](agents.md#user-prompt-inject) | Subagents | No | `PROMPT-INJECT-*.md` (`user-goal.md` in repo) |
 | 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | Main + Sub | No | None |
