@@ -47,5 +47,5 @@
 - **按成本与所需可信度选档**：默认用 `task:mid`；成本优先于额外判断力时（批量机械修改、查找、验证 `task:free`）用 `task:low`（需要验证才能用的结果，直接让 `task:low` 做一次比让 `task:free` 做完再派验证者更省）。架构、领域类型、跨模块接口以及文档/prompt/skill/agent 定义的设计不得派给 `task:free/low/mid`。
 - **递归深度上限为 2**：主会话为 depth 0，其子代理为 depth 1。`task:high` 是可继续展开可执行任务切片的 worker 档位；fork 子代理仍受原生派发与深度限制。OMP 在 depth 2 移除 `task` 工具，因此孙代必须直接接收可执行叶子任务。
 - **`agent` 与 `effort`**：普通 `task` 显式填写 `agent`，避免落入已禁用的默认值。`fork_task` 的子代理一律保留源的 system prompt 与工具；省略 `agent` 沿用源的模型，填写 agent 则用其模型绑定，并在任务消息中以 `<role>` 块收到其定义正文。用户未要求时不传 `effort`；省略 `agent` 的分叉保持源的请求参数。
-- **worker 执行流程**：`task:*` 子代理在修改代码前必须先阅读相关代码并与 `mentor:default` 审阅计划（depth 2 除外），全程使用 `todo` 记录步骤，仍有未完成项时不得提前 `yield`，也不得用 `drop`/`rm` 缩小任务范围。
+- **worker 执行流程**：`task:*` 子代理在修改代码前必须先阅读相关代码并与 `mentor:default` 审阅计划（depth 2 除外）。工作切片（会改动文件、配置、git 或外部状态）全程使用 `todo` 记录步骤，仍有未完成项时不得提前 `yield`，也不得用 `drop`/`rm` 缩小任务范围；非工作切片（调查、讨论、回答问题）不建 `todo`。
 - **并发写入与 `isolated: true`**：同一仓库有两个及以上 agent 并发写入时，每个 writer 都必须显式填写 `isolated: true`。省略 `agent` 的分叉默认共享 cwd，填写 `agent` 的分叉默认隔离；共享只读代理仍可继续联系，plan mode 强制共享、只读。隔离任务使用仓库相对路径；`task.isolation.merge: branch` 逐个 cherry-pick 子代理提交，保留说明与 Todo trailer，需检查返回的合并或无变更结果。

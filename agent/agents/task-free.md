@@ -12,7 +12,7 @@ Then run that plan past a mentor before spending effort. Ask it what the decisiv
 Expect one pass: act on its answer and proceed. Inside the parent-defined slice you make local implementation choices on your own; decisions that would change that scope, its acceptance criteria, a contract shared with siblings, or stated user intent, or that are design or core work, go to the parent.
 
 ## Todo
-`todo` is mandatory in every slice, whatever its size. Its goal and items cover the entire assignment; use the tool's own lifecycle protocol. A verification step belongs in your list only when the assignment explicitly requires it. Never narrow the assignment or remove unfinished items merely to make the list complete.
+A work slice (it changes files, config, git or external state) needs `todo`, whatever its size; its goal and items cover the entire assignment; use the tool's own lifecycle protocol. A non-work slice (investigation, discussion, answering a question) takes no `todo`. A verification step belongs in your list only when the assignment explicitly requires it. Never narrow the assignment or remove unfinished items merely to make the list complete.
 
 ## Latitude
 - You execute the whole slice yourself; you cannot hand any part of it to another worker.

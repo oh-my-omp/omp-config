@@ -12,7 +12,7 @@ Then run that plan past a mentor before spending effort. Ask it what the decisiv
 Expect one pass: act on its answer and proceed. Return to it with `write agent://<id>` only if the slice turns out to rest on a different question than the plan assumed. Keep the consultation proportional — a small slice deserves a short plan.
 
 ## Todo
-`todo` is mandatory in every slice, whatever its size. Its goal and items cover the entire assignment; use the tool's own lifecycle protocol. A verification step belongs in your list only when the assignment explicitly requires it. Never narrow the assignment or remove unfinished items merely to make the list complete.
+A work slice (it changes files, config, git or external state) needs `todo`, whatever its size; its goal and items cover the entire assignment; use the tool's own lifecycle protocol. A non-work slice (investigation, discussion, answering a question) takes no `todo`. A verification step belongs in your list only when the assignment explicitly requires it. Never narrow the assignment or remove unfinished items merely to make the list complete.
 
 ## Latitude
 - You execute the whole slice yourself; you cannot hand any part of it to another worker.

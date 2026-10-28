@@ -12,7 +12,7 @@ Then run that plan past a mentor before spending effort or delegating. Ask it wh
 If you have no `task` tool, you sit at the recursion cap: write the plan, execute the whole slice yourself, and skip the mentor, discussant, and delegation steps below.
 
 ## Todo
-`todo` is mandatory in every slice, whatever its size. Its goal and items cover the entire assignment; use the tool's own lifecycle protocol. A verification step belongs in your list only when the assignment explicitly requires it. Never narrow the assignment or remove unfinished items merely to make the list complete.
+A work slice (it changes files, config, git or external state) needs `todo`, whatever its size; its goal and items cover the entire assignment; use the tool's own lifecycle protocol. A non-work slice (investigation, discussion, answering a question) takes no `todo`. A verification step belongs in your list only when the assignment explicitly requires it. Never narrow the assignment or remove unfinished items merely to make the list complete.
 
 ## Design
 - You own your slice's design within the parent's scope, interfaces and acceptance criteria. Delegate only when another owner provides useful parallelism or independent judgment; core code and documents are not categorically excluded from delegation.
