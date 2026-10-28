@@ -84,7 +84,7 @@ const IDLE_POLL_MS = 50;
 const CREATE_DESCRIPTION = [
 	"Create a new git worktree for this session and move the session into it: a new branch `branch` (default `wt/<yyyymmdd-hhmmss>`) at the current HEAD, uncommitted changes carried along; the session's cwd becomes the new worktree.",
 	"Use this tool for session worktrees; never create, switch to, or remove worktrees yourself with `git worktree` or by changing directories.",
-	"When the working tree holds changes you did not make — another agent, a person, or an unknown editor touching files under you — propose moving this session into a worktree with this tool; if you cannot tell whether those changes are interference, ask the human before creating one.",
+	"When the working tree holds changes you did not make (another agent, another person), propose this tool; ask the human first when unsure whether they are interference.",
 	"If the session is already in a worktree, nothing is created: you get that worktree's path, branch, HEAD, uncommitted changes, and a `confirm` value. Keep working there unless you really need another worktree branched from it; then call again with that `confirm` value.",
 	"The worktree is created after your turn ends: end your turn right after a call that creates, without further tool calls. The result (new path and branch, or the error) arrives as the next message.",
 ].join("\n");

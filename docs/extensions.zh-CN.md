@@ -194,7 +194,7 @@ doc-polish:
 
 OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `ExtensionAPI` 不暴露 `InteractiveMode` 实例。扩展在一次同步 `ctx.ui.setEditorComponent(undefined)` 调用中捕获当前 `InteractiveMode` 实例，把工具请求排入单槽队列并提示模型立即结束本轮；等回合交还控制权（非 `willContinue` 的 `agent_end`，或只剩后台任务能唤醒会话时带 `awaitingAsyncWork` 的 `agent_end`）且会话空闲后，调用 TUI 的 `executeBuiltinSlashCommand` 执行命令，并把结果作为 `attribution: "agent"` 消息发回（按 `Esc` 中断回合会取消排队请求）。会话自行安排的续跑（stop 提醒、重试、compaction）不会触发执行，请求保持排队直到之后的回合结束：
 
-- **`wt`**：执行 `/wt [<branch>]`。若当前会话已在 linked worktree 中，首次调用不创建目录，只返回当前 worktree 路径、分支、HEAD、未提交项数、主 checkout 路径与 `confirm` 哈希；需要再次新建时传入该 `confirm` 二次调用。工具描述要求模型在工作区出现自己没做的改动（其他 agent、他人、未知编辑器）时提出用该工具切到 worktree；分不清这些改动是否属于干扰时先问用户。
+- **`wt`**：执行 `/wt [<branch>]`。若当前会话已在 linked worktree 中，首次调用不创建目录，只返回当前 worktree 路径、分支、HEAD、未提交项数、主 checkout 路径与 `confirm` 哈希；需要再次新建时传入该 `confirm` 二次调用。工具描述要求模型在工作区出现自己没做的改动时提出切到 worktree，分不清是否属于干扰时先问用户。
 - **`wt_remove`**：分两步调用。不传 `confirm` 时做只读检查，返回 worktree 与主 checkout 路径、`SAFE`/`UNSAFE`/`BLOCKED` 结论、删除会丢失的文件（staged、unstaged、untracked、ignored，每类最多列 50 项及总数）、主 checkout HEAD 未合并的分支提交（保留在分支上）、运行中任务/子代理阻塞项，以及绑定当前状态指纹的 `confirm` 哈希。传入 `confirm` 二次调用时，在空闲后按 **重检指纹 → `/move <主 checkout>` → 确认新 `cwd` → 再检指纹 → `worktreeRemove(path, true)`** 顺序执行，任一步状态变化即停止并报告停在哪一步。
 
 ### harness-restart
