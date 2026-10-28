@@ -34,7 +34,6 @@
 
 import {
 	ANTIGRAVITY_MODEL_WIRE_PROFILES,
-	type AntigravityModelWireProfile,
 	ensureAntigravityVersion,
 	getAntigravityUserAgent,
 } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
@@ -51,6 +50,8 @@ const LOAD_TIMEOUT_MS = 20_000;
 // The provider looks entries up in this exported object on every request. Its
 // declared type is Readonly, but the object is not frozen; writing it in place is
 // the only way to reach callers (compaction) that bypass extension request hooks.
+// The entry type is derived from the table: OMP 18.13 no longer exports its name.
+type AntigravityModelWireProfile = (typeof ANTIGRAVITY_MODEL_WIRE_PROFILES)[string];
 const wireTable = ANTIGRAVITY_MODEL_WIRE_PROFILES as Record<string, AntigravityModelWireProfile>;
 
 const credentialSchema = z.object({ token: z.string().min(1) }).passthrough();
@@ -170,7 +171,7 @@ function applyProfiles(profiles: Profiles): readonly string[] {
 	const changed: string[] = [];
 	for (const [wireId, profile] of profiles) {
 		const before = wireTable[wireId];
-		if (before?.maxOutputTokens === profile.maxOutputTokens && before.modelEnum === profile.modelEnum) continue;
+		if (before !== undefined && before.maxOutputTokens === profile.maxOutputTokens && before.modelEnum === profile.modelEnum) continue;
 		wireTable[wireId] = profile;
 		changed.push(`${before === undefined ? "+" : "~"}${wireId}=${profile.maxOutputTokens}/${profile.modelEnum ?? "-"}`);
 	}
