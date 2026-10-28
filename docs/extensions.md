@@ -191,7 +191,7 @@ doc-polish:
 
 Source: `agent/extensions/wt-tool/`. Main interactive TUI only (`defaultInactive`, enabled on main `session_start`/`session_switch`).
 
-OMP's `/wt` and `/move` reject calls while a turn is streaming, and `ExtensionAPI` does not expose `InteractiveMode`. The extension captures the live `InteractiveMode` instance during a synchronous `ctx.ui.setEditorComponent(undefined)` call, queues the tool request, and asks the model to end its turn; once the turn ends (`agent_end` without `willContinue`) and the session is idle, it runs `executeBuiltinSlashCommand` on the TUI instance and sends the result back as an `attribution: "agent"` message (pressing `Esc` cancels the queued action):
+OMP's `/wt` and `/move` reject calls while a turn is streaming, and `ExtensionAPI` does not expose `InteractiveMode`. The extension captures the live `InteractiveMode` instance during a synchronous `ctx.ui.setEditorComponent(undefined)` call, queues the tool request, and asks the model to end its turn; once the turn hands control back (`agent_end` without `willContinue`, or with `awaitingAsyncWork` while only background jobs can resume the session) and the session is idle, it runs `executeBuiltinSlashCommand` on the TUI instance and sends the result back as an `attribution: "agent"` message (pressing `Esc` cancels the queued action). A continuation the session schedules itself (stop reminder, retry, compaction) keeps the request queued until a later end:
 
 - **`wt`**: runs `/wt [<branch>]`. If the session is already in a linked worktree, the first call creates nothing and returns the current worktree path, branch, HEAD, uncommitted count, main checkout path, and a `confirm` hash; pass that `confirm` value on a second call to create another worktree.
 - **`wt_remove`**: requires two calls. Calling without `confirm` runs a read-only check returning the worktree/main paths, `SAFE`/`UNSAFE`/`BLOCKED` status, files that removal would delete (staged, unstaged, untracked, ignored, up to 50 per category with totals), unmerged branch commits (kept on the branch), active job/subagent blockers, and a `confirm` hash bound to the worktree state. Calling with `confirm` re-checks the state when idle, runs `/move <main checkout>`, verifies the new `cwd`, re-checks the state, and calls `worktreeRemove(path, true)`, stopping immediately if anything changed.
@@ -200,7 +200,7 @@ OMP's `/wt` and `/move` reject calls while a turn is streaming, and `ExtensionAP
 
 Source: `agent/extensions/harness-restart/`. Main interactive TUI only (enabled in light mode).
 
-Queues a restart using the same idle-turn `InteractiveMode` mechanism as `wt-tool`. Right before calling `InteractiveMode.restart()`, appends custom session entry `mouriya.omp.harness-restart.request` (`reason` and timestamp); when the restarted process resumes the session, `session_start` sends `"Harness restart completed (<time>). Reason was: <reason>. Continue what you were doing."` with `attribution: "agent"`.
+Queues a restart with the same `InteractiveMode` queue as `wt-tool`, but arms it only on a terminal `agent_end` (an end that waits on background jobs does not run it). Right before calling `InteractiveMode.restart()`, appends custom session entry `mouriya.omp.harness-restart.request` (`reason` and timestamp); when the restarted process resumes the session, `session_start` sends `"Harness restart completed (<time>). Reason was: <reason>. Continue what you were doing."` with `attribution: "agent"`.
 
 ### commandcode-model-spec
 

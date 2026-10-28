@@ -35,10 +35,12 @@
 // more after it; any difference or blocker stops the removal there.
 //
 // Both tools queue: the human commands refuse while the session is streaming,
-// and a tool call always runs while streaming. On a terminal `agent_end` (not
-// `willContinue`) the request is armed; a timer waits until the session is
-// idle with no queued messages, then runs it once. `agent_start` disarms the
-// timer; the next terminal `agent_end` re-arms it. A terminal end interrupted
+// and a tool call always runs while streaming. On an `agent_end` that hands
+// control back (terminal, or `willContinue` with `awaitingAsyncWork`: only a
+// background job's result can resume the session, which stays open to the
+// human's commands meanwhile) the request is armed; a timer waits until the
+// session is idle with no queued messages, then runs it once. `agent_start`
+// disarms the timer; the next such `agent_end` re-arms it. An end interrupted
 // by the user (Esc) cancels the request. Session switch and shutdown drop it.
 //
 // While a human command runs, `showError` / `showWarning` / `showStatus` /
@@ -355,7 +357,10 @@ function disarm(runtime: Runtime, ctx: ExtensionContext): void {
 }
 
 function onAgentEnd(runtime: Runtime, event: AgentEndEvent, ctx: ExtensionContext): void {
-	if (runtime.state.kind !== "queued" || event.willContinue === true) return;
+	if (runtime.state.kind !== "queued") return;
+	// A continuation the session schedules itself (reminder, retry, compaction) keeps the request queued;
+	// waiting only on background jobs leaves the session idle, where the human could run the command too.
+	if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
 	const request = runtime.state.request;
 	const last = event.messages.findLast((message) => message.role === "assistant");
 	if (last?.role === "assistant" && last.stopReason === "aborted" && isUserInterruptAbort(last)) {
