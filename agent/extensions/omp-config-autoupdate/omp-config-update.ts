@@ -53,9 +53,10 @@
 // extensions flat (extensions/<name>.ts) and their files at the agent root.
 //   - A file SUPERSEDED by one the source ships is deleted: a flat module
 //     would load beside its directory version (two modules, one extension
-//     id), and the agent-root updater is replaced by the copy in
-//     extensions/omp-config-autoupdate/. An app-managed one is reported as
-//     an error instead.
+//     id), the agent-root updater is replaced by the copy in
+//     extensions/omp-config-autoupdate/, and read-topics/index.ts would
+//     contest tool://read with the tool-topics extension that now owns it.
+//     An app-managed one is reported as an error instead.
 //   - An omomp section a machine lacks is imported from its old standalone JSON
 //     file (OMOMP_LEGACY_SECTIONS: extensions/<name>/<name>.json, the flat
 //     extensions/<name>.json, the root system-prompt-replace.json and the
@@ -214,6 +215,7 @@ const SUPERSEDED: readonly { readonly from: string; readonly by: string }[] = [
 		"wt-tool",
 	].map((name) => ({ from: `extensions/${name}.ts`, by: `extensions/${name}/index.ts` })),
 	{ from: "extensions-last/system-prompt-replace.ts", by: "extensions-last/system-prompt-replace/index.ts" },
+	{ from: "extensions/read-topics/index.ts", by: "extensions/tool-topics/index.ts" },
 	{ from: "omp-config-update.ts", by: UPDATER_REL },
 ];
 
@@ -309,12 +311,14 @@ function managedPlain(rel: string): boolean {
 		/^agent\/(extensions|extensions-last)\/[^/]+\/[^/]+\.ts$/.test(rel) ||
 		/^agent\/extensions\/user-prompt-inject\/PROMPT-INJECT-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions\/turn-judge\/TURN-JUDGE-[^/]+\.md$/.test(rel) ||
-		/^agent\/extensions\/tool-policy-nag\/INTENT-[^/]+\.md$/.test(rel)
+		/^agent\/extensions\/tool-policy-nag\/INTENT-[^/]+\.md$/.test(rel) ||
+		/^agent\/extensions\/tool-topics\/(TOPIC|SURFACE)-[^/]+\.md$/.test(rel)
 	);
 }
 
-/** Extension code takes effect on the next start; the updater script itself runs fresh each time. */
-const RESTART_SCOPED = /^agent\/(SYSTEM_TEMPLATE\.md|APPEND_SYSTEM\.md|PERSONALITY\.md|extensions\/.+\.ts|extensions-last\/.+\.ts)$/;
+/** Extension code and the tool-topics files it loads at start take effect on the next start; the updater script itself runs fresh each time. */
+const RESTART_SCOPED =
+	/^agent\/(SYSTEM_TEMPLATE\.md|APPEND_SYSTEM\.md|PERSONALITY\.md|extensions\/.+\.ts|extensions-last\/.+\.ts|extensions\/tool-topics\/(TOPIC|SURFACE)-[^/]+\.md)$/;
 
 // --- report -----------------------------------------------------------------
 

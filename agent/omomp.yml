@@ -48,45 +48,71 @@ tool-topic-injection:
       parameter: command
       pattern: '\bssh\b[^\n;|&]*\bcat\b'
       topic: tool://read/ssh
+    - id: read-archives
+      tool: read
+      parameter: path
+      pattern: '\.(zip|jar|war|whl|apk|vsix|nupkg|tar|tgz|tbz2?|txz|tzst|gz|bz2|xz|zst|7z|rar|deb|rpm|iso|asar)(:|$)'
+      topic: tool://read/archives
+    - id: read-sqlite
+      tool: read
+      parameter: path
+      pattern: '\.(sqlite3?|db3?)(:|\?|$)'
+      topic: tool://read/sqlite
+    - id: read-json
+      tool: read
+      parameter: path
+      pattern: '\.(json|jsonl|ndjson)(\?|:|$)'
+      topic: tool://read/json
+    - id: read-documents
+      tool: read
+      parameter: path
+      pattern: '\.(pdf|docx|pptx|xlsx|epub|ipynb)(:|\?|$)'
+      topic: tool://read/documents
+    - id: read-forge
+      tool: read
+      parameter: path
+      pattern: '^(issue|pr|mr)://'
+      topic: tool://read/forge
+    - id: read-runtime
+      tool: read
+      parameter: path
+      pattern: '^(agent|history|proc|artifact)://'
+      topic: tool://read/runtime
+    - id: read-web
+      tool: read
+      parameter: path
+      pattern: '^(https?://|www\.)'
+      topic: tool://read/web
+    - id: grep-regex
+      tool: grep
+      parameter: pattern
+      pattern: '\(\?[=!<]|\\[1-9]|\\n|\n'
+      topic: tool://grep/regex
+    - id: grep-scopes
+      tool: grep
+      parameter: path
+      pattern: '(^|;)!|://|\.(zip|jar|whl|tar|tgz|gz|zst):'
+      topic: tool://grep/scopes
+    - id: glob-patterns
+      tool: glob
+      parameter: path
+      pattern: '://|/$'
+      topic: tool://glob/patterns
+    - id: web-search-query
+      tool: web_search
+      parameter: query
+      pattern: '(^|\s)-?(site|domain|host|after|before|since|until|intitle|title|inurl|url|filetype|ext|lang|from):'
+      topic: tool://web_search/query
 system-prompt-replace:
   replacements:
-    - regex: 'Use `read` for static web; browser only if needed\.[\s\S]*?bare host:port needs trailing slash\.'
-      replace: |-
-        `read` is an almost universal reading tool: files/directories, archives, structured data, documents/notebooks, images/video, web pages and remote/internal resources.
-        Pass one `path`. Common selectors: `file:20-60` (lines), `file:-20` (tail), `file:raw` (exact text without edit anchors). Repeat the selector on every paged call; follow returned omissions and continuation hints. Before anchored edits, read non-raw and copy the returned `[FILENAME#TAG]` snapshot header; never invent anchors.
-        Supported URLs: `http://`, `https://`, `file://`, `ssh://`, `skill://`, `rule://`, `agent://`, `history://`, `artifact://`, `local://`, `proc://`, `cfg://`, `issue://`, `pr://`, `mr://`, `mcp://`, `memory://`, `omp://`, `tool://`, `xd://`, `attachment://`, `conflict://`, `security://`, `vault://`; MCP may advertise additional schemes.
-        Detailed capabilities are topics, not repeated here. Read `tool://read` for the topic list, then read `tool://read/<topic>` when needed (for example `tool://read/ssh` or `tool://read/sqlite`). Use `read` for static web content; use a browser when interaction or rendered page state is required.
-    - literal: Use most specific agent.
-      replace: "Choose a worker tier by cost and required trust, not task type, difficulty, ambiguity, code volume, or tool familiarity. Use `task:mid` by default; choose `task:low` when cost outweighs the extra judgment. Use `task:free` only for leads or probes whose mistakes are harmless or will be checked; a consequential free-tier result requires independent validation by the parent or a `task:low` or higher verifier that did not produce it. Free-tier agreement is not validation. Keep the operator's model bindings and role assignments unchanged."
-    - regex: "Every task MUST skip build/lint/tests/formatters mid-flight; run once afterward\\.|No TODO tracking, no progress updates\\."
+    - regex: "No TODO tracking, no progress updates\\."
       replace: ""
-    - literal: Shared edits need one integration owner
-      replace: "Concurrent writers MUST use `isolated: true`, with non-overlapping file/state ownership and one integration owner. Research-only agents stay shared so they remain reachable. Use repository-relative paths for isolated assignments; identify pre-existing parent changes. Shared edits need one integration owner"
-    - regex: "Omit `agent` only for default \\(`[^`]*`\\); NEVER specify it\\."
-      replace: "Always set `agent` explicitly; never rely on the default. User says `parallel` or `parallelize` → use task subagents, not merely parallel tool calls. Omit per-spawn `effort` unless the user explicitly requests it; the configured agent binding chooses model and effort."
+      scope: sub
     - literal: "User-reported errors, failures, observations are ground truth; NEVER rerun checks to confirm them."
       replace: "User-reported errors, failures, observations are ground truth; NEVER rerun checks to doubt them. Reproducing to locate the cause and confirming the fix still apply."
     - literal: "Compiled code: NEVER avoidable allocation, copying, computation."
       replace: "Compiled code: NEVER add avoidable allocation, copying, computation."
     - literal: "On error, retry only the failed step; earlier steps may have taken effect."
-      replace: "On error, retry only the failed step; earlier steps may have taken effect.\nRefuse to investigate files through `eval`: reading content (`open`, `Path.read_text`, `Bun.file`, `readFileSync`, the prelude `read()`), listing or finding files (`os.listdir`, `os.walk`, `glob.glob`, `readdirSync`), and searching text (regex over file content, `subprocess` running `cat`/`ls`/`find`/`grep`/`rg`) belong to `read`, `glob` and `grep`. A quick look, many files at once, or fewer tool calls are not exceptions. `eval` starts only where the work needs language semantics on data already in hand: computation, transforms, structured parsing, library calls."
+      replace: "On error, retry only the failed step; earlier steps may have taken effect.\n// Refuse to investigate files through `eval`: reading content (`open`, `Path.read_text`, `Bun.file`, `readFileSync`, the prelude `read()`), listing or finding files (`os.listdir`, `os.walk`, `glob.glob`, `readdirSync`), and searching text (regex over file content, `subprocess` running `cat`/`ls`/`find`/`grep`/`rg`) belong to `read`, `glob` and `grep`. A quick look, many files at once, or fewer tool calls are not exceptions. `eval` starts only where the work needs language semantics on data already in hand: computation, transforms, structured parsing, library calls."
     - regex: "Write JSON args as `content` to `xd://<tool>` via `([^`]+)`\\."
       replace: "Write JSON args as `content` to `xd://<tool>` via `$1`. Devices are not functions: no `xd__<tool>`, `xd_<tool>`, or bare `<tool>` function exists, so never call one; the only call is `$1` with `path` set to `xd://<tool>`."
-    - literal: |-
-        Persistent shell: one fact command/pipeline; dependencies use `&&`.
-        // Scripts/heredocs/`$(…)`/complex pipelines → `eval`.
-        // `cwd`, not `cd`; `pty` only interactive.
-        // Internal URIs work as paths for builtins/coreutils, redirects, globs.
-        // `async` defers finite results but keeps the deadline (default 300s); `timeout: 0` for watchers and long jobs.
-        // No `head`/`tail`/redirection; output trunc by default, full result at `artifact://<id>`.
-        //
-        // Non-`pty` calls still running after 60s (or 1s before `timeout`, if sooner) usually move to background job `bg_N` and keep running to `timeout` (not when the client terminal runs the command or the job cap is reached); the result arrives automatically as a follow-up message. NEVER poll.
-      replace: |-
-        Runs command text synchronously in OMP's embedded POSIX shell (brush), not /bin/bash: the call waits for the command and returns its output. It is the default way to run a command. Write POSIX shell and do not switch shells inside a call (`bash -c`, `zsh -c`, `pwsh -Command`). Keep each call to one cohesive operation; chain only dependent steps with `&&`.
-        // Use it for real programs and short pipelines: builds, tests, git, package managers, CLIs, probes, remote/container commands, filters over a program's output. Reading, listing and searching files → `read`/`glob`/`grep`; file content you author → `write`/`edit`; inline Python/JS or computation needing language semantics → `eval`. A command that runs long or must keep running, waits on an outside condition, needs a terminal (REPL, TUI, password prompt, `sudo`, interactive `ssh`) or needs another shell → `xd://exec_command` where mounted.
-        // Set `cwd` instead of `cd`. Shell variables may persist between calls, but overlapping calls run in isolated one-shot shells, so make every command self-contained. Pipes, `$(…)` and redirecting a program's output (`2>&1`, `>/dev/null`) are ordinary shell. Internal URIs work as file paths for builtins/coreutils, redirects and globs.
-        // Do not add `head`/`tail` just to shorten output: stdout and stderr arrive merged, long output keeps its head and tail, and the result links an `artifact://<id>` when the full capture is available.
-        //
-        // `timeout` is the deadline in seconds from call start: default 300; positive values are clamped to 1–3600 and may be capped lower by configuration. Size it to the command; work that may outlast it belongs in `exec_command`.
-        // A call still running after 60s may move to background job `bg_N` (it stays in the foreground at the job cap); its result then arrives once, as a follow-up, to the session that started it. Do not wait for it with more tool calls (`sleep`, `ps`, `tail`, repeated `read proc://bg_N`): continue other work; with nothing left, end the turn (main session) or call `wait` (subagent). `read proc://bg_N` is for one-off diagnosis; `write proc://bg_N/kill` cancels.
-        // To wait for a condition outside your control (a host coming back, CI finishing, a deploy), start one quiet loop with `xd://exec_command` that prints only when it ends, e.g. 24h: `(for i in $(seq 288); do probe >/dev/null 2>&1 && exit 0; sleep 300; done; exit 1) && echo READY || echo GAVE_UP`, then attach `xd://monitor` without `condition`, which wakes you once when it ends. Failed checks print nothing; do not add a per-check marker.

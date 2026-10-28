@@ -1,11 +1,12 @@
 // ============================================================================
 // system-prompt-replace — text replacement over the final system prompt.
 //
-// WHY THIS EXISTS. SYSTEM_TEMPLATE.md owns the base workflow. Built-in and
-// plugin tool descriptions are still rendered dynamically into toolInventory
-// and xdevDocs; with inlineToolDescriptors on, this extension rewrites those
-// descriptions in place instead of repeating their instructions in the base
-// template or APPEND_SYSTEM.md. Custom tools edit their own descriptions.
+// WHY THIS EXISTS. SYSTEM_TEMPLATE.md owns the base workflow. Whole tool
+// descriptions are rewritten by the tool-topics extension (surface + topic
+// index, keyed by tool name); this extension makes the remaining wording-level
+// edits over the final prompt — template lines, and sentences inside tool
+// descriptions that keep their native text — instead of repeating them in the
+// base template or APPEND_SYSTEM.md.
 //
 // ORDER. `before_agent_start` handlers run one extension after another in
 // load order, each receiving the prompt the previous one returned. Load order
@@ -33,8 +34,10 @@
 // Each rule sets exactly one of `literal` / `regex`, plus `replace`. A literal
 // replaces every occurrence verbatim (no `$` handling). A regex is compiled
 // with the `g` flag and uses String.prototype.replace substitution patterns.
-// Rules apply in file order, each to the output of the previous one, across
-// every system-prompt block.
+// Optional `scope: sub` applies a rule only in subagent sessions (text only
+// subagent prompts carry); the default `all` applies everywhere. Rules apply
+// in file order, each to the output of the previous one, across every
+// system-prompt block.
 //
 // TIMING. Every `before_agent_start`, in the main session and in every
 // subagent. The file is re-read per prompt, so edits apply from the next
@@ -60,14 +63,19 @@ const objectSchema = z.record(z.string(), z.unknown()).refine((value) => !Array.
 const replacementsSchema = z.array(z.unknown());
 const replacementSchema = z.string();
 const matcherSchema = z.string().min(1);
+const scopeSchema = z.enum(["all", "sub"]);
 const omompSection = defineOmompSection(import.meta.dir, z.object({ replacements: replacementsSchema }).strict());
 
 type Matcher = { readonly kind: "literal"; readonly text: string } | { readonly kind: "regex"; readonly pattern: RegExp };
+
+/** `all`: every session; `sub`: subagent sessions only, for text only subagent prompts carry. */
+type Scope = "all" | "sub";
 
 interface Rule {
 	readonly label: string;
 	readonly matcher: Matcher;
 	readonly replace: string;
+	readonly scope: Scope;
 }
 
 type Parsed = { readonly kind: "ok"; readonly rules: readonly Rule[] } | { readonly kind: "invalid"; readonly reason: string };
@@ -84,10 +92,13 @@ function parseRule(value: unknown, index: number): RuleParse {
 		return { kind: "invalid", reason: `${at} is not an object` };
 	}
 	const record = object.data;
-	const unknownKey = Object.keys(record).find((key) => key !== "literal" && key !== "regex" && key !== "replace");
+	const unknownKey = Object.keys(record).find((key) => key !== "literal" && key !== "regex" && key !== "replace" && key !== "scope");
 	if (unknownKey !== undefined) return { kind: "invalid", reason: `${at}: unknown key \`${unknownKey}\`` };
 	const replacement = replacementSchema.safeParse(record.replace);
 	if (!replacement.success) return { kind: "invalid", reason: `${at}: \`replace\` must be a string` };
+	const scoped = scopeSchema.safeParse(record.scope ?? "all");
+	if (!scoped.success) return { kind: "invalid", reason: `${at}: \`scope\` must be "all" or "sub"` };
+	const scope = scoped.data;
 	const { literal, regex } = record;
 	if ((literal === undefined) === (regex === undefined)) {
 		return { kind: "invalid", reason: `${at}: set exactly one of \`literal\` and \`regex\`` };
@@ -103,6 +114,7 @@ function parseRule(value: unknown, index: number): RuleParse {
 				label: `${at} literal ${JSON.stringify(text.data)}`,
 				matcher: { kind: "literal", text: text.data },
 				replace: replacement.data,
+				scope,
 			},
 		};
 	}
@@ -118,7 +130,7 @@ function parseRule(value: unknown, index: number): RuleParse {
 	}
 	return {
 		kind: "ok",
-		rule: { label: `${at} regex /${expression.data}/`, matcher: { kind: "regex", pattern }, replace: replacement.data },
+		rule: { label: `${at} regex /${expression.data}/`, matcher: { kind: "regex", pattern }, replace: replacement.data, scope },
 	};
 }
 
@@ -164,6 +176,7 @@ export default function systemPromptReplace(pi: ExtensionAPI): void {
 			let blocks = event.systemPrompt;
 			let changed = false;
 			for (const rule of parsed.rules) {
+				if (rule.scope === "sub" && ctx.agent.kind === "main") continue;
 				let hits = 0;
 				const matcher = rule.matcher;
 				blocks = blocks.map((block) => {

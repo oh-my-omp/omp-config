@@ -26,6 +26,8 @@ import type {
 export interface ToolTopic {
 	readonly name: string;
 	readonly title: string;
+	/** One line telling the caller when to read the topic; shown in indexes. Optional for older callers. */
+	readonly when?: string;
 	readonly read: () => string | Promise<string>;
 }
 
@@ -48,7 +50,7 @@ const textSchema = z.string().refine((text) => text.trim().length > 0, "Expected
 const registrationSchema = z.object({
 	tool: nameSchema,
 	owner: textSchema,
-	topics: z.array(z.object({ name: nameSchema, title: textSchema, read: z.unknown() })).min(1),
+	topics: z.array(z.object({ name: nameSchema, title: textSchema, when: textSchema.optional(), read: z.unknown() })).min(1),
 });
 
 // The callback's actual return value is checked by #body at the execution boundary.
@@ -95,7 +97,7 @@ class ToolTopicsHandler implements TopicsRegistry {
 			if (!isTopicReader(topic.read) || topics.has(topic.name)) {
 				return { kind: "invalid", reason: `Invalid reader or duplicate topic '${topic.name}' for ${input.tool}` };
 			}
-			topics.set(topic.name, { name: topic.name, title: topic.title, read: topic.read });
+			topics.set(topic.name, { name: topic.name, title: topic.title, when: topic.when, read: topic.read });
 		}
 		const existing = this.#tools.get(input.tool);
 		if (existing && existing.owner !== input.owner) {
@@ -135,7 +137,9 @@ class ToolTopicsHandler implements TopicsRegistry {
 			return markdown(url.href, ["# tool://", "", "Tools with topics:", "", ...rows, ""].join("\n"));
 		}
 		if (topic === undefined) {
-			const rows = [...this.#topics(tool).values()].map((entry) => `- [${entry.name}](tool://${tool}/${entry.name}) — ${entry.title}`);
+			const rows = [...this.#topics(tool).values()].map(
+				(entry) => `- [${entry.name}](tool://${tool}/${entry.name}) — ${entry.title}${entry.when ? `. Read when: ${entry.when}` : ""}`,
+			);
 			return markdown(
 				url.href,
 				[`# ${tool} topics`, "", `Read tool://${tool}/<topic> (line selectors apply).`, "", ...rows, ""].join("\n"),
@@ -159,7 +163,8 @@ class ToolTopicsHandler implements TopicsRegistry {
 		const completions: UrlCompletion[] = [];
 		for (const [tool, entry] of this.#tools) {
 			completions.push({ value: tool });
-			for (const topic of entry.topics.values()) completions.push({ value: `${tool}/${topic.name}`, description: topic.title });
+			for (const topic of entry.topics.values())
+				completions.push({ value: `${tool}/${topic.name}`, description: topic.when ?? topic.title });
 		}
 		return completions;
 	}
