@@ -481,6 +481,10 @@ function liveSize(session: AgentSession): SourceSize {
  * assistant provider snapshot of the active context (after the latest
  * compaction, as `buildSessionContext` returns it), less the history rewrites
  * recorded against it, plus the tokenizer count of the messages after it.
+ * The live tracker's non-message delta (current system prompt and tools
+ * against the snapshot's) has no parked counterpart: a parked source has no
+ * current system prompt or tools, and the child sends its own anyway, so the
+ * snapshot's own non-message part stands as recorded.
  */
 async function persistedSize(file: string, tokenizer: Tokenizer): Promise<SourceSize> {
 	const manager = await SessionManager.open(file, undefined, undefined, { suppressBreadcrumb: true, throwIfMissing: true });
