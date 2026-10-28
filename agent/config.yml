@@ -1,6 +1,8 @@
 extensions:
   - ~/.omp/agent/extensions-last/system-prompt-replace/index.ts
 setupVersion: 2
+# omp's VS Code MCP discovery warns `Failed to read <cwd>/.vscode/mcp.json` in
+# every directory without that file; no project here uses it.
 disabledProviders:
   - vscode
 modelTags:
