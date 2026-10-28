@@ -28,7 +28,7 @@
 | 20 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话（表为进程全局） | 是 | 后端 `fetchAvailableModels`；无文件 |
 | 21 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） |
 | 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局（模块加载） | 是 | `omomp.yml#omomp-lang`（仓库） |
-| 23 | `read-topics` | [read-topics](#read-topics) | 进程全局（`tool://` scheme） | 是 | 切分 OMP 内置的 `omp://tools/read.md`；无文件 |
+| 23 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子（提示词）；进程全局（`tool://` scheme） | 是 | 同目录的 `TOPIC-*.md` / `SURFACE-*.md`（仓库） |
 | 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection`（仓库） |
 
 ---
@@ -216,15 +216,16 @@ OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PR
 
 在根会话 `session_start`（最多等待 20 秒，`before_agent_start` 等待同一次加载）时，扩展用当前会话凭据和本机已存的全部 Antigravity 账号调用 `POST <baseUrl>/v1internal:fetchAvailableModels`，合并非 internal、非 disabled 且 `maxOutputTokens` 为正整数的条目，原地更新 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（只新增或覆盖，不删除条目）。若所有账号均获取失败，则保留原表内容，记日志并弹一次主 UI 警告，下次根会话启动时重试。
 
-### read-topics
+### tool-topics
 
-源码：`agent/extensions/read-topics/`；路由和注册由 [`_shared/tool-topics.ts`](operations.zh-CN.md#插件注册工具专题) 提供。
+源码：`agent/extensions/tool-topics/`；路由和注册由 [`_shared/tool-topics.ts`](operations.zh-CN.md#插件注册工具专题) 提供。
 
-通过 `tool://` 内部 URL scheme 为内置 `read` 工具提供按功能划分的专题：`read tool://read` 列出专题，`read tool://read/<topic>` 返回单个专题（支持行选择器，如 `tool://read/sqlite:1-40`），专题名不存在时报错并列出可用名称。对 `tool://read` 执行 `grep`/`find` 会搜索全部专题。
+渐进式工具说明。被覆盖的工具在 system prompt 里的说明只保留常用调用说明，末尾附 `Topics` 索引；详细调用说明是按需读取的专题 `tool://<tool>/<topic>`（支持行选择器；`read tool://<tool>` 列出该工具的专题及读取条件；对 `tool://` 执行 `grep`/`find` 可检索全部专题）。`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题；[tool-topic-injection](#tool-topic-injection) 另在只读工具调用后补送专题。
 
-- **内容**：通过 `getEmbeddedDoc` 读取 OMP 内置 `omp://tools/read.md`，按固定的“专题名 → 标题”表切出：`selectors`（`## Inputs`）、`outputs`、`flow`、`local-files`、`directories`、`archives`、`executables`、`video`、`profiler-reports`、`sqlite`、`documents`、`notebooks`、`images`、`internal-urls`、`web-urls`、`side-effects`、`limits`、`errors`。`ssh` 提取同一文档中的 SSH URL 原文条目。面向维护者的 `Source`、`Registration / Visibility`、`Notes` 不作为专题。正文随已安装的 OMP 版本更新，仓库不保存副本。
-- **生命周期**：扩展工厂调用共享 `registerToolTopics` 提交 read 的描述和读取函数。索引不加载正文；文档在首次读取专题或搜索时加载并切分。完整模式的 `omomp.yml#system-prompt-replace` 整段替换原生 read 说明，只保留常用用法、支持的 URL 和 `tool://read` 列表入口，细节交给按需读取的专题与[条件注入](#tool-topic-injection)。
-- **失败处理**：注册返回显式的 `invalid` 或 `conflict` 结果，read 工厂将其记录为 warning；OMP 内置或其他宿主的 `tool` handler 不会被覆盖。read 文档缺失，或某个标题缺失、重复时，专题读取或搜索会报错并写明哪处不一致，不返回残缺的专题。
+- **文件**：`TOPIC-<tool>-<name>.md` 带严格 YAML 头（`tool`、`name`、`title`、`when`、`upstream`）和 Markdown 正文；`SURFACE-<tool>.md`（头为 `tool`、`upstream`）整段替换该工具的说明。专题写调用说明——参数、语法、取值、前置条件、结果、出错后的改法——不写实现细节。`when` 是索引显示的一行（“before …”“when …”）。`upstream` 记录核对时依据的 OMP 版本与来源。
+- **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；有专题的工具：read、bash、edit（hashline 模式）、eval、glob、grep、find、task、wait、web_search、write、ask、fork_task，以及设备 ast_grep、ast_edit、debug、github、checkpoint。`wt`、`wt_remove`、`harness_restart` 不拆专题：现有说明已写全调用契约。
+- **生命周期**：扩展加载时读取一次文件，以 owner `omp-config/tool-topics` 注册各工具的专题；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引。没有 `read` 的会话保留原生说明。
+- **失败处理**：解析失败的文件跳过并记 warning。找不到工具格式或 `{{native:…}}` 段时，该工具保留原生说明，记 warning，主会话按工具与原因各提示一次。注册失败的工具不显示索引。
 
 ### tool-topic-injection
 
@@ -240,17 +241,16 @@ tool-topic-injection:
       parameter: path
       pattern: '^ssh://'
       topic: tool://read/ssh
-    - id: eval-ssh-cat
-      tool: eval
-      parameter: code
-      pattern: '\bssh\b[^\n;|&]*\bcat\b'
-      topic: tool://read/ssh
-    - id: bash-ssh-cat
-      tool: bash
-      parameter: command
-      pattern: '\bssh\b[^\n;|&]*\bcat\b'
-      topic: tool://read/ssh
+    - id: read-sqlite
+      tool: read
+      parameter: path
+      pattern: '\.(sqlite3?|db3?)(:|\?|$)'
+      topic: tool://read/sqlite
+    # … read-archives、read-json、read-documents、read-forge、read-runtime、read-web、
+    #   grep-regex、grep-scopes、glob-patterns、web-search-query、eval-ssh-cat、bash-ssh-cat
 ```
+
+仓库规则只覆盖不改动任何东西、重来没有代价的调用（read、grep、glob、web_search），外加 eval/bash 里 `ssh … cat` 的误用提醒：调用后送达的专题用于改进下一次调用。`task`、`fork_task`、`edit`、`write` 和会改动状态的设备没有规则：调用之后再送专题已经晚了，它们的专题要在调用前读。
 
 `tool` 精确匹配工具名；`parameter` 指定字符串参数名，也支持点分属性路径。`pattern` 是不带斜杠定界符和 flags 的 JavaScript 正则源码，只匹配文本，不解释 shell 语义。参数缺失或不是字符串时不匹配。`topic` 指向已注册的 `tool://<tool>/<topic>` 正文。规则 id 在同一 owner 内须唯一且稳定。
 

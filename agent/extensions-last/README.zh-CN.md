@@ -4,7 +4,7 @@
 
 这里的扩展必须在其他按路径加载的扩展之后执行，所以不放进 `extensions/`，而是由 `config.yml` 的 `extensions` 按路径加载，并且写在列表的最后一项。每个扩展一个目录，入口是 `<名字>/index.ts`，自己的配置是 omomp 文件（`omomp.yml`）里以目录名命名的一段；`config.yml` 里写的是 `index.ts` 的完整路径（写文件路径而不是目录，加载方式与平铺时相同，`disabledExtensions` 按名字过滤不到它）。共享代码从 `../../extensions/_shared/` 导入。
 
-`system-prompt-replace/` 修订 `toolInventory`、`xdevDocs` 渲染出来的工具描述，不替换 Handlebars 模板，也不修改单独发送的工具 schema。提示词分层和当前 read/task/eval/bash 修订见 [system-prompt-replace](../../docs/prompts-and-context.zh-CN.md#system-prompt-replace)。
+`system-prompt-replace/` 对渲染后的提示词做措辞级修订，包括 `toolInventory`、`xdevDocs` 工具描述里的句子；不替换 Handlebars 模板，也不修改单独发送的工具 schema，整段工具说明归更早运行的 `tool-topics` 扩展。提示词分层和当前规则见 [system-prompt-replace](../../docs/prompts-and-context.zh-CN.md#system-prompt-replace)。
 
 ## 加载顺序
 
@@ -23,4 +23,4 @@
 
 轻量模式下，`config-light.yml` 把 `extensions` 覆盖成空列表，排除这里的扩展；`omp-light` 再用 `-e` 把本机 `config.yml` 里不在 `extensions-last/` 下的条目（如 `~/.claude`）传回去。
 
-本文件和 `README.md` 不会被加载，也不同步：仓库 → 本机的更新器（启动时自动更新和 `/update-omp`）与 `/sync-omp-config` 只同步扩展目录里的 `*.ts` 和结构化配置 `omomp.yml`（其中 `system-prompt-replace` 段归仓库）。
+本文件和 `README.md` 不会被加载，也不同步：仓库 → 本机的更新器（启动时自动更新和 `/update-omp`）与 `/sync-omp-config` 只同步扩展目录里的 `*.ts`、仓库自带的模板和结构化配置 `omomp.yml`（其中 `system-prompt-replace` 段归仓库）。

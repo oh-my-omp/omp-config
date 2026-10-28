@@ -12,7 +12,8 @@
 | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充 `# Personality` 下的 `{{personality}}`。前半部分保留 OMP `personality: default` 原文（`Evidence-first terse engineer`）；后半部分定义 `# Writing` 分析与研究写作规范：结论、数字或机制直接开篇，一句话写清时间、主体、动作、规模与来源，多项对象或指标合并进一张表且不在正文逐行复述，删去过程自述、重复解释、叠加免责声明与文末总结。 |
 | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加四条主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）；重大决策同时询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理 | 加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件，并处理所有规则来源的 `paths` 按路径触发。 |
-| [system-prompt-replace](#system-prompt-replace) | 主会话 + 子代理（仅完整模式） | 在所有按路径加载的扩展最后运行，原地改写渲染进 system prompt 的工具说明。 |
+| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 把被覆盖工具的说明换成常用调用说明加 `Topics` 索引；详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
+| [system-prompt-replace](#system-prompt-replace) | 主会话 + 子代理（仅完整模式） | 在所有按路径加载的扩展最后运行，对渲染出的 system prompt 做措辞级修改。 |
 | [append-system-model](#append-system-model) | 主会话 + 子代理 | 按当前会话的 `model` 或 `provider` 正则匹配 `APPEND_SYSTEM_MODEL.md`，追加模型专属提示词块。 |
 | [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection) | 主会话 + 子代理 | 配置的工具参数命中后才加载专题，每条规则在真实未压缩上下文中注入一次；追加 developer 上下文，而不是扩大常驻工具说明。 |
 
@@ -31,24 +32,22 @@ system-prompt-replace:
       replace: "替换文字"
     - regex: "JavaScript 正则源码"
       replace: "替换文字，可用 $1、$&"
+      scope: sub   # 可选：只在子代理会话生效
 ```
 
-`agent/omomp.yml` 当前包含的 10 条替换规则（其中文件检索与编辑固定使用 `read` + hashline `edit` 并禁止在 `eval` 中查文件，以要求模型在读取目标行邻近上下文后再做修改，避免在缺少编译器与测试保护的脚本、配置或命令行操作中脱离上下文直接修改）：
+`agent/omomp.yml` 当前包含的 5 条替换规则（其中文件检索与编辑固定使用 `read` + hashline `edit` 并禁止在 `eval` 中查文件，以要求模型在读取目标行邻近上下文后再做修改，避免在缺少编译器与测试保护的脚本、配置或命令行操作中脱离上下文直接修改）：
 
 | 目标 | 修改内容 |
 |---|---|
-| `read` 工具说明 | 整段替换原生说明，改为几乎万能的阅读能力概览、常用选择器/快照要求、支持的 URL 与 [`tool://read`](extensions.zh-CN.md#read-topics) 列表入口。细节通过按需读取或条件专题注入提供，不再把长说明追加在旧正文之前。 |
-| `task` 选档说明 | 把 `"Use most specific agent."` 改为按成本与所需可信度选档：默认 `task:mid`，省成本或验证 `task:free` 用 `task:low`，无须独立验证的试探用 `task:free`。 |
-| 子代理检查与 Todo 说明 | 删去原生子代理提示词中的 `"Every task MUST skip build/lint/tests..."` 与 `"No TODO tracking, no progress updates."`，避免与子代理必填 Todo 及 `fork_task` 的验证要求冲突。 |
-| 并发写入隔离 | 要求并发写入的子代理设置 `isolated: true`，只读调查子代理保持共享以便后续用 `write agent://<id>` 续聊。 |
-| `agent` 与 `effort` 参数 | 要求每个 task 项显式填写 `agent`，用户未要求时不传 `effort`。 |
+| 子代理 Todo 说明（`scope: sub`） | 删去原生子代理提示词中的 `"No TODO tracking, no progress updates."`，避免与子代理必填 Todo 及 `fork_task` 的验证要求冲突。task 侧的句子（选档、显式 `agent`、并发写入隔离、删掉的 “skip build/lint/tests”）改由 [tool-topics](extensions.zh-CN.md#tool-topics) 的 `SURFACE-task.md` 承载。 |
 | 用户报错处理规则 | 补充说明“不重跑检查去质疑用户报错”不影响为定位原因而复现和修复后验证。 |
 | 编译代码规则 | 补上原句缺失的动词 `add`（`NEVER add avoidable allocation...`）。 |
 | `eval` 工具说明 | 禁止通过 `eval` 读取、列目录或搜索本地文件（统一使用 `read`、`glob`、`grep`）。 |
 | `xd://` 设备说明 | 说明 `xd://<tool>` 只能通过 `write` 写入 JSON 调用，不存在 `xd__<tool>` 或裸 `<tool>` 函数。 |
-| `bash` 工具说明 | 用精确 literal 整段替换内置 `bash` 说明，与 `omp://tools/bash.md` 及 `agent/extensions/tool-policy-nag/INTENT-policy.md` 保持同一分工：`bash` 用于内嵌 brush shell 的同步短命令；`xd://exec_command` 用于长时运行、等待外部条件、需要终端或切换 shell 的任务（配合不带 `condition` 的 `xd://monitor` 在结束时唤醒一次）；`eval` 用于代码计算。 |
 
-当某条规则在主会话 system prompt 中找不到匹配文本时（例如升级 OMP 后上游改了内置工具描述），每个进程对每条规则记一次日志并弹一次 UI 警告（headless 模式写 stderr），不阻塞请求。子代理的 system prompt 本就不含 `task` 等工具，不做缺失检查。
+整段工具说明（`read`、`bash`、`task`）不再由本扩展替换：[tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞定位它们，上游改写措辞后仍然生效，且轻量模式也会运行。
+
+当某条规则在主会话 system prompt 中找不到匹配文本时（例如升级 OMP 后上游改了内置措辞），每个进程对每条规则记一次日志并弹一次 UI 警告（headless 模式写 stderr），不阻塞请求。子代理的 system prompt 本就不含 `task` 等工具，不做缺失检查；`scope: sub` 的规则在主会话中跳过。
 
 ### append-system-model
 

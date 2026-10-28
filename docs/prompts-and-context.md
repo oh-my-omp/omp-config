@@ -12,7 +12,8 @@ Any non-minimal harness ships predefined text across its base template, built-in
 | `agent/PERSONALITY.md` | Main session only (subagents run with `personality: none`) | Fills `{{personality}}` under `# Personality`. Starts with OMP's `personality: default` text (`Evidence-first terse engineer`), followed by `# Writing` rules for research and analysis prose: open with the finding, number, or mechanism; state time, actor, action, scale, and source in one sentence; group multiple items or metrics into one table without restating rows in prose; omit process narration, repeated explanations, stacked disclaimers, and summary recaps. |
 | `agent/APPEND_SYSTEM.md` (`APPEND_SYSTEM_LIGHT.md` in light mode, empty) | Main session only | Adds four defaults for the main agent: explicit user instructions override default rules; the final reply must use complete sentences with explicit subjects, identify objects on first mention, attach `path:line` or observed output to conclusions, and avoid analogies; do not skip reads or truncate outputs to save tokens (read design docs and related files in full before editing); consult `discuss:steady` and `discuss:divergent` on consequential decisions, and use `mentor:default` before and after long investigations. |
 | [repo-rules](#repo-rules) | Main + Subagents | Loads rules from `.claude/rules`, `.agents/rules`, `.pi/rules`, and `~/.claude/rules`, and handles `paths` frontmatter across all rule sources. |
-| [system-prompt-replace](#system-prompt-replace) | Main + Subagents (full mode only) | Runs last among path-loaded extensions and rewrites rendered tool descriptions in the system prompt. |
+| [tool-topics](extensions.md#tool-topics) | Main + Subagents (full and light) | Replaces covered tool descriptions with common call instructions plus a `Topics` index; detailed call instructions are read on demand as `tool://<tool>/<topic>`, and `SYSTEM_TEMPLATE.md` requires reading the matching topic before such a call. |
+| [system-prompt-replace](#system-prompt-replace) | Main + Subagents (full mode only) | Runs last among path-loaded extensions and makes wording-level edits to the rendered system prompt. |
 | [append-system-model](#append-system-model) | Main + Subagents | Appends model-specific prompt blocks from `APPEND_SYSTEM_MODEL.md` when the session's `model` or `provider` matches. |
 | [tool-topic-injection](extensions.md#tool-topic-injection) | Main + Subagents | Loads a topic only after a configured tool argument matches, once per rule in the actual uncompacted context; it adds developer context rather than growing the static tool description. |
 
@@ -31,24 +32,22 @@ system-prompt-replace:
       replace: "replacement text"
     - regex: "JavaScript regex source"
       replace: "replacement text, $1 and $& supported"
+      scope: sub   # optional: subagent sessions only
 ```
 
 Active rules in `agent/omomp.yml` (file lookup and edits are restricted to `read` + hashline `edit` and prohibited in `eval` so the model reads surrounding context before modifying target lines, avoiding blind edits in scripts, configs, and CLI operations that lack compiler or test coverage):
 
 | Target | Change |
 |---|---|
-| `read` tool description | Replaces the entire native description with an almost-universal reading overview, common selectors/snapshot guidance, supported URLs and the [`tool://read`](extensions.md#read-topics) topic index. Detailed syntax is read on demand or supplied by conditional topic injection, not appended to the original long description. |
-| `task` tier selection | Replaces `"Use most specific agent."` with cost and trust selection (`task:mid` default, `task:low` when cost outweighs extra judgment or to validate `task:free`, `task:free` for unvalidated probes). |
-| Subagent check/todo instructions | Removes `"Every task MUST skip build/lint/tests..."` and `"No TODO tracking, no progress updates."` from the native child prompt so they do not conflict with worker Todo or `fork_task` verification. |
-| Concurrent writers | Requires `isolated: true` when multiple writers run concurrently; keeps read-only research agents shared so they stay reachable via `write agent://<id>`. |
-| `agent` and `effort` arguments | Requires setting `agent` explicitly on every task item and omitting `effort` unless the user asks for it. |
+| Subagent Todo instruction (`scope: sub`) | Removes `"No TODO tracking, no progress updates."` from the native child prompt so it does not conflict with worker Todo or `fork_task` verification. The task-side sentences (tier choice, explicit `agent`, concurrent writers, the removed "skip build/lint/tests" line) now live in [tool-topics](extensions.md#tool-topics)' `SURFACE-task.md`. |
 | User-reported errors | Clarifies that not rerunning checks to doubt a user report still leaves reproducing to find the cause and verifying the fix in place. |
 | Compiled-code rule | Fixes the missing verb (`NEVER add avoidable allocation...`). |
 | `eval` tool description | Prohibits reading, listing, or searching local files through `eval` (`read`, `glob`, and `grep` handle file inspection). |
 | `xd://` device header | States that `xd://<tool>` devices are called only by writing JSON to `xd://<tool>`, not as `xd__<tool>` or `<tool>` functions. |
-| `bash` tool description | Replaces the entire built-in `bash` description (exact literal match) with the split used by `omp://tools/bash.md` and `agent/extensions/tool-policy-nag/INTENT-policy.md`: `bash` for synchronous commands in OMP's embedded brush shell, `xd://exec_command` for long-running/interactive/waiting jobs (paired with condition-less `xd://monitor`), and `eval` for language computation. |
 
-When a rule's target is missing from the main session's system prompt (for example after an OMP upgrade changes built-in tool wording), the extension logs and shows one warning per rule per process without blocking the prompt. Subagent prompts are not checked for missing targets because they omit tools such as `task`.
+Whole tool descriptions (`read`, `bash`, `task`) are no longer replaced here: [tool-topics](extensions.md#tool-topics) locates them by tool name rather than by wording, so they survive upstream rewording, and it runs in light mode too.
+
+When a rule's target is missing from the main session's system prompt (for example after an OMP upgrade changes built-in wording), the extension logs and shows one warning per rule per process without blocking the prompt. Subagent prompts are not checked for missing targets because they omit tools such as `task`; `scope: sub` rules are skipped in the main session.
 
 ### append-system-model
 

@@ -28,7 +28,7 @@
 | 20 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | Root main (process-wide table) | Yes | Backend `fetchAvailableModels`; no file |
 | 21 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omomp.yml#omp-config-autoupdate` (machine-local) |
 | 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide (module load) | Yes | `omomp.yml#omomp-lang` (repo) |
-| 23 | `read-topics` | [read-topics](#read-topics) | Process-wide (`tool://` scheme) | Yes | Cuts OMP's bundled `omp://tools/read.md`; no file |
+| 23 | `tool-topics` | [tool-topics](#tool-topics) | Main + Sub (prompt); process-wide (`tool://` scheme) | Yes | `TOPIC-*.md` / `SURFACE-*.md` beside it (repo) |
 | 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | Main + Sub | Yes | `omomp.yml#tool-topic-injection` (repo) |
 
 ---
@@ -216,15 +216,16 @@ OMP's `google-antigravity` provider only overrides the caller's `maxTokens` for 
 
 At root `session_start` (awaited up to 20 s; `before_agent_start` awaits the same promise), the extension calls `POST <baseUrl>/v1internal:fetchAvailableModels` for the session credential and every stored Antigravity account, merges served models (non-internal, non-disabled, positive integer `maxOutputTokens`), and updates `ANTIGRAVITY_MODEL_WIRE_PROFILES` in place (adding and overwriting entries, never deleting). If all accounts fail, it keeps the existing table, warns in the log and main UI, and retries on the next root session start.
 
-### read-topics
+### tool-topics
 
-Source: `agent/extensions/read-topics/`; routing and registration come from [`_shared/tool-topics.ts`](operations.md#registering-tool-topics-from-plugins).
+Source: `agent/extensions/tool-topics/`; routing and registration come from [`_shared/tool-topics.ts`](operations.md#registering-tool-topics-from-plugins).
 
-Adds per-feature topics to the built-in `read` tool through a `tool://` internal-URL scheme: `read tool://read` lists the topics, `read tool://read/<topic>` returns one (line selectors apply, e.g. `tool://read/sqlite:1-40`), and an unknown topic fails with the available keys. `grep`/`find` over `tool://read` search every topic.
+Progressive tool instructions. Each covered tool's description in the system prompt keeps its common call instructions and ends with a `Topics` index; the detailed call instructions are topics read on demand as `tool://<tool>/<topic>` (line selectors apply; `read tool://<tool>` lists one tool's topics with their conditions; `grep`/`find` over `tool://` search them). `SYSTEM_TEMPLATE.md` requires reading the matching topic before a call that needs it; [tool-topic-injection](#tool-topic-injection) additionally delivers a topic after calls to read-only tools.
 
-- **Content**: sections of OMP's bundled `omp://tools/read.md`, fetched with `getEmbeddedDoc` and cut by a fixed key → heading table: `selectors` (`## Inputs`), `outputs`, `flow`, `local-files`, `directories`, `archives`, `executables`, `video`, `profiler-reports`, `sqlite`, `documents`, `notebooks`, `images`, `internal-urls`, `web-urls`, `side-effects`, `limits`, `errors`. `ssh` extracts the same document's exact SSH URL entry. The maintainer-only `Source`, `Registration / Visibility` and `Notes` sections are not topics. Text follows the installed OMP version; the repo keeps no copy.
-- **Lifecycle**: the factory calls shared `registerToolTopics` with read's descriptors/readers. Indexes do not load bodies; the document is loaded and cut on the first leaf read/search. In full mode, `omomp.yml#system-prompt-replace` replaces the entire native read description with its common use, supported URLs and `tool://read` index, leaving details to on-demand topics and [conditional injection](#tool-topic-injection).
-- **Failure**: registration returns explicit `invalid` or `conflict` results, which the read factory logs as warnings. An OMP-owned or foreign `tool` handler is never replaced. When read's document is missing, or a heading is missing or repeated, the leaf read/search fails with that drift spelled out instead of serving partial topics.
+- **Files**: `TOPIC-<tool>-<name>.md` with a strict YAML header (`tool`, `name`, `title`, `when`, `upstream`) and a Markdown body; `SURFACE-<tool>.md` (header `tool`, `upstream`) replaces the tool's whole description. Topics are call instructions — parameters, syntax, values, preconditions, results, error recovery — never implementation detail. `when` is the one line the index shows (“before …”, “when …”). `upstream` names the OMP version and the sources the text was checked against.
+- **Coverage**: surfaces for `read`, `bash`, `task` (which splices the native `# Available Agents` section with `{{native:Available Agents}}`); topics for read, bash, edit (hashline mode), eval, glob, grep, find, task, wait, web_search, write, ask, fork_task, and the devices ast_grep, ast_edit, debug, github, checkpoint. `wt`, `wt_remove` and `harness_restart` have no topics: their descriptions already hold the call contract.
+- **Lifecycle**: files are read once when the extension loads and each tool's topics are registered under owner `omp-config/tool-topics`; changes need a restart. On every `before_agent_start` (main and sub, full and light) the extension locates each tool by name in OMP's rendered layout — inline `//` comment lines above `type <tool> =`, or a `## <tool>` device section before `### Schema` — and replaces its description with the surface (or keeps the native text) plus the index. Sessions without `read` keep native descriptions.
+- **Failure**: a bad file is skipped with a warning. A tool whose layout or `{{native:…}}` section is not found keeps its native description, with a log warning and one main-session notice per tool and reason. A tool whose registration fails gets no index.
 
 ### tool-topic-injection
 
@@ -240,17 +241,16 @@ tool-topic-injection:
       parameter: path
       pattern: '^ssh://'
       topic: tool://read/ssh
-    - id: eval-ssh-cat
-      tool: eval
-      parameter: code
-      pattern: '\bssh\b[^\n;|&]*\bcat\b'
-      topic: tool://read/ssh
-    - id: bash-ssh-cat
-      tool: bash
-      parameter: command
-      pattern: '\bssh\b[^\n;|&]*\bcat\b'
-      topic: tool://read/ssh
+    - id: read-sqlite
+      tool: read
+      parameter: path
+      pattern: '\.(sqlite3?|db3?)(:|\?|$)'
+      topic: tool://read/sqlite
+    # … read-archives, read-json, read-documents, read-forge, read-runtime, read-web,
+    #   grep-regex, grep-scopes, glob-patterns, web-search-query, eval-ssh-cat, bash-ssh-cat
 ```
+
+Shipped rules cover only calls that change nothing and are cheap to repeat (read, grep, glob, web_search) plus the eval/bash `ssh … cat` misuse rules: a topic delivered after the call improves the next one. `task`, `fork_task`, `edit`, `write` and mutating devices have no rules, since a topic arriving after their call is too late; their topics are read before the call.
 
 `tool` is an exact tool name; `parameter` names a string argument (or dotted property path). `pattern` is JavaScript regex source, without slash delimiters or flags; it is a text matcher, not a shell parser. Missing/non-string parameters do not match. `topic` is a registered `tool://<tool>/<topic>` leaf. Rule ids must be unique and stable within the owner.
 

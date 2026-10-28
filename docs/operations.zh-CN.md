@@ -22,6 +22,7 @@ flowchart LR
 | `agent/SYSTEM_TEMPLATE.md`、`APPEND_SYSTEM.md`、`PERSONALITY.md`、`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`、`agents/*` | 仓库（整文件） | 临时文件 + `rename` 覆盖（保留 symlink） | 只读 `cmp` 比对，有差异则复制回仓库 | `agents/*` 下次派发生效；其余下次启动生效 |
 | `agent/extensions/<name>/*.ts`、`extensions/_shared/*.ts`、`extensions-last/<name>/*.ts` | 仓库（整文件） | 覆盖 `.ts` 文件；`auto` 模式按 git diff 删除仓库已移除的 `.ts`（`extensions-last/README*.md` 只留仓库） | 逐个 `.ts` 比对并写回仓库 | 下次启动 OMP |
 | `PROMPT-INJECT-*.md`、`TURN-JUDGE-*.md`、`INTENT-*.md` | 仓库自带归仓库；本机自建归本机 | 覆盖仓库自带文件，不改动或删除同目录下本机自建的文件 | 只收回仓库已跟踪的同名文件 | 下次派发 / 下一轮 / 下次调用 |
+| `extensions/tool-topics/TOPIC-*.md`、`SURFACE-*.md` | 仓库自带归仓库；本机自建归本机 | 覆盖仓库自带文件；`auto` 模式按 git diff 删除仓库已移除的文件 | 只收回仓库已跟踪的同名文件 | 下次启动 OMP |
 | `APPEND_SYSTEM_MODEL.md`、`WATCHDOG-*.md` | 本机 | 不写入也不删除（仅在旧平铺目录迁移时从根目录移入扩展目录） | 不收回仓库 | 下一条 prompt / 写入即重读 |
 | `agent/config.yml` | 仓库 + 本机按字段合并 | 写入仓库键；保留本机字段 `LOCAL_CONFIG_FIELDS`（`providers.webSearchOrder`、`modelRoles`、`defaultThinkingLevel`、`skills`、`symbolPreset`、`theme`、`colorBlindMode`、`hideThinkingBlock`、`statusLine`、`terminal`、`tui`、`display`、`worktree`、`compaction.thresholdTokens`、`compaction.thresholdPercent`、`compaction.idleThresholdTokens`）和本机独有键；将 `extensions`（`MACHINE_LIST_FIELDS`）中的本机条目（如 `~/.claude`）保留在仓库条目之前 | 只用 `edit` 修改非本机字段的差异行，不整文件重序列化；跳过 `LOCAL_CONFIG_FIELDS` 与本机 `extensions` 条目 | OMP 热重载 |
 | `agent/omomp.yml` | 仓库段 + 本机段 | 覆盖仓库段（`omomp-lang`、`judge`、`lang-nag`、`input-polish`、`tool-policy-nag`、`task-completion-judge`、`task-split-check`、`child-memory-warning`、`tool-topic-injection`、`system-prompt-replace`）；保留本机段（`doc-polish`、`model-compaction`、`omp-config-autoupdate`） | 只修改仓库段的差异行，忽略本机段 | 按各扩展读取时机生效 |
@@ -150,7 +151,7 @@ export default function exampleTopics(pi: ExtensionAPI): void {
 
 先通过 `/update-omp` 安装 helper。插件位于其他目录或使用自定义 agent 目录时，在部署阶段计算从插件真实源码目录到 `<getAgentDir()>/extensions/_shared/tool-topics.ts` 的相对路径。必须保留为静态相对导入：OMP 的扩展依赖图会遍历相对路径源码；绝对导入或独立的原生动态导入可能绕过宿主包重写，报 `Cannot find package '@oh-my-pi/pi-coding-agent'`。导入或初始化失败时明确报告，不另建注册表。
 
-- `ToolTopic` 包含 `name`、`title`、`read(): string | Promise<string>`；`ToolTopicsRegistration` 包含 `tool`、稳定的 `owner` 和 `topics`。工具名和专题名区分大小写，限 `[A-Za-z0-9_.-]+`；owner/title 不能全为空白，专题数组不能为空且名称不能重复。共享边界验证注册信息和正文读取函数的返回值。
+- `ToolTopic` 包含 `name`、`title`、可选的一行 `when`（何时读取；`tool://<tool>` 列表和补全优先显示它而非 `title`）以及 `read(): string | Promise<string>`；`ToolTopicsRegistration` 包含 `tool`、稳定的 `owner` 和 `topics`。工具名和专题名区分大小写，限 `[A-Za-z0-9_.-]+`；owner/title 不能全为空白，专题数组不能为空且名称不能重复。共享边界验证注册信息和正文读取函数的返回值。
 - `registerToolTopics` 返回 `registered`、`invalid` 或 `conflict`，后两者携带 `reason`。每个工具归一个 owner；相同 owner 原子替换整份专题快照，未再提交的旧专题被移除；无效或冲突注册不会破坏现有内容。owner 用于协调注册，不是鉴权凭据。
 - 注册表由 router 持有的 handler 保存；带版本的能力标识让不同导入实例加入同一个 handler，而不是覆盖它。OMP 内置、其他宿主或不兼容的 `tool` handler 不会被覆盖。注册会复制描述，调用方之后修改原对象不会改变已发布快照。
 - `read tool://` 列工具，`read tool://example` 列专题，`read tool://example/usage` 读正文，支持行号和 raw 选择器。对工具或 scheme 根执行 `grep`/`find` 会枚举对应正文；未知工具或专题报错并列出可用名称。补全只读描述，正文读取和搜索每次调用 reader；reader 失败会使请求失败，不静默漏掉专题。
@@ -176,4 +177,5 @@ export default function exampleTopics(pi: ExtensionAPI): void {
   1. 在真实 TUI 会话中验证依赖 OMP 内部实现（`AgentRegistry`、子会话文件路径、钩子顺序、运行时设置层、`InteractiveMode` 原型、内置斜杠命令分发器）的功能：[`fork-task`](prompts-and-context.zh-CN.md#fork-task)、[`omp-todo-more`](plugins-and-modes.zh-CN.md#todo-more)（含 `todo`、`ctx`、task log 与 compact 后注入）、[`user-prompt-inject`](agents.zh-CN.md#user-prompt-inject)、[`turn-judge`](extensions.zh-CN.md#turn-judge)、[`task-completion-judge`](extensions.zh-CN.md#task-completion-judge)、[`model-compaction`](prompts-and-context.zh-CN.md#model-compaction)、[`wt-tool`](extensions.zh-CN.md#wt-tool) 与 [`harness-restart`](extensions.zh-CN.md#harness-restart)。
   2. 对比 `agent/SYSTEM_TEMPLATE.md` 与 OMP 内置的 `packages/coding-agent/src/prompts/system/system-prompt.md`，以及 `agent/PERSONALITY.md` 前半部分与 OMP `personality: default` 预设。
   3. 若启动时弹出 `system-prompt-replace: … found no target` 警告，按上游最新工具说明更新 `agent/omomp.yml` 的 `system-prompt-replace` 段。
+  4. 复查 `agent/extensions/tool-topics/`：出现 `tool-topics: <tool> keeps its native description` 警告，说明 OMP 改了工具说明的渲染格式或 `{{native:…}}` 引用的标题。随后逐个工具，把它的 `SURFACE-*` / `TOPIC-*` 文件与头部 `upstream` 列出的来源（`src/prompts/tools/` 下的工具提示词、工具 schema 与 `omp://tools/<tool>.md`）对照，修正有变化的参数、取值与行为，并更新 `upstream` 里的版本。
 - **中英文同步**：`README.md` / `README.zh-CN.md` 及每对 `docs/<topic>.md` / `docs/<topic>.zh-CN.md` 保持相同的章节、表格行与标题锚点。

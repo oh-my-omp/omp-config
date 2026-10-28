@@ -4,7 +4,7 @@
 
 本仓库的配置围绕以下设计取舍展开：
 
-1. **消除 system prompt 内部的重复与前后矛盾。** 非空壳 harness 在基础模板、内置工具说明与子代理包装层中自带的预定义文本极易与用户规则重复或冲突，而模型遇到前后矛盾的提示词时会直接忽略。依托 Pi 系（含 `omp`）对 Handlebars 模板、personality 槽位、追加提示词与 `before_agent_start` 钩子的完整定制能力，本仓库从 `SYSTEM_TEMPLATE.md` 中剔除重复的工具说明，并通过 [`system-prompt-replace`](docs/prompts-and-context.zh-CN.md#system-prompt-replace) 在渲染后原地改写内置与插件工具描述（如移除原生子代理跳过测试和禁用 Todo 的冲突句子），使每条规则只出现一次且前后一致。
+1. **消除 system prompt 内部的重复与前后矛盾。** 非空壳 harness 在基础模板、内置工具说明与子代理包装层中自带的预定义文本极易与用户规则重复或冲突，而模型遇到前后矛盾的提示词时会直接忽略。依托 Pi 系（含 `omp`）对 Handlebars 模板、personality 槽位、追加提示词与 `before_agent_start` 钩子的完整定制能力，本仓库从 `SYSTEM_TEMPLATE.md` 中剔除重复的工具说明，通过 [`tool-topics`](docs/extensions.zh-CN.md#tool-topics) 把渲染出的工具说明压到常用调用说明加 `Topics` 索引，OMP 简短的内置说明里省掉的详细调用说明改为按需读取的 `tool://<tool>/<topic>`，再通过 [`system-prompt-replace`](docs/prompts-and-context.zh-CN.md#system-prompt-replace) 做其余措辞级修改（如移除原生子代理禁用 Todo 的冲突句子），使每条规则只出现一次且前后一致。
 2. **文件读写固定使用 `read` + hashline `edit`，并以工具失范作为 system prompt 偏离的触发信号。** 允许用 `eval` 或 shell 组合命令检索和修改文件，会让模型跳过目标行周围的上下文直接按匹配结果修改；在长任务中读取邻近上下文增加的 token 占比很小，而在缺少编译器与测试保护的配置、脚本和命令行操作中，脱离上下文的修改容易造成破坏，因此配置启用 `edit.mode: hashline`（修改前须经非 `:raw` `read` 获取行快照标签）并禁止在 `eval` 中检索本地文件。同时，包括 Claude Opus 在内的前沿模型在长会话中普遍会逐步忽略静态 system prompt；[`tool-policy-nag`](docs/extensions.zh-CN.md#tool-policy-nag) 以工具调用不规范作为可观测信号，注入伪装成用户观察的 user 角色 steer 消息（在各模型厂商不透明的指令层级下，用户消息的注意力权重普遍高于系统提示），借此提醒模型重新遵守整个 system prompt。其启发式检测刻意保持较高误报率：对触发后的 thinking 块逐条检查表明，误报除消耗少量自检思考 token 外未观察到负面影响。回合中途与结束状态另由 [`watchdog-agent`](docs/extensions.zh-CN.md#watchdog-agent) 与 [`turn-judge`](docs/extensions.zh-CN.md#turn-judge) 抽查。
 3. **推迟有损上下文压缩，并保留已确认的约束。** 长会话上下文除文件内容外，还记录已与用户确认的需求边界与排除方案，过早压缩或截断命令输出会丢失这些前提。配置将压缩方式按信息损耗从低到高排列（`remote → soft → snapcompact → handoff → shake`），关闭提前 32k token 的后台预摘要（`compaction.asyncEnabled: false`），通过 [`model-compaction`](docs/prompts-and-context.zh-CN.md#model-compaction) 按模型调整触发阈值，并在子代理需要完整对话背景时使用 [`fork-task`](docs/prompts-and-context.zh-CN.md#fork-task) 复制当前分支。
 4. **`todo`（[`omp-todo-more`](docs/plugins-and-modes.zh-CN.md#todo-more)）介于普通会话与 `/goal` 之间。** 它保留 `/goal` 对目标、验收条件（`objective`/`measure`/`doneWhen`）与未完成项的督促，同时允许在执行过程中调整阶段、任务、耗时预估与阻塞状态。任务状态变更与 `DONE` 提交共同构成逻辑检查点（checkpoint）；跨 compact 轮次时，`omp-todo-more` 将 Todo 快照、[`Task log`](docs/prompts-and-context.zh-CN.md#task-log) 与 [`ctx`](docs/prompts-and-context.zh-CN.md#ctx) 子代理树重新注入上下文。
@@ -14,7 +14,7 @@
 
 | 页面 | 内容 |
 |---|---|
-| [提示词与上下文](docs/prompts-and-context.zh-CN.md) | 提示词分层（`SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`APPEND_SYSTEM.md`、`system-prompt-replace`、`append-system-model`、`repo-rules`）与上下文保留（`fork-task`、`model-compaction`、`ctx`、`Task log`） |
+| [提示词与上下文](docs/prompts-and-context.zh-CN.md) | 提示词分层（`SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`APPEND_SYSTEM.md`、`tool-topics`、`system-prompt-replace`、`append-system-model`、`repo-rules`）与上下文保留（`fork-task`、`model-compaction`、`ctx`、`Task log`） |
 | [子代理](docs/agents.zh-CN.md) | `agent/agents/*.md` 中的 7 个自定义子代理、模型绑定、顾问配置（`user-prompt-inject`、`discuss:steady` / `discuss:divergent`、`mentor:default`）、派发规则与 worktree 隔离 |
 | [本地扩展](docs/extensions.zh-CN.md) | 22 个本地扩展总表，以及派发/交付检查（`isolation-nudge`、`task-split-check`、`task-completion-judge`）、`JUDGE` 判定扩展（`tool-policy-nag`、`watchdog-agent`、`turn-judge`、`lang-nag`）与宿主/TUI 扩展 |
 | [插件与运行模式](docs/plugins-and-modes.zh-CN.md) | `install-plugins.sh` 中的外部插件（`omp-todo-more`、`omp-thinking-translator` 等）以及 `omp` 与 `omp-light` 的差异 |
