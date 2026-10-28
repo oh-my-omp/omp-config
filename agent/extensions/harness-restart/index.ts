@@ -4,11 +4,14 @@
 // The tool queues the human's own `/restart` (TUI `InteractiveMode.restart()`:
 // same launch flags, session resumed from disk) instead of reimplementing it.
 // `/restart` refuses while streaming, and a tool call always runs while
-// streaming, so the call only queues the request; a terminal `agent_end` (not
-// `willContinue`) starts an idle poll and runs it once the session is idle
-// with no queued messages. `agent_start` disarms the poll back to queued; a
-// terminal end interrupted by the user (Esc) cancels; session switch and
-// shutdown drop the request. This mirrors `wt-tool`'s queue/arm shape.
+// streaming, so the call only queues the request; an `agent_end` that hands
+// control back (terminal, or `willContinue` with `awaitingAsyncWork`: only a
+// background job's result can resume the session, which stays open to the
+// human's commands meanwhile) starts an idle poll and runs it once the session
+// is idle with no queued messages. A continuation the session schedules itself
+// (reminder, retry, compaction) keeps it queued. `agent_start` disarms the poll
+// back to queued; an end interrupted by the user (Esc) cancels; session switch
+// and shutdown drop the request. This mirrors `wt-tool`'s queue/arm shape.
 //
 // The restart is process-wide, so the tool result never reaches the caller:
 // just before restarting, the request (reason, timestamp) is appended as a
@@ -204,7 +207,9 @@ function disarm(runtime: Runtime, ctx: ExtensionContext): void {
 }
 
 function onAgentEnd(runtime: Runtime, event: AgentEndEvent, ctx: ExtensionContext): void {
-	if (runtime.state.kind !== "queued" || event.willContinue === true) return;
+	if (runtime.state.kind !== "queued") return;
+	// Same arming rule as wt-tool: self-scheduled continuations keep the request queued; a wait on background jobs does not.
+	if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
 	const request = runtime.state.request;
 	const last = event.messages.findLast((message) => message.role === "assistant");
 	if (last?.role === "assistant" && last.stopReason === "aborted" && isUserInterruptAbort(last)) {
