@@ -20,7 +20,7 @@
 | `https://github.com/oh-my-omp/omp-codex-image-gen` | `omp-codex-image-gen` | 必装（GitHub） | `xd://` 工具：`codex_generate_image`；Skill：`imagegen` | 使用本机 ChatGPT Codex 订阅凭据调用 `gpt-image-2` 生成或根据 1–5 张参考图修改 PNG |
 | `pi-package-search` | `pi-package-search` | 必装（npm） | `xd://` 工具：`search_pi_packages`, `install_pi_package`；Skill：`pi-package-search` | 检索 npm 上的 `pi-package` 扩展包，并在用户要求时安装 |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | 必装（npm） | TUI `Markdown.prototype.render` 补丁 | 隐藏 TUI 中 Markdown 代码块的围栏行并去掉默认 2 列缩进，保留源码缩进与语法高亮 |
-| `https://github.com/oh-my-omp/omp-playbooks` | `omp-playbooks` | 必装（GitHub） | `xd://` 工具：`playbook_open`, `playbook_read`, `playbook_edit`, `playbook_compile`, `playbook_check`, `playbook_run`, `playbook_timeline`, `playbook_launch`；CLI：`omp-playbook` | YAML Playbook 文档服务与 Tern 侧边栏界面。安装时检查 `PATH` 上有无 Tern 桌面应用提供的 `tern` 命令并链接其 Tern 插件；没有 `tern` 则安装失败，并中止整次更新器 apply。不在 Tern pane 中运行的 omp（没有数字 `TERN_PANE`）不会从它得到工具、专题或命令 |
+| `https://github.com/oh-my-omp/omp-playbooks` | `omp-playbooks` | 必装（GitHub） | `xd://` 工具：`playbook_open`, `playbook_read`, `playbook_edit`, `playbook_compile`, `playbook_check`, `playbook_run`, `playbook_timeline`, `playbook_launch`；CLI：`omp-playbook` | YAML Playbook 文档服务与 Tern 侧边栏界面。`PATH` 上有 Tern 桌面应用提供的 `tern` 时链接其 Tern 插件；没有时安装照样成功，只是不链接。不在 Tern pane 中运行的 omp（没有数字 `TERN_PANE`）不会从它得到工具、专题或命令 |
 | `# https://github.com/oh-my-omp/omp-remote-build` | `omp-remote-build` | 可选（默认注释） | `xd://` 工具：`container_exec`, `container_write_stdin`, `container_list_sessions`, `container_kill_session`, `remote_env_init`, `remote_env_build_image` | 按 git worktree 在远端 Docker 主机维护 Mutagen 同步副本与 Komodo 构建容器。依赖 `omp-unified-exec`、Mutagen、`km` CLI 与 SSH 构建主机 |
 
 ### todo-more
