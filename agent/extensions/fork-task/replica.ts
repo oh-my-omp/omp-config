@@ -44,31 +44,36 @@ export function observeRequests(session: AgentSession): void {
 	};
 }
 
-export type SelfFork = {
+/** What a fork child replicates from its source's latest request. */
+export type Replica = {
 	readonly request: RequestSnapshot;
 	readonly systemPrompt: readonly string[];
 	readonly tools: readonly AgentTool[];
-	readonly model: string;
+	/** The source's model and thinking level as a spawn selector. */
+	readonly sourceModel: string;
 	readonly replayPrefix: boolean;
+	/** Copy the source's reasoning controls when the child runs the source's model. */
 	readonly inheritReasoning: boolean;
 };
 
-type CaptureResult = { readonly kind: "ready"; readonly fork: SelfFork } | { readonly kind: "unavailable"; readonly reason: string };
+type CaptureResult = { readonly kind: "ready"; readonly replica: Replica } | { readonly kind: "unavailable"; readonly reason: string };
 
-export function captureSelf(session: AgentSession, shake: boolean, overrideEffort: boolean): CaptureResult {
+export function captureReplica(
+	session: AgentSession,
+	options: { readonly shake: boolean; readonly inheritReasoning: boolean },
+): CaptureResult {
 	const request = requests.get(session);
-	if (!request)
-		return { kind: "unavailable", reason: "the caller has not sent a request with self-fork capture loaded; restart OMP first" };
+	if (!request) return { kind: "unavailable", reason: "it has not sent a model request in this OMP process since fork capture loaded" };
 	const level = session.thinkingLevel;
 	return {
 		kind: "ready",
-		fork: {
+		replica: {
 			request,
 			systemPrompt: [...session.systemPrompt],
 			tools: [...session.agent.state.tools],
-			model: `${request.model.provider}/${request.model.id}${level ? `:${level}` : ""}`,
-			replayPrefix: !shake,
-			inheritReasoning: !overrideEffort,
+			sourceModel: `${request.model.provider}/${request.model.id}${level ? `:${level}` : ""}`,
+			replayPrefix: !options.shake,
+			inheritReasoning: options.inheritReasoning,
 		},
 	};
 }
@@ -113,48 +118,50 @@ function replicateContext(source: Context, current: Context, replayPrefix: boole
 }
 
 /** Install once per live generation; disposal releases the per-call hook. */
-export function applySelf(session: AgentSession, fork: SelfFork): void {
+export function applyReplica(session: AgentSession, replica: Replica): void {
 	const own = new Map(session.agent.state.tools.map((tool) => [tool.name, tool]));
-	const names = new Set(fork.tools.map((tool) => tool.name));
-	const tools = fork.tools.map((tool) => {
+	const names = new Set(replica.tools.map((tool) => tool.name));
+	const tools = replica.tools.map((tool) => {
 		const local = own.get(tool.name) ?? session.getToolByName(tool.name);
 		if (local) return local;
 		// AskTool's real implementation uses the supplied execution context. In
 		// a headless child it takes its existing headless handoff path; never
 		// fabricate a same-schema tool that always returns an error.
 		if (tool.name === "ask") return tool;
-		throw new Error(`fork_task: cannot clone caller tool \`${tool.name}\` into this child`);
+		throw new Error(`fork_task: cannot clone source tool \`${tool.name}\` into this child`);
 	});
-	// Only completion extends the caller's capability surface. Do not expose
+	// Only completion extends the source's capability surface. Do not expose
 	// other tools admitted by the unrestricted internal agent definition.
 	const yieldTool = own.get("yield") ?? session.getToolByName("yield");
 	if (yieldTool && !names.has("yield")) tools.push(yieldTool);
 	const detach = session.agent.addBeforeModelCallHook(() => {
-		session.agent.setSystemPrompt([...fork.systemPrompt]);
+		session.agent.setSystemPrompt([...replica.systemPrompt]);
 		session.agent.setTools(tools);
 	});
 	session.addDisposer(detach);
 
 	const stream = session.agent.streamFn;
-	const parent = fork.request;
+	const source = replica.request;
 	const initialCompaction = session.sessionManager.getBranchView().findLast((entry) => entry.type === "compaction")?.id;
-	let replayPrefix = fork.replayPrefix;
+	let replayPrefix = replica.replayPrefix;
 	const wrap: StreamFn = (model, context, options) => {
-		if (model.provider !== parent.model.provider || model.id !== parent.model.id) {
-			throw new Error("fork_task: self fork changed models; use an explicit agent for a different-model continuation");
-		}
 		if (replayPrefix && session.sessionManager.getBranchView().findLast((entry) => entry.type === "compaction")?.id !== initialCompaction) {
 			replayPrefix = false;
 		}
-		return stream(model, replicateContext(parent.context, context, replayPrefix), {
+		const replicated = replicateContext(source.context, context, replayPrefix);
+		// Request controls belong to the source's model; another model keeps its own.
+		if (model.provider !== source.model.provider || model.id !== source.model.id) {
+			return stream(model, replicated, { ...options, parentSessionId: source.options.sessionId });
+		}
+		return stream(model, replicated, {
 			...options,
-			...(fork.inheritReasoning ? { reasoning: parent.options.reasoning, disableReasoning: parent.options.disableReasoning } : {}),
-			serviceTier: parent.options.serviceTier,
-			temperature: parent.options.temperature,
-			maxTokens: parent.options.maxTokens,
-			cacheRetention: parent.options.cacheRetention,
-			promptCacheKey: parent.options.promptCacheKey ?? parent.options.sessionId,
-			parentSessionId: parent.options.sessionId,
+			...(replica.inheritReasoning ? { reasoning: source.options.reasoning, disableReasoning: source.options.disableReasoning } : {}),
+			serviceTier: source.options.serviceTier,
+			temperature: source.options.temperature,
+			maxTokens: source.options.maxTokens,
+			cacheRetention: source.options.cacheRetention,
+			promptCacheKey: source.options.promptCacheKey ?? source.options.sessionId,
+			parentSessionId: source.options.sessionId,
 		});
 	};
 	session.agent.streamFn = wrap;

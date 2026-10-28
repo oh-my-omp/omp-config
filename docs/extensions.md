@@ -40,7 +40,7 @@
 
 Source: `agent/extensions/isolation-nudge/`.
 
-Runs at `tool_call` on `task` in main and subagent sessions; `fork_task` is not checked by this extension. Explicit-agent forks default to isolation, while self forks default to shared cwd, so concurrent fork writers must explicitly set `isolated: true`. When a `task` call would leave $\ge 2$ write-capable agents (`task:*`, built-in `task`, omitted `agent`, `m1`, etc., counting both the current batch and running shared writer jobs from the same session) in the same working directory with at least one item leaving `isolated` unset, it blocks the call once per SHA-256 of the item's `task` text and asks for `isolated: true` on writers and `isolated: false` on read-only items. A second call with the same `task` text passes.
+Runs at `tool_call` on `task` in main and subagent sessions; `fork_task` is not checked by this extension. Forks with `agent` default to isolation, while forks without it default to shared cwd, so concurrent fork writers must explicitly set `isolated: true`. When a `task` call would leave $\ge 2$ write-capable agents (`task:*`, built-in `task`, omitted `agent`, `m1`, etc., counting both the current batch and running shared writer jobs from the same session) in the same working directory with at least one item leaving `isolated` unset, it blocks the call once per SHA-256 of the item's `task` text and asks for `isolated: true` on writers and `isolated: false` on read-only items. A second call with the same `task` text passes.
 
 ### task-split-check
 

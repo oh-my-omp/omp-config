@@ -37,8 +37,8 @@ prompt 的措辞无法绕过这一点。
 3. `task.disabledAgents` 里的名字即使列进 allowlist 也会失败
 -------------------------------------------------------------
 目前禁用：task、scout、sonic、reviewer、security-reviewer。把其中一个写进 `spawns` 不会让它
-复活。普通 `task` 必须显式写 `agent`，否则会掉进第 2 条。`fork_task` 不同：省略
-`agent` 表示通过内部 `fork:self` 复制调用方，填写则表示上下文交接。
+复活。普通 `task` 必须显式写 `agent`，否则会掉进第 2 条。`fork_task` 不同：所有子代理
+都以内部 `fork:self` 运行，`agent` 只选模型绑定与角色。
 
 
 4. 递归深度 2：孙代是叶子

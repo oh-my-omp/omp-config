@@ -41,8 +41,8 @@ worker that spawns other workers, lists `task:mid` (the default worker tier) fir
 -------------------------------------------------------------
 Currently disabled: task, scout, sonic, reviewer, security-reviewer. Listing one in
 `spawns` does not revive it. Ordinary `task` calls must name `agent` explicitly;
-relying on the default walks into item 2. `fork_task` is different: omit `agent`
-to fork the caller itself via internal `fork:self`, or set it for a handoff.
+relying on the default walks into item 2. `fork_task` is different: every child
+runs as internal `fork:self`, and `agent` only picks a model binding and a role.
 
 
 4. Recursion depth 2: grandchildren are leaves

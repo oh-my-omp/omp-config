@@ -81,19 +81,19 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 
 源码：`agent/extensions/fork-task/`。注册 `fork_task` 工具（顶层 `context` 加不含 `solutionSpace` 的 `tasks[]`，需开启 `async.enabled: true`）。
 
-`fork_task` 保留原生 Agent Hub、结果投递、`agent://`/`history://`、后续消息与隔离工作区合并。每个任务项有两种不同语义：
+`fork_task` 保留原生 Agent Hub、结果投递、`agent://`/`history://`、后续消息与隔离工作区合并。每个子代理都复刻源的最近一次模型请求（调用方的，或 `from` 指定的活跃代理的），同一源的多个分叉共享供应商缓存前缀；任何任务项都不改写 system prompt。`agent` 只决定模型与角色：
 
-| 任务项 | 子代理契约 | 默认工作区 | 用途 |
-|---|---|---|---|
-| 省略 `agent` | 复制调用方当前模型、请求参数、system prompt 与工具 | 共享（`isolated: false`） | 同一个 agent 开出另一条执行分支，复用已有缓存前缀 |
-| 显式填写 `agent` | 指定 agent 自己的模型、prompt 与工具，复制来的对话仅作背景 | 隔离（`isolated: true`） | 让另一个、通常更便宜的 worker 接着已有调查做事 |
+| 任务项 | 模型 | 任务消息 | 默认工作区 | 用途 |
+|---|---|---|---|---|
+| 省略 `agent` | 源的模型、thinking 等级与请求参数 | `context` + `task` | 共享（`isolated: false`） | 从源开出另一条执行分支，复用已有缓存前缀 |
+| 显式填写 `agent` | 该 agent 在 `task.agentModelOverrides` 中的绑定，否则取定义里的 `model` | `<role agent="…">` 包裹的定义正文 + `context` + `task` | 隔离（`isolated: true`） | 让另一个角色接着源的工作做，通常换更便宜的模型 |
 
-- **前缀复刻**：`self.ts` 在 `Agent.streamFn` 捕获实际 `Context`，位置在 SDK 的提醒、图片、上下文变换之后、供应商序列化之前。分身复用这份 system/工具定义前缀、分叉点以前的父消息、thinking/service-tier 参数和 prompt-cache key。共享 `context` 与新任务接在继承历史后，不进入 system prompt。工具调用由子会话自己的实现执行；存在的 `yield` 追加在父工具之后。实现只有一条供应商无关的路径，不分别改写 Anthropic/OpenAI payload。子会话的对话和传输身份保持独立；原生 `ask` 仍遵守 headless 限制。
-- **缓存与生命周期边界**：模型相同、请求参数兼容是必要条件；是否命中仍由供应商的缓存策略、路由和 TTL 决定。不支持追加工具保留缓存的供应商可能因新增 `yield` 而 miss。请求快照保存在创建它的 OMP 进程中，支持同进程 idle/park/revive。进程重启或父会话关闭后丢失快照的分身会在请求供应商前失败，应创建新分身；显式 agent 交接保留原生冷恢复。压缩改变子会话上下文后，包装器停止替换继承消息；未压缩时锚点缺失或不唯一则报错，不猜测拼接位置。
-- **工作区覆盖**：`isolated` 覆盖两种模式各自的默认值。并发写入必须显式选择 `isolated: true`；plan mode 强制共享、只读子代理；隔离子代理完成后不能继续唤醒。
-- **Shake 必须显式选择**：`shake` 默认为 false，两种模式都不检查继承 token 数或来源成本。显式 `shake: true` 对副本执行 `session.shake("elide")`，保留最近约 4,000 token 及 `skill://`、`local://PLAN.md` 读取，把更早的文本工具结果、$\ge 400$ token 的代码块和顶层小写 XML 块替换成共享 artifact 中的恢复引用。开启 shake 的分身明确不再回放原始消息前缀。
-- **显式改变参数**：主动填写 `effort` 会覆盖继承的 thinking，可能使缓存失效。导入额外 eval `tools` 必须显式填写 `agent`；分身不会默默接受最终无法使用的工具。
-- `from: "<agent-id>"`（解析规则同 `agent://<id>`，支持运行中、idle 或 parked 代理）复制该代理已落盘的对话历史。带 `from` 的项必须显式填 `agent`；子代理的工作目录仍取自调用方的 checkout，而非 `from` 代理自己的隔离 worktree。
+- **前缀复刻**：`replica.ts` 在每个会话的 `Agent.streamFn` 捕获实际 `Context`，位置在 SDK 的提醒、图片、上下文变换之后、供应商序列化之前。子代理复用这份 system/工具定义前缀和分叉点以前的源消息；运行源的模型时还复用 thinking/service-tier/temperature/max-token 参数和 prompt-cache key，换成其他模型则用该模型自己的参数。共享 `context`、角色和任务接在继承历史后，作为子代理的 user 消息。所有子代理都以内部 `fork:self` 派发，工具调用由子会话自己的实现执行，存在的 `yield` 追加在源工具之后。子代理以 `fork:self` 运行源的工具面，所以指定 agent 的工具限制、派发策略、按 agent 配置的 service-tier、压缩阈值与账号池，以及按 agent 名生效的钩子（如 [`task-completion-judge`](extensions.zh-CN.md#task-completion-judge)）都不生效。实现只有一条供应商无关的路径，不分别改写 Anthropic/OpenAI payload。子会话的对话和传输身份保持独立；原生 `ask` 仍遵守 headless 限制。
+- **缓存与生命周期边界**：模型相同、请求参数兼容是必要条件；是否命中仍由供应商的缓存策略、路由和 TTL 决定。改 `effort` 不影响复刻的前缀。不支持追加工具保留缓存的供应商可能因新增 `yield` 而 miss。请求快照保存在创建它的 OMP 进程中，支持同进程 idle/park/revive。进程重启或父会话关闭后丢失快照的子代理会在请求供应商前失败，应创建新分叉。压缩改变子会话上下文后，包装器停止替换继承消息；未压缩时锚点缺失或不唯一则报错，不猜测拼接位置。
+- **工作区覆盖**：`isolated` 覆盖默认值。并发写入必须显式选择 `isolated: true`；plan mode 强制共享、只读子代理；隔离子代理完成后不能继续唤醒。
+- **Shake 必须显式选择**：`shake` 默认为 false，任何任务项都不检查继承 token 数或来源成本。显式 `shake: true` 对副本执行 `session.shake("elide")`，保留最近约 4,000 token 及 `skill://`、`local://PLAN.md` 读取，把更早的文本工具结果、$\ge 400$ token 的代码块和顶层小写 XML 块替换成共享 artifact 中的恢复引用。开启 shake 的分叉明确不再回放原始消息前缀。
+- **拒绝的任务项**：`tools` 不是 fork 字段，子代理只暴露源的工具。未知 agent、`task.disabledAgents` 中的 agent 或 `fork:self` 本身在派发前报错。
+- `from: "<agent-id>"`（解析规则同 `agent://<id>`）复刻运行中或 idle 的代理而非调用方：先捕获它的最近一次请求，再落盘并复制它的对话历史。parked 代理没有可复刻的活跃请求，派发前报错，需先用 `write agent://<id>` 唤醒。子代理的工作目录仍取自调用方的 checkout，而非 `from` 代理自己的隔离 worktree。
 - 复制出的历史末尾会追加 `<system-notice cause="fork_task">`，说明前面的历史仅作背景，并要求子代理在交回结果前完成相关构建、测试与真实运行验证。
 - 暂存步骤：先把源会话复制到 `$TMPDIR/omp-fork-task/<uuid>/`（清零继承费用、为未完成的工具调用补齐中止结果、清空源 Todo、追加 fork notice），移除 `session_init`、`model_change`、`thinking_level_change`、`service_tier_change` 与 shake 产生的 `session_exit` 并将子条目重挂到上一级，共享子代理写入调用方 `cwd`、隔离子代理置空 `cwd`，最后在 `before_subagent_spawn` 中把暂存文件移到 `<父会话文件去掉 .jsonl>/<子代理 id>.jsonl`。
 
