@@ -60,6 +60,9 @@
 // "user"`), in a subagent any (its assignment and the parent's messages).
 //   用户说        that human prompt, always the first entry (absent only when
 //                the branch has none).
+//   用户在ask中回答  what the user chose or typed in an `ask` call, one line per
+//                answered question (`question → answer`); a cancelled,
+//                refused or unanswered ask adds nothing.
 //   提醒          any later user-role prompt that is not a human prompt: a
 //                harness or extension reminder, a turn-judge prompt; only its
 //                first 400 characters.
@@ -70,7 +73,7 @@
 //                marks as narration addressed to the user.
 //   模型调用工具  a tool call, as `name：intent` (the harness intent the call
 //                carries; just the name when it has none). Arguments and
-//                results are left out.
+//                results are left out, except the ask answers above.
 // The judged message's own thinking closes the 时间线; its text is 本轮回复.
 // When the entries after 用户说 exceed `maxChars` characters, whole entries
 // are dropped from the oldest end; 用户说 itself is never dropped.
@@ -117,6 +120,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import type { AssistantMessage, Judge } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { openJudge } from "../_shared/judge.ts";
@@ -167,7 +171,7 @@ type SpecParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-type TimelineKind = "用户说" | "提醒" | "模型想" | "模型说" | "模型调用工具";
+type TimelineKind = "用户说" | "用户在ask中回答" | "提醒" | "模型想" | "模型说" | "模型调用工具";
 
 type TimelineEntry = { readonly 类型: TimelineKind; readonly 内容: string };
 
@@ -498,6 +502,10 @@ function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
 			timeline.push(...assistantEvents(message, true));
 			for (const block of message.content) if (block.type === "toolCall") toolCalls.push(block.name);
 			if (message.stopReason === "stop") toolCalls = [];
+		} else if (message.role === "toolResult") {
+			// The user's decisions made in `ask` are the user speaking; a cancelled or refused ask is not.
+			const answers = askAnswers(message);
+			if (answers !== null) timeline.push({ 类型: "用户在ask中回答", 内容: formatAskAnswers(answers) });
 		}
 	}
 	timeline.push(...assistantEvents(judged, false).filter((event) => event.类型 !== "模型调用工具"));

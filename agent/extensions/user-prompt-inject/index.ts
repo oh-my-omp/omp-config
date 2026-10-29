@@ -28,17 +28,23 @@
 //   {{user_prompt[3:e]}}  slice, end-exclusive, `e` = end; bounds may be negative.
 // A scalar out of range renders empty; slice bounds clamp. A slice renders each
 // element as `<user_prompt index="N">…</user_prompt>` (N = 0-based position),
-// one per line block. Any other `{{user_prompt…}}` form makes the file invalid
-// (skipped with a warning). Each prompt is the message's text blocks joined by
-// newlines and trimmed; text-empty messages are dropped and take no index.
-// Prompt text is never re-expanded.
+// one per line block. `{{ask_answers}}` renders every decision the user made in
+// the root session's `ask` calls, oldest first, each call as
+// `<ask_answer index="N">question → answer…</ask_answer>` (one line per
+// answered question; a cancelled or refused ask is left out); it renders
+// empty when there are none. Any other `{{user_prompt…}}` / `{{ask_answers…}}`
+// form makes the file invalid (skipped with a warning). Each prompt is the
+// message's text blocks joined by newlines and trimmed; text-empty messages
+// are dropped and take no index. Prompt text is never re-expanded.
 //
 // SOURCE. The root is found by walking `ctx.agent.parentId` through the
 // process agent registry to the `kind: "main"` ref. Its prompts are the user
 // messages on the root session's current branch (`getBranch()` keeps
-// pre-compaction entries) with `attribution: "user"` and not `synthetic`.
-// Attribution is set by whoever sends the message, so extensions that inject
-// user-role messages must send them with `attribution: "agent"`.
+// pre-compaction entries) with `attribution: "user"` and not `synthetic`;
+// its ask answers are the `ask` tool results on that branch
+// (`_shared/ask-answers.ts`). Attribution is set by whoever sends the message,
+// so extensions that inject user-role messages must send them with
+// `attribution: "agent"`.
 //
 // RUNTIME. Files are read at session start, so edits apply to the next spawned
 // subagent. On every `context` event (each model call, including IRC wakes) a
@@ -56,22 +62,25 @@ import { basename } from "node:path";
 import type { DeveloperMessage } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 
 const FILE_PATTERN = /^PROMPT-INJECT-.+\.md$/i;
-/** Any `{{ user_prompt … }}` occurrence; the inner text is parsed separately. */
-const PLACEHOLDER_PATTERN = /\{\{\s*(user_prompt\b[^}]*?)\s*\}\}/g;
+/** Any `{{ user_prompt … }}` or `{{ ask_answers … }}` occurrence; the inner text is parsed separately. */
+const PLACEHOLDER_PATTERN = /\{\{\s*((?:user_prompt|ask_answers)\b[^}]*?)\s*\}\}/g;
 const SCALAR_PATTERN = /^user_prompt\[\s*(-?\d+)\s*\]$/;
 const SLICE_PATTERN = /^user_prompt\[\s*(-?\d+)\s*:\s*(-?\d+|e)\s*\]$/;
+const ANSWERS_EXPR = "ask_answers";
 
 type SliceEnd = { readonly kind: "end" } | { readonly kind: "index"; readonly value: number };
 
 type Segment =
 	| { readonly kind: "text"; readonly text: string }
 	| { readonly kind: "scalar"; readonly index: number }
-	| { readonly kind: "slice"; readonly start: number; readonly end: SliceEnd };
+	| { readonly kind: "slice"; readonly start: number; readonly end: SliceEnd }
+	| { readonly kind: "answers" };
 
 type TargetSet = { readonly kind: "all" } | { readonly kind: "names"; readonly names: ReadonlySet<string> };
 
@@ -87,7 +96,10 @@ type SpecParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-type RootPrompts = { readonly kind: "ok"; readonly prompts: readonly string[] } | { readonly kind: "missing"; readonly reason: string };
+/** The root session's human prompts and, separately, the ask answers given there; both oldest first. */
+type RootPrompts =
+	| { readonly kind: "ok"; readonly prompts: readonly string[]; readonly answers: readonly string[] }
+	| { readonly kind: "missing"; readonly reason: string };
 
 // --- discovery + parsing ----------------------------------------------------
 
@@ -123,8 +135,13 @@ function parseTemplate(body: string): TemplateParse {
 		} else if (slice) {
 			const end: SliceEnd = slice[2] === "e" ? { kind: "end" } : { kind: "index", value: Number(slice[2]) };
 			segments.push({ kind: "slice", start: Number(slice[1]), end });
+		} else if (expr === ANSWERS_EXPR) {
+			segments.push({ kind: "answers" });
 		} else {
-			return { kind: "invalid", reason: `unsupported placeholder "${m[0]}" (use user_prompt[i] or user_prompt[a:b], b may be e)` };
+			return {
+				kind: "invalid",
+				reason: `unsupported placeholder "${m[0]}" (use user_prompt[i], user_prompt[a:b] where b may be e, or ask_answers)`,
+			};
 		}
 		last = at + m[0].length;
 	}
@@ -180,7 +197,8 @@ function clampBound(bound: number, length: number): number {
 	return Math.min(Math.max(n, 0), length);
 }
 
-function renderSegment(segment: Segment, prompts: readonly string[]): string {
+function renderSegment(segment: Segment, root: { readonly prompts: readonly string[]; readonly answers: readonly string[] }): string {
+	const { prompts } = root;
 	switch (segment.kind) {
 		case "text":
 			return segment.text;
@@ -207,6 +225,8 @@ function renderSegment(segment: Segment, prompts: readonly string[]): string {
 			for (let i = start; i < end; i++) parts.push(`<user_prompt index="${i}">\n${prompts[i]}\n</user_prompt>`);
 			return parts.join("\n");
 		}
+		case "answers":
+			return root.answers.map((answer, i) => `<ask_answer index="${i}">\n${answer}\n</ask_answer>`).join("\n");
 		default: {
 			const unreachable: never = segment;
 			return unreachable;
@@ -214,8 +234,8 @@ function renderSegment(segment: Segment, prompts: readonly string[]): string {
 	}
 }
 
-function renderSpec(spec: InjectSpec, prompts: readonly string[]): string {
-	const body = spec.segments.map((s) => renderSegment(s, prompts)).join("");
+function renderSpec(spec: InjectSpec, root: { readonly prompts: readonly string[]; readonly answers: readonly string[] }): string {
+	const body = spec.segments.map((s) => renderSegment(s, root)).join("");
 	const name = spec.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 	return `<user-prompt-inject name="${name}">\n${body}\n</user-prompt-inject>`;
 }
@@ -235,14 +255,20 @@ function rootPrompts(ctx: ExtensionContext): RootPrompts {
 		if (ref.kind === "main") {
 			if (!ref.session) return { kind: "missing", reason: `root ${id} has no live session` };
 			const prompts: string[] = [];
+			const answers: string[] = [];
 			for (const entry of ref.session.sessionManager.getBranch()) {
 				if (entry.type !== "message") continue;
 				const message = entry.message;
+				if (message.role === "toolResult") {
+					const answered = askAnswers(message);
+					if (answered !== null) answers.push(formatAskAnswers(answered));
+					continue;
+				}
 				if (message.role !== "user" || message.attribution !== "user" || message.synthetic === true) continue;
 				const text = textOf(message.content, "\n").trim();
 				if (text !== "") prompts.push(text);
 			}
-			return { kind: "ok", prompts };
+			return { kind: "ok", prompts, answers };
 		}
 		id = ref.parentId;
 	}
@@ -318,7 +344,7 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 					return unreachable;
 				}
 			}
-			const text = active.map((spec) => renderSpec(spec, root.prompts)).join("\n\n");
+			const text = active.map((spec) => renderSpec(spec, root)).join("\n\n");
 			const message: DeveloperMessage = {
 				role: "developer",
 				content: [{ type: "text", text }],

@@ -96,6 +96,7 @@ OMP discovers extensions one level deep under `~/.omp/agent/extensions/`: each e
 |---|---|
 | `errors.ts` | `errorText(error)`: formats an `unknown` error as a string |
 | `messages.ts` | `textOf`, `lastAssistantText`: extracts plain text from messages |
+| `ask-answers.ts` | `askAnswers`, `formatAskAnswers`, `AskAnswer`: reads what the user answered in one `ask` tool result (native or omp-ask-more `details`), null for a cancelled, refused or unanswered ask; used by `turn-judge` and `user-prompt-inject` |
 | `i18n.ts` | `tr`, `language`, `resolveLanguage`, `parseLanguage`, `configuredLanguage`, `omompLangSection`, `LANGUAGE_ENV`: resolves `OMOMP_LANG` → agent-dir `omomp-lang` section → locale → English at each call site (do not call `tr` at module load) |
 | `omomp.ts` | `defineOmompSection`, `defineSharedOmompSection`, `loadOmompSection`, `writeOmompSection`: reads and writes an extension's (or shared module's) section in `omomp.{yml,yaml,json,toml}` (project `<cwd>/.omp/omomp.*` before `<agentDir>/omomp.*`) |
 | `models.ts` | `Model`, `ThinkingLevel`: host model and helper-session thinking types |
