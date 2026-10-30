@@ -11,32 +11,34 @@ argument-hint: "[check|<plane>]"
    - 与 `omp` 相比，Claude Code 和 Codex CLI 接近最小工具循环（毛坯房）；但 `omp` 原生默认状态关闭或未配置大量关键能力（`github`、`astGrep`、`checkpoint`、`extendedContext`、`inlineToolDescriptors`、`edit.mode: hashline`、`readLineNumbers` 等）。
    - `omp-config` 不仅打开这些原生底座，而且**围绕长程任务的正确性（而非节省 token）构建运行时控制层**——这与主流 harness 提倡“尽早压缩上下文、用 grep/sed 跳过上下文读取、限制子代理汇报字数以省 token”的做法相反。
    - 本命令只需由 AI 带着用户跑一次：不预先堆砌静态说明书，而是按控制面**当场调查** `omp://` 内置文档、`tool://` 专题与本仓库配置，只向用户呈现**运行时如何控制 AI（触发信号 → 拦截/注入/裁决 → 模型可观测行为）**，不讲内部 TypeScript 代码实现细节。
-2. **冷启动安全（自举约束）**：
+2. **冷启动安全与工具纪律（自举约束）**：
    - 本命令可能在尚未安装 `omp-config` 的原生 `omp` 中运行：不得假定 `omp-ask-more`、`omp-unified-exec`（`exec_command`）、`tool-topics`（`tool://`）、`session-urls`（`session://`）、`wt-tool` 或 `harness-restart` 已加载。
    - 在核对并完成模型角色绑定前，不得调用任何依赖特定模型角色或作者订阅的扩展工具（如 `polish_doc`、`task`、`fork_task`）。
+   - **文件与目录检查必须使用 `read`、`glob`、`grep` 工具**：严禁在 `bash` 中运行 `ls`、`cat`、`head`、`tail`、`find`、`grep` 或用 `python3 -c` 解析本地文件（会直接触发 `tool-policy-nag`）。`bash` 仅用于执行 `omp` CLI、`bun` 更新器脚本、`./plugin-audit.sh` 与 `git status`。
+   - **阶段 0–2 及 `check` 模式属于调查与讨论阶段（非工作阶段），严禁初始化 `todo`**：只有用户在 `ask` 中明确确认要执行安装或写入本机配置、正式进入阶段 3 时，才初始化 `todo`。
    - 每完成一个阶段的现场调查，必须使用 `ask` 工具（原生或 `omp-ask-more`）让用户选择下一步深挖的控制面、确认本机定制项或决定是否执行安装；严禁一次性倾倒全部 26 个扩展与 11 个插件的细节。
 3. **所有权红线（仅改本机所有项，仓库项默认只诊断不改工作树）**：
-   - 任何写入前，先从 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 读取 `LOCAL_CONFIG_FIELDS`、`LOCAL_OMOMP_SECTIONS`、`MACHINE_LIST_FIELDS`、`STRUCTURED` 与 `managedPlain`。
+   - 任何写入前，先用 `read` 从 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 读取 `LOCAL_CONFIG_FIELDS`、`LOCAL_OMOMP_SECTIONS`、`MACHINE_LIST_FIELDS`、`STRUCTURED` 与 `managedPlain`。
    - **本机所有项**（`<agentDir>/config.yml` 的 `LOCAL_CONFIG_FIELDS` 与 `extensions` 本机前置项、`<agentDir>/omomp.yml` 的 `LOCAL_OMOMP_SECTIONS`、`<agentDir>/models.yml`、`<agentDir>/commandcode-models.json`、`APPEND_SYSTEM_MODEL.md`、`WATCHDOG-*.md`）：在用户确认后直接写入本机 `<agentDir>`（由 `omp config path` 或 `PI_CODING_AGENT_DIR` / `~/.omp/agent` 决定），更新器与启动自动更新不会覆盖它们。
    - **仓库所有项**（`agent/config.yml` 的 `task.agentModelOverrides` 等非本机字段、`agent/omomp.yml` 的仓库段、`agent/thinking-translator.json`、`install-plugins.sh`、`agent/agents/*.md`、仓库自带的 `PROMPT-INJECT-user-goal.md` / `TURN-JUDGE-gpt-talk-only.md`）：**默认只做当场可用性诊断并输出定制片段，不修改仓库工作树，也不直接改 `<agentDir>` 中会被 `/update-omp` 覆盖的同名字段**。这样工作树保持干净，可安全开启 `/omp-config-autoupdate on`。只有用户明确要求维护个人分支/fork 并修改工作树时，才编辑工作树并提醒关闭上游自动更新。
 4. **当前全量安装与可选划分的诚实边界**：
    - 当前更新器 `omp-config-update.ts` 对仓库受管文件与 `install-plugins.sh` 未注释插件执行**全量安装**；日常轻量会话通过 `omp-light` 在进程启动时跳过 10 个长程监督/子代理治理扩展与 `system-prompt-replace`。
    - 引导中对“必选基底 / 条件必选 / 可选增强”的划分，一方面帮用户决定当前启用哪些本机开关、使用 `omp` 还是 `omp-light`，另一方面作为后续可选安装器（selective installer）的行为闭包规格；不得向用户谎称当前更新器会按勾选跳过文件写入。
 
-`$ARGUMENTS`：
-- 为空：按阶段 0 → 阶段 5 渐进执行完整引导、本机定制与安装。
-- `check`：只读诊断模式。执行阶段 0 现场盘点、输出本机模型/订阅/语言/插件与仓库配置的匹配诊断表，并运行 `bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source . --check` 与 `./plugin-audit.sh`；不修改任何本机或仓库文件。
-- `<plane>`（`1`–`8` 或控制面关键词）：直接进入阶段 0 盘点后跳转至指定控制面的深度现场调查与定制。
+当前传入参数：`$ARGUMENTS`
+- 参数为空：按阶段 0 → 阶段 4 渐进执行完整引导、本机定制与安装。
+- 参数为 `check`：只读诊断模式（非工作阶段，不建 `todo`）。执行阶段 0 现场盘点、输出本机模型/订阅/语言/插件与仓库配置的匹配诊断表，并运行 `bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source . --check` 与 `./plugin-audit.sh`；不修改任何本机或仓库文件。
+- 参数为 `<plane>`（`1`–`8` 或控制面关键词）：执行阶段 0 盘点后直接跳转至指定控制面的深度现场调查与定制。
 
 ---
 
-## 阶段 0：现场盘点（不改文件，先建事实基线）
+## 阶段 0：现场盘点（只读调查，不改文件、不建 `todo`）
 
-在向用户提问前，并行读取以下权威源建立当前机器与仓库的基线事实：
+在向用户提问前，用 `read`/`glob`/`grep` 与必要的 `omp` CLI 并行建立当前机器与仓库的基线事实：
 
 1. **本机环境与已安装状态**：
-   - 运行 `omp config path`、`omp config list --scope global --json`、`omp plugin list --json`，检查 `<agentDir>/config.yml`、`<agentDir>/omomp.yml`、`<agentDir>/models.yml`、`~/.pi/agent/pi-bansos-relay-state.json` 是否存在，以及本机是否有 `~/.claude`。
-   - 检查本机已配置凭据的 provider（通过 `omp models` 或读取配置/模型列表，严禁打印或解密任何凭据原文、严禁触碰 macOS Keychain）。
+   - 在 `bash` 中运行 `omp config path`、`omp config list --scope global --json`、`omp plugin list --json`；用 `glob` 检查 `<agentDir>/*`、`~/.pi/agent/*` 与 `~/.claude/*` 是否存在，用 `read` 读取 `<agentDir>/omomp.yml`（若存在）。
+   - 检查本机已配置凭据的 provider（通过 `omp models` 或 `omp config list --scope global --json`；**严禁直接 `read` `<agentDir>/models.yml` 全文以免暴露其中的 `apiKey:` 字段**，如需检查 `supportsReasoningEffort` 仅对该词执行 `grep`；严禁打印或解密任何凭据原文、严禁触碰 macOS Keychain）。
 2. **OMP 原生默认与 `agent/config.yml` 差分**：
    - 读取 `agent/config.yml`、`agent/config-light.yml`、`agent/omomp.yml`、`install-plugins.sh`，并对照 `omp://settings.md`、`omp://compaction.md`、`omp://tools/edit.md`。
    - 提炼出两组核心对比：
@@ -114,7 +116,7 @@ argument-hint: "[check|<plane>]"
 
 ## 阶段 3：执行安装与写入本机定制
 
-当用户在 `ask` 中确认安装与本机定制方案后（若 `$ARGUMENTS` 为 `check` 则跳过写入，仅跑 `--check` 与 `./plugin-audit.sh`）：
+当用户在 `ask` 中确认安装与本机定制方案后，初始化 `todo` 并按顺序执行（当传入参数为 `check` 时跳过本阶段写入，仅跑 `--check` 与 `./plugin-audit.sh`）：
 
 1. **执行仓库 → 本机更新器**：
    - 在仓库根目录运行：`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source .`（命名 profile 加 `--agent-dir <omp config path 输出>`）。
