@@ -89,7 +89,9 @@
 // DELETE TOOL. Registers `delete` (approval `write`, top-level) on macOS,
 // Linux and Windows; on any other platform no tool is registered.
 // Parameters: `paths` (non-empty string array) and `mode` (`"trash"`, the
-// default, or `"permanent"`). Paths are literal: no `~`, environment variable
+// default, or `"permanent"`). The tool text tells the agent to leave `mode`
+// unset and to set `"permanent"` only when the user explicitly asks for
+// unrecoverable deletion. Paths are literal: no `~`, environment variable
 // or glob expansion; a relative path is resolved against the session cwd.
 //
 // Every path is validated before any is touched; one refusal refuses the whole
@@ -112,7 +114,8 @@
 // `trash` moves each path to the platform trash, restorable from the file
 // manager: macOS runs `/usr/bin/trash -v <path>` with the path as argv, never
 // through a shell (missing binary: the call fails before touching anything and
-// points to `permanent`); Linux follows the freedesktop.org Trash spec itself
+// says `permanent` is only for an explicit request for unrecoverable deletion);
+// Linux follows the freedesktop.org Trash spec itself
 // (home trash `$XDG_DATA_HOME/Trash` or `~/.local/share/Trash` when the path is
 // on the same device, otherwise, on the mount really holding the path, its
 // parent's links resolved, `$topdir/.Trash/$uid`, falling back to
@@ -123,7 +126,7 @@
 // `Microsoft.VisualBasic.FileIO.FileSystem` `DeleteFile`/`DeleteDirectory`
 // with `SendToRecycleBin`; the path is passed in an environment variable,
 // never in the script text. UNC paths, non-fixed drives (no Recycle Bin) and
-// symbolic links or junctions fail and point to `permanent`.
+// symbolic links or junctions fail with the same note about `permanent`.
 // A failed move is reported; it never falls back to permanent deletion.
 // `permanent` deletes recursively. Paths run in order and the result reports
 // each one; a failure on one path, a backend that throws included, leaves the
@@ -145,7 +148,7 @@ const DELETE_TOOL = "delete";
 
 const DELETE_DESCRIPTION = [
 	"Delete files and directories given as literal paths. This is the way to delete: bash deletion commands (`rm`, `unlink`, `rmdir`, `shred`, `find -delete`, …) and eval deletion APIs (`shutil.rmtree`, `os.remove`, `fs.rmSync`, `Bun.file().delete()`, …) are refused.",
-	'Default `mode: "trash"` moves each path to the system trash, where the user can restore it; `mode: "permanent"` deletes recursively and cannot be undone.',
+	'Leave `mode` unset: the default `"trash"` moves each path to the system trash, where the user can restore it. `mode: "permanent"` deletes recursively and cannot be undone; set it only when the user explicitly asks for unrecoverable deletion. "Delete", "remove", "clean up" or a request phrased as `rm -rf` is not such a request.',
 	"Paths are taken literally: no `~`, environment variable or glob expansion; relative paths resolve against the session cwd. List every path explicitly.",
 	"Every path is checked before anything is touched; one bad path refuses the whole call. Refused: empty paths, paths starting with `~`, paths that do not exist, the filesystem root, the home directory and its ancestors, the session cwd and its ancestors (also when reached through a symbolic link or another spelling), and paths whose `..`, `.` or trailing `/` passes through a symbolic link. A symbolic link is deleted as the link itself.",
 	"The result reports each path: where it was moved, or why it failed.",
@@ -153,7 +156,12 @@ const DELETE_DESCRIPTION = [
 
 const deleteParams = z.object({
 	paths: z.array(z.string()).min(1).describe("Literal paths to delete; absolute, or relative to the session cwd."),
-	mode: z.enum(["trash", "permanent"]).optional().describe('"trash" (default): move to the system trash. "permanent": delete recursively.'),
+	mode: z
+		.enum(["trash", "permanent"])
+		.optional()
+		.describe(
+			'Leave unset: the default "trash" moves paths to the system trash, where the user can restore them. "permanent" deletes recursively and cannot be undone: set it only when the user explicitly asks for unrecoverable deletion; "delete", "remove", "clean up" or a request phrased as `rm -rf` is not such a request.',
+		),
 });
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: true };

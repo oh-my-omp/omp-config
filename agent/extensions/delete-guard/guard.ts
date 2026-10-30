@@ -52,7 +52,7 @@ async function judge(entry: Entry): Promise<Verdict> {
 function reasonFor(rule: Rule, fragment: string, detail: string, deleteAvailable: boolean): string {
 	const shown = fragment.length > FRAGMENT_LIMIT ? `${fragment.slice(0, FRAGMENT_LIMIT)}…` : fragment;
 	const outlet = deleteAvailable
-		? 'To delete files, call the `delete` tool with literal paths (it moves them to the system trash; `mode: "permanent"` deletes for good).'
+		? "To delete files, call the `delete` tool with literal paths and leave `mode` unset; the default moves them to the system trash."
 		: "This session cannot delete files.";
 	switch (rule) {
 		case "delete":
