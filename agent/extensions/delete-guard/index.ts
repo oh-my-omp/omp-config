@@ -92,7 +92,7 @@
 // (home trash `$XDG_DATA_HOME/Trash` or `~/.local/share/Trash` when the path is
 // on the same device, otherwise, on the mount really holding the path, its
 // parent's links resolved, `$topdir/.Trash/$uid`, falling back to
-// `$topdir/.Trash-$uid` when that cannot be created), writing `files/<name>`
+// `$topdir/.Trash-$uid` when any step there fails), writing `files/<name>`
 // and `info/<name>.trashinfo`; a name taken in either is never overwritten.
 // A failed move is reported; it never falls back to permanent deletion.
 // `permanent` deletes recursively. Paths run in order and the result reports

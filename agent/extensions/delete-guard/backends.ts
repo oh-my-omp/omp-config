@@ -119,21 +119,6 @@ function trashesFor(located: string): readonly TrashDir[] {
 	return topdirTrashes(mountPoint(located));
 }
 
-/** Creates `files/` and `info/` of the first candidate that allows it; the last candidate's error is rethrown. */
-function prepareTrash(candidates: readonly TrashDir[]): TrashDir {
-	let failure: unknown = new Error("no trash directory");
-	for (const candidate of candidates) {
-		try {
-			mkdirSync(path.join(candidate.dir, "files"), { recursive: true, mode: 0o700 });
-			mkdirSync(path.join(candidate.dir, "info"), { recursive: true, mode: 0o700 });
-			return candidate;
-		} catch (error) {
-			failure = error;
-		}
-	}
-	throw failure;
-}
-
 /** RFC 2396 escaping per path segment, `/` kept, as the spec's `Path=` key requires. */
 const encodeTrashPath = (value: string): string => value.split("/").map(encodeURIComponent).join("/");
 
@@ -178,24 +163,42 @@ function claimInfo(trashDir: string, base: string, body: string): { readonly nam
 	}
 }
 
+/**
+ * Moves `target` into one trash: creates `files/` and `info/`, claims a name, renames. Any failure removes the
+ * claimed info file and throws, so the caller can try the next trash; the entry is never half moved.
+ */
+function moveInto(trash: TrashDir, target: Target, located: string): string {
+	mkdirSync(path.join(trash.dir, "files"), { recursive: true, mode: 0o700 });
+	mkdirSync(path.join(trash.dir, "info"), { recursive: true, mode: 0o700 });
+	const recorded = trash.topdir === null ? target.operand : path.relative(trash.topdir, located);
+	const body = `[Trash Info]\nPath=${encodeTrashPath(recorded)}\nDeletionDate=${deletionDate(new Date())}\n`;
+	const { name, infoPath } = claimInfo(trash.dir, path.basename(target.operand), body);
+	const destination = path.join(trash.dir, "files", name);
+	try {
+		renameSync(target.operand, destination);
+	} catch (error) {
+		unlinkSync(infoPath);
+		throw error;
+	}
+	return destination;
+}
+
+/** The spec's fallback applies when a trash "fails at any point": each candidate is tried until one takes the entry. */
 function linuxTrash(target: Target): Outcome {
+	let failure: unknown = new Error("no trash directory");
 	try {
 		const located = path.join(realpathSync(path.dirname(target.operand)), path.basename(target.operand));
-		const trash = prepareTrash(trashesFor(located));
-		const recorded = trash.topdir === null ? target.operand : path.relative(trash.topdir, located);
-		const body = `[Trash Info]\nPath=${encodeTrashPath(recorded)}\nDeletionDate=${deletionDate(new Date())}\n`;
-		const { name, infoPath } = claimInfo(trash.dir, path.basename(target.operand), body);
-		const destination = path.join(trash.dir, "files", name);
-		try {
-			renameSync(target.operand, destination);
-		} catch (error) {
-			unlinkSync(infoPath);
-			throw error;
+		for (const trash of trashesFor(located)) {
+			try {
+				return { kind: "done", given: target.given, note: `moved to ${moveInto(trash, target, located)}` };
+			} catch (error) {
+				failure = error;
+			}
 		}
-		return { kind: "done", given: target.given, note: `moved to ${destination}` };
 	} catch (error) {
-		return { kind: "failed", given: target.given, error: errorText(error) };
+		failure = error;
 	}
+	return { kind: "failed", given: target.given, error: errorText(failure) };
 }
 
 function permanent(target: Target): Outcome {

@@ -176,7 +176,7 @@ tool-policy-nag:
 
 - **字面路径**：不展开 `~`、环境变量与 glob；相对路径相对会话 cwd。`"$HOME"`、`"*.log"` 都是文件名。
 - **先校验、后改动**：所有路径先逐个校验，任一被拒则整次拒绝、不动任何文件。拒绝：空串或纯空白、以 `~` 开头、不存在、文件系统根、家目录及其祖先目录、会话 cwd 本身及其祖先目录。受保护目录按文件身份（`dev:ino`）比较，因此大小写变体、firmlink、bind mount 以及指向它们的符号链接都会被拒；检查覆盖路径本身、按原文经链接实际到达的文件，以及符号链接的目标。已不存在的受保护目录（如已删除的 cwd）按拼写比较。`..`、`.` 或末尾 `/` 穿过符号链接的路径（`link/../x`、`link/`）实际到达的文件与规范化后的路径不同，予以拒绝。通过校验的符号链接（含悬空链接）只删除链接本身。
-- **`trash`**：把每个路径移入平台回收站，可从文件管理器还原。macOS 以 argv 传路径调用 `/usr/bin/trash -v <path>`（不经 shell）；该程序缺失时，整次调用在动任何文件之前失败，并提示改用 `permanent`。Linux 不依赖 `gio`、`trash-cli`，自行实现 [freedesktop.org Trash 规范](https://specifications.freedesktop.org/trash-spec/latest/)：与家目录回收站（`$XDG_DATA_HOME/Trash`，默认 `~/.local/share/Trash`）同设备的路径进家目录回收站，否则在实际容纳该路径的挂载点（解析其父目录的链接后）上进 `$topdir/.Trash/$uid`（带粘滞位的共享目录），无法创建时改进 `$topdir/.Trash-$uid`；写入 `files/<name>` 与 `info/<name>.trashinfo`（`Path=` 为 URI 转义后的原路径，家目录回收站写绝对路径，挂载点回收站写相对挂载点的路径）。`files/` 或 `info/` 中已有同名条目时依次改为 `<name>.2`、`<name>.3`……，不会覆盖回收站里已有的条目。移动失败照实报告，不改为永久删除。
+- **`trash`**：把每个路径移入平台回收站，可从文件管理器还原。macOS 以 argv 传路径调用 `/usr/bin/trash -v <path>`（不经 shell）；该程序缺失时，整次调用在动任何文件之前失败，并提示改用 `permanent`。Linux 不依赖 `gio`、`trash-cli`，自行实现 [freedesktop.org Trash 规范](https://specifications.freedesktop.org/trash-spec/latest/)：与家目录回收站（`$XDG_DATA_HOME/Trash`，默认 `~/.local/share/Trash`）同设备的路径进家目录回收站，否则在实际容纳该路径的挂载点（解析其父目录的链接后）上进 `$topdir/.Trash/$uid`（带粘滞位的共享目录），其中任一步失败（建目录、写 info 文件或移动条目）时改进 `$topdir/.Trash-$uid`；写入 `files/<name>` 与 `info/<name>.trashinfo`（`Path=` 为 URI 转义后的原路径，家目录回收站写绝对路径，挂载点回收站写相对挂载点的路径）。`files/` 或 `info/` 中已有同名条目时依次改为 `<name>.2`、`<name>.3`……，不会覆盖回收站里已有的条目。移动失败照实报告，不改为永久删除。
 - **`permanent`**：递归删除。
 - **结果**：按顺序处理，每个路径一行 `ok` 或 `failed`；任一失败则整次调用标为错误，摘要写明 `ok` 行已生效，已处理的路径保持处理结果。
 
