@@ -4,34 +4,34 @@
 
 ## Local Extensions Index
 
-| # | Extension | Section | Scope | Light mode | Config (`omomp.yml` section or sibling file) |
-|---|---|---|---|---|---|
-| 1 | `system-prompt-replace` | [Prompts and Context](prompts-and-context.md#system-prompt-replace) | Main + Sub | No | `omomp.yml#system-prompt-replace` (repo) |
-| 2 | `append-system-model` | [Prompts and Context](prompts-and-context.md#append-system-model) | Main + Sub | Yes | `APPEND_SYSTEM_MODEL.md` (machine-local) |
-| 3 | `repo-rules` | [Prompts and Context](prompts-and-context.md#repo-rules) | Main + Sub | Yes | Scans `.claude/rules`, `.agents/rules`, `.pi/rules`, `~/.claude/rules`, and native rules for `paths` |
-| 4 | `fork-task` | [Prompts and Context](prompts-and-context.md#fork-task) | Main + Sub | No | None |
-| 5 | `model-compaction` | [Prompts and Context](prompts-and-context.md#model-compaction) | Main writes / Sub reads | Yes | `omomp.yml#model-compaction` (machine-local) |
-| 6 | `user-prompt-inject` | [Subagents](agents.md#user-prompt-inject) | Subagents | No | `PROMPT-INJECT-*.md` (`user-goal.md` in repo) |
-| 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | Main + Sub | No | None |
-| 8 | `task-split-check` | [task-split-check](#task-split-check) | Main (`split`) / Main+Sub (`report-limit`) | No | `omomp.yml#task-split-check` (repo) |
-| 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | No | `omomp.yml#task-completion-judge` (repo) |
-| 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | Main | No | `omomp.yml#tool-policy-nag` + `INTENT-policy.md` (repo) |
-| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | Main + Sub | No | `WATCHDOG-*.md` (machine-local) |
-| 12 | `turn-judge` | [turn-judge](#turn-judge) | Main + Sub (per file `target`) | No | `TURN-JUDGE-*.md` (`gpt-talk-only` in repo; others machine-local) |
-| 13 | `lang-nag` | [lang-nag](#lang-nag) | Main | No | `omomp.yml#lang-nag` (repo) |
-| 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | Process-wide (from main) | Yes | `omomp.yml#child-memory-warning` (repo) |
-| 15 | `input-polish` | [input-polish](#input-polish) | Main TUI | Yes | `omomp.yml#input-polish` (repo) |
-| 16 | `doc-polish` | [doc-polish](#doc-polish) | Main + Sub | No | `omomp.yml#doc-polish` (machine-local) |
-| 17 | `wt-tool` | [wt-tool](#wt-tool) | Main TUI | Yes | None |
-| 18 | `harness-restart` | [harness-restart](#harness-restart) | Main TUI | Yes | None |
-| 19 | `commandcode-model-spec` | [commandcode-model-spec](#commandcode-model-spec) | Main + Sub | Yes | Reads machine-local `commandcode-models.json` |
-| 20 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | Root main (process-wide table) | Yes | Backend `fetchAvailableModels`; no file |
-| 21 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omomp.yml#omp-config-autoupdate` (machine-local) |
-| 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide (module load) | Yes | `omomp.yml#omomp-lang` (repo) |
-| 23 | `tool-topics` | [tool-topics](#tool-topics) | Main + Sub (prompt); process-wide (`tool://` scheme) | Yes | `TOPIC-*.md` / `SURFACE-*.md` beside it (repo) |
-| 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | Main + Sub | Yes | `omomp.yml#tool-topic-injection` (repo) |
-| 25 | `session-urls` | [session-urls](#session-urls) | Process-wide (`session://` scheme) | Yes | Reads the session files, recap journal and prompt history; no config |
-| 26 | `delete-guard` | [delete-guard](#delete-guard) | Main + Sub | Yes | None |
+| # | Extension | Section | Scope | Light mode | Config (`omomp.yml` section or sibling file) | Control plane & bundle | Customization & timing |
+|---|---|---|---|---|---|---|---|
+| 1 | `system-prompt-replace` | [Prompts and Context](prompts-and-context.md#system-prompt-replace) | Main + Sub | No | `omomp.yml#system-prompt-replace` (repo) | Prompt & knowledge (`todo-continuity` / full-mode pack; coupled with `omp-todo-more` & `inlineToolDescriptors`) | Defer: keep shipped replacements; update only when OMP upstream changes tool wording |
+| 2 | `append-system-model` | [Prompts and Context](prompts-and-context.md#append-system-model) | Main + Sub | Yes | `APPEND_SYSTEM_MODEL.md` (machine-local) | Prompt & knowledge (Optional) | Optional now (machine-local): create `APPEND_SYSTEM_MODEL.md` only if specific models need extra rules |
+| 3 | `repo-rules` | [Prompts and Context](prompts-and-context.md#repo-rules) | Main + Sub | Yes | Scans `.claude/rules`, `.agents/rules`, `.pi/rules`, `~/.claude/rules`, and native rules for `paths` | Prompt & knowledge (Core `prompt-topics`) | No config needed: scans `.claude/rules`, `.agents/rules`, `.pi/rules`, `~/.claude/rules` and `paths` frontmatter |
+| 4 | `fork-task` | [Prompts and Context](prompts-and-context.md#fork-task) | Main + Sub | No | None | Long-horizon context & subagents (Full-mode `subagent-gates`; coupled with `fork:self`) | No config needed: uses active session or target `agent` model binding |
+| 5 | `model-compaction` | [Prompts and Context](prompts-and-context.md#model-compaction) | Main writes / Sub reads | Yes | `omomp.yml#model-compaction` (machine-local) | Long-horizon state & compaction (Core `compaction-baseline`) | Customize now (machine-local): set per-model regex `thresholdTokens` in `<agentDir>/omomp.yml#model-compaction` matching your models' context windows |
+| 6 | `user-prompt-inject` | [Subagents](agents.md#user-prompt-inject) | Subagents | No | `PROMPT-INJECT-*.md` (`user-goal.md` in repo) | Subagents & advisors (Full-mode `advisor-governance`; coupled with `APPEND_SYSTEM.md` & 3 advisors) | Defer: keep `PROMPT-INJECT-user-goal.md`; add machine-local `PROMPT-INJECT-*.md` only for custom roles |
+| 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | Main + Sub | No | None | Subagents & advisors (Full-mode `subagent-gates`) | No config needed: enforces explicit `isolated` on concurrent writable `task` calls |
+| 8 | `task-split-check` | [task-split-check](#task-split-check) | Main (`split`) / Main+Sub (`report-limit`) | No | `omomp.yml#task-split-check` (repo) | Subagents & advisors (Full-mode `subagent-gates`) | Customize now (machine-local): bind `modelRoles.smol` (or `@task-split-check`) in `<agentDir>/config.yml` to an available fast model |
+| 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | No | `omomp.yml#task-completion-judge` (repo) | Subagents & advisors (Full-mode `subagent-gates` + `todo-continuity`; calls `omp-todo-more:read`) | Customize now (machine-local): bind `modelRoles.smol` (or `@task-completion-judge`) in `<agentDir>/config.yml` to an available fast model |
+| 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | Main | No | `omomp.yml#tool-policy-nag` + `INTENT-policy.md` (repo) | Runtime drift steering (Full-mode `drift-monitors` + `pty-routing`; `heuristic` mode overrides runtime `bashInterceptor.enabled = false`) | Defer thresholds (`afterHits: 3`, `maxNags: 3`); for non-Chinese steers, override `form.prompt` in project `.omp/omomp.yml` |
+| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | Main + Sub | No | `WATCHDOG-*.md` (machine-local) | Runtime drift steering (Full-mode `drift-monitors`, Optional) | Defer (machine-local): inactive until `WATCHDOG-*.md` is created via `/watchdog add` |
+| 12 | `turn-judge` | [turn-judge](#turn-judge) | Main + Sub (per file `target`) | No | `TURN-JUDGE-*.md` (`gpt-talk-only` in repo; others machine-local) | Runtime drift steering (Full-mode `drift-monitors`) | Customize now (machine-local): ensure `modelRoles.judge` or `modelRoles.tiny` resolves; defer `TURN-JUDGE-gpt-talk-only.md` threshold (`0.8`) |
+| 13 | `lang-nag` | [lang-nag](#lang-nag) | Main | No | `omomp.yml#lang-nag` (repo) | Runtime drift steering (Full-mode `drift-monitors`) | Diagnose now: uses `openJudge` (`judge`/`tiny`); non-Chinese projects override `lang-nag` in `<cwd>/.omp/omomp.yml` |
+| 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | Process-wide (from main) | Yes | `omomp.yml#child-memory-warning` (repo) | Execution & host safety (Conditional `macos-memory`: Darwin only) | Defer: keep `thresholdGiB: 4`; override in `<cwd>/.omp/omomp.yml` for memory-heavy builds |
+| 15 | `input-polish` | [input-polish](#input-polish) | Main TUI | Yes | `omomp.yml#input-polish` (repo) | Human interaction & TUI (Optional `polish-tools`) | Optional now: uses `@input-polish` / `modelRoles.smol`; override `key` (`alt+enter`) or `instruction` in `<cwd>/.omp/omomp.yml` if needed |
+| 16 | `doc-polish` | [doc-polish](#doc-polish) | Main + Sub | No | `omomp.yml#doc-polish` (machine-local) | Human interaction & TUI (Full-mode Optional `polish-tools`) | Optional now (machine-local): add `omomp.yml#doc-polish` (`fallbackRole`, `concurrency`) and `@doc-polish.*` roles if using `/polish-doc` |
+| 17 | `wt-tool` | [wt-tool](#wt-tool) | Main TUI | Yes | None | Execution & workspace control (Core `workspace-lifecycle`) | No config needed: queues `/wt` and `/move` at turn idle |
+| 18 | `harness-restart` | [harness-restart](#harness-restart) | Main TUI | Yes | None | Execution & workspace control (Core `workspace-lifecycle`) | No config needed: queues `InteractiveMode.restart()` and resumes session |
+| 19 | `commandcode-model-spec` | [commandcode-model-spec](#commandcode-model-spec) | Main + Sub | Yes | Reads machine-local `commandcode-models.json` | Providers & lifecycle (Conditional `commandcode-adapter`; coupled with `pi-commandcode-provider`) | Conditional now (machine-local): active only when `<agentDir>/commandcode-models.json` exists |
+| 20 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | Root main (process-wide table) | Yes | Backend `fetchAvailableModels`; no file | Providers & lifecycle (Conditional `antigravity-compat`) | No config needed: refreshes `maxOutputTokens` automatically when Antigravity credentials exist |
+| 21 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omomp.yml#omp-config-autoupdate` (machine-local) | Providers & lifecycle (Core `workspace-lifecycle`) | Optional now (machine-local): toggle via `/omp-config-autoupdate on\|off` (`<agentDir>/omomp.yml#omp-config-autoupdate`) |
+| 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide (module load) | Yes | `omomp.yml#omomp-lang` (repo) | Human interaction & TUI (Core `workspace-lifecycle`) | Diagnose now: shipped `zh`; set `OMOMP_LANG=en` in shell environment to switch UI to English without editing repo files |
+| 23 | `tool-topics` | [tool-topics](#tool-topics) | Main + Sub (prompt); process-wide (`tool://` scheme) | Yes | `TOPIC-*.md` / `SURFACE-*.md` beside it (repo) | Prompt & knowledge (Core `prompt-topics`; `TOPIC-exec_command-*` coupled with `omp-unified-exec`) | Defer: shipped `SURFACE-*` / `TOPIC-*` match current OMP; add machine-local topics only when extending tools |
+| 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | Main + Sub | Yes | `omomp.yml#tool-topic-injection` (repo) | Prompt & knowledge (Core `prompt-topics`; depends on `tool-topics`) | Defer: keep shipped read/grep/ssh rules; override in `<cwd>/.omp/omomp.yml` only if disabling or adding rules |
+| 25 | `session-urls` | [session-urls](#session-urls) | Process-wide (`session://` scheme) | Yes | Reads the session files, recap journal and prompt history; no config | Long-horizon state & compaction (Core `compaction-baseline`) | No config needed: registers read-only `session://` scheme globally |
+| 26 | `delete-guard` | [delete-guard](#delete-guard) | Main + Sub | Yes | None | Execution & host safety (Core `safe-deletion`) | No config needed: always blocks `bash`/`eval` deletions and registers literal-path `delete` tool |
 
 ---
 
