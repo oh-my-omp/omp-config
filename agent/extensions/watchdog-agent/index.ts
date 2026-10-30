@@ -12,8 +12,8 @@
 // content itself* to a specific target: every advised session receives the
 // whole discovered roster. This extension adds exactly that — a `WATCHDOG-*.md`
 // file declares WHICH agent it watches (`target: main` or a subagent name).
-// Chat reviewers may choose a model; option-based judgments follow OMP's JUDGE
-// role. Its body only reaches that target. There is no ExtensionAPI hook into
+// Chat reviewers may choose a model; option-based judgments follow `openJudge`
+// (purpose `watchdog-agent`). Its body only reaches that target. There is no ExtensionAPI hook into
 // the native advisor, so this is a small self-contained reviewer.
 //
 // FILE FORMAT. `WATCHDOG-<label>.md`, discovered at:
@@ -25,7 +25,7 @@
 //   model:  anthropic/claude-sonnet-4-5:medium   # chat reviewer; else @advisor role
 //   tools:  [read, grep, glob]                   # optional; chat reviewer's tools
 //   instructions: Judge only the latest work.    # optional native question text
-//   option.<label>: <criteria>                   # selects native JUDGE backend (>= 2)
+//   option.<label>: <criteria>                   # selects the JUDGE backend (>= 2)
 //   option.<label>.prompt: <text>                # injected when JUDGE picks <label>; omit = silent
 //   option.<label>.delivery: steer               # optional per-option delivery override
 //   name:   Architecture                          # optional label; `/watchdog` addresses it by name
@@ -35,9 +35,11 @@
 //   every:  30                                    # run after this many watched actions (default 30)
 //   scope:  full                                  # full (whole branch, default) | window (since own last run)
 // Body = review priorities for chat; judgment criterion for JUDGE.
-// Option-based watchdogs use OMP's JUDGE role chain (`_shared/judge.ts`), then
-// the `judge` section's fallback role as a prompted judge; they stay inactive
-// only when neither resolves a model. JUDGE has no tools, free-form
+// Option-based watchdogs use `openJudge` (`_shared/judge.ts`, purpose
+// `watchdog-agent`): the `@watchdog-agent` role's chat models when assigned,
+// otherwise OMP's JUDGE role chain, then the `judge` section's fallback role as
+// a prompted judge; they stay inactive only when no path resolves a model.
+// JUDGE has no tools, free-form
 // explanation, or fallback to the chat reviewer. Labels are lowercased
 // (the frontmatter parser lowercases keys); each value is a single line.
 //
@@ -52,7 +54,7 @@
 // whole branch; `scope: window` reviews only messages after the cursor, which
 // advances only when a review reaches a verdict and is persisted as a session
 // entry. The transcript is never truncated. Chat reviewers use a
-// tool-capable `createAgentSession`; native JUDGE uses `Judge.judge` and only
+// tool-capable `createAgentSession`; JUDGE uses `Judge.judge` and only
 // selects one configured option whose prewritten prompt (if any) is injected.
 // Findings go through `sendUserMessage`, bounded per watchdog per context when
 // `maxPerContext` is set; `nextTurn` findings wait for the user's next prompt
@@ -82,8 +84,8 @@
 //
 // FAILURE POLICY. Every failure path (no match, unresolved model, judge
 // unavailable, reviewer error/timeout, malformed file) degrades to "no note"
-// and leaves the cursor where it was. Explicit native judge selection never
-// falls back to a chat model. The extension never blocks, mutates, or corrupts
+// and leaves the cursor where it was. Option-based judgment never falls back
+// to the chat reviewer. The extension never blocks, mutates, or corrupts
 // a primary turn.
 //
 // SCOPE HONESTY. On a subagent the note is best-effort: it lands if the turn

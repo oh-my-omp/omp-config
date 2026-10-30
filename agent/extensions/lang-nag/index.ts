@@ -16,11 +16,14 @@
 // has already settled; if detection is still running when the message is sent,
 // the judgment is aborted and the message goes out unchanged.
 //
-// Detection is one choice question on the sample's language, asked through OMP's
-// JUDGE role chain (`_shared/judge.ts`, scope `any`): `modelRoles.judge`, then
-// `retry.fallbackChains.judge`, native, local or prompted chat. Config (target
-// language + the literal instruction string) is the `lang-nag` section of
-// omomp.*: the project's `.omp/` copy first, then the agent-dir copy.
+// Detection is one choice question on the sample's language, asked through
+// `openJudge` (`_shared/judge.ts`, purpose `lang-nag`): the chat models of the
+// `@lang-nag` model role when assigned, then the `judge` fallback role, as
+// prompted judges; otherwise OMP's JUDGE role chain (`modelRoles.judge`, then
+// `retry.fallbackChains.judge`; native, local or prompted chat) before that
+// fallback role. Config (target language + the literal instruction string) is
+// the `lang-nag` section of omomp.*: the project's `.omp/` copy first, then the
+// agent-dir copy.
 //
 // Scope is the main session only, mirroring tool-policy-nag: subagents run
 // short decomposed slices where a language nag is noise. A judgment failure

@@ -1,6 +1,6 @@
 // ============================================================================
 // turn-judge — after every turn of a session a `TURN-JUDGE-*.md` file targets,
-// ask OMP's native JUDGE that file's question about the turn, then either
+// ask JUDGE (`openJudge`, purpose `turn-judge`) that file's question about the turn, then either
 // report the verdict or type the configured prompt.
 // Registers input, session_switch/branch/tree, and message_end hooks; no tools
 // or commands. Reads adjacent/repository specs and session history; writes no
@@ -107,10 +107,11 @@
 //   Subagent sessions have no UI: their reports and warnings go to the log.
 //
 // AVAILABILITY. No applying file: nothing runs — no request and no report.
-// Neither the JUDGE role chain nor the `judge` fallback role resolves a model:
-// silently inactive; when the chain fails, the fallback role's chat models
-// answer as prompted judges (`_shared/judge.ts`, one-hot probabilities). Role
-// changes apply on the next turn. A
+// Models come from `openJudge` (`_shared/judge.ts`, purpose `turn-judge`): the
+// `@turn-judge` role's chat models when assigned, otherwise the JUDGE role
+// chain; the `judge` fallback role's chat models follow either as prompted
+// judges (one-hot probabilities). No path resolves a model: silently inactive.
+// Role changes apply on the next turn. A
 // failed request warns for that turn; an invalid file warns once per process
 // (per path and reason). Sessions without UI only log. Nothing blocks or
 // changes the turn itself.

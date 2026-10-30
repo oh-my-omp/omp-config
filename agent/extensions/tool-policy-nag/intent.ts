@@ -18,7 +18,8 @@
  * reminder names the intent and the required tool, then quotes the call.
  *
  * FAILURE. Missing or invalid spec, no judge model, a request that failed on
- * the judge role chain and the `judge` fallback role, or the timeout: no
+ * every model `openJudge` resolved for purpose `tool-policy-nag` (`@tool-policy-nag`
+ * or the judge role chain, then the `judge` fallback role), or the timeout: no
  * reminder, no `form` fallback; the caller reports the reason once.
  */
 

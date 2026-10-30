@@ -13,7 +13,7 @@
  *   `form.maxNags` times per context. `form` is required; an `intent` block is ignored, so no
  *   JUDGE request is made and `INTENT-*.md` is not read. OMP's bash
  *   interceptor is overridden off for the session while this detector is set.
- * - `detector: jev` — the intent lane (`intent.ts`): asks OMP's native JUDGE
+ * - `detector: jev` — the intent lane (`intent.ts`): asks JUDGE (`openJudge`, purpose `tool-policy-nag`)
  *   one `choice` question about what the call is trying to accomplish, worded
  *   by `INTENT-*.md`. `intent` is required; an optional `form` block is the
  *   fallback sender when the intent lane cannot run.

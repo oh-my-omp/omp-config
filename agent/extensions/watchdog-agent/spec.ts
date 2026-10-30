@@ -157,7 +157,7 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 		if (fields.model !== undefined || fields.tools !== undefined || fields.note !== undefined || !common.guidance) {
 			return {
 				kind: "invalid",
-				reason: "native JUDGE options require a nonempty body; model, tools and note are not allowed",
+				reason: "JUDGE options require a nonempty body; model, tools and note are not allowed",
 			};
 		}
 		const parsed = parseJevOptions(fields, delivery);

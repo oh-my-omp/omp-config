@@ -316,7 +316,7 @@ function describe(runtime: Runtime, spec: WatchdogSpec): string {
 			? tr("ON", "开启")
 			: tr("OFF", "关闭");
 	const session = override === undefined ? "—" : override ? tr("on", "开启") : tr("off", "关闭");
-	const backend = spec.kind === "jev" ? tr("native @judge", "原生 @judge") : `${tr("chat", "聊天")} ${spec.model ?? "@advisor"}`;
+	const backend = spec.kind === "jev" ? "JUDGE" : `${tr("chat", "聊天")} ${spec.model ?? "@advisor"}`;
 	return `${spec.name}: ${state} · ${tr("global", "全局")} ${spec.enabled ? tr("on", "开启") : tr("off", "关闭")} · ${tr("session", "会话")} ${session} · ${tr("target", "目标")} ${spec.targets.join(",")} · ${tr("every", "每")} ${spec.every} · ${tr("scope", "范围")} ${spec.scope === "full" ? tr("full", "全部") : tr("window", "窗口")} · ${backend}\n  ${spec.filePath}`;
 }
 /** Model-facing watchdog description kept in English for tool-result content. */
@@ -324,7 +324,7 @@ function describeForToolResult(runtime: Runtime, spec: WatchdogSpec): string {
 	const override = runtime.overrides.get(spec.filePath);
 	const state = !targetsHere(runtime, spec) ? "not for this session" : effectiveEnabled(runtime, spec) ? "ON" : "OFF";
 	const session = override === undefined ? "—" : override ? "on" : "off";
-	const backend = spec.kind === "jev" ? "native @judge" : `chat ${spec.model ?? "@advisor"}`;
+	const backend = spec.kind === "jev" ? "JUDGE" : `chat ${spec.model ?? "@advisor"}`;
 	return `${spec.name}: ${state} · global ${spec.enabled ? "on" : "off"} · session ${session} · target ${spec.targets.join(",")} · every ${spec.every} · scope ${spec.scope} · ${backend}\n  ${spec.filePath}`;
 }
 

@@ -228,7 +228,7 @@ export async function runReviewer(
 	}
 }
 
-/** Native JUDGE answers a typed choice; the chosen option supplies the injected text. */
+/** JUDGE answers a typed choice; the chosen option supplies the injected text. */
 export async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevWatchdog, transcript: string): Promise<Verdict | null> {
 	const signal = AbortSignal.timeout(REVIEW_TIMEOUT_MS);
 	const opened = openJudge(ctx, "watchdog-agent");
@@ -244,7 +244,7 @@ export async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevW
 			},
 			{ signal },
 		);
-		pi.logger?.info?.(`watchdog "${spec.name}": native judge usage`, {
+		pi.logger?.info?.(`watchdog "${spec.name}": judge usage`, {
 			provider: result.provider,
 			model: result.model,
 			input: result.usage.input,
@@ -254,7 +254,7 @@ export async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevW
 		const choice = result.answers.review.choice;
 		const picked = spec.options.find((option) => option.label === choice);
 		if (!picked) {
-			pi.logger?.warn?.(`watchdog "${spec.name}": native judge returned an unconfigured choice — skipping`);
+			pi.logger?.warn?.(`watchdog "${spec.name}": judge returned an unconfigured choice — skipping`);
 			return null;
 		}
 		switch (picked.outcome.kind) {
@@ -268,7 +268,7 @@ export async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevW
 			}
 		}
 	} catch (error) {
-		pi.logger?.warn?.(`watchdog "${spec.name}": native judge failed — skipping`, {
+		pi.logger?.warn?.(`watchdog "${spec.name}": judge failed — skipping`, {
 			error: errorText(error),
 		});
 		return null;
