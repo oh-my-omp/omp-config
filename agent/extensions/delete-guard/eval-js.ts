@@ -280,26 +280,26 @@ function isReference(node: Node, parent: Node | null): boolean {
 	);
 }
 
-function judgeNode(node: Node, parent: Node | null, ctx: Context): Verdict {
+/** Judges one node; `statement` is the top-level statement holding it, quoted for deletion APIs. */
+function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Context): Verdict {
 	const fragment = (target: Node): string => ctx.code.slice(target.start ?? 0, target.end ?? 0);
+	const quoted = fragment(statement);
 	const { bindings } = ctx;
 	if (node.type === "Identifier" && isReference(node, parent)) {
-		if (DISTINCTIVE_DELETE[node.name]) return block("delete", fragment(parent ?? node), `\`${node.name}\` deletes files`);
+		if (DISTINCTIVE_DELETE[node.name]) return block("delete", quoted, `\`${node.name}\` deletes files`);
 		const member = bindings.members.get(node.name);
 		const exported = member?.slice(member.lastIndexOf(".") + 1) ?? "";
 		const fromFs = member?.startsWith("fs.") === true || member?.startsWith("fs/promises.") === true;
-		if (fromFs && (exported === "rm" || DISTINCTIVE_DELETE[exported]))
-			return block("delete", fragment(parent ?? node), `\`${member}\` deletes files`);
+		if (fromFs && (exported === "rm" || DISTINCTIVE_DELETE[exported])) return block("delete", quoted, `\`${member}\` deletes files`);
 	}
 	if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
 		const property = propertyName(node);
-		if (property !== null && DISTINCTIVE_DELETE[property]) return block("delete", fragment(node), `\`${property}\` deletes files`);
+		if (property !== null && DISTINCTIVE_DELETE[property]) return block("delete", quoted, `\`${property}\` deletes files`);
 		if (property === "rm") {
 			const module = receiverModule(node.object, bindings);
-			if (module === "fs" || module === "fs/promises") return block("delete", fragment(node), `\`${module}.rm\` deletes files`);
+			if (module === "fs" || module === "fs/promises") return block("delete", quoted, `\`${module}.rm\` deletes files`);
 		}
-		if (property === "delete" && isBunFile(node.object, bindings))
-			return block("delete", fragment(node), "`Bun.file(…).delete()` deletes files");
+		if (property === "delete" && isBunFile(node.object, bindings)) return block("delete", quoted, "`Bun.file(…).delete()` deletes files");
 	}
 	if (node.type === "CallExpression" || node.type === "OptionalCallExpression") {
 		const args = node.arguments.filter((arg): arg is Expression => arg.type !== "SpreadElement" && arg.type !== "ArgumentPlaceholder");
@@ -340,9 +340,12 @@ export async function classifyJs(code: string, shell: Dialect, brush: Dialect): 
 	});
 	const ctx: Context = { code, bindings: collectBindings(file.program), shell, brush };
 	let verdict: Verdict = ALLOW;
-	walk(file.program, null, (node, parent) => {
-		if (verdict.kind === "block") return;
-		verdict = judgeNode(node, parent, ctx);
-	});
+	for (const statement of file.program.body) {
+		walk(statement, file.program, (node, parent) => {
+			if (verdict.kind === "block") return;
+			verdict = judgeNode(node, parent, statement, ctx);
+		});
+		if (verdict.kind === "block") return verdict;
+	}
 	return verdict;
 }
