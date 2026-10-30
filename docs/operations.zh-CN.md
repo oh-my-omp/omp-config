@@ -36,7 +36,7 @@ flowchart LR
 在仓库根目录启动 `omp` 后执行斜杠命令：
 
 1. **新机器首次配置（`/onboard-omp [check|<plane>]` 或 `/update-omp`）**：
-   - 首次引导安装可在仓库根目录启动 `omp` 运行 `/onboard-omp`：按八个运行时控制面当场读取 `omp://` 内置文档与工作区配置讲解运行时控制机制，在不修改仓库工作树的前提下诊断订阅/模型/语言匹配度（`task.agentModelOverrides`、`omomp.yml`、`thinking-translator.json`），调用 `/update-omp` 完成全量安装，并只把当场定制写入本机所有项（`LOCAL_CONFIG_FIELDS` 中的 `modelRoles` 等、`LOCAL_OMOMP_SECTIONS` 中的 `model-compaction` 与 `doc-polish`，以及本机 `models.yml`）。传 `check` 只做只读诊断，传 `<plane>`（`1`–`8`）直接调查指定控制面。
+   - 首次引导安装可在仓库根目录启动 `omp` 运行 `/onboard-omp`：完成只读基线盘点后，先询问是否扩充 AI 提供商（当场对照 `omp://providers.md` 梳理 `/login` 与环境变量支持的内置渠道、检索补充的 `pi-package` 提供商扩展包、协助将第三方中转站/聚合网关写入本机 `~/.omp/agent/models.yml`），再按八个运行时控制面当场读取 `omp://` 内置文档与工作区配置讲解运行时控制机制，在不修改仓库工作树的前提下诊断订阅/模型/语言匹配度（`task.agentModelOverrides`、`omomp.yml`、`thinking-translator.json`），调用 `/update-omp` 完成全量安装，并只把当场定制写入本机所有项（`LOCAL_CONFIG_FIELDS` 中的 `modelRoles` 等、`LOCAL_OMOMP_SECTIONS` 中的 `model-compaction` 与 `doc-polish`，以及本机 `models.yml`）。传 `check` 只做只读诊断，传 `<plane>`（`1`–`8`）直接调查指定控制面。
    - 若已熟悉配置、只需直接安装，运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件执行 `omp install`）。
    - 若本机使用 `~/.claude`，在 `~/.omp/agent/config.yml` 的 `extensions` 第一项加上 `~/.claude`，然后重启 `omp`。
    - 需要开启启动自动更新时，运行 `/omp-config-autoupdate on`（下次启动起生效）。

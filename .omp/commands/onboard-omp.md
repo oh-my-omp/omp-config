@@ -15,7 +15,7 @@ argument-hint: "[check|<plane>]"
    - 本命令可能在尚未安装 `omp-config` 的原生 `omp` 中运行：不得假定 `omp-ask-more`、`omp-unified-exec`（`exec_command`）、`tool-topics`（`tool://`）、`session-urls`（`session://`）、`wt-tool` 或 `harness-restart` 已加载。
    - 在核对并完成模型角色绑定前，不得调用任何依赖特定模型角色或作者订阅的扩展工具（如 `polish_doc`、`task`、`fork_task`）。
    - **文件与目录检查必须使用 `read`、`glob`、`grep` 工具**：严禁在 `bash` 中运行 `ls`、`cat`、`head`、`tail`、`find`、`grep` 或用 `python3 -c` 解析本地文件（会直接触发 `tool-policy-nag`）。`bash` 仅用于执行 `omp` CLI、`bun` 更新器脚本、`./plugin-audit.sh` 与 `git status`。
-   - **阶段 0–2 及 `check` 模式属于调查与讨论阶段（非工作阶段），严禁初始化 `todo`**：只有用户在 `ask` 中明确确认要执行安装或写入本机配置、正式进入阶段 3 时，才初始化 `todo`。
+   - **阶段 0–3 中的调查、讲解与诊断（及 `check` 模式）属于非工作阶段，严禁初始化 `todo`**：只有用户在 `ask` 中明确确认要写入本机配置文件（如阶段 1 写入 `<agentDir>/models.yml` 中转站配置，或进入阶段 4 执行安装与本机定制）时，才初始化 `todo`。
    - 每完成一个阶段的现场调查，必须使用 `ask` 工具（原生或 `omp-ask-more`）让用户选择下一步深挖的控制面、确认本机定制项或决定是否执行安装；严禁一次性倾倒全部 26 个扩展与 11 个插件的细节。
 3. **所有权红线（仅改本机所有项，仓库项默认只诊断不改工作树）**：
    - 任何写入前，先用 `read` 从 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 读取 `LOCAL_CONFIG_FIELDS`、`LOCAL_OMOMP_SECTIONS`、`MACHINE_LIST_FIELDS`、`STRUCTURED` 与 `managedPlain`。
@@ -26,9 +26,9 @@ argument-hint: "[check|<plane>]"
    - 引导中对“必选基底 / 条件必选 / 可选增强”的划分，一方面帮用户决定当前启用哪些本机开关、使用 `omp` 还是 `omp-light`，另一方面作为后续可选安装器（selective installer）的行为闭包规格；不得向用户谎称当前更新器会按勾选跳过文件写入。
 
 当前传入参数：`$ARGUMENTS`
-- 参数为空：按阶段 0 → 阶段 4 渐进执行完整引导、本机定制与安装。
+- 参数为空：按阶段 0 → 阶段 5 渐进执行完整引导、提供商扩充、本机定制与安装。
 - 参数为 `check`：只读诊断模式（非工作阶段，不建 `todo`、不调 `ask`、不修改任何本机或仓库文件）。依次执行阶段 0 现场盘点、`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source . --check` 与 `./plugin-audit.sh`，直接输出完整的《本机兼容性与原子行为闭包诊断报告》并结束。
-- 参数为 `<plane>`（`1`–`8` 或控制面关键词）：执行阶段 0 盘点后直接跳转至指定控制面的深度现场调查与定制。
+- 参数为 `<plane>`（`1`–`8` 或控制面关键词）：执行阶段 0 盘点后直接跳转至阶段 2 指定控制面的深度现场调查与定制。
 ---
 
 ## 阶段 0：现场盘点（只读调查，不改文件、不建 `todo`）
@@ -46,14 +46,39 @@ argument-hint: "[check|<plane>]"
 3. **本机与仓库配置的冲突预检**：
    - 对照 `agent/config.yml#task.agentModelOverrides`（`anthropic`、`openai-codex`、`bansos`、`opencode-go`）与 `agent/thinking-translator.json`（`futureppo-pool`、`commandcode`），找出当前机器缺少凭据或未配置 `models.yml` 兼容项的模型引用。
 
-完成盘点后，先向用户展示简明的**基线诊断摘要**（当前机器状态、原生 OMP vs `omp-config` 的长程正确性设计反转、检测到的模型/语言待适配项），再用 `ask` 询问：
-- 希望按推荐顺序渐进了解八个运行时控制面，还是只看关心的控制面，或直接进入本机定制与安装？
-- 用户日常使用的主力模型订阅/provider 与界面/回复语言偏好是什么？
+完成盘点后，先向用户展示简明的**基线诊断摘要**（当前机器已激活的 provider 与模型数量、原生 OMP vs `omp-config` 的长程正确性设计反转、检测到的模型/语言待适配项），立即进入**阶段 1**，用 `ask` 询问用户是否需要先多配置几个 AI 提供商（内置 `/login` 渠道、`pi-package` 补充包或第三方中转站接入）。
 
 ---
 
-## 阶段 1：八个运行时控制面的渐进式现场调查
+## 阶段 1：扩充 AI 提供商与中转站接入（在进入控制面与角色绑定前优先询问）
 
+`omp-config` 的子代理分档（`task:high/mid/low/free`）、三位独立顾问（`discuss:steady/divergent`、`mentor:default`）、判定与润色角色（`judge`、`tiny`、`smol`）以及思考翻译均建立在**跨模型特性互补与多订阅分摊成本**之上。在阶段 0 盘点后，先通过 `ask` 询问用户是否需要扩充 AI 提供商，并按用户选择提供以下三类现场协助（用户选择跳过则直接进入阶段 2）：
+
+1. **确认并接入内置 `/login` 与环境变量支持的提供商（当场读取 `omp://providers.md`）**：
+   - 对照阶段 0 盘点出的本机已有 provider，从 `omp://providers.md` 中为用户分类梳理尚未配置但常用的内置渠道，帮用户确认有哪些是他想启用的：
+     - **OAuth / 订阅直连（通过 `/login <provider>` 或终端 `omp login <provider>` 登录；`anthropic` 与 `openai-codex` 支持同一邮箱下的个人订阅与 Team/Enterprise 席位分别登录并自动轮转额度）**：`anthropic`（Claude）、`openai-codex`（ChatGPT Codex）、`google-antigravity`、`google-gemini-cli`、`github-copilot`、`cursor`、`factory-droid`、`cline-pass`、`qwen-portal`、`kimi-code`、`xai-oauth`、`ollama-cloud`、`gitlab-duo` / `gitlab-duo-agent`、`snowflake`、`devin`、`muse-code`、`wafer-serverless`。
+     - **API Key / Coding Plan / 原生判定网关（支持 `/login <provider>` 交互存库，或在 `~/.omp/agent/.env` / `<cwd>/.env` / 环境变量中设置对应 `*_API_KEY`）**：`openrouter`、`opencode-go` / `opencode-zen`、`deepseek`、`siliconflow` / `siliconflow-cn`、`zai` / `zhipu-coding-plan`、`minimax-code` / `minimax-code-cn` / `minimax`、`alibaba-coding-plan` / `alibaba-token-plan`、`moonshot`、`stepfun`、`xiaomi` / `xiaomi-token-plan-{cn,sgp,ams}`、`groq`、`cerebras`、`fireworks`、`together`、`baseten`、`coreweave`、`singularityapi-dev` / `singularityapi-tech`、`charm-hyper`、`inception`（Mercury 3）、`cloudflare-ai-gateway`，以及提供原生 `judge` 判定模型的 `typesafe`（Jev）与 `cloudflare-workers-ai`（Clef）。
+     - **本地免密推理引擎**：`ollama`（`127.0.0.1:11434`）、`lm-studio`（`127.0.0.1:1234/v1`）、`llama.cpp`（`127.0.0.1:8080`）、macOS arm64 原生 `apple`（`apple/on-device`）。
+   - **协助方式**：告知用户对应的 `/login <provider>`（或在另一终端运行 `omp login <provider>`）命令，或引导其将环境变量写入 `~/.omp/agent/.env`（**严禁让用户在对话中直接粘贴明文 API Key 或 Token**）；完成后运行 `omp models find <provider>` 确认模型已解锁。
+2. **检索并安装补充的 `pi-package` 提供商扩展包**：
+   - 先说明本仓库 `install-plugins.sh` 已内置的两个提供商插件：`pi-bansos`（在 `127.0.0.1:18080` 提供免费模型代理供 `task:free` 使用，配 `/bansos` 命令）和 `pi-commandcode-provider`（接入 `commandcode` API 与 `/login commandcode`、`/commandcode-quota`，配合本地扩展 `commandcode-model-spec`）。
+   - 若用户想寻找其他第三方平台或社区封装的 provider 扩展包：
+     - 若当前会话已加载 `search_pi_packages`（写 `xd://search_pi_packages`），按关键词（如 `provider`、`auth`、`relay` 或目标厂商名）搜索 npm 上的 `pi-package`；若冷启动尚未安装该插件，可在 `bash` 中运行 `npm search keywords:pi-package <关键词>`（或先运行 `omp install pi-package-search`）检索。
+     - 向用户列出候选包名、用途与安装命令；经用户在 `ask` 中明确选中确认后，运行 `omp install <package-name>`（或写 `xd://install_pi_package`）完成安装。
+3. **协助接入自定义中转站 / 聚合网关 / 反向代理（写入本机 `<agentDir>/models.yml`）**：
+   - 当场读取 `omp://models.md` 与 `omp://providers.md#custom-providers-in-modelsyml`，询问用户是否有第三方中转站（如 NewAPI / OneAPI / LiteLLM / OpenAI 或 Anthropic 兼容反代 / 标准按量 BigModel `https://open.bigmodel.cn/api/paas/v4` / 自建 System One `typesafe` 判定网关等）需要接入。
+   - 若用户需要接入中转站，通过 `ask` 收集以下非敏感配置项（**严禁让用户在对话中粘贴明文 API Key**）：
+     - 自定义 `<provider-id>` 名称与 `baseUrl`（例如 `https://api.example.com/v1`）；
+     - 协议类型 `api`（`openai-completions`、`openai-responses`、`openai-codex-responses`、`anthropic-messages`、`google-generative-ai`，或判定协议 `typesafe` / `openrouter-decisions` / `openai-decisions`）；
+     - 凭据引用方式：约定一个环境变量名（如 `MY_RELAY_API_KEY`，由用户写入 `~/.omp/agent/.env` 或 shell 环境）或 `!command` 动态取密命令（如 `!op read ...`），在 `models.yml` 的 `apiKey:` 字段只写该环境变量名或 `!command`（OMP 会自动解析同名非空环境变量，且 `models.yml` 的 `apiKey` 优先级高于已存 OAuth，避免将官方 OAuth token 误发给中转站）；
+     - 模型声明与兼容项：选择动态发现（`discovery: { type: proxy }`、`openai-models-list` 或 `litellm`；非 `/v1` 根路径加 `injectV1: false`）还是静态声明 `models: [{ id, name, contextWindow, maxTokens }]`，并按需加上 `authHeader: true`、`disableStrictTools: true`（针对拒绝 `strict` 字段的 Anthropic 兼容中转）或 `modelOverrides.<id>.compat.supportsReasoningEffort: true`。
+   - **安全写入与验证**：`<agentDir>/models.yml` 属于本机所有文件（更新器与自动更新永不覆盖，`/sync-omp-config` 永不收回仓库）。在用户确认后（此时先初始化 `todo`），在不读取/不回显既有 `apiKey` 行的前提下将新 provider 块追加写入 `<agentDir>/models.yml`，再用 `Bun.YAML.parse` 语法校验并运行 `omp models find <provider-id>` 验证中转站模型已正常加载。
+
+完成提供商扩充（或用户确认跳过）后，用 `ask` 询问用户：希望按推荐顺序渐进了解八个运行时控制面，还是只看关心的控制面，或直接进入本机定制与安装？
+
+---
+
+## 阶段 2：八个运行时控制面的渐进式现场调查
 按用户在 `ask` 中选择的路径推进（建议每次 2–3 个相关控制面，每轮末尾用 `ask` 确认是否展开细节或进入下一组）。对每个控制面，AI **当场读取表中列出的权威源**，按统一结构向用户讲解：
 - **运行时控制链**：`什么信号触发 → 哪个钩子/工具/判定器介入 → 拦截、改写还是注入什么消息 → AI 在当前回合/下一回合/压缩后表现出什么行为`；
 - **为何这样设计（长程正确性 vs 省 token）**；
@@ -91,7 +116,7 @@ argument-hint: "[check|<plane>]"
 
 ---
 
-## 阶段 2：可定制项分类、定制思路与当场定制（仅写本机项）
+## 阶段 3：可定制项分类、定制思路与当场定制（仅写本机项）
 
 向用户展示以下三类定制划分（这也是后续可选安装器的配置分类基准），并通过 `ask` 收集用户的当场定制决定：
 
@@ -132,7 +157,7 @@ argument-hint: "[check|<plane>]"
 
 ---
 
-## 阶段 3：执行安装与写入本机定制
+## 阶段 4：执行安装与写入本机定制
 
 当用户在 `ask` 中确认安装与本机定制方案后，初始化 `todo` 并按顺序执行（当传入参数为 `check` 时跳过本阶段写入，仅跑 `--check` 与 `./plugin-audit.sh`）：
 
@@ -141,7 +166,7 @@ argument-hint: "[check|<plane>]"
    - 若脚本报告 ` errors` 或 `Cutover incomplete; do not restart OMP`，立即停止后续步骤，协助排查修复后重跑。
 2. **执行插件审计**：
    - 运行 `./plugin-audit.sh`。若出现 `[卸载候选]`，用 `ask` 询问用户是否执行 `omp plugin uninstall <name>`。
-3. **写入用户在阶段 2 确认的本机所有项**：
+3. **写入用户在阶段 1 与阶段 3 确认的本机所有项**：
    - 对 `<agentDir>/config.yml` 中的本机字段（如 `modelRoles`、`defaultThinkingLevel`、`extensions` 中的 `~/.claude` 等），使用 `omp config set` 或在读取 `<agentDir>/config.yml` 后用 `edit` 精确修改对应本机键。
    - 对 `<agentDir>/omomp.yml` 中的本机段（`model-compaction`、`doc-polish`、`omp-config-autoupdate`），先 `read` `<agentDir>/omomp.yml`，再用 `edit` 写入或更新对应本机段，严禁触碰仓库管理段。
    - 若用户确认创建 `<agentDir>/models.yml` 兼容项（如 `futureppo-pool` 的 `supportsReasoningEffort: true`）或 `<agentDir>/commandcode-models.json`：若 `<agentDir>/models.yml` 已存在，严禁整文件重写或读取/回显含 `apiKey` 的行，只做最小字段追加或给出 YAML 片段由用户合入，保留文件中所有既有 provider 与未知字段。
@@ -151,7 +176,7 @@ argument-hint: "[check|<plane>]"
 
 ---
 
-## 阶段 4：激活边界说明与最终交付报告
+## 阶段 5：激活边界说明与最终交付报告
 
 安装与本机定制完成后，向用户输出结构化的最终报告（严格区分**已落盘**、**当前会话已生效**与**需重启后生效**）：
 
