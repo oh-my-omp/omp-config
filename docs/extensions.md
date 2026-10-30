@@ -31,6 +31,7 @@
 | 23 | `tool-topics` | [tool-topics](#tool-topics) | Main + Sub (prompt); process-wide (`tool://` scheme) | Yes | `TOPIC-*.md` / `SURFACE-*.md` beside it (repo) |
 | 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | Main + Sub | Yes | `omomp.yml#tool-topic-injection` (repo) |
 | 25 | `session-urls` | [session-urls](#session-urls) | Process-wide (`session://` scheme) | Yes | Reads the session files, recap journal and prompt history; no config |
+| 26 | `delete-guard` | [delete-guard](#delete-guard) | Main + Sub | Yes | None |
 
 ---
 
@@ -147,6 +148,22 @@ Evaluates discovered `TURN-JUDGE-<label>.md` files after every turn that the mod
 Source: `agent/extensions/lang-nag/`. Main session only.
 
 At `agent_end`, takes the first 200 characters of the last paragraph of the last non-empty reply and asks `openJudge` whether it is written in `omomp.yml#lang-nag.language` (shipped: `language: 中文`, `instruction: 说中文`, read at session start or switch). On mismatch, prepends `"说中文\n\n"` to the user's next input (slash commands clear the pending flag; if the user sends a message before the check finishes, the check is aborted and the message is sent unchanged).
+
+---
+
+## Deletion
+
+### delete-guard
+
+Source: `agent/extensions/delete-guard/`. Main and sub sessions, full and light mode; no config.
+
+Registers the `delete` tool (approval `write`, top-level) on macOS and Linux; other platforms (Windows included) register no tool. Parameters: `paths` (non-empty string array) and `mode` (`"trash"`, the default, or `"permanent"`).
+
+- **Literal paths**: no `~`, environment variable or glob expansion; relative paths resolve against the session cwd. `"$HOME"` and `"*.log"` are file names.
+- **Validation before any change**: every path is checked first; one refusal refuses the whole call and touches nothing. Refused: empty or blank paths, paths starting with `~`, paths that do not exist, the filesystem root, the home directory and its ancestors, the session cwd and its ancestors. Protected directories are compared by file identity (`dev:ino`), so case variants, firmlinks, bind mounts and symbolic links reaching them are refused; the check covers the path, what its text reaches through links, and a link's target. A protected directory that no longer exists (a removed cwd) is compared by spelling. A path whose `..`, `.` or trailing `/` passes through a symbolic link (`link/../x`, `link/`) reaches a different file than its normalized form and is refused. A link that passes, dangling links included, is deleted as the link itself.
+- **`trash`**: moves each path to the platform trash, restorable from the file manager. macOS runs `/usr/bin/trash -v <path>` with the path as argv (no shell); if the binary is missing the call fails before touching anything and points to `permanent`. Linux implements the [freedesktop.org Trash spec](https://specifications.freedesktop.org/trash-spec/latest/) without `gio` or `trash-cli`: the home trash (`$XDG_DATA_HOME/Trash`, default `~/.local/share/Trash`) for paths on its device, otherwise `$topdir/.Trash/$uid` (sticky shared directory) or `$topdir/.Trash-$uid` on the path's mount; it writes `files/<name>` and `info/<name>.trashinfo` (`Path=` the URI-escaped original path, absolute in the home trash and relative to the mount in a top-directory trash). A taken name becomes `<name>.2`, `<name>.3`, …. A failed move is reported and never falls back to permanent deletion.
+- **`permanent`**: deletes recursively.
+- **Result**: paths run in order and each gets an `ok` or `failed` line; any failure marks the call as an error, the summary says the `ok` lines took effect, and paths already handled stay handled.
 
 ---
 
