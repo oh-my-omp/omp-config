@@ -20,6 +20,7 @@ This configuration is organized around the following design choices:
 | [Plugins and Runtime Modes](docs/plugins-and-modes.md) | External plugins in `install-plugins.sh` (`omp-todo-more`, `omp-thinking-translator`, etc.) and `omp` vs `omp-light` |
 | [Setup, Sync and Maintenance](docs/operations.md) | Repo ↔ machine ownership rules, `/update-omp`, `/sync-omp-config`, `omp-config-autoupdate`, `_shared` modules, and upgrade checks |
 | [CI Configuration Check (`ci/README.md`)](ci/README.md) | How `bun ci/check.ts` installs `omp`, applies the config, wires the free model and shadow proxy, and deduplicates diagnostics |
+| [Test Sandbox (`sandbox/README.md`)](sandbox/README.md) | How `bun sandbox/sandbox.ts` builds a throwaway container with this machine's `~/.omp` config, credentials and the working tree, drives real sessions per model, and removes and ledgers each run |
 | [`extensions-last` (`agent/extensions-last/README.md`)](agent/extensions-last/README.md) | Extension load order and why `system-prompt-replace` sits outside `agent/extensions/` |
 | [Subagent Authoring Notes (`agent/agents/README.txt`)](agent/agents/README.txt) | Subagent frontmatter, `spawns` lists, the depth-2 recursion limit, and `yield` pitfalls |
 

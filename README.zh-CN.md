@@ -20,6 +20,7 @@
 | [插件与运行模式](docs/plugins-and-modes.zh-CN.md) | `install-plugins.sh` 中的外部插件（`omp-todo-more`、`omp-thinking-translator` 等）以及 `omp` 与 `omp-light` 的差异 |
 | [安装、同步与维护](docs/operations.zh-CN.md) | 仓库与本机的文件归属、`/update-omp`、`/sync-omp-config`、`omp-config-autoupdate`、`_shared` 模块与升级检查 |
 | [配置检查（`ci/README.zh-CN.md`）](ci/README.zh-CN.md) | `bun ci/check.ts` 如何安装 `omp`、应用配置、接入免费模型与影子代理并去重报告故障 |
+| [测试沙箱（`sandbox/README.zh-CN.md`）](sandbox/README.zh-CN.md) | `bun sandbox/sandbox.ts` 如何用本机 `~/.omp` 配置、凭据与工作树建一次性容器，按模型驱动真实会话，并删除和登记每次运行 |
 | [`extensions-last`（`agent/extensions-last/README.zh-CN.md`）](agent/extensions-last/README.zh-CN.md) | 扩展加载顺序，以及 `system-prompt-replace` 放在 `agent/extensions/` 之外的原因 |
 | [子代理编写说明（`agent/agents/README.zh-CN.txt`）](agent/agents/README.zh-CN.txt) | 子代理 frontmatter、`spawns` 白名单、depth 2 递归上限与 `yield` 常见陷阱 |
 

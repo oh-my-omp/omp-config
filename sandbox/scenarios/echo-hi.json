@@ -1,0 +1,9 @@
+{
+	"name": "echo-hi",
+	"init": "true",
+	"prompt": "用 bash 执行 `echo hi`。",
+	"finalAssertion": "true",
+	"calls": {
+		"expect": [{ "tool": "bash", "resultIncludes": "hi" }]
+	}
+}
