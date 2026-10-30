@@ -4,10 +4,10 @@ import { type ArgvWord, classify } from "./classify.ts";
 import { ALLOW, type Dialect, type Rule, type Verdict } from "./verdict.ts";
 
 /** API names only fs uses: blocked wherever code names them, so aliases made in earlier cells are caught too. */
-const DISTINCTIVE_DELETE: Readonly<Record<string, true>> = { rmSync: true, unlinkSync: true, rmdirSync: true, unlink: true, rmdir: true };
+const DISTINCTIVE_DELETE: ReadonlySet<string> = new Set(["rmSync", "unlinkSync", "rmdirSync", "unlink", "rmdir"]);
 
 /** child_process launch names only it uses: matched as bare calls too, so imports from earlier cells are caught. */
-const DISTINCTIVE_LAUNCH: Readonly<Record<string, true>> = { execSync: true, spawnSync: true, execFileSync: true };
+const DISTINCTIVE_LAUNCH: ReadonlySet<string> = new Set(["execSync", "spawnSync", "execFileSync"]);
 
 type Module = "fs" | "fs/promises" | "child_process" | "bun";
 
@@ -54,10 +54,19 @@ function propertyName(node: Node): string | null {
 	return null;
 }
 
-/** The module an object expression stands for: a bound name or a module expression. */
+/** The module an object expression stands for: a bound name, `<fs>.promises`, or a module expression. */
 function receiverModule(node: Node, bindings: Bindings): Module | null {
 	if (node.type === "Identifier") return bindings.modules.get(node.name) ?? null;
+	if (node.type === "AwaitExpression") return receiverModule(node.argument, bindings);
+	if ((node.type === "MemberExpression" || node.type === "OptionalMemberExpression") && propertyName(node) === "promises")
+		return receiverModule(node.object, bindings) === "fs" ? "fs/promises" : null;
 	return moduleExpression(node);
+}
+
+/** Binds `local` to `module.imported`; `promises` of fs binds a whole `fs/promises` module. */
+function bindMember(bindings: Bindings, local: string, module: Module, imported: string): void {
+	if (module === "fs" && imported === "promises") bindings.modules.set(local, "fs/promises");
+	else bindings.members.set(local, `${module}.${imported}`);
 }
 
 /** `object.name` on a global such as `Bun` or `JSON`. */
@@ -84,24 +93,24 @@ function collectBindings(root: Node): Bindings {
 			for (const specifier of node.specifiers) {
 				if (specifier.type === "ImportSpecifier") {
 					const imported = specifier.imported.type === "Identifier" ? specifier.imported.name : specifier.imported.value;
-					bindings.members.set(specifier.local.name, `${module}.${imported}`);
+					bindMember(bindings, specifier.local.name, module, imported);
 				} else bindings.modules.set(specifier.local.name, module);
 			}
 			return;
 		}
 		if (node.type !== "VariableDeclarator" || !node.init) return;
 		if (node.id.type === "Identifier") {
-			const module = moduleExpression(node.init);
+			const module = receiverModule(node.init, bindings);
 			if (module !== null) bindings.modules.set(node.id.name, module);
 			if (isBunFile(node.init, bindings)) bindings.bunFiles.add(node.id.name);
 			return;
 		}
 		if (node.id.type !== "ObjectPattern") return;
-		const module = moduleExpression(node.init);
+		const module = receiverModule(node.init, bindings);
 		if (module === null) return;
 		for (const property of node.id.properties) {
 			if (property.type !== "ObjectProperty" || property.key.type !== "Identifier") continue;
-			if (property.value.type === "Identifier") bindings.members.set(property.value.name, `${module}.${property.key.name}`);
+			if (property.value.type === "Identifier") bindMember(bindings, property.value.name, module, property.key.name);
 		}
 	});
 	return bindings;
@@ -139,6 +148,20 @@ function objectProperty(node: ObjectExpression, key: string): Node | null {
 	return null;
 }
 
+/**
+ * Whether child_process options may start a shell: a `shell` that is not literally `false`, `null` or `undefined`
+ * (`shell: "/bin/sh"`, `shell: flag`), or options the code does not spell out (a variable, a spread).
+ */
+function mayUseShell(options: Node | undefined): boolean {
+	if (options === undefined) return false;
+	if (options.type !== "ObjectExpression") return true;
+	if (options.properties.some((property) => property.type === "SpreadElement")) return true;
+	const shell = objectProperty(options, "shell");
+	if (shell === null) return false;
+	if (shell.type === "BooleanLiteral") return shell.value;
+	return shell.type !== "NullLiteral" && !(shell.type === "Identifier" && shell.name === "undefined");
+}
+
 function argvOf(nodes: readonly (Node | null)[]): ArgvWord[] {
 	return nodes.map((node) => {
 		const text = literalString(node);
@@ -159,7 +182,7 @@ function shellCallOf(callee: Node, args: readonly Node[], ctx: Context): ShellCa
 	const { bindings } = ctx;
 	let api: string | null = null;
 	if (callee.type === "Identifier")
-		api = bindings.members.get(callee.name) ?? (DISTINCTIVE_LAUNCH[callee.name] ? `child_process.${callee.name}` : null);
+		api = bindings.members.get(callee.name) ?? (DISTINCTIVE_LAUNCH.has(callee.name) ? `child_process.${callee.name}` : null);
 	else if (callee.type === "MemberExpression" || callee.type === "OptionalMemberExpression") {
 		const property = propertyName(callee);
 		if (property === null) return null;
@@ -200,15 +223,14 @@ function judgeShellCall(call: ShellCall, fragment: string, ctx: Context): Verdic
 		}
 		case "spawn": {
 			const [command, second, third] = call.args;
+			if (second && second.type !== "ArrayExpression" && second.type !== "ObjectExpression") return nonLiteral("the argument list");
 			const list = second?.type === "ArrayExpression" ? second.elements : [];
-			const options = second?.type === "ObjectExpression" ? second : third?.type === "ObjectExpression" ? third : null;
-			const shell = options === null ? null : objectProperty(options, "shell");
+			const options = second?.type === "ArrayExpression" ? third : second;
 			const words = argvOf([command ?? null, ...list.map((item) => (item?.type === "SpreadElement" ? null : item))]);
-			if (shell?.type === "BooleanLiteral" && shell.value) {
+			if (mayUseShell(options)) {
 				if (words.some((word) => !word.literal)) return nonLiteral("the command handed to a shell");
 				return classify(ctx.shell, { kind: "script", text: words.map((word) => word.text).join(" ") }, 1);
 			}
-			if (second && second.type !== "ArrayExpression" && second.type !== "ObjectExpression") return nonLiteral("the argument list");
 			return classify(ctx.brush, { kind: "argv", words }, 1);
 		}
 		case "bunSpawn": {
@@ -286,15 +308,15 @@ function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Contex
 	const quoted = fragment(statement);
 	const { bindings } = ctx;
 	if (node.type === "Identifier" && isReference(node, parent)) {
-		if (DISTINCTIVE_DELETE[node.name]) return block("delete", quoted, `\`${node.name}\` deletes files`);
+		if (DISTINCTIVE_DELETE.has(node.name)) return block("delete", quoted, `\`${node.name}\` deletes files`);
 		const member = bindings.members.get(node.name);
 		const exported = member?.slice(member.lastIndexOf(".") + 1) ?? "";
 		const fromFs = member?.startsWith("fs.") === true || member?.startsWith("fs/promises.") === true;
-		if (fromFs && (exported === "rm" || DISTINCTIVE_DELETE[exported])) return block("delete", quoted, `\`${member}\` deletes files`);
+		if (fromFs && (exported === "rm" || DISTINCTIVE_DELETE.has(exported))) return block("delete", quoted, `\`${member}\` deletes files`);
 	}
 	if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
 		const property = propertyName(node);
-		if (property !== null && DISTINCTIVE_DELETE[property]) return block("delete", quoted, `\`${property}\` deletes files`);
+		if (property !== null && DISTINCTIVE_DELETE.has(property)) return block("delete", quoted, `\`${property}\` deletes files`);
 		if (property === "rm") {
 			const module = receiverModule(node.object, bindings);
 			if (module === "fs" || module === "fs/promises") return block("delete", quoted, `\`${module}.rm\` deletes files`);

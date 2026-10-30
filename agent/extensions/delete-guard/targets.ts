@@ -63,12 +63,12 @@ function protectChain(
 	try {
 		real = realpathSync.native(dir);
 	} catch {
-		// A home or cwd that no longer exists is protected by spelling only.
+		// A home or cwd that no longer exists is protected by spelling; its existing ancestors still by identity.
 	}
 	let current = real ?? path.resolve(dir);
 	let reason = selfReason;
 	for (;;) {
-		const stats = real === null ? null : statOrNull(current, true);
+		const stats = statOrNull(current, true);
 		const identity = stats === null ? null : identityOf(stats);
 		if (identity !== null && !identities.has(identity)) identities.set(identity, reason);
 		const spelling = spellingOf(current);

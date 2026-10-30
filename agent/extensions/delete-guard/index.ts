@@ -20,10 +20,15 @@
 //     without a value), `find -delete` and `find -exec|-execdir|-ok|-okdir`;
 //   - non-literal commands: a command name from an expansion, substitution,
 //     glob or brace pattern; a non-literal nested shell, `eval`, `trap` or
-//     `alias` script; `env -S`; a shell reading its script from stdin other
-//     than a quoted here-document (pipe, here-string, unquoted here-document,
-//     nothing). Script files (`bash x.sh`, `sh < x.sh`, `source`) and `-n`
-//     (syntax check) run nothing the text shows and pass.
+//     `alias` script; a shell argument from an expansion (`bash "$FLAGS"`, it
+//     may be `-c` or `-s`); `env -S`; a shell reading its script from stdin
+//     other than a quoted here-document (pipe, here-string, unquoted
+//     here-document, nothing). Literal script files (`bash x.sh`, `sh < x.sh`,
+//     `source`), `-n` (syntax check, undone by `+n`) and `--version`/`--help`
+//     run nothing the text shows and pass. An unknown long shell option is read
+//     both with and without a value. Here-document bodies on any descriptor
+//     are scanned for substitutions, and inside double quotes `'` does not
+//     quote (`"${x:-'$(…)'}"` runs the substitution).
 // Words that are only arguments pass (`echo rm -rf /`, `git rm`).
 //
 // Nested Windows shells (any platform; reached from brush on Windows):
@@ -50,24 +55,25 @@
 //     wherever code names them (not in strings or comments), and `os.remove`
 //     on `os` or an `os` alias or import; shell handoffs — `os.system`,
 //     `os.popen`, `subprocess.getoutput|getstatusoutput`,
-//     `asyncio.create_subprocess_shell`, any call with `shell=True`, and the
+//     `asyncio.create_subprocess_shell`, any call whose `shell=` is not literally `False`/`None`, and the
 //     kernel's `!cmd`, `x = !cmd` and `%%bash` body: the literal command is
 //     classified as a system-shell script (posix on macOS and Linux, cmd on
 //     Windows; `%%bash` stays posix); launches without a shell — `subprocess`
 //     `run|call|check_call|check_output|Popen`, `asyncio.create_subprocess_exec`
 //     — classify a literal argv (argv[0] non-literal → blocked); the
 //     `tool.bash({"command": …})` bridge. `%time`/`%timeit` arguments,
-//     `%%capture`/`%%timeit` bodies and f-string placeholders are judged as
+//     `%%capture`/`%%timeit` bodies, f-string placeholders and expressions nested in their format specs are judged as
 //     Python. `%run`/`%load` run script files (not covered).
 //   - js (`eval-js.ts`, omp's own Babel parser with the kernel's options):
 //     deletion APIs — `rmSync`, `unlinkSync`, `rmdirSync`, `unlink`, `rmdir`
-//     wherever named, `rm` on an fs / fs.promises binding or `require`, and
+//     wherever named, `rm` on an fs / fs.promises binding (also `fs.promises` via a bound `fs`) or `require`, and
 //     `.delete()` on `Bun.file(…)` or a name bound to it; child_process
 //     `exec|execSync` strings as system-shell scripts (cmd on Windows),
-//     `spawn|spawnSync|execFile|execFileSync` as argv (a script with
-//     `shell: true`), `Bun.spawn|spawnSync` argv, `Bun.$` templates (posix,
-//     brush), the `tool.bash({command})` bridge and `tool.write` to
-//     `xd://bash`.
+//     `spawn|spawnSync|execFile|execFileSync` as argv (a script when the
+//     options may start a shell: `shell` not literally false/null/undefined,
+//     or options not spelled out), `Bun.spawn|spawnSync` argv, `Bun.$`
+//     templates (posix, brush), the `tool.bash({command})` bridge and
+//     `tool.write` to `xd://bash`.
 // A command that is not a literal string (f-string or template with
 // placeholders, variable, concatenation) is blocked as non-literal. Names are
 // matched in the cell's text only: a generic name (`remove`, `run`, `exec`,
@@ -106,8 +112,10 @@
 // through a shell (missing binary: the call fails before touching anything and
 // points to `permanent`); Linux follows the freedesktop.org Trash spec itself
 // (home trash `$XDG_DATA_HOME/Trash` or `~/.local/share/Trash` when the path is
-// on the same device, otherwise `$topdir/.Trash/$uid` or `$topdir/.Trash-$uid`
-// on the path's mount), writing `files/<name>` and `info/<name>.trashinfo`.
+// on the same device, otherwise, on the mount really holding the path, its
+// parent's links resolved, `$topdir/.Trash/$uid`, falling back to
+// `$topdir/.Trash-$uid` when that cannot be created), writing `files/<name>`
+// and `info/<name>.trashinfo`; a name taken in either is never overwritten.
 // Windows runs `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
 // (absolute path, never a bare name) with a fixed script calling
 // `Microsoft.VisualBasic.FileIO.FileSystem` `DeleteFile`/`DeleteDirectory`
@@ -116,7 +124,8 @@
 // symbolic links or junctions fail and point to `permanent`.
 // A failed move is reported; it never falls back to permanent deletion.
 // `permanent` deletes recursively. Paths run in order and the result reports
-// each one; a failure on one path leaves the earlier ones as they are.
+// each one; a failure on one path, a backend that throws included, leaves the
+// earlier ones as they are.
 //
 // Main and sub sessions, full and light mode. The tool writes and deletes only
 // the requested paths and the trash entries for them; no extension config

@@ -3,9 +3,9 @@ import { parsePosix, type Script, type SimpleCommand, type StdinSource, type Wor
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
 /** The posix deletion commands; names are compared lowercased (case-insensitive filesystems run `RM`). */
-const DELETE_COMMANDS: Readonly<Record<string, true>> = { rm: true, unlink: true, rmdir: true, shred: true };
+const DELETE_COMMANDS: ReadonlySet<string> = new Set(["rm", "unlink", "rmdir", "shred"]);
 
-const SHELLS: Readonly<Record<string, true>> = { sh: true, bash: true, zsh: true, dash: true, ksh: true };
+const SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 
 /** Words that open or close compound commands; the command follows them. A Set: a `then` key reads as a thenable to Biome. */
 const RESERVED: ReadonlySet<string> = new Set([
@@ -27,7 +27,8 @@ const RESERVED: ReadonlySet<string> = new Set([
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 
-type Flags = Readonly<Record<string, true>>;
+/** Name tables are Sets and Maps: a plain object would also match `constructor` or `toString`. */
+type Flags = ReadonlySet<string>;
 
 /**
  * How a prefix command takes its options before the command it runs.
@@ -49,7 +50,7 @@ type PrefixSpec = {
 	readonly numeric: boolean;
 };
 
-const set = (...names: readonly string[]): Flags => Object.fromEntries(names.map((name) => [name, true] as const));
+const set = (...names: readonly string[]): Flags => new Set(names);
 
 const NONE = set();
 const HELP = set("--help", "--version");
@@ -65,136 +66,138 @@ const spec = (fields: Partial<PrefixSpec>): PrefixSpec => ({
 	...fields,
 });
 
-const PREFIXES: Readonly<Record<string, PrefixSpec>> = {
-	sudo: spec({
-		values: set(
-			"-u",
-			"-g",
-			"-p",
-			"-C",
-			"-U",
-			"-r",
-			"-t",
-			"-T",
-			"-D",
-			"-R",
-			"--user",
-			"--group",
-			"--prompt",
-			"--close-from",
-			"--other-user",
-			"--role",
-			"--type",
-			"--command-timeout",
-			"--chdir",
-			"--chroot",
-			"--host",
-		),
-		flags: set(
-			"-A",
-			"-b",
-			"-B",
-			"-E",
-			"-H",
-			"-i",
-			"-k",
-			"-n",
-			"-N",
-			"-P",
-			"-S",
-			"-s",
-			"--askpass",
-			"--background",
-			"--bell",
-			"--preserve-env",
-			"--set-home",
-			"--login",
-			"--reset-timestamp",
-			"--non-interactive",
-			"--no-update",
-			"--preserve-groups",
-			"--stdin",
-			"--shell",
-		),
-		queries: set("-l", "-V", "-v", "-K", "-e", "--list", "--version", "--validate", "--remove-timestamp", "--edit", "--help"),
+const PREFIXES: ReadonlyMap<string, PrefixSpec> = new Map(
+	Object.entries({
+		sudo: spec({
+			values: set(
+				"-u",
+				"-g",
+				"-p",
+				"-C",
+				"-U",
+				"-r",
+				"-t",
+				"-T",
+				"-D",
+				"-R",
+				"--user",
+				"--group",
+				"--prompt",
+				"--close-from",
+				"--other-user",
+				"--role",
+				"--type",
+				"--command-timeout",
+				"--chdir",
+				"--chroot",
+				"--host",
+			),
+			flags: set(
+				"-A",
+				"-b",
+				"-B",
+				"-E",
+				"-H",
+				"-i",
+				"-k",
+				"-n",
+				"-N",
+				"-P",
+				"-S",
+				"-s",
+				"--askpass",
+				"--background",
+				"--bell",
+				"--preserve-env",
+				"--set-home",
+				"--login",
+				"--reset-timestamp",
+				"--non-interactive",
+				"--no-update",
+				"--preserve-groups",
+				"--stdin",
+				"--shell",
+			),
+			queries: set("-l", "-V", "-v", "-K", "-e", "--list", "--version", "--validate", "--remove-timestamp", "--edit", "--help"),
+		}),
+		doas: spec({ values: set("-u", "-C"), flags: set("-n", "-s", "-L"), queries: NONE }),
+		command: spec({ flags: set("-p"), queries: set("-v", "-V") }),
+		builtin: spec({ queries: NONE }),
+		exec: spec({ values: set("-a"), flags: set("-c", "-l"), queries: NONE }),
+		env: spec({
+			values: set("-u", "-C", "-a", "--unset", "--chdir", "--argv0"),
+			flags: set(
+				"-i",
+				"-0",
+				"-v",
+				"--ignore-environment",
+				"--null",
+				"--debug",
+				"--block-signal",
+				"--default-signal",
+				"--ignore-signal",
+				"--list-signal-handling",
+			),
+			nonLiteral: set("-S", "--split-string"),
+			assignments: true,
+		}),
+		nice: spec({ values: set("-n", "--adjustment"), numeric: true }),
+		nohup: spec({}),
+		time: spec({
+			values: set("-f", "-o", "--format", "--output"),
+			flags: set("-p", "-a", "-v", "-q", "--append", "--verbose", "--quiet", "--portability"),
+			queries: set("-V", "--help", "--version"),
+		}),
+		timeout: spec({
+			values: set("-s", "-k", "--signal", "--kill-after"),
+			flags: set("-v", "-f", "--verbose", "--foreground", "--preserve-status"),
+			positional: 1,
+		}),
+		stdbuf: spec({ values: set("-i", "-o", "-e", "--input", "--output", "--error") }),
+		busybox: spec({ queries: set("--list", "--list-full", "--install", "--help") }),
+		xargs: spec({
+			values: set(
+				"-a",
+				"-d",
+				"-E",
+				"-I",
+				"-L",
+				"-n",
+				"-P",
+				"-s",
+				"--arg-file",
+				"--delimiter",
+				"--max-args",
+				"--max-procs",
+				"--max-chars",
+				"--process-slot-var",
+			),
+			flags: set(
+				"-0",
+				"-o",
+				"-p",
+				"-r",
+				"-t",
+				"-x",
+				"-e",
+				"-i",
+				"-l",
+				"--null",
+				"--open-tty",
+				"--interactive",
+				"--no-run-if-empty",
+				"--verbose",
+				"--exit",
+				"--eof",
+				"--replace",
+				"--max-lines",
+			),
+			queries: set("--help", "--version"),
+		}),
 	}),
-	doas: spec({ values: set("-u", "-C"), flags: set("-n", "-s", "-L"), queries: NONE }),
-	command: spec({ flags: set("-p"), queries: set("-v", "-V") }),
-	builtin: spec({ queries: NONE }),
-	exec: spec({ values: set("-a"), flags: set("-c", "-l"), queries: NONE }),
-	env: spec({
-		values: set("-u", "-C", "-a", "--unset", "--chdir", "--argv0"),
-		flags: set(
-			"-i",
-			"-0",
-			"-v",
-			"--ignore-environment",
-			"--null",
-			"--debug",
-			"--block-signal",
-			"--default-signal",
-			"--ignore-signal",
-			"--list-signal-handling",
-		),
-		nonLiteral: set("-S", "--split-string"),
-		assignments: true,
-	}),
-	nice: spec({ values: set("-n", "--adjustment"), numeric: true }),
-	nohup: spec({}),
-	time: spec({
-		values: set("-f", "-o", "--format", "--output"),
-		flags: set("-p", "-a", "-v", "-q", "--append", "--verbose", "--quiet", "--portability"),
-		queries: set("-V", "--help", "--version"),
-	}),
-	timeout: spec({
-		values: set("-s", "-k", "--signal", "--kill-after"),
-		flags: set("-v", "-f", "--verbose", "--foreground", "--preserve-status"),
-		positional: 1,
-	}),
-	stdbuf: spec({ values: set("-i", "-o", "-e", "--input", "--output", "--error") }),
-	busybox: spec({ queries: set("--list", "--list-full", "--install", "--help") }),
-	xargs: spec({
-		values: set(
-			"-a",
-			"-d",
-			"-E",
-			"-I",
-			"-L",
-			"-n",
-			"-P",
-			"-s",
-			"--arg-file",
-			"--delimiter",
-			"--max-args",
-			"--max-procs",
-			"--max-chars",
-			"--process-slot-var",
-		),
-		flags: set(
-			"-0",
-			"-o",
-			"-p",
-			"-r",
-			"-t",
-			"-x",
-			"-e",
-			"-i",
-			"-l",
-			"--null",
-			"--open-tty",
-			"--interactive",
-			"--no-run-if-empty",
-			"--verbose",
-			"--exit",
-			"--eof",
-			"--replace",
-			"--max-lines",
-		),
-		queries: set("--help", "--version", "--show-limits"),
-	}),
-};
+);
 
-const FIND_EXEC: Readonly<Record<string, true>> = { "-exec": true, "-execdir": true, "-ok": true, "-okdir": true };
+const FIND_EXEC: ReadonlySet<string> = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
 /** Unknown prefix options read both ways at most this many times per command. */
 const AMBIGUITY_BUDGET = 4;
@@ -243,22 +246,22 @@ function resolvePrefix(ctx: Context, words: readonly Word[], start: number, pref
 		let consumed: number | null = null;
 		if (text.startsWith("--")) {
 			const name = text.split("=")[0] ?? text;
-			if (prefix.queries[name]) return ALLOW;
-			if (prefix.nonLiteral[name]) return block("nonLiteral", ctx.fragment, `\`${name}\` builds the command line from a string`);
-			if (text.includes("=") || prefix.flags[name]) consumed = 1;
-			else if (prefix.values[name]) consumed = 2;
+			if (prefix.queries.has(name)) return ALLOW;
+			if (prefix.nonLiteral.has(name)) return block("nonLiteral", ctx.fragment, `\`${name}\` builds the command line from a string`);
+			if (text.includes("=") || prefix.flags.has(name)) consumed = 1;
+			else if (prefix.values.has(name)) consumed = 2;
 		} else {
 			const letters = text.slice(1);
 			consumed = 1;
 			for (let k = 0; k < letters.length; k++) {
 				const option = `-${letters.charAt(k)}`;
-				if (prefix.queries[option]) return ALLOW;
-				if (prefix.nonLiteral[option]) return block("nonLiteral", ctx.fragment, `\`${option}\` builds the command line from a string`);
-				if (prefix.values[option]) {
+				if (prefix.queries.has(option)) return ALLOW;
+				if (prefix.nonLiteral.has(option)) return block("nonLiteral", ctx.fragment, `\`${option}\` builds the command line from a string`);
+				if (prefix.values.has(option)) {
 					if (k === letters.length - 1) consumed = 2;
 					break;
 				}
-				if (!prefix.flags[option]) {
+				if (!prefix.flags.has(option)) {
 					consumed = null;
 					break;
 				}
@@ -281,7 +284,7 @@ function resolveFind(ctx: Context, words: readonly Word[], start: number): Verdi
 		const word = words[k];
 		if (word === undefined || !word.literal) continue;
 		if (word.text === "-delete") return block("delete", ctx.fragment, "`find -delete` deletes files");
-		if (!FIND_EXEC[word.text]) continue;
+		if (!FIND_EXEC.has(word.text)) continue;
 		let end = k + 1;
 		while (end < words.length && !(words[end]?.literal && (words[end]?.text === ";" || words[end]?.text === "+"))) end++;
 		if (ctx.depth + 1 > MAX_DEPTH)
@@ -313,38 +316,81 @@ function stdinLabel(stdin: StdinSource | null): string {
 	}
 }
 
+type ShellState = { readonly commandMode: boolean; readonly stdinMode: boolean; readonly noExec: boolean };
+
+/** Long shell options that print and exit without running any script. */
+const SHELL_QUERIES: ReadonlySet<string> = new Set(["--version", "--help"]);
+
+/** Long shell options that take the next word as their value (bash `--rcfile`/`--init-file`, zsh `--emulate`). */
+const SHELL_VALUE_OPTIONS: ReadonlySet<string> = new Set(["--rcfile", "--init-file", "--emulate"]);
+
+/** Long shell options known to take no value. */
+const SHELL_FLAGS: ReadonlySet<string> = new Set([
+	"--login",
+	"--noprofile",
+	"--norc",
+	"--posix",
+	"--restricted",
+	"--verbose",
+	"--debugger",
+	"--noediting",
+	"--dump-strings",
+	"--dump-po-strings",
+	"--pretty-print",
+]);
+
 /** `sh|bash|zsh|dash|ksh`: `-c` scripts and quoted here-documents on stdin are classified; script files are K5's. */
 function resolveShell(ctx: Context, words: readonly Word[], start: number): Verdict {
+	return resolveShellFrom(ctx, words, start, { commandMode: false, stdinMode: false, noExec: false }, AMBIGUITY_BUDGET);
+}
+
+/**
+ * Reads shell options from `start`. Any argument from an expansion may be an option (`"$FLAGS"` = `-c`), so it is
+ * non-literal. `+n` undoes `-n`. An unknown long option (zsh takes any option name as `--name`) is read both
+ * without and with a value; either reading that reaches a deletion blocks.
+ */
+function resolveShellFrom(ctx: Context, words: readonly Word[], start: number, initial: ShellState, budget: number): Verdict {
 	let j = start;
-	let commandMode = false;
-	let stdinMode = false;
-	let noExec = false;
+	let { commandMode, stdinMode, noExec } = initial;
 	while (j < words.length) {
 		const word = words[j];
 		if (word === undefined) break;
 		const text = word.text;
-		if (!word.literal) {
-			if (text.startsWith("-") || text.startsWith("+"))
-				return block("nonLiteral", ctx.fragment, `the shell option \`${word.raw}\` comes from an expansion`);
-			break;
-		}
+		if (!word.literal)
+			return block("nonLiteral", ctx.fragment, `the shell argument \`${word.raw}\` comes from an expansion, so it may be an option`);
 		if (text === "--" || text === "-") {
 			j++;
 			break;
 		}
 		if (text.startsWith("--")) {
-			j += text === "--rcfile" || text === "--init-file" ? 2 : 1;
-			continue;
+			const name = text.split("=")[0] ?? text;
+			if (SHELL_QUERIES.has(name)) return ALLOW;
+			if (text.includes("=") || SHELL_FLAGS.has(name)) {
+				j++;
+				continue;
+			}
+			if (SHELL_VALUE_OPTIONS.has(name)) {
+				j += 2;
+				continue;
+			}
+			if (budget <= 0) return block("nonLiteral", ctx.fragment, `the shell option \`${text}\` is not known`);
+			const state: ShellState = { commandMode, stdinMode, noExec };
+			const withoutValue = resolveShellFrom(ctx, words, j + 1, state, budget - 1);
+			if (withoutValue.kind === "block") return withoutValue;
+			return resolveShellFrom(ctx, words, j + 2, state, budget - 1);
 		}
 		if (text.length < 2 || (!text.startsWith("-") && !text.startsWith("+"))) break;
-		let takesValue = false;
+		const set = text.startsWith("-");
+		let value: "o" | "O" | null = null;
 		for (const letter of text.slice(1)) {
 			if (letter === "c") commandMode = true;
 			else if (letter === "s") stdinMode = true;
-			else if (letter === "n" && text.startsWith("-")) noExec = true;
-			else if (letter === "o" || letter === "O") takesValue = true;
+			else if (letter === "n") noExec = set;
+			else if (letter === "o" || letter === "O") value = letter;
 		}
-		j += takesValue ? 2 : 1;
+		const next = words[j + 1];
+		if (value === "o" && next?.literal && next.text === "noexec") noExec = set;
+		j += value === null ? 1 : 2;
 	}
 	if (commandMode) {
 		const script = words[j];
@@ -399,10 +445,10 @@ function resolveCommand(ctx: Context, words: readonly Word[], start: number): Ve
 	if (word === undefined) return ALLOW;
 	if (!word.literal) return block("nonLiteral", ctx.fragment, `the command name \`${word.raw}\` comes from an expansion`);
 	const name = programName(word.text);
-	if (DELETE_COMMANDS[name]) return block("delete", ctx.fragment, `\`${name}\` deletes files`);
-	const prefix = PREFIXES[name];
+	if (DELETE_COMMANDS.has(name)) return block("delete", ctx.fragment, `\`${name}\` deletes files`);
+	const prefix = PREFIXES.get(name);
 	if (prefix !== undefined) return resolvePrefix(ctx, words, start + 1, prefix, AMBIGUITY_BUDGET);
-	if (SHELLS[name]) return resolveShell(ctx, words, start + 1);
+	if (SHELLS.has(name)) return resolveShell(ctx, words, start + 1);
 	const kind = shellKind(word.text);
 	if (kind !== null) return classifyShellInvocation(kind, word, words.slice(start + 1), ctx.depth, ctx.fragment);
 	switch (name) {
@@ -431,6 +477,11 @@ function classifyCommand(command: SimpleCommand, depth: number): Verdict {
 			continue;
 		}
 		if (!word.literal) break;
+		// `coproc NAME { … }`: the name is not a command; the compound body after it is.
+		if (word.text === "coproc" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(words[i + 1]?.text ?? "") && words[i + 2]?.text === "{") {
+			i += 3;
+			continue;
+		}
 		if (RESERVED.has(word.text)) {
 			i++;
 			continue;
