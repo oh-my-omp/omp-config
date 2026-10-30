@@ -174,7 +174,13 @@ class PsParser {
 			}
 			if (ch === "}") this.fail("unexpected `}`");
 			if (ch === ">" || (ch === "<" && this.src.charAt(this.i + 1) !== "#")) {
+				const opStart = this.i;
 				while (this.i < this.src.length && ">&12*".includes(this.src.charAt(this.i))) this.i++;
+				// `2>&1` merges streams and has no target; any other redirect needs one.
+				if (/&[12]$/.test(this.src.slice(opStart, this.i))) continue;
+				while (this.src.charAt(this.i) === " " || this.src.charAt(this.i) === "\t") this.i++;
+				const next = this.src.charAt(this.i);
+				if (next === "" || ";\n\r|}".includes(next) || this.src.startsWith("&&", this.i)) this.fail("a redirect without a target");
 				continue;
 			}
 			this.readWord(words, (piece) => {

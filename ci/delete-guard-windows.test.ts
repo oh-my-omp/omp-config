@@ -52,6 +52,7 @@ describe("nested PowerShell and cmd from brush", () => {
 		'cmd /c "!X! f"',
 		"cmd",
 		"echo del x | cmd",
+		"pwsh -c 'Write-Output hi >'",
 	])("blocks non-literal: %p", (command) => {
 		expect(ruleOf(command)).toBe("nonLiteral");
 	});
@@ -64,7 +65,8 @@ describe("nested PowerShell and cmd from brush", () => {
 		`pwsh -c 'Write-Output "Remove-Item x"'`,
 		"pwsh -c '$x = 1'",
 		"pwsh -c 'git rm x'",
-		"pwsh -c 'Write-Output hi >'",
+		"pwsh -c 'Get-Process 2>&1'",
+		"pwsh -c 'Get-Process > out.txt'",
 		`pwsh -c '$x = "rm"; Write-Output $x'`,
 		"pwsh -c '. ./build.ps1'",
 		"pwsh -c 'if ($a) { Write-Output a } else { Write-Output b }'",

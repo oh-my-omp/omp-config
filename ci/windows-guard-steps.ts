@@ -166,6 +166,11 @@ export function steps(cwd: string): readonly Step[] {
 		blockedBash("pwsh -EncodedCommand ZABpAHIA"),
 		blockedBash(String.raw`cmd /c rd /s /q C:\omp-dg\d`),
 		blockedBash(String.raw`cmd /c "for %f in (C:\omp-dg\d\*) do del %f"`),
+		// Review of #77: commands after `=`, `return` and `.`, and after `start /d <dir>`.
+		blockedBash(String.raw`pwsh -NoProfile -Command '$x=Remove-Item -LiteralPath C:\omp-dg\d\f'`),
+		blockedBash(String.raw`pwsh -NoProfile -Command 'return Remove-Item -LiteralPath C:\omp-dg\d\f'`),
+		blockedBash(String.raw`pwsh -NoProfile -Command '. Remove-Item -LiteralPath C:\omp-dg\d\f'`),
+		blockedBash(String.raw`cmd /c 'start "" /b /wait /d C:\omp-dg cmd /c del C:\omp-dg\d\f'`),
 		// Row 2: eval handing commands to cmd (and Bun.$ to brush).
 		blockedEval("py", String.raw`import subprocess; subprocess.run(r"del /q C:\omp-dg\d\f", shell=True)`),
 		blockedEval("py", String.raw`import os; os.system(r"rd /s /q C:\omp-dg\d")`),

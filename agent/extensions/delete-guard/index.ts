@@ -116,7 +116,7 @@
 // (home trash `$XDG_DATA_HOME/Trash` or `~/.local/share/Trash` when the path is
 // on the same device, otherwise, on the mount really holding the path, its
 // parent's links resolved, `$topdir/.Trash/$uid`, falling back to
-// `$topdir/.Trash-$uid` when that cannot be created), writing `files/<name>`
+// `$topdir/.Trash-$uid` when any step there fails), writing `files/<name>`
 // and `info/<name>.trashinfo`; a name taken in either is never overwritten.
 // Windows runs `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
 // (absolute path, never a bare name) with a fixed script calling
