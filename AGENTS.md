@@ -13,7 +13,7 @@ Behavior is described where it lives; read the matching one before changing it:
 |Design, prompts, subagents, extensions, plugins, sync and maintenance|`README.md`, `docs/*.md`|
 |One extension's events, tools, files and failure policy|header comment of its `index.ts`|
 |What repo → machine writes, deletes and never touches|header of `agent/extensions/omp-config-autoupdate/omp-config-update.ts`|
-|Slash-command contracts (`/update-omp`, `/sync-omp-config`, `/migrate-omp-keys`)|`.omp/commands/*.md`|
+|Slash-command contracts (`/onboard-omp`, `/update-omp`, `/sync-omp-config`, `/migrate-omp-keys`)|`.omp/commands/*.md`|
 |Subagent authoring traps|`agent/agents/README.txt`|
 |Extension load order|`agent/extensions-last/README.md`|
 |Configuration check (CI)|`ci/README.md`|

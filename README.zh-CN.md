@@ -18,7 +18,7 @@
 | [子代理](docs/agents.zh-CN.md) | 7 个可选 worker/顾问定义与内部 `fork:self`、模型绑定、顾问上下文、派发规则与 worktree 隔离 |
 | [本地扩展](docs/extensions.zh-CN.md) | 26 个本地扩展总表，以及派发/交付检查（`isolation-nudge`、`task-split-check`、`task-completion-judge`）、`JUDGE` 判定扩展（`tool-policy-nag`、`watchdog-agent`、`turn-judge`、`lang-nag`）、bash 与 eval 删除拦截和只收字面路径的 `delete` 工具（`delete-guard`）、宿主/TUI 扩展与读取其他会话的 `session://`（`session-urls`） |
 | [插件与运行模式](docs/plugins-and-modes.zh-CN.md) | `install-plugins.sh` 中的外部插件（`omp-todo-more`、`omp-thinking-translator` 等）以及 `omp` 与 `omp-light` 的差异 |
-| [安装、同步与维护](docs/operations.zh-CN.md) | 仓库与本机的文件归属、`/update-omp`、`/sync-omp-config`、`omp-config-autoupdate`、`_shared` 模块与升级检查 |
+| [安装、同步与维护](docs/operations.zh-CN.md) | 仓库与本机的文件归属、`/onboard-omp`、`/update-omp`、`/sync-omp-config`、`omp-config-autoupdate`、`_shared` 模块与升级检查 |
 | [配置检查（`ci/README.zh-CN.md`）](ci/README.zh-CN.md) | `bun ci/check.ts` 如何安装 `omp`、应用配置、接入免费模型与影子代理并去重报告故障 |
 | [测试沙箱（`sandbox/README.zh-CN.md`）](sandbox/README.zh-CN.md) | `bun sandbox/sandbox.ts` 如何用本机 `~/.omp` 配置、凭据与工作树建一次性容器，按模型驱动真实会话，并删除和登记每次运行 |
 | [`extensions-last`（`agent/extensions-last/README.zh-CN.md`）](agent/extensions-last/README.zh-CN.md) | 扩展加载顺序，以及 `system-prompt-replace` 放在 `agent/extensions/` 之外的原因 |
@@ -29,6 +29,7 @@
 在仓库根目录启动 `omp` 后运行的斜杠命令：
 
 ```text
+/onboard-omp [check|<plane>]                 # 渐进式引导理解运行时控制面、当场诊断与本机配置安装
 /update-omp [check]                          # 仓库工作区 -> ~/.omp/agent、~/.pi/agent、omp-light 与插件
 /sync-omp-config [check]                     # 本机受管改动 -> 仓库（按字段比对修改、校验、提交并推送）
 /omp-config-autoupdate [status|on|off|run]   # 查看或切换启动自动更新开关（默认关），或立即从 GitHub 拉取更新

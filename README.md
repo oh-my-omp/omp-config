@@ -18,7 +18,7 @@ This configuration is organized around the following design choices:
 | [Subagents](docs/agents.md) | The 7 selectable worker/advisor definitions plus internal `fork:self`, model bindings, advisor context, dispatch rules, and worktree isolation |
 | [Local Extensions](docs/extensions.md) | 26-extension index, dispatch/yield gates (`isolation-nudge`, `task-split-check`, `task-completion-judge`), `JUDGE`-backed monitors (`tool-policy-nag`, `watchdog-agent`, `turn-judge`, `lang-nag`), the bash and eval deletion guard and literal-path `delete` tool (`delete-guard`), host/TUI extensions, and the `session://` reader for other sessions (`session-urls`) |
 | [Plugins and Runtime Modes](docs/plugins-and-modes.md) | External plugins in `install-plugins.sh` (`omp-todo-more`, `omp-thinking-translator`, etc.) and `omp` vs `omp-light` |
-| [Setup, Sync and Maintenance](docs/operations.md) | Repo ↔ machine ownership rules, `/update-omp`, `/sync-omp-config`, `omp-config-autoupdate`, `_shared` modules, and upgrade checks |
+| [Setup, Sync and Maintenance](docs/operations.md) | Repo ↔ machine ownership rules, `/onboard-omp`, `/update-omp`, `/sync-omp-config`, `omp-config-autoupdate`, `_shared` modules, and upgrade checks |
 | [CI Configuration Check (`ci/README.md`)](ci/README.md) | How `bun ci/check.ts` installs `omp`, applies the config, wires the free model and shadow proxy, and deduplicates diagnostics |
 | [Test Sandbox (`sandbox/README.md`)](sandbox/README.md) | How `bun sandbox/sandbox.ts` builds a throwaway container with this machine's `~/.omp` config, credentials and the working tree, drives real sessions per model, and removes and ledgers each run |
 | [`extensions-last` (`agent/extensions-last/README.md`)](agent/extensions-last/README.md) | Extension load order and why `system-prompt-replace` sits outside `agent/extensions/` |
@@ -29,6 +29,7 @@ This configuration is organized around the following design choices:
 Slash commands run inside `omp` started at the repository root:
 
 ```text
+/onboard-omp [check|<plane>]                 # progressive guided walkthrough, live runtime check, and machine-local setup
 /update-omp [check]                          # apply working tree -> ~/.omp/agent, ~/.pi/agent, omp-light, plugins
 /sync-omp-config [check]                     # copy eligible machine changes -> repo, validate, commit and push
 /omp-config-autoupdate [status|on|off|run]   # toggle startup auto-update (off by default) or update from GitHub now
