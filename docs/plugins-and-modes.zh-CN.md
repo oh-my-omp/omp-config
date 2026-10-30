@@ -4,7 +4,7 @@
 
 ## 插件（`install-plugins.sh`）
 
-轻量策略与生命周期钩子放在 `agent/extensions/`，而带持久状态的引擎、模型 provider 适配层、跨平台 PTY 终端与 Tern 侧边栏界面则作为独立插件通过 `install-plugins.sh` 安装到 `~/.omp/plugins/`（10 个必装 + 1 个默认注释掉的可选，不固定版本号，`~/.omp/plugins/` 不纳入本仓库）。
+轻量策略与生命周期钩子放在 `agent/extensions/`，而带持久状态的引擎、模型 provider 适配层、跨平台 PTY 终端与 Tern 侧边栏界面则作为独立插件通过 `install-plugins.sh` 安装到 `~/.omp/plugins/`（必装项加默认注释掉的可选项，不固定版本号，`~/.omp/plugins/` 不纳入本仓库）。
 
 - 每次运行更新器都会对全部必装项执行 `omp install`，安装缺失插件并升级已安装插件。
 - 启动自动更新在远端配置提交未变时，仍会对每个不带 `#ref` 的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，使其跟随各自仓库的默认分支。
@@ -30,11 +30,11 @@
 
 - **分支快照、逻辑 checkpoint 与督促提醒**：当前分支上的自定义条目 `mouriya.omp.todo-more` 保存 `{objective, measure, doneWhen}` 及每项的 `{title, explanation}`、分钟预算与 `DONE` 提交记录的 git commit SHA（宿主 `TodoTracker`、`/todo` 与历史卡片均从该条目派生）。`planning.ts` 在列表为空时拦截 `edit`，其空列表提醒只在工作阶段（请求会改动文件、配置、git 或外部状态）要求建 todo，讨论与调查不建；`reminders.ts` 在回合结束且仍有未完成项（非向用户提问）时自动提醒继续；在有未提交改动的 git 工作区中 `DONE` 必须携带 git commit 子句（非 git 目录或工作区干净时不触发），将 commit SHA 记在完成项上并写入 [`Task log`](prompts-and-context.zh-CN.md#task-log) 形成逻辑 checkpoint；跨 compact 轮次时，`omp-todo-more` 会重新注入 Todo 快照与 [`compact 后注入`](prompts-and-context.zh-CN.md#compact-后注入)（`ctx list` 与 `ctx show`）；`before_agent_start` 则为 `task:*` 子代理挂回 `todo` 工具。
 - **`/todo-more` 编辑器**：输入 `/todo-more` 直接修改 goal 或各项 explanation（Enter 换行、Tab/Shift+Tab 切换字段、Ctrl+Enter 保存、Esc 取消），只更新当前分支上的文字字段，不改动任务状态或触发模型回合。
-- **旧本地文件清理**：更新器确认 `omp-todo-more` 在 OMP 插件目录中已启用且 `./index.ts` 存在后，会 unlink 8 个旧本地 Todo 文件（`extensions/todo-more/{index,tool,render,reminders,planning}.ts`、`extensions/_shared/todo-more.ts`、`extensions/subagent-todo.ts`、`extensions/subagent-todo/index.ts`），并在插件含 `src/ctx` 时一并 unlink 5 个旧本地 ctx 文件（`extensions/ctx-tool/{index,inventory,post-compact-hint}.ts`、`extensions/ctx-tasklog/index.ts`、`extensions/_shared/task-log.ts`）。`/sync-omp-config` 同样排除这 13 个路径。
+- **旧本地文件清理**：更新器确认 `omp-todo-more` 在 OMP 插件目录中已启用且 `./index.ts` 存在后，会 unlink 旧本地 Todo 文件（`extensions/todo-more/{index,tool,render,reminders,planning}.ts`、`extensions/_shared/todo-more.ts`、`extensions/subagent-todo.ts`、`extensions/subagent-todo/index.ts`），并在插件含 `src/ctx` 时一并 unlink 旧本地 ctx 文件（`extensions/ctx-tool/{index,inventory,post-compact-hint}.ts`、`extensions/ctx-tasklog/index.ts`、`extensions/_shared/task-log.ts`）。`/sync-omp-config` 同样排除这些路径。
 
 ### 思考翻译
 
-`omp-thinking-translator` 从 `~/.omp/agent/thinking-translator.json` 读取有序模型链，每次翻译请求从第 1 项开始尝试，失败才换下一项（下一条消息开始时重读文件）。当前配置的 6 个候选模型：
+`omp-thinking-translator` 从 `~/.omp/agent/thinking-translator.json` 读取有序模型链，每次翻译请求从第 1 项开始尝试，失败才换下一项（下一条消息开始时重读文件）。仓库配置的模型链：
 
 1. `futureppo-pool/glm-5.3-flash`（`effort: "low"`）
 2. `futureppo-pool/minimax-m3.1-flash`（`effort: "low"`）
@@ -72,7 +72,7 @@ providers:
 |---|---|---|
 | 追加系统提示词 | `agent/APPEND_SYSTEM.md` | `agent/APPEND_SYSTEM_LIGHT.md`（空文件） |
 | `task.eager` | `preferred` | `default` |
-| `disabledExtensions` | 无 | 禁用 10 个本地扩展：`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
+| `disabledExtensions` | 无 | 禁用以下本地扩展：`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
 | `config.yml` 的 `extensions` 路径列表 | 加载 `extensions-last/system-prompt-replace` | `config-light.yml` 将 `extensions` 设为空列表以跳过 `extensions-last/system-prompt-replace`（`disabledExtensions` 只按模块名过滤，不能过滤文件路径）；`omp-light.ts` 读取本机 `config.yml`，把不含 `/extensions-last/` 的本机条目（如 `~/.claude`）通过 `-e` 传回 |
 | 其余本地扩展 | 启用 | 保留：`antigravity-wire-profiles`、`append-system-model`、`child-memory-warning`、`commandcode-model-spec`、`delete-guard`、`harness-restart`、`input-polish`、`model-compaction`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`session-urls`、`tool-topic-injection`、`tool-topics`、`wt-tool`（轻量模式下工具说明同样有表层文本与 `Topics` 索引） |
 | 已安装插件 | 全部加载 | 全部加载（`disabledExtensions` 不影响插件） |

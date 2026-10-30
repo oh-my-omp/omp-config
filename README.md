@@ -15,8 +15,8 @@ This configuration is organized around the following design choices:
 | Page | Contents |
 |---|---|
 | [Prompts and Context](docs/prompts-and-context.md) | Prompt layering (`SYSTEM_TEMPLATE.md`, `PERSONALITY.md`, `APPEND_SYSTEM.md`, `tool-topics`, `system-prompt-replace`, `append-system-model`, `repo-rules`) and context retention (`fork-task`, `model-compaction`, `ctx`, `Task log`) |
-| [Subagents](docs/agents.md) | The 7 selectable worker/advisor definitions plus internal `fork:self`, model bindings, advisor context, dispatch rules, and worktree isolation |
-| [Local Extensions](docs/extensions.md) | 26-extension index, dispatch/yield gates (`isolation-nudge`, `task-split-check`, `task-completion-judge`), `JUDGE`-backed monitors (`tool-policy-nag`, `watchdog-agent`, `turn-judge`, `lang-nag`), the bash and eval deletion guard and literal-path `delete` tool (`delete-guard`), host/TUI extensions, and the `session://` reader for other sessions (`session-urls`) |
+| [Subagents](docs/agents.md) | The selectable worker/advisor definitions plus internal `fork:self`, model bindings, advisor context, dispatch rules, and worktree isolation |
+| [Local Extensions](docs/extensions.md) | Index of every local extension, dispatch/yield gates (`isolation-nudge`, `task-split-check`, `task-completion-judge`), `JUDGE`-backed monitors (`tool-policy-nag`, `watchdog-agent`, `turn-judge`, `lang-nag`), the bash and eval deletion guard and literal-path `delete` tool (`delete-guard`), host/TUI extensions, and the `session://` reader for other sessions (`session-urls`) |
 | [Plugins and Runtime Modes](docs/plugins-and-modes.md) | External plugins in `install-plugins.sh` (`omp-todo-more`, `omp-thinking-translator`, etc.) and `omp` vs `omp-light` |
 | [Setup, Sync and Maintenance](docs/operations.md) | Repo ↔ machine ownership rules, `/onboard-omp`, `/update-omp`, `/sync-omp-config`, `omp-config-autoupdate`, `_shared` modules, and upgrade checks |
 | [CI Configuration Check (`ci/README.md`)](ci/README.md) | How `bun ci/check.ts` installs `omp`, applies the config, wires the free model and shadow proxy, and deduplicates diagnostics |
@@ -40,7 +40,7 @@ Shell commands run from the repository root:
 
 ```bash
 omp                           # full mode
-omp-light                     # light mode (skips 10 extensions and system-prompt-replace)
+omp-light                     # light mode (skips the governance extensions in config-light.yml and system-prompt-replace)
 bun run check                 # biome check . && tsc --noEmit
 bun run test                  # bun test ci: session-urls scanner differential and type-filter tests
 ./plugin-audit.sh             # compare install-plugins.sh against `omp plugin list`

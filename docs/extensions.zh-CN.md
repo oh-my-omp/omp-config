@@ -11,7 +11,7 @@
 | 3 | `repo-rules` | [提示词与上下文](prompts-and-context.zh-CN.md#repo-rules) | 主 + 子 | 是 | 扫描 `.claude/rules`、`.agents/rules`、`.pi/rules`、`~/.claude/rules` 及原生规则的 `paths` | 提示词与知识注入（必选基底 `prompt-topics`） | 无需配置：自动扫描 `.claude/rules`、`.agents/rules`、`.pi/rules`、`~/.claude/rules` 与 `paths` 规则 |
 | 4 | `fork-task` | [提示词与上下文](prompts-and-context.zh-CN.md#fork-task) | 主 + 子 | 否 | 无配置文件 | 长程上下文与子代理（完整模式 `subagent-gates`；与 `fork:self` 耦合） | 无需配置：复用当前会话模型或目标 `agent` 模型绑定 |
 | 5 | `model-compaction` | [提示词与上下文](prompts-and-context.zh-CN.md#model-compaction) | 主写 / 子读 | 是 | `omomp.yml#model-compaction`（本机） | 长程状态与压缩（必选基底 `compaction-baseline`） | 当场定制（本机）：在 `<agentDir>/omomp.yml#model-compaction` 按本机主力模型的有效窗口设置正则 `thresholdTokens` |
-| 6 | `user-prompt-inject` | [子代理](agents.zh-CN.md#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库带 `user-goal.md`） | 子代理与顾问（完整模式 `advisor-governance`；与 `APPEND_SYSTEM.md` 及 3 个顾问耦合） | 延后：保留 `PROMPT-INJECT-user-goal.md`；仅在自建新角色时添加本机 `PROMPT-INJECT-*.md` |
+| 6 | `user-prompt-inject` | [子代理](agents.zh-CN.md#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库带 `user-goal.md`） | 子代理与顾问（完整模式 `advisor-governance`；与 `APPEND_SYSTEM.md` 及顾问定义耦合） | 延后：保留 `PROMPT-INJECT-user-goal.md`；仅在自建新角色时添加本机 `PROMPT-INJECT-*.md` |
 | 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | 主 + 子 | 否 | 无配置文件 | 子代理与顾问（完整模式 `subagent-gates`） | 无需配置：并发可写 `task` 共用工作目录时提示显式设置 `isolated` |
 | 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check`（仓库） | 子代理与顾问（完整模式 `subagent-gates`） | 当场定制（本机）：在 `<agentDir>/config.yml` 将 `modelRoles.smol`（或 `@task-split-check`）绑到本机可用轻量模型 |
 | 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge`（仓库） | 子代理与顾问（完整模式 `subagent-gates` + `todo-continuity`；调用 `omp-todo-more:read`） | 当场定制（本机）：在 `<agentDir>/config.yml` 将 `modelRoles.smol`（或 `@task-completion-judge`）绑到本机可用轻量模型 |
@@ -78,7 +78,7 @@
 
 1. 先走 OMP 的 judge 角色链（`resolveJudge`：`modelRoles.judge` → `retry.fallbackChains.judge` → OMP 内置默认链）。跳过无凭据候选，遇到 provider 错误换下一个（401/402/403 使该候选冷却 5 分钟），遇到中止或超时立即停止。从链中第一个原生判定 API 模型起只保留原生候选，`openJudge` 不把当前会话模型加入链中。
 2. 当上述链因中止、超时以外的原因失败，或未解析出任何模型时，改用 `omomp.yml#judge.fallbackRole`（仓库配置 `tiny`，即 `@tiny`：`modelRoles.tiny` → `retry.fallbackChains.tiny`，跳过本地 `local` 模型）中的聊天模型，以提示式判定（`TextJudge`）作答。提示式判定的概率为 one-hot（选中项为 1）。未配置 `judge` 段则不回退。
-3. 两个阶段的请求均记入会话用量账本，相同的原生请求复用 OMP 判定缓存。角色设置与 `omomp.yml#judge` 在每次触发时重读。
+3. 各阶段的请求均记入会话用量账本，相同的原生请求复用 OMP 判定缓存。角色设置与 `omomp.yml#judge` 在每次触发时重读。
 
 ### tool-policy-nag
 
@@ -104,7 +104,7 @@ tool-policy-nag:
   pty: {}
 ```
 
-- **`pty` 通道（`pty.ts`，阻断，主会话与子会话，不调模型）**：在 `tool_call` 中最先运行，与 `detector` 取值无关；只有配置段里有 `pty` 对象、且发起调用的会话的活动工具（`pi.getActiveTools()`）包含 `exec_command` 时才运行，否则一律放行。它在任何进程启动前拒绝运行以下三类命令的 `bash` 调用（直接调用、写往 `xd://bash`——在外层 `write` 上拒绝——或经 eval 的 `tool.bash` 桥；`pty: true` 不豁免）和 eval cell：
+- **`pty` 通道（`pty.ts`，阻断，主会话与子会话，不调模型）**：在 `tool_call` 中最先运行，与 `detector` 取值无关；只有配置段里有 `pty` 对象、且发起调用的会话的活动工具（`pi.getActiveTools()`）包含 `exec_command` 时才运行，否则一律放行。它在任何进程启动前拒绝运行以下各类命令的 `bash` 调用（直接调用、写往 `xd://bash`——在外层 `write` 上拒绝——或经 eval 的 `tool.bash` 桥；`pty: true` 不豁免）和 eval cell：
   - **passthrough**：命令交给另一台机器、另一个容器、另一个用户或另一个 shell 解释：`ssh`（`-G`/`-V`/`-O` 除外）、`mosh`、`vagrant ssh`、`gcloud compute ssh`、`aws ssm start-session`、`docker`/`podman`/`nerdctl` 的 `exec`/`run`、`docker compose`/`docker-compose` 的 `exec`/`run`、`kubectl` 的 `exec`/`run`/`debug`/`attach`、`incus`/`lxc` 的 `exec`/`shell`、`pct exec`/`enter`、`qm guest exec`/`terminal`、带 `-m` 或 `run`/`shell` 或无参数的 `orb`/`orbctl`、`limactl shell`、`multipass exec`/`shell`、`distrobox enter`、`nsenter`、`su`、`bash`/`zsh`/`sh`/`dash`/`ksh`/`fish -c`、`pwsh`/`powershell -c`/`-Command`；
   - **terminal**：需要终端或会停在交互提示上：stdin 没有输入的裸 `bash`/`zsh`/`sh`/`fish`/`python`/`python3`/`node`/`irb`/`ghci`；没有查询、文件或 stdin 的 `psql`/`mysql`/`mariadb`/`redis-cli`/`sqlite3`/`mongosh`；`vim`/`vi`/`nvim`/`nano`/`emacs`（`--batch`/`--headless` 除外）、`htop`、`btop`、`top`（`-b`/`-l` 除外）、`lazygit`、`lazydocker`、`tig`、`k9s`；`git rebase -i`、`git add -p`/`-i`、不带 `-m`/`-F`/`-C`/`--no-edit` 的 `git commit`；`expect`、`script`、`unbuffer`；可能要密码的 `sudo`/`doas`/`run0`（`sudo -n`/`-S`、`doas -n` 只判定它们后面的命令）；`passwd`；不带 `--with-token` 的 `gh auth login`；Python cell 里的 `pexpect`、`pty.spawn`/`pty.fork`；
   - **open-ended**：不会自己结束或在等外部条件：`tail -f`/`-F`、`journalctl -f`、`docker`/`podman logs -f`、`docker compose logs -f`、`kubectl logs -f`、`kubectl get -w`、`watch`、`gh run watch`、不带 `-c` 的 `ping`、不带 `-d`/`--wait` 的 `docker compose up`、`nohup`、`setsid`、以单个 `&` 结尾的管道、`while`/`until`/`for` 循环体里的 `sleep`。
@@ -114,10 +114,10 @@ tool-policy-nag:
 - **`detector: jev`**：要求配置 `intent`，`bashInterceptor.enabled` 保持 `config.yml` 的设置（拦截器开启时，`form`、`intent`、`risk` 三条通道跳过已被拦截器处理的 `bash` 调用，只检查 `exec_command`、`bash_bg` 与 `eval`；`pty` 通道在这一跳过之前运行）。可选的 `form` 段在旁同步计数，仅在 `intent` 无法运行（`INTENT-policy.md` 缺失/无效/停用，或解析不出判定模型）时发送 `form.prompt`；判定请求失败或 90 秒超时只按原因记一次 warning，不触发 `form`。
 - **`form` 通道（命令语法解析与计数）**：
   - 解析管道、`;`/`&&`/`||`、引号、heredoc、`$(…)`/反引号与重定向（含 `>|`、`&>`），剥离 `NAME=value` 前缀、保留字（`if`/`elif`/`while`/`until`/`do`/`then`/`else`/`!`/`{`）及包装命令（`timeout`、`env`、`nice`、`stdbuf`、`time`、`nohup`、`command`、`exec`、`builtin`、`xargs`）；跳过 `sudo`/`doas`/`su`/`ssh`，对字面量 `bash|sh|zsh|dash -c '…'`、`eval '…'` 与 `find -exec … ;` 的内部命令直接分析。
-  - 统计六类 shell 调用：列目录（`ls`、`tree`、`fd`、无动作 `find`、`rg --files`、`ag -g`）、读文件（`cat`/`bat`/`nl`/`head`/`tail`/`less`/`more`/`zcat`、`sed -n`、awk 行号与 `/start/,/end/` 区间、单文件 `jq`、单条只读 `sqlite3` 查询与 `.tables`/`.schema`、`tar -t`/`-xO`、`unzip -l`/`-p`）、搜索（带文件或 `-r` 的 `grep`、非管道输入的 `rg`/`ag`/`ack`、awk `/re/`、工作区 `git grep`）、编辑（`sed -i`、`perl -i`、`awk -i inplace`、`mv`）、写入字面内容（`echo`/`printf`/heredoc `cat` 重定向到文件或管道给 `tee`）、内联脚本（`node`/`bun`/`deno`/`python`/`ruby` 带 `-e`/`-c`/`-p`/`--eval` 或 `-` 读 stdin）；另计 `eval` 中的本地文件调用（`Path.read_text`、`open`、`glob`、`os.listdir`、`readFileSync`、`Bun.file`、`readdir`、`Bun.Glob`）。
+  - 统计以下 shell 调用类别：列目录（`ls`、`tree`、`fd`、无动作 `find`、`rg --files`、`ag -g`）、读文件（`cat`/`bat`/`nl`/`head`/`tail`/`less`/`more`/`zcat`、`sed -n`、awk 行号与 `/start/,/end/` 区间、单文件 `jq`、单条只读 `sqlite3` 查询与 `.tables`/`.schema`、`tar -t`/`-xO`、`unzip -l`/`-p`）、搜索（带文件或 `-r` 的 `grep`、非管道输入的 `rg`/`ag`/`ack`、awk `/re/`、工作区 `git grep`）、编辑（`sed -i`、`perl -i`、`awk -i inplace`、`mv`）、写入字面内容（`echo`/`printf`/heredoc `cat` 重定向到文件或管道给 `tee`）、内联脚本（`node`/`bun`/`deno`/`python`/`ruby` 带 `-e`/`-c`/`-p`/`--eval` 或 `-` 读 stdin）；另计 `eval` 中的本地文件调用（`Path.read_text`、`open`、`glob`、`os.listdir`、`readFileSync`、`Bun.file`、`readdir`、`Bun.Glob`）。
   - 豁免项：结果用于 `$(…)` 捕获、仅经 stdin 过滤器传给 `wc`/`uniq -c`/`grep -c`、传给 `xargs`、作为 `if`/`while` 条件的 `grep -q`；目标是 `/dev/*`；以及 `tail -f`、`locate`、带 `-delete`/`-exec rm` 的 `find`、`git ls-files`、读管道 stdin 的无路径 `grep`。
   - 前 `form.afterHits`（`3`）次只计数；超出后每次以 steer 发送 `form.prompt` 并弹 UI 警告，每个上下文最多发 `form.maxNags`（`3`）次，直到下次 compaction、`/clear` 或 `branch_summary`（调高 `maxNags` 立即恢复）。计数保存在会话自定义条目 `mouriya.omp.tool-policy-nag.state` 中。
-- **`intent` 通道（`INTENT-policy.md`）**：每次调用并发发起一次不阻塞命令的 JUDGE `choice` 请求（11 个选项：`list`、`read`、`search`、`edit`、`write`、`move`、`eval`、`ast`、`shell`、`mixed`、`none`）。当 shell 调用选中非 `none`（或 `eval` 选中非 `eval`/`none`）且概率 $\ge$ `threshold`（`0.5`）时，在下一个 step 边界插入 `aside` 提醒，标出意图名称、应改用的内置工具与原调用。命令该走哪个 shell 入口由 `pty` 通道判定，不是这里的选项。
+- **`intent` 通道（`INTENT-policy.md`）**：每次调用并发发起一次不阻塞命令的 JUDGE `choice` 请求（选项：`list`、`read`、`search`、`edit`、`write`、`move`、`eval`、`ast`、`shell`、`mixed`、`none`）。当 shell 调用选中非 `none`（或 `eval` 选中非 `eval`/`none`）且概率 $\ge$ `threshold`（`0.5`）时，在下一个 step 边界插入 `aside` 提醒，标出意图名称、应改用的内置工具与原调用。命令该走哪个 shell 入口由 `pty` 通道判定，不是这里的选项。
 - **`risk` 通道（仅检查 shell，不调模型）**：配置了 `risk` 时在 `tool_call` 内同步执行。同时满足三项时触发：简单命令段数 $\ge$ `minCommands`（`4`）或总字符数 $\ge$ `minChars`（`600`）；排除 shell 内置命令（`cd`、`echo`、`printf`、`export`、`source`、`test`、`mkdir` 等）后调用的不同外部程序数 $\ge$ `minPrograms`（`3`）；且包含写入动作（重定向/`tee`/就地编辑，`rm`/`cp`/`mv`/`chmod`/`dd`/`tar -c|-x`/`rsync`/`scp`/`make`/`install`/`patch`，或 `git`、`gh`、`docker`、`kubectl`、`orb`、`npm`/`pnpm`/`yarn`/`bun`、`tofu`/`terraform`、`curl`、`wget` 的写子命令）。命中时发一条提醒列出段数、字符数、外部程序和写步骤。
 
 ### watchdog-agent
@@ -247,7 +247,7 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 
 源码：`agent/extensions/commandcode-model-spec/`。
 
-修复 `--model` 启动参数指定 `commandcode` 模型时的两类认证失败：`models.db` 将模型缓存为 `openai-completions`/`anthropic-messages` 导致请求未走插件的 `commandcode-custom` 而报 401，以及 `google/gemini-3.5-flash-lite` 等模型名被匹配到无凭据的内置 `google` provider。扩展在 `session_start` 读取 `<agentDir>/commandcode-models.json`（或 `COMMANDCODE_MODELS_CACHE`），若当前模型在该列表中、`api !== "commandcode-custom"` 且不是已配置凭据的内置模型，则调用 `setModel` 重新绑定到 `pi-commandcode-provider` 注册的实时模型。
+修复 `--model` 启动参数指定 `commandcode` 模型时的认证失败：`models.db` 将模型缓存为 `openai-completions`/`anthropic-messages` 导致请求未走插件的 `commandcode-custom` 而报 401，以及 `google/gemini-3.5-flash-lite` 等模型名被匹配到无凭据的内置 `google` provider。扩展在 `session_start` 读取 `<agentDir>/commandcode-models.json`（或 `COMMANDCODE_MODELS_CACHE`），若当前模型在该列表中、`api !== "commandcode-custom"` 且不是已配置凭据的内置模型，则调用 `setModel` 重新绑定到 `pi-commandcode-provider` 注册的实时模型。
 
 ### antigravity-wire-profiles
 

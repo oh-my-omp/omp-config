@@ -49,8 +49,10 @@ Behavior is described where it lives; read the matching one before changing it:
   parsed as an agent.
 - **Docs.** `README.md` and each `docs/<topic>.md` have a `*.zh-CN.md` twin
   with aligned sections, tables and anchors; change both. A behavior change
-  updates the page or header that describes it. This file carries rules only,
-  never a description of what the code does.
+  updates the page or header that describes it. Docs and commands never state
+  how many items a set has (extensions, plugins, subagents, files, options,
+  categories); name the items or point to the file that lists them. This file
+  carries rules only, never a description of what the code does.
 - **After an OMP upgrade**, follow `docs/operations.md#upgrade-and-maintenance-notes`.
 
 ## Code conventions

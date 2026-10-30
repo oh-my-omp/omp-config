@@ -8,15 +8,15 @@
 2. **文件读写固定使用 `read` + hashline `edit`，并以工具失范作为 system prompt 偏离的触发信号。** 允许用 `eval` 或 shell 组合命令检索和修改文件，会让模型跳过目标行周围的上下文直接按匹配结果修改；在长任务中读取邻近上下文增加的 token 占比很小，而在缺少编译器与测试保护的配置、脚本和命令行操作中，脱离上下文的修改容易造成破坏，因此配置启用 `edit.mode: hashline`（修改前须经非 `:raw` `read` 获取行快照标签）并禁止在 `eval` 中检索本地文件。同时，包括 Claude Opus 在内的前沿模型在长会话中普遍会逐步忽略静态 system prompt；[`tool-policy-nag`](docs/extensions.zh-CN.md#tool-policy-nag) 以工具调用不规范作为可观测信号，注入伪装成用户观察的 user 角色 steer 消息（在各模型厂商不透明的指令层级下，用户消息的注意力权重普遍高于系统提示），借此提醒模型重新遵守整个 system prompt。其启发式检测刻意保持较高误报率：对触发后的 thinking 块逐条检查表明，误报除消耗少量自检思考 token 外未观察到负面影响。回合中途与结束状态另由 [`watchdog-agent`](docs/extensions.zh-CN.md#watchdog-agent) 与 [`turn-judge`](docs/extensions.zh-CN.md#turn-judge) 抽查。
 3. **推迟有损上下文压缩，并保留已确认的约束。** 长会话上下文除文件内容外，还记录已与用户确认的需求边界与排除方案，过早压缩或截断命令输出会丢失这些前提。配置将压缩方式按信息损耗从低到高排列（`remote → soft → snapcompact → handoff → shake`），关闭提前 32k token 的后台预摘要（`compaction.asyncEnabled: false`），通过 [`model-compaction`](docs/prompts-and-context.zh-CN.md#model-compaction) 按模型调整触发阈值，并在子代理需要完整对话背景时使用 [`fork-task`](docs/prompts-and-context.zh-CN.md#fork-task) 复制当前分支。
 4. **`todo`（[`omp-todo-more`](docs/plugins-and-modes.zh-CN.md#todo-more)）介于普通会话与 `/goal` 之间。** 它保留 `/goal` 对目标、验收条件（`objective`/`measure`/`doneWhen`）与未完成项的督促，同时允许在执行过程中调整阶段、任务、耗时预估与阻塞状态。任务状态变更与 `DONE` 提交共同构成逻辑检查点（checkpoint）；跨 compact 轮次时，`omp-todo-more` 将 Todo 快照、[`Task log`](docs/prompts-and-context.zh-CN.md#task-log) 与 [`ctx`](docs/prompts-and-context.zh-CN.md#ctx) 子代理树重新注入上下文。
-5. **子代理（subagent）按模型互补、多订阅分摊与职责边界划分。** 一是以少量调用延迟换取不同模型的特性互补（如 `gpt-*-sol` 偏稳健保守、`gpt-*-luna` 成本低、`claude-opus` 适合发散设计），收敛单一模型的推理偏差；二是将各档位与回退链分布到不同订阅与免费渠道（`anthropic`、`openai-codex`、`opencode-go`、`bansos`），分摊调用以降低综合成本；三是区分任务执行与角色边界——主代理编写派工 prompt 时会将自身假设带入子代理，因此执行侧不设预设人设或固定工作流节点（禁用 `scout`、`reviewer` 等内置子代理），统一由主代理编排无状态的 `task:high/mid/low/free` 执行器，并在派发与交付时由 [`task-split-check`](docs/extensions.zh-CN.md#task-split-check)、[`isolation-nudge`](docs/extensions.zh-CN.md#isolation-nudge) 与 [`task-completion-judge`](docs/extensions.zh-CN.md#task-completion-judge) 校验；非 `task` 子代理仅用于需要隔离职责边界的场景（使顾问既不受主代理转述偏差主导，也不替代主代理决策），通过 [`user-prompt-inject`](docs/agents.zh-CN.md#user-prompt-inject) 注入根会话用户消息、`discuss:*` 限制只读工具、`mentor:default` 移除全部工具来约束边界，因此仅设 `discuss:steady`、`discuss:divergent` 与 `mentor:default` 三个角色。
+5. **子代理（subagent）按模型互补、多订阅分摊与职责边界划分。** 一是以少量调用延迟换取不同模型的特性互补（如 `gpt-*-sol` 偏稳健保守、`gpt-*-luna` 成本低、`claude-opus` 适合发散设计），收敛单一模型的推理偏差；二是将各档位与回退链分布到不同订阅与免费渠道（`anthropic`、`openai-codex`、`opencode-go`、`bansos`），分摊调用以降低综合成本；三是区分任务执行与角色边界——主代理编写派工 prompt 时会将自身假设带入子代理，因此执行侧不设预设人设或固定工作流节点（禁用 `scout`、`reviewer` 等内置子代理），统一由主代理编排无状态的 `task:high/mid/low/free` 执行器，并在派发与交付时由 [`task-split-check`](docs/extensions.zh-CN.md#task-split-check)、[`isolation-nudge`](docs/extensions.zh-CN.md#isolation-nudge) 与 [`task-completion-judge`](docs/extensions.zh-CN.md#task-completion-judge) 校验；非 `task` 子代理仅用于需要隔离职责边界的场景（使顾问既不受主代理转述偏差主导，也不替代主代理决策），通过 [`user-prompt-inject`](docs/agents.zh-CN.md#user-prompt-inject) 注入根会话用户消息、`discuss:*` 限制只读工具、`mentor:default` 移除全部工具来约束边界，因此只设 `discuss:steady`、`discuss:divergent` 与 `mentor:default` 这几个角色。
 
 ## 文档
 
 | 页面 | 内容 |
 |---|---|
 | [提示词与上下文](docs/prompts-and-context.zh-CN.md) | 提示词分层（`SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`APPEND_SYSTEM.md`、`tool-topics`、`system-prompt-replace`、`append-system-model`、`repo-rules`）与上下文保留（`fork-task`、`model-compaction`、`ctx`、`Task log`） |
-| [子代理](docs/agents.zh-CN.md) | 7 个可选 worker/顾问定义与内部 `fork:self`、模型绑定、顾问上下文、派发规则与 worktree 隔离 |
-| [本地扩展](docs/extensions.zh-CN.md) | 26 个本地扩展总表，以及派发/交付检查（`isolation-nudge`、`task-split-check`、`task-completion-judge`）、`JUDGE` 判定扩展（`tool-policy-nag`、`watchdog-agent`、`turn-judge`、`lang-nag`）、bash 与 eval 删除拦截和只收字面路径的 `delete` 工具（`delete-guard`）、宿主/TUI 扩展与读取其他会话的 `session://`（`session-urls`） |
+| [子代理](docs/agents.zh-CN.md) | 可选 worker/顾问定义与内部 `fork:self`、模型绑定、顾问上下文、派发规则与 worktree 隔离 |
+| [本地扩展](docs/extensions.zh-CN.md) | 全部本地扩展总表，以及派发/交付检查（`isolation-nudge`、`task-split-check`、`task-completion-judge`）、`JUDGE` 判定扩展（`tool-policy-nag`、`watchdog-agent`、`turn-judge`、`lang-nag`）、bash 与 eval 删除拦截和只收字面路径的 `delete` 工具（`delete-guard`）、宿主/TUI 扩展与读取其他会话的 `session://`（`session-urls`） |
 | [插件与运行模式](docs/plugins-and-modes.zh-CN.md) | `install-plugins.sh` 中的外部插件（`omp-todo-more`、`omp-thinking-translator` 等）以及 `omp` 与 `omp-light` 的差异 |
 | [安装、同步与维护](docs/operations.zh-CN.md) | 仓库与本机的文件归属、`/onboard-omp`、`/update-omp`、`/sync-omp-config`、`omp-config-autoupdate`、`_shared` 模块与升级检查 |
 | [配置检查（`ci/README.zh-CN.md`）](ci/README.zh-CN.md) | `bun ci/check.ts` 如何安装 `omp`、应用配置、接入免费模型与影子代理并去重报告故障 |
@@ -40,7 +40,7 @@
 
 ```bash
 omp                           # 完整模式
-omp-light                     # 轻量模式（跳过 10 个扩展与 system-prompt-replace）
+omp-light                     # 轻量模式（跳过 config-light.yml 列出的治理扩展与 system-prompt-replace）
 bun run check                 # biome check . && tsc --noEmit
 bun run test                  # bun test ci：session-urls 扫描器差分测试与 type 过滤测试
 ./plugin-audit.sh             # 只读比对 install-plugins.sh 与 `omp plugin list`

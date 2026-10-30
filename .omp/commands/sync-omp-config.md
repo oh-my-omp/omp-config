@@ -30,7 +30,7 @@ description: 把本机 ~/.omp/agent 配置和 pi-bansos 状态同步进本仓库
 ## 步骤
 
 0. 本机还是平铺布局时停止：`~/.omp/agent/extensions/` 下直接有本仓库扩展同名的 `.ts`（不含应用托管文件和上述退休 Todo 路径），或 `~/.omp/agent/extensions-last/system-prompt-replace.ts` 存在。报告这些文件，要求先执行 `/update-omp` 迁移本机，不比对、不写仓库：拿平铺布局和仓库比对会把仓库的整套目录误判为本机已删除。
-1. 按上面的范围逐文件比对，列出仓库缺失、内容不同、本机已删除三类差异；扩展目录按范围里的文件类型逐个比对，不用整目录 `diff -rq`。`extensions-last/README.md` 和 `extensions-last/README.zh-CN.md` 只存在于仓库，不算本机已删除。同时比对第 3 步的插件列表。文件和插件列表都没有差异时，报告已同步并结束。
+1. 按上面的范围逐文件比对，列出仓库缺失、内容不同、本机已删除的差异；扩展目录按范围里的文件类型逐个比对，不用整目录 `diff -rq`。`extensions-last/README.md` 和 `extensions-last/README.zh-CN.md` 只存在于仓库，不算本机已删除。同时比对第 3 步的插件列表。文件和插件列表都没有差异时，报告已同步并结束。
 2. 把差异写入仓库。结构化配置（`config.yml`、`omomp.yml`、`thinking-translator.json`、`pi-bansos-relay-state.json`）先 `read` 两边、比出有差异的字段，再用 `edit` 只改这些行，不整文件覆盖、不重新序列化；`config.yml` 的本机字段和本机列表条目不写，`omomp.yml` 的本机段不写。
 3. `~/.omp/plugins/package.json` 的依赖与 `install-plugins.sh` 的列表不一致时，重写列表：URL/Git 依赖原样保留，npm 依赖去掉版本号。列表里注释掉的条目是可选插件，本机装了也保持注释、不改成有效条目，也不算差异。
 4. 校验：
