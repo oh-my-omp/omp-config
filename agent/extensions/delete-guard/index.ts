@@ -29,9 +29,25 @@
 //     both with and without a value. Here-document bodies on any descriptor
 //     are scanned for substitutions, and inside double quotes `'` does not
 //     quote (`"${x:-'$(…)'}"` runs the substitution).
-// Words that are only arguments pass (`echo rm -rf /`, `git rm`). The block
-// reason names the rule and the command; it points to `delete` when the
-// session's active tools include it, otherwise it says the session cannot
+// Words that are only arguments pass (`echo rm -rf /`, `git rm`).
+//
+// Nested Windows shells (any platform; reached from brush on Windows):
+// `powershell|pwsh` (`.exe`, any path) with `-Command`/`-c` or a positional
+// script is classified in the PowerShell dialect (`powershell.ts`):
+// `Remove-Item` and its aliases `rm`, `ri`, `del`, `erase`, `rd`, `rmdir`,
+// `[System.IO.File]::Delete`, `[IO.Directory]::Delete` and any `.Delete(`
+// call are deletions; `& $cmd`, `Invoke-Expression`/`iex`,
+// `-EncodedCommand` and a script read from stdin are non-literal; `-File`
+// runs a script file and passes. The command after `=` (`$x=Remove-Item`),
+// `return`/`throw`/`exit`, `&` or `.` is classified like any other, and a
+// control block's `}` ends its statement. `cmd` (`.exe`) with `/c` or `/k` is
+// classified in the cmd dialect (`cmd.ts`): `del`, `erase`, `rd`, `rmdir`
+// (also in `for … do`, `if …` and `(…)` blocks) are deletions, a command name
+// with `%VAR%`/`!VAR!` is non-literal, `cmd` without `/c`/`/k` reads stdin
+// and is non-literal. Case never matters; scripts nest across dialects.
+//
+// The block reason names the rule and the command; it points to `delete` when
+// the session's active tools include it, otherwise it says the session cannot
 // delete. No switch, no config, independent of `tools.approvalMode` and
 // `bashInterceptor`.
 //
@@ -43,7 +59,8 @@
 //     `os.popen`, `subprocess.getoutput|getstatusoutput`,
 //     `asyncio.create_subprocess_shell`, any call whose `shell=` is not literally `False`/`None`, and the
 //     kernel's `!cmd`, `x = !cmd` and `%%bash` body: the literal command is
-//     classified as a posix script; launches without a shell — `subprocess`
+//     classified as a system-shell script (posix on macOS and Linux, cmd on
+//     Windows; `%%bash` stays posix); launches without a shell — `subprocess`
 //     `run|call|check_call|check_output|Popen`, `asyncio.create_subprocess_exec`
 //     — classify a literal argv (argv[0] non-literal → blocked); the
 //     `tool.bash({"command": …})` bridge. `%time`/`%timeit` arguments,
@@ -53,9 +70,11 @@
 //     deletion APIs — `rmSync`, `unlinkSync`, `rmdirSync`, `unlink`, `rmdir`
 //     wherever named, `rm` on an fs / fs.promises binding (also `fs.promises` via a bound `fs`) or `require`, and
 //     `.delete()` on `Bun.file(…)` or a name bound to it; child_process
-//     `exec|execSync` strings as posix scripts, `spawn|spawnSync|execFile|
-//     execFileSync` as argv (a script when the options may start a shell: `shell` not literally false/null/undefined, or options not spelled out), `Bun.spawn|spawnSync`
-//     argv, `Bun.$` templates, the `tool.bash({command})` bridge and
+//     `exec|execSync` strings as system-shell scripts (cmd on Windows),
+//     `spawn|spawnSync|execFile|execFileSync` as argv (a script when the
+//     options may start a shell: `shell` not literally false/null/undefined,
+//     or options not spelled out), `Bun.spawn|spawnSync` argv, `Bun.$`
+//     templates (posix, brush), the `tool.bash({command})` bridge and
 //     `tool.write` to `xd://bash`.
 // A command that is not a literal string (f-string or template with
 // placeholders, variable, concatenation) is blocked as non-literal. Names are
@@ -67,8 +86,8 @@
 // Not covered: `exec_command`, and aliases or functions the bash tool sources
 // from the user's shell rc.
 //
-// DELETE TOOL. Registers `delete` (approval `write`, top-level) on macOS and
-// Linux; on any other platform (Windows included) no tool is registered.
+// DELETE TOOL. Registers `delete` (approval `write`, top-level) on macOS,
+// Linux and Windows; on any other platform no tool is registered.
 // Parameters: `paths` (non-empty string array) and `mode` (`"trash"`, the
 // default, or `"permanent"`). Paths are literal: no `~`, environment variable
 // or glob expansion; a relative path is resolved against the session cwd.
@@ -85,6 +104,11 @@
 // link reaches a different file than its normalized form and is refused. A
 // link that passes (dangling links included) is deleted as the link itself.
 //
+// On Windows a bare drive (`C:`) is refused, roots are the drive root (`C:\`,
+// `C:/`, `\` and `/` resolve to it), a UNC share root (`\\server\share`) and
+// `\\?\C:\`; spellings are compared case-folded with `\` separators; the home
+// directory is `USERPROFILE`.
+//
 // `trash` moves each path to the platform trash, restorable from the file
 // manager: macOS runs `/usr/bin/trash -v <path>` with the path as argv, never
 // through a shell (missing binary: the call fails before touching anything and
@@ -94,6 +118,12 @@
 // parent's links resolved, `$topdir/.Trash/$uid`, falling back to
 // `$topdir/.Trash-$uid` when any step there fails), writing `files/<name>`
 // and `info/<name>.trashinfo`; a name taken in either is never overwritten.
+// Windows runs `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
+// (absolute path, never a bare name) with a fixed script calling
+// `Microsoft.VisualBasic.FileIO.FileSystem` `DeleteFile`/`DeleteDirectory`
+// with `SendToRecycleBin`; the path is passed in an environment variable,
+// never in the script text. UNC paths, non-fixed drives (no Recycle Bin) and
+// symbolic links or junctions fail and point to `permanent`.
 // A failed move is reported; it never falls back to permanent deletion.
 // `permanent` deletes recursively. Paths run in order and the result reports
 // each one; a failure on one path, a backend that throws included, leaves the

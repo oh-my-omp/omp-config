@@ -1,5 +1,5 @@
-/** The shell language a command text is written in; #69 adds `powershell` and `cmd`. */
-export type Dialect = { readonly kind: "posix" };
+/** The shell language a command text is written in. */
+export type Dialect = { readonly kind: "posix" } | { readonly kind: "powershell" } | { readonly kind: "cmd" };
 
 /** `delete`: a deletion command. `nonLiteral`: what runs cannot be read from the text. */
 export type Rule = "delete" | "nonLiteral";

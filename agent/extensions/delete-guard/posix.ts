@@ -1,3 +1,4 @@
+import { classifyShellInvocation, programName, shellKind } from "./nested.ts";
 import { parsePosix, type Script, type SimpleCommand, type StdinSource, type Word } from "./posix-parse.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
@@ -209,9 +210,6 @@ type Context = {
 };
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
-
-/** `/bin/RM` and `\rm` both run `rm`: the basename, lowercased. */
-const commandName = (text: string): string => text.slice(text.lastIndexOf("/") + 1).toLowerCase();
 
 function classifyNested(text: string, depth: number, fragment: string): Verdict {
 	if (depth > MAX_DEPTH) return block("nonLiteral", fragment, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
@@ -446,11 +444,13 @@ function resolveCommand(ctx: Context, words: readonly Word[], start: number): Ve
 	const word = words[start];
 	if (word === undefined) return ALLOW;
 	if (!word.literal) return block("nonLiteral", ctx.fragment, `the command name \`${word.raw}\` comes from an expansion`);
-	const name = commandName(word.text);
+	const name = programName(word.text);
 	if (DELETE_COMMANDS.has(name)) return block("delete", ctx.fragment, `\`${name}\` deletes files`);
 	const prefix = PREFIXES.get(name);
 	if (prefix !== undefined) return resolvePrefix(ctx, words, start + 1, prefix, AMBIGUITY_BUDGET);
 	if (SHELLS.has(name)) return resolveShell(ctx, words, start + 1);
+	const kind = shellKind(word.text);
+	if (kind !== null) return classifyShellInvocation(kind, word, words.slice(start + 1), ctx.depth, ctx.fragment);
 	switch (name) {
 		case "find":
 			return resolveFind(ctx, words, start + 1);

@@ -9,7 +9,7 @@
 - **非目标**：让模型执行任务或调用工具；验证付费 helper 的判定（`task-split-check`、`task-completion-judge`）；TUI 专属行为；拦截合并（不设 branch protection）。
 - **输入**：仓库工作区（被检查对象），npm 上的 `@oh-my-pi/pi-coding-agent`，`install-plugins.sh` 声明的插件，Kilo 网关的匿名免费模型。
 
-实现：`ci/check.ts`（检查运行），`.github/workflows/config-check.yml`（触发；其中的 `omp-session` job）。
+实现：`ci/check.ts`（检查运行），`.github/workflows/config-check.yml`（触发；其中的 `omp-session` job）。本目录的第二个节点 [delete-guard Windows 验收](#delete-guard-windows-验收) 有自己的 workflow，见文末。
 
 ## 问题
 
@@ -140,6 +140,7 @@ flowchart TB
 - 付费模型本身的可用性和凭据；
 - TUI 专属行为（`input-polish` 的按键与 overlay，`omp-thinking-translator` 的渲染）；
 - 自动更新的联网路径（`auto`、`/omp-config-autoupdate run`）和维护命令（`/update-omp`、`/sync-omp-config`、`/migrate-omp-keys`）；
+- skills：检查以 `skills.enabled: false` 运行，插件自带的 skills 与 omp 的 skill 描述压缩都不经过；
 - Windows 的 `omp-light.cmd`。
 
 ## 本地复现
@@ -151,3 +152,18 @@ CI_KEEP_ROOT=1 bun ci/check.ts       # 保留临时根目录以便排查
 ```
 
 需要 Bun、git 和公网访问。
+
+## delete-guard Windows 验收
+
+本节点在真实 omp 会话里验证 `delete-guard` 在 Windows 上的行为（issue #69）：嵌套的 PowerShell 与 cmd 方言、eval 交给 cmd 的调用、回收站后端与 Windows 拒绝集。OrbStack 不提供 Windows 容器，Windows 是唯一无法在本地观察这些行为的平台。
+
+- **实现**：`ci/windows-guard.ts`（准备与会话）、`ci/windows-guard-steps.ts`（步骤与判定）、`.github/workflows/delete-guard-windows.yml`（`windows-latest` 上的 `windows` job）。
+- **准备**：`bun install -g @oh-my-pi/pi-coding-agent@latest`，用仓库更新器 `apply` 到 runner 的 `~/.omp/agent`，把 `modelRoles` 的每个角色绑定到 `opencode-go/deepseek-v4.1-flash`，并设 `skills.enabled: false`。runner 是一次性虚拟机，因此直接使用 runner 账户真实的家目录与回收站。
+- **步骤**：每步一个 RPC 会话（`--mode rpc --no-ui --no-session`，cwd 为 `$RUNNER_TEMP\omp-dg-work`），要求模型只发一次工具调用：经 `bash` 的十一条嵌套 PowerShell/cmd 命令（#69 第 1 行的七条，加上 `$x=Remove-Item`、`return Remove-Item`、`. Remove-Item` 与 `start /d <dir> cmd /c del`）与 `rm -rf`，四个 eval 单元格（`shell=True`/`os.system` 各一、`child_process.execSync`、`Bun.$`），一次 `trash` 与一次 `permanent` 的 `delete`，以及六次把 `C:\omp-dg\keep` 与 `C:\`、`C:`、`\`、`\\localhost\C$`、`USERPROFILE`、会话 cwd 配对的 `delete`。prompt 写明这是删除 guard 的验收、操作对象都是一次性探针，模型因此没有理由拒绝或改写调用。每步之前创建对应探针（`C:\omp-dg\d\f`、`C:\omp-dg\p\f` 或 `C:\omp-dg\keep\f`）。
+- **每步通过条件**：所要求工具的第一次调用存在（否则报「model did not call <tool>」），输入与要求一字不差，结果符合预期——`bash`/`eval` 返回 `delete-guard:` 错误，`delete` 成功，拒绝时错误点名危险路径——且之后探针状态符合预期：`C:\omp-dg\d\f` 或 `C:\omp-dg\keep` 仍在；`trash` 后目录消失且回收站（`Shell.Application` 的 `NameSpace(10)`）列出它；`permanent` 后目录消失且回收站不列出它。runner 账户没有回收站时以「no recycle bin on runner」失败。日志打印每次工具调用、结果原文、`Test-Path` 与回收站列表，步骤失败时另打印模型的最后一条回复。
+- **退出码**：全部步骤通过为 0，否则（含准备失败）为 1。
+- **触发与权限**：`workflow_dispatch`，以及改动 `agent/extensions/delete-guard/`、这两个脚本或该 workflow 的 `pull_request`，使改动在合并前得到验证。fork 的 PR 跳过该 job（拿不到 secret）。`contents: read`、`persist-credentials: false`、actions 按 commit SHA 固定；只报告，不拦截合并。
+- **Secret**：与配置检查（R4）不同，本节点使用一个仓库 secret `OPENCODE_API_KEY`，即操作员的 opencode-go key，只传给运行 `bun ci/windows-guard.ts` 的那一步。操作员决定（2026-10-30）：用其他 delete-guard 验收所用的同一模型取代 Kilo 免费模型，失败只归因于 guard，而非更弱的模型。代价：每次运行都计费到这个 key。
+- **不覆盖**：`exec_command` 退回 PowerShell 的情况；WSL；其他低档模型的矩阵。
+
+本地运行：无，本节点需要 Windows。workflow 进入 `main` 后用 `gh workflow run delete-guard-windows.yml --ref <branch>` 触发，或推送改动上述路径的 PR。

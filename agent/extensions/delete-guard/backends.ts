@@ -20,10 +20,10 @@ import type { Target } from "./targets.ts";
 const STICKY_BIT = 0o1000;
 
 /** The platforms `delete` is registered on; any other platform registers no tool. */
-export type Platform = "darwin" | "linux";
+export type Platform = "darwin" | "linux" | "win32";
 
 export const supportedPlatform = (platform: NodeJS.Platform): Platform | null =>
-	platform === "darwin" || platform === "linux" ? platform : null;
+	platform === "darwin" || platform === "linux" || platform === "win32" ? platform : null;
 
 export type Mode = "trash" | "permanent";
 
@@ -32,6 +32,30 @@ export type Outcome =
 	| { readonly kind: "failed"; readonly given: string; readonly error: string };
 
 const MAC_TRASH = "/usr/bin/trash";
+
+/** `powershell.exe` by absolute path under `SystemRoot`, never a bare name the cwd could shadow. */
+function windowsPowershell(): string | null {
+	const root = process.env.SystemRoot ?? process.env.windir;
+	if (root === undefined) return null;
+	const exe = path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+	return existsSync(exe) ? exe : null;
+}
+
+/**
+ * Sends `$env:OMP_DELETE_TARGET` (a file or a directory, per `$env:OMP_DELETE_KIND`) to the Recycle Bin. The
+ * path is never part of the script text. UNC paths and non-fixed drives have no Recycle Bin, where
+ * `SendToRecycleBin` would delete permanently, so the script refuses them.
+ */
+const RECYCLE_SCRIPT = [
+	"$ErrorActionPreference = 'Stop'",
+	"Add-Type -AssemblyName Microsoft.VisualBasic",
+	"$target = $env:OMP_DELETE_TARGET",
+	"$root = [System.IO.Path]::GetPathRoot($target)",
+	"if ($root.StartsWith('\\\\') -or ([System.IO.DriveInfo]::new($root).DriveType -ne [System.IO.DriveType]::Fixed)) { throw 'this drive has no Recycle Bin; use mode permanent to delete' }",
+	"$ui = [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs",
+	"$recycle = [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin",
+	"if ($env:OMP_DELETE_KIND -eq 'directory') { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($target, $ui, $recycle) } else { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($target, $ui, $recycle) }",
+].join("; ");
 
 /** Why the trash backend cannot run at all on this machine, checked before any path is touched. */
 export function trashUnavailable(platform: Platform): string | null {
@@ -42,11 +66,36 @@ export function trashUnavailable(platform: Platform): string | null {
 				: `${MAC_TRASH} is missing, so nothing can be moved to the Trash; use mode "permanent" to delete instead`;
 		case "linux":
 			return null;
+		case "win32":
+			return windowsPowershell() === null
+				? 'powershell.exe was not found under %SystemRoot%\\System32, so nothing can be moved to the Recycle Bin; use mode "permanent" to delete instead'
+				: null;
 		default: {
 			const unreachable: never = platform;
 			return unreachable;
 		}
 	}
+}
+
+async function windowsTrash(target: Target): Promise<Outcome> {
+	if (target.kind === "link") {
+		return {
+			kind: "failed",
+			given: target.given,
+			error:
+				'symbolic links and junctions are not sent to the Recycle Bin (it could follow them); use mode "permanent" to remove the link itself',
+		};
+	}
+	const exe = windowsPowershell();
+	if (exe === null) return { kind: "failed", given: target.given, error: "powershell.exe is missing" };
+	const child = Bun.spawn([exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", RECYCLE_SCRIPT], {
+		env: { ...process.env, OMP_DELETE_TARGET: target.operand, OMP_DELETE_KIND: target.kind },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+	if (code !== 0) return { kind: "failed", given: target.given, error: `powershell exited ${code}: ${`${stderr}\n${stdout}`.trim()}` };
+	return { kind: "done", given: target.given, note: "moved to the Recycle Bin" };
 }
 
 /** `/usr/bin/trash -v` reports `Moved "<src>" to "<dest>"`; the path is passed as argv, never through a shell. */
@@ -216,6 +265,8 @@ function trashOne(platform: Platform, target: Target): Promise<Outcome> | Outcom
 			return macTrash(target);
 		case "linux":
 			return linuxTrash(target);
+		case "win32":
+			return windowsTrash(target);
 		default: {
 			const unreachable: never = platform;
 			return unreachable;

@@ -85,7 +85,7 @@ describe("validateTargets", () => {
 	test("accepts a dangling symbolic link as the link itself", () => {
 		const link = path.join(root, "dangling");
 		symlinkSync(path.join(root, "gone"), link);
-		expect(validateTargets([link], cwd)).toEqual({ kind: "ok", targets: [{ given: link, operand: link }] });
+		expect(validateTargets([link], cwd)).toEqual({ kind: "ok", targets: [{ given: link, operand: link, kind: "link" }] });
 	});
 
 	test("refuses a path whose `..` or trailing slash passes through a symbolic link", () => {
@@ -103,13 +103,16 @@ describe("validateTargets", () => {
 		const dollar = path.join(root, "$HOME");
 		writeFileSync(dollar, "x");
 		const ok = validateTargets([dollar], cwd);
-		expect(ok).toEqual({ kind: "ok", targets: [{ given: dollar, operand: dollar }] });
+		expect(ok).toEqual({ kind: "ok", targets: [{ given: dollar, operand: dollar, kind: "file" }] });
 		expect(refusedPaths([path.join(root, "*.txt")])).toEqual([path.join(root, "*.txt")]);
 	});
 
 	test("resolves relative paths against the cwd", () => {
 		writeFileSync(path.join(cwd, "rel.txt"), "r");
-		expect(validateTargets(["rel.txt"], cwd)).toEqual({ kind: "ok", targets: [{ given: "rel.txt", operand: path.join(cwd, "rel.txt") }] });
+		expect(validateTargets(["rel.txt"], cwd)).toEqual({
+			kind: "ok",
+			targets: [{ given: "rel.txt", operand: path.join(cwd, "rel.txt"), kind: "file" }],
+		});
 	});
 });
 
@@ -119,7 +122,7 @@ describe("runDeletion", () => {
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(path.join(dir, "f"), "f");
 		const outcomes = await runDeletion(process.platform === "darwin" ? "darwin" : "linux", "permanent", [
-			{ given: "p", operand: path.join(root, "p") },
+			{ given: "p", operand: path.join(root, "p"), kind: "directory" },
 		]);
 		expect(outcomes.map((outcome) => outcome.kind)).toEqual(["done"]);
 		expect(existsSync(path.join(root, "p"))).toBe(false);
@@ -136,8 +139,8 @@ describe("runDeletion", () => {
 			const a = path.join(root, "a.txt");
 			writeFileSync(a, "a");
 			const outcomes = await runDeletion("linux", "trash", [
-				{ given: "a.txt", operand: a },
-				{ given: "d", operand: dir },
+				{ given: "a.txt", operand: a, kind: "file" },
+				{ given: "d", operand: dir, kind: "directory" },
 			]);
 			expect(outcomes.map((outcome) => outcome.kind)).toEqual(["done", "done"]);
 			const trash = path.join(root, "data", "Trash");
@@ -148,7 +151,7 @@ describe("runDeletion", () => {
 			expect(info).toMatch(new RegExp(`^\\[Trash Info\\]\\nPath=${a}\\nDeletionDate=\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\n$`));
 
 			writeFileSync(a, "second");
-			const again = await runDeletion("linux", "trash", [{ given: "a.txt", operand: a }]);
+			const again = await runDeletion("linux", "trash", [{ given: "a.txt", operand: a, kind: "file" }]);
 			expect(again.map((outcome) => outcome.kind)).toEqual(["done"]);
 			expect(readFileSync(path.join(trash, "files", "a.txt.2"), "utf8")).toBe("second");
 			expect(existsSync(path.join(trash, "info", "a.txt.2.trashinfo"))).toBe(true);
@@ -157,7 +160,7 @@ describe("runDeletion", () => {
 			writeFileSync(path.join(trash, "files", "b.txt"), "old");
 			const b = path.join(root, "b.txt");
 			writeFileSync(b, "new");
-			const third = await runDeletion("linux", "trash", [{ given: "b.txt", operand: b }]);
+			const third = await runDeletion("linux", "trash", [{ given: "b.txt", operand: b, kind: "file" }]);
 			expect(third.map((outcome) => outcome.kind)).toEqual(["done"]);
 			expect(readFileSync(path.join(trash, "files", "b.txt"), "utf8")).toBe("old");
 			expect(readFileSync(path.join(trash, "files", "b.txt.2"), "utf8")).toBe("new");
