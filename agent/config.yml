@@ -17,6 +17,14 @@ modelTags:
     name: Doc polish polish
   doc-polish.check:
     name: Doc polish check
+  lang-nag:
+    name: Language nag judge
+  tool-policy-nag:
+    name: Tool policy intent judge
+  turn-judge:
+    name: Turn judge
+  watchdog-agent:
+    name: Watchdog option judge
 composer:
   shape: band
 github:

@@ -22,20 +22,25 @@ const omompSection = defineSharedOmompSection(import.meta.path, configSchema);
 
 export type JudgeOpen = { readonly kind: "ready"; readonly judge: Judge } | { readonly kind: "inactive" };
 
-/** A fallback role with the chat models its own role chain resolves to, in chain order. */
-type Fallback = { readonly role: string; readonly models: readonly RoleModel[] };
-
 /**
- * The calling session's judge. First OMP's own judge-role chain
- * (`modelRoles.judge`, then `retry.fallbackChains.judge` or OMP's built-in
- * defaults), walked in order on missing credentials and provider errors, with
- * OMP's account-rejection cooldown, session usage ledger, pricing and shared
- * answer cache; the session model is never added to it. When that chain fails
- * for any reason but abort or timeout, or resolves no candidate, the
- * `fallbackRole` of the `judge` section of omomp.* answers: the chat models of
- * that role's own chain, in order, as prompted judges (one-hot probabilities).
- * Without that section there is no fallback. Inactive only when neither
- * resolves a model. `purpose` labels ledger entries and telemetry spans.
+ * The calling session's judge for `purpose`, which is both the ledger and
+ * telemetry label and the name of an OMP model role (`@lang-nag`, …).
+ *
+ * When `@<purpose>` resolves chat models, they answer as prompted judges
+ * (one-hot probabilities), in chain order, followed by the chat models of the
+ * `fallbackRole` of the `judge` section of omomp.*; OMP's judge-role chain is
+ * not consulted, so no native or on-device judgment model answers that purpose.
+ *
+ * Otherwise first OMP's own judge-role chain (`modelRoles.judge`, then
+ * `retry.fallbackChains.judge` or OMP's built-in defaults), walked in order on
+ * missing credentials and provider errors, with OMP's account-rejection
+ * cooldown, session usage ledger, pricing and shared answer cache; the session
+ * model is never added to it. When that chain fails for any reason but abort or
+ * timeout, or resolves no candidate, the `fallbackRole` chat models answer as
+ * prompted judges. Without a `judge` section there is no fallback.
+ *
+ * Roles and the `judge` section are resolved on every call. Inactive only when
+ * no path resolves a model.
  */
 export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 	const session = AgentRegistry.global()
@@ -52,9 +57,22 @@ export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 		telemetry: session.agent.telemetry,
 		cache: sharedJudgmentCache(),
 	};
+	const fallbackRole = configuredFallbackRole(ctx);
+	const prompted = roleModels(ctx, fallbackRole === null ? [purpose] : [purpose, fallbackRole]);
+	if (prompted.some((entry) => entry.role === purpose)) {
+		return {
+			kind: "ready",
+			judge: {
+				label: `@${purpose}`,
+				judge: <Q extends Questions>(request: JudgmentRequest<Q>, options: JudgeOptions = {}) =>
+					judgeWithChat(deps, prompted, request, options),
+			},
+		};
+	}
+	// `@<purpose>` resolved nothing, so `prompted` holds only the fallback role's models.
 	const chain = resolveJudge(deps);
 	const hasChain = chain.primaryModel() !== undefined;
-	if (!hasChain && roleFallback(ctx) === null) return { kind: "inactive" };
+	if (!hasChain && prompted.length === 0) return { kind: "inactive" };
 	return {
 		kind: "ready",
 		judge: {
@@ -69,31 +87,27 @@ export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 						chainError = error;
 					}
 				}
-				const fallback = roleFallback(ctx);
-				if (fallback === null) throw chainError;
+				if (prompted.length === 0) throw chainError;
 				logger.warn("judgment judge role chain failed; falling back to role", {
 					purpose,
-					role: fallback.role,
-					candidates: fallback.models.map((entry) => modelLabel(entry.model)),
+					role: fallbackRole,
+					candidates: prompted.map((entry) => modelLabel(entry.model)),
 					error: chainError instanceof Error ? chainError.message : String(chainError),
 				});
-				return judgeWithChat(deps, fallback, request, options);
+				return judgeWithChat(deps, prompted, request, options);
 			},
 		},
 	};
 }
 
-/** The configured fallback role's chat models, or null without a `judge` section or when the role resolves none. */
-function roleFallback(ctx: ExtensionContext): Fallback | null {
+/** The `fallbackRole` of the `judge` section, or null without one. */
+function configuredFallbackRole(ctx: ExtensionContext): string | null {
 	const config = loadOmompSection(omompSection, ctx.cwd);
 	switch (config.kind) {
 		case "none":
 			return null;
-		case "found": {
-			const role = roleName(config.value.fallbackRole);
-			const models = roleModels(ctx, [role]);
-			return models.length === 0 ? null : { role, models };
-		}
+		case "found":
+			return roleName(config.value.fallbackRole);
 		default: {
 			const exhaustive: never = config;
 			return exhaustive;
@@ -105,14 +119,14 @@ function roleFallback(ctx: ExtensionContext): Fallback | null {
 // Chat candidates only; no rejection cooldown, image or box handling, or telemetry span.
 async function judgeWithChat<Q extends Questions>(
 	deps: JudgeDeps,
-	fallback: Fallback,
+	models: readonly RoleModel[],
 	request: JudgmentRequest<Q>,
 	options: JudgeOptions,
 ): Promise<JudgmentResult<Q>> {
 	const { registry, sessionId } = deps;
 	const signal = options.signal;
 	let lastFailure: string | undefined;
-	for (const { model } of fallback.models) {
+	for (const { role, model } of models) {
 		if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new AIError.AbortError("judgment aborted");
 		try {
 			if (!(await registry.getApiKey(model, sessionId, { signal }))) {
@@ -130,7 +144,7 @@ async function judgeWithChat<Q extends Questions>(
 				onAttempt: (attempt) =>
 					deps.onUsage?.({
 						purpose: deps.purpose,
-						role: fallback.role,
+						role,
 						api: attempt.api,
 						provider: attempt.provider,
 						model: attempt.model,
@@ -144,10 +158,11 @@ async function judgeWithChat<Q extends Questions>(
 			if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new AIError.AbortError("judgment aborted");
 			if (isAbortOrTimeout(error)) throw error;
 			lastFailure = error instanceof Error ? error.message : String(error);
-			logger.warn("judgment fallback role candidate failed", { role: fallback.role, candidate: modelLabel(model), error: lastFailure });
+			logger.warn("judgment prompted candidate failed", { role, candidate: modelLabel(model), error: lastFailure });
 		}
 	}
-	throw new Error(`judgment: every candidate of fallback role ${fallback.role} failed: ${lastFailure ?? "unknown error"}`);
+	const roles = [...new Set(models.map((entry) => entry.role))].map((role) => `@${role}`).join(", ");
+	throw new Error(`judgment: every prompted candidate of ${roles} failed: ${lastFailure ?? "unknown error"}`);
 }
 // @upstream-end
 
