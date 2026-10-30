@@ -12,13 +12,16 @@
 # tool's operation. How big, chained or destructive a call is does not decide
 # anything here: a long line that downloads, checksums, greps and writes files
 # is `none` when every step belongs to the shell. Judging that call's
-# side-effect surface is the risk lane's job, not this question's.
+# side-effect surface is the risk lane's job, not this question's. Which shell
+# entry a command needs (`bash` or an `exec_command` PTY session) is not asked
+# either: the pty lane refuses passthrough, terminal and open-ended commands on
+# `bash` and eval before they run, so this question never sees them there.
 #
 # The coverage sentences in the body are this policy's statement of which
-# shell forms count. The `bash` description rewritten in the
-# `system-prompt-replace` section of `omomp.yml` tells the agent the same
-# division (`bash` is the synchronous default shell, `exec_command` runs
-# long-running, waiting or interactive programs, `eval` does language
+# shell forms count. `tool-topics/SURFACE-bash.md` tells the agent the same
+# division (`bash` is the synchronous default shell; `exec_command` runs
+# commands handed to another machine, container, user or shell, programs that
+# need a terminal, and commands that keep running; `eval` does language
 # computation); when one changes, change the other with it.
 name: tool-policy
 enabled: true
@@ -63,16 +66,11 @@ options:
     tool: "`ast_grep` / `ast_edit`"
     rubric: |
       The call exists to find or rewrite code by syntax shape (calls with their arguments, declarations, imports, multi-line constructs) through text patterns across files, which `ast_grep` / `ast_edit` do. Not: searching for a literal identifier, string or log line.
-  pty:
-    title: 交互程序没有走 PTY
-    tool: "`exec_command`（PTY 会话），再用 `write_stdin` 驱动"
-    rubric: |
-      The call exists to drive a program that waits for the terminal it is talking to through `bash` or eval instead of an `exec_command` PTY session, or fakes a terminal: a bare shell or `ssh` session with no command, a password, passphrase or host-key prompt, a REPL or database shell opened bare, a TUI, `git rebase -i`, an installer asking on stdin, or `yes |`, `expect`, `ssh -tt`, `script -q`. Not: a program that only prints and exits (`open X.app`, `agent-browser … open`, `tern capture`, `omp -p …`, a build, a test, a linter), a one-shot given a command or a redirect (`ssh host 'cmd'`, `psql -c '…'`, `docker exec` without `-it`, `bash x.sh </dev/null`), or anything running on another machine or in a container (`ssh -o BatchMode=yes host 'ls; cat x'`, `orb -m box -u root bash`, `docker exec app sh`) — this rule never applies to another machine's program.
   shell:
     title: 起进程 / 跑 shell 命令
-    tool: "`bash`（长时间运行或需要终端时用 `exec_command`）"
+    tool: "`bash`（交给远程、容器、另一个用户或另一个 shell 解释的命令，需要终端的程序和不会自己结束的命令用 `exec_command`）"
     rubric: |
-      The call exists to start an operating-system process that should run through `bash` (or `exec_command` when it runs long or needs a terminal): `subprocess.run`, `os.system`, `!cmd`, `Bun.$`, `Bun.spawn`, `child_process` in eval code. Examples: `import subprocess; print(subprocess.run(['date'], …).stdout)`, and a shell command run from eval through the harness bridge. Not: calling another harness tool through `tool.<name>(…)`; and not eval code handing the shell a command line whose own operation a built-in tool covers — that call's intent is the covered operation (`read`, `list`, …), which is why routing it through eval is the violation.
+      The call exists to start an operating-system process that should run through `bash` (or `exec_command` when it is handed to another machine, container, user or shell, needs a terminal, or keeps running): `subprocess.run`, `os.system`, `!cmd`, `Bun.$`, `Bun.spawn`, `child_process` in eval code. Examples: `import subprocess; print(subprocess.run(['date'], …).stdout)`, and a shell command run from eval through the harness bridge. Not: calling another harness tool through `tool.<name>(…)`; and not eval code handing the shell a command line whose own operation a built-in tool covers — that call's intent is the covered operation (`read`, `list`, …), which is why routing it through eval is the violation.
   mixed:
     title: 一次调用重拼了多个内置工具的操作
     tool: 拆开：读走 `read` / `glob` / `grep`，写走 `edit` / `write`
@@ -82,13 +80,13 @@ options:
     title: 不走内置工具
     tool: 保持原样
     rubric: |
-      None of the above: a real program or short fact pipeline doing its own job — builds, tests, linters, package managers, git, an external CLI or API, counts, checksums, a program's own output redirected to a file, container commands, remote operations other than UTF-8 text reads covered by `read ssh://`, a service probe, or anything the shell is simply the right tool for.
+      None of the above: a real program or short fact pipeline doing its own job — builds, tests, linters, package managers, git, an external CLI or API, counts, checksums, a program's own output redirected to a file, a service probe, or anything the shell is simply the right tool for. An `exec_command` call that runs a remote, container, interactive or long-running command is this option unless its work is one of the operations above (`ssh host 'cat /etc/hosts'` is `read`).
 ---
 
 The state is one tool call made by an AI coding agent working in a repository. Its system prompt gives it the built-in tools below and forbids reassembling their operations through the shell (`bash` or `exec_command`) or the eval kernel:
 
-`read` — file contents and line ranges, directory listings, archive members, SQLite databases, PDFs and documents, images, web pages, and `ssh://host/path`; it is a protocol for every source the agent would otherwise shell out to (`cat`, `sed -n`, `jq` on a dump, `unzip`, `ffprobe`, `curl`). `glob` — find files by name or pattern. `grep` — regex search over files. `edit` — modify an existing file, and rename or move it. `write` — create or overwrite a file. `eval` — persistent Python/JS kernel, for work that needs language semantics on data already in hand. `ast_grep` / `ast_edit` — structural code search and rewrites. `bash` — the default, synchronous shell: real binaries and short fact pipelines, such as builds, tests, package managers, git, external CLIs and APIs, counts and checksums. `exec_command` — a PTY session for programs that run long, wait on an outside condition or need a terminal, driven with `write_stdin` and watched with `monitor`.
+`read` — file contents and line ranges, directory listings, archive members, SQLite databases, PDFs and documents, images, web pages, and `ssh://host/path`; it is a protocol for every source the agent would otherwise shell out to (`cat`, `sed -n`, `jq` on a dump, `unzip`, `ffprobe`, `curl`). `glob` — find files by name or pattern. `grep` — regex search over files. `edit` — modify an existing file, and rename or move it. `write` — create or overwrite a file. `eval` — persistent Python/JS kernel, for work that needs language semantics on data already in hand. `ast_grep` / `ast_edit` — structural code search and rewrites. `bash` — the default, synchronous shell: real binaries and short fact pipelines, such as builds, tests, package managers, git, external CLIs and APIs, counts and checksums. `exec_command` — a PTY session for commands handed to another machine, container, user or shell, programs that need a terminal, and commands that run long or wait on an outside condition, driven with `write_stdin` and watched with `monitor`.
 
-The shell stays legitimate for anything an external program owns: a subcommand belonging to another program (`km ls actions`, `docker ps`, `kubectl get pods`, `gh pr list`, `git ls-files`, `aws s3 ls`) lists that program's own resources; a filter reshaping a stream (`cmd | jq`, `cmd | grep x`) works on bytes no built-in tool produced; a program's own output redirected to a file (`npm test > log`, `strings … > f`) writes nothing the agent authored. Remote UTF-8 files up to 1 MiB on verified POSIX hosts are reachable with `read ssh://host/path`, so `ssh host 'cat /path'` for those files is a read operation; other remote operations, unsupported remote sources, and commands inside containers (`docker exec`, `kubectl exec`, `qm guest exec`, `orb -m`) still belong to the shell. A program that only prints and exits (`open X.app`, `agent-browser … open`, `omp -p …`, a build, a test, a linter) needs no terminal.
+The shell stays legitimate for anything an external program owns: a subcommand belonging to another program (`km ls actions`, `docker ps`, `kubectl get pods`, `gh pr list`, `git ls-files`, `aws s3 ls`) lists that program's own resources; a filter reshaping a stream (`cmd | jq`, `cmd | grep x`) works on bytes no built-in tool produced; a program's own output redirected to a file (`npm test > log`, `strings … > f`) writes nothing the agent authored. Remote UTF-8 files up to 1 MiB on verified POSIX hosts are reachable with `read ssh://host/path`, so `ssh host 'cat /path'` for those files is a read operation; other remote operations, unsupported remote sources, and commands inside containers (`docker exec`, `kubectl exec`, `qm guest exec`, `orb -m`) run through `exec_command`. A program that only prints and exits (`open X.app`, `agent-browser … open`, `omp -p …`, a build, a test, a linter) needs no terminal.
 
 Say which option below is the intent of this call — what the call is trying to accomplish, not the words it happens to use. One option exactly.

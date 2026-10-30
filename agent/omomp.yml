@@ -25,6 +25,7 @@ tool-policy-nag:
     minCommands: 4
     minChars: 600
     minPrograms: 3
+  pty: {}
 task-completion-judge:
   fallbackRole: smol
 task-split-check:
