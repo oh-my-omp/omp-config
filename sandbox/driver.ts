@@ -14,7 +14,8 @@
 //                   expect: matched in order as a subsequence of the tool calls;
 //                   forbid: no tool call may match any of them
 //   replyIncludes?  literal strings the last assistant reply must contain
-//   Matcher         { tool, isError?, inputPattern? (regex over the call's JSON input), resultIncludes? }
+//   Matcher         { tool (a name, or a list of names any of which matches), isError?,
+//                     inputPattern? (regex over the call's JSON input), resultIncludes? }
 //
 // Result, one of:
 //   pass           every assertion held
@@ -32,7 +33,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { join } from "node:path";
 
 export interface Matcher {
-	readonly tool: string;
+	readonly tool: readonly string[];
 	readonly isError?: boolean;
 	readonly inputPattern?: string;
 	readonly resultIncludes?: string;
@@ -70,7 +71,8 @@ const isMapping = (value: unknown): value is Mapping => typeof value === "object
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
 
 function parseMatcher(value: unknown, where: string): Matcher {
-	if (!isMapping(value) || typeof value.tool !== "string") throw new Error(`${where}: a matcher needs a string "tool"`);
+	if (!isMapping(value) || !(typeof value.tool === "string" || (isStringArray(value.tool) && value.tool.length > 0)))
+		throw new Error(`${where}: a matcher needs "tool", a string or a non-empty list of strings`);
 	if (value.isError !== undefined && typeof value.isError !== "boolean") throw new Error(`${where}: "isError" must be a boolean`);
 	if (value.inputPattern !== undefined && typeof value.inputPattern !== "string")
 		throw new Error(`${where}: "inputPattern" must be a string`);
@@ -78,7 +80,7 @@ function parseMatcher(value: unknown, where: string): Matcher {
 		throw new Error(`${where}: "resultIncludes" must be a string`);
 	if (typeof value.inputPattern === "string") new RegExp(value.inputPattern);
 	return {
-		tool: value.tool,
+		tool: typeof value.tool === "string" ? [value.tool] : value.tool,
 		...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
 		...(typeof value.inputPattern === "string" ? { inputPattern: value.inputPattern } : {}),
 		...(typeof value.resultIncludes === "string" ? { resultIncludes: value.resultIncludes } : {}),
@@ -124,7 +126,7 @@ function textOf(value: unknown): string {
 }
 
 function matches(call: Call, matcher: Matcher): boolean {
-	if (call.tool !== matcher.tool) return false;
+	if (!matcher.tool.includes(call.tool)) return false;
 	if (matcher.isError !== undefined && call.isError !== matcher.isError) return false;
 	if (matcher.inputPattern !== undefined && !new RegExp(matcher.inputPattern).test(JSON.stringify(call.input) ?? "")) return false;
 	if (matcher.resultIncludes !== undefined && !call.result.includes(matcher.resultIncludes)) return false;

@@ -1,0 +1,46 @@
+{
+	"name": "pty-remote-repl",
+	"init": "true",
+	"prompt": "登录主机 target，在交互式 python3 里计算 2**100，把结果告诉我。",
+	"finalAssertion": "true",
+	"calls": {
+		"expect": [
+			{
+				"tool": [
+					"write",
+					"eval"
+				],
+				"isError": false,
+				"inputPattern": "xd://exec_command|tool\\.exec_command\\("
+			},
+			{
+				"tool": [
+					"write",
+					"eval"
+				],
+				"isError": false,
+				"inputPattern": "xd://write_stdin|tool\\.write_stdin\\("
+			}
+		],
+		"forbid": [
+			{
+				"tool": "bash",
+				"isError": false,
+				"inputPattern": "(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?(?:ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-]))"
+			},
+			{
+				"tool": "eval",
+				"isError": false,
+				"inputPattern": "^(?!.*(xd://exec_command|xd://write_stdin|tool\\.exec_command\\(|tool\\.write_stdin\\())(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?(?:ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-])))"
+			},
+			{
+				"tool": "write",
+				"isError": false,
+				"inputPattern": "(?=.*\"xd://bash\")(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?(?:ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-])))"
+			}
+		]
+	},
+	"replyIncludes": [
+		"1267650600228229401496703205376"
+	]
+}

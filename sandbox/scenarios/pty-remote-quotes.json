@@ -1,0 +1,42 @@
+{
+	"name": "pty-remote-quotes",
+	"init": "true",
+	"prompt": "在主机 target 上执行下面这段脚本，把输出原样告诉我：`printf '%s\\n' \"a'b\" 'c\"d' 'x\\ty'; awk -F: '$1==\"root\"{print \"(\" $7 \")\"}' /etc/passwd`",
+	"finalAssertion": "true",
+	"calls": {
+		"expect": [
+			{
+				"tool": [
+					"write",
+					"eval"
+				],
+				"isError": false,
+				"inputPattern": "(?=.*(xd://exec_command|tool\\.exec_command\\())(?=.*target)",
+				"resultIncludes": "exit_code: 0"
+			}
+		],
+		"forbid": [
+			{
+				"tool": "bash",
+				"isError": false,
+				"inputPattern": "(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b)"
+			},
+			{
+				"tool": "eval",
+				"isError": false,
+				"inputPattern": "^(?!.*(xd://exec_command|xd://write_stdin|tool\\.exec_command\\(|tool\\.write_stdin\\())(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b))"
+			},
+			{
+				"tool": "write",
+				"isError": false,
+				"inputPattern": "(?=.*\"xd://bash\")(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b))"
+			}
+		]
+	},
+	"replyIncludes": [
+		"a'b",
+		"c\"d",
+		"x\\ty",
+		"(/bin/bash)"
+	]
+}
