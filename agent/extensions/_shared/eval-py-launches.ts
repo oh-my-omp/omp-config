@@ -382,7 +382,7 @@ class Lexer {
 	}
 }
 
-/** A call argument, reduced to what the guard needs. */
+/** A call argument, reduced to what launch recognition needs. */
 type Arg =
 	| { readonly kind: "string"; readonly value: string; readonly literal: boolean }
 	| { readonly kind: "seq"; readonly items: readonly Arg[] }

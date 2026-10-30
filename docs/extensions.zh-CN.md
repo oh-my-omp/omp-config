@@ -15,7 +15,7 @@
 | 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | 主 + 子 | 否 | 无配置文件 |
 | 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check`（仓库） |
 | 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge`（仓库） |
-| 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话 | 否 | `omomp.yml#tool-policy-nag` + `INTENT-policy.md`（仓库） |
+| 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `omomp.yml#tool-policy-nag` + `INTENT-policy.md`（仓库） |
 | 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子 | 否 | `WATCHDOG-*.md`（本机） |
 | 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子（按文件 `target`） | 否 | `TURN-JUDGE-*.md`（仓库带 `gpt-talk-only`，其余归本机） |
 | 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `omomp.yml#lang-nag`（仓库） |
@@ -82,9 +82,9 @@
 
 ### tool-policy-nag
 
-源码：`agent/extensions/tool-policy-nag/`。仅在主会话运行。
+源码：`agent/extensions/tool-policy-nag/`。`form`、`intent`、`risk` 三条通道只在主会话运行；`pty` 通道在主会话和子会话都运行。
 
-在 `tool_call` 阶段检查 `bash`、`bash_bg`、`exec_command`（含写往 `xd://bash`、`xd://bash_bg`、`xd://exec_command` 的调用）和 `eval`。只发提醒，不拦截命令。设计上，它把工具调用不规范当作模型偏离静态 system prompt 的可观测信号（包括 Claude Opus 在内的模型在长会话中均会高频忽略静态 system prompt）：`form.prompt` 并非以系统提示注入，而是作为伪装成用户观察的 user 角色 steer 消息发送（在各模型厂商不透明的指令权重体系下，user 消息通常享有更高优先级），促使模型重新审视并遵守 system prompt。启发式检测刻意不压低误报率：对触发后的 thinking 记录逐条检查表明，误报仅增加少量自检思考 token，未观察到其他负面副作用。
+在 `tool_call` 阶段检查 `bash`、`bash_bg`、`exec_command`（含写往 `xd://bash`、`xd://bash_bg`、`xd://exec_command` 的调用）和 `eval`。`pty` 通道在调用执行前拒绝；其余通道只发提醒，不拦截命令。设计上，提醒通道把工具调用不规范当作模型偏离静态 system prompt 的可观测信号（包括 Claude Opus 在内的模型在长会话中均会高频忽略静态 system prompt）：`form.prompt` 并非以系统提示注入，而是作为伪装成用户观察的 user 角色 steer 消息发送（在各模型厂商不透明的指令权重体系下，user 消息通常享有更高优先级），促使模型重新审视并遵守 system prompt。启发式检测刻意不压低误报率：对触发后的 thinking 记录逐条检查表明，误报仅增加少量自检思考 token，未观察到其他负面副作用。
 
 每次调用重读 `omomp.yml#tool-policy-nag`（项目 `.omp/omomp.*` 优先于 agent 目录 `omomp.*`；无有效配置段时不运行）：
 
@@ -101,16 +101,23 @@ tool-policy-nag:
     minCommands: 4
     minChars: 600
     minPrograms: 3
+  pty: {}
 ```
 
+- **`pty` 通道（`pty.ts`，阻断，主会话与子会话，不调模型）**：在 `tool_call` 中最先运行，与 `detector` 取值无关；只有配置段里有 `pty` 对象、且发起调用的会话的活动工具（`pi.getActiveTools()`）包含 `exec_command` 时才运行，否则一律放行。它在任何进程启动前拒绝运行以下三类命令的 `bash` 调用（直接调用、写往 `xd://bash`——在外层 `write` 上拒绝——或经 eval 的 `tool.bash` 桥；`pty: true` 不豁免）和 eval cell：
+  - **passthrough**：命令交给另一台机器、另一个容器、另一个用户或另一个 shell 解释：`ssh`（`-G`/`-V`/`-O` 除外）、`mosh`、`vagrant ssh`、`gcloud compute ssh`、`aws ssm start-session`、`docker`/`podman`/`nerdctl` 的 `exec`/`run`、`docker compose`/`docker-compose` 的 `exec`/`run`、`kubectl` 的 `exec`/`run`/`debug`/`attach`、`incus`/`lxc` 的 `exec`/`shell`、`pct exec`/`enter`、`qm guest exec`/`terminal`、带 `-m` 或 `run`/`shell` 或无参数的 `orb`/`orbctl`、`limactl shell`、`multipass exec`/`shell`、`distrobox enter`、`nsenter`、`su`、`bash`/`zsh`/`sh`/`dash`/`ksh`/`fish -c`、`pwsh`/`powershell -c`/`-Command`；
+  - **terminal**：需要终端或会停在交互提示上：stdin 没有输入的裸 `bash`/`zsh`/`sh`/`fish`/`python`/`python3`/`node`/`irb`/`ghci`；没有查询、文件或 stdin 的 `psql`/`mysql`/`mariadb`/`redis-cli`/`sqlite3`/`mongosh`；`vim`/`vi`/`nvim`/`nano`/`emacs`（`--batch`/`--headless` 除外）、`htop`、`btop`、`top`（`-b`/`-l` 除外）、`lazygit`、`lazydocker`、`tig`、`k9s`；`git rebase -i`、`git add -p`/`-i`、不带 `-m`/`-F`/`-C`/`--no-edit` 的 `git commit`；`expect`、`script`、`unbuffer`；可能要密码的 `sudo`/`doas`/`run0`（`sudo -n`/`-S`、`doas -n` 只判定它们后面的命令）；`passwd`；不带 `--with-token` 的 `gh auth login`；Python cell 里的 `pexpect`、`pty.spawn`/`pty.fork`；
+  - **open-ended**：不会自己结束或在等外部条件：`tail -f`/`-F`、`journalctl -f`、`docker`/`podman logs -f`、`docker compose logs -f`、`kubectl logs -f`、`kubectl get -w`、`watch`、`gh run watch`、不带 `-c` 的 `ping`、不带 `-d`/`--wait` 的 `docker compose up`、`nohup`、`setsid`、以单个 `&` 结尾的管道、`while`/`until`/`for` 循环体里的 `sleep`。
+
+  一行命令里任何一个简单命令命中就拒绝——管道每一段、`$(…)` 内部、`;`/`&&`/`||` 链、`env`/`timeout`/`nice`/`nohup`/`stdbuf`/`time`/`command`/`exec` 后面的命令——类别按源码顺序第一个命中定。eval cell 只认用自身名字写出、参数全是字面量的启动：py 的 `subprocess.run`/`call`/`check_call`/`check_output`/`Popen`、`os.system`、`os.popen`、`!cmd` 与 `%%bash`；js 的不含 `${}` 的 `Bun.$`、`Bun.spawn`/`spawnSync`、child_process 的 `exec`/`execSync`/`spawn`/`spawnSync`/`execFile`/`execFileSync`；命中时整个 cell 被拒。读不出来的一律放行：未闭合的命令行、来自 `$…` 的程序词、经 `xargs`、`find -exec` 或 `parallel` 调起的程序、shell 的 `eval`、改名导入、变量、拼接或插值、解析不了的 eval cell。拒绝信息就是工具结果：类别、程序、原调用、`xd://exec_command`、该类别的改写方法（passthrough：`ssh host bash -s <<'EOF'` 并把脚本写成带引号的 heredoc，或只写外层再用 `write_stdin` 交互，或用 `shell` 参数，或 `read ssh://`；terminal：用 `write_stdin`/`monitor` 驱动，密码由人在终端页输入；open-ended：在那里启动并用 `monitor` 等待），以及“这是入口路由，不是风险判断”。被拒的调用不进入其他通道：不计数、不提醒、不发判定请求、不写嵌套去重标记。`exec_command` 本身从不判定。规则是 `pty.ts` 里的闭合注册表 `RULES`，`ci/tool-policy-nag-pty.test.ts` 为每条规则各带一个命中和一个不命中样例。轻量模式停用整个扩展，本通道也不运行。
 - **`detector: heuristic`**：要求配置 `form`，忽略 `intent`（不发 JUDGE 请求，不读 `INTENT-policy.md`）。每次检查前在主会话运行时设置层写入 `bashInterceptor.enabled = false`（子代理透读主会话设置，同样关闭拦截器），切换 detector 或 `session_shutdown` 时清除该覆盖。
-- **`detector: jev`**：要求配置 `intent`，`bashInterceptor.enabled` 保持 `config.yml` 的设置（拦截器开启时，三条通道均跳过已被拦截器处理的 `bash` 调用，只检查 `exec_command`、`bash_bg` 与 `eval`）。可选的 `form` 段在旁同步计数，仅在 `intent` 无法运行（`INTENT-policy.md` 缺失/无效/停用，或解析不出判定模型）时发送 `form.prompt`；判定请求失败或 90 秒超时只按原因记一次 warning，不触发 `form`。
+- **`detector: jev`**：要求配置 `intent`，`bashInterceptor.enabled` 保持 `config.yml` 的设置（拦截器开启时，`form`、`intent`、`risk` 三条通道跳过已被拦截器处理的 `bash` 调用，只检查 `exec_command`、`bash_bg` 与 `eval`；`pty` 通道在这一跳过之前运行）。可选的 `form` 段在旁同步计数，仅在 `intent` 无法运行（`INTENT-policy.md` 缺失/无效/停用，或解析不出判定模型）时发送 `form.prompt`；判定请求失败或 90 秒超时只按原因记一次 warning，不触发 `form`。
 - **`form` 通道（命令语法解析与计数）**：
   - 解析管道、`;`/`&&`/`||`、引号、heredoc、`$(…)`/反引号与重定向（含 `>|`、`&>`），剥离 `NAME=value` 前缀、保留字（`if`/`elif`/`while`/`until`/`do`/`then`/`else`/`!`/`{`）及包装命令（`timeout`、`env`、`nice`、`stdbuf`、`time`、`nohup`、`command`、`exec`、`builtin`、`xargs`）；跳过 `sudo`/`doas`/`su`/`ssh`，对字面量 `bash|sh|zsh|dash -c '…'`、`eval '…'` 与 `find -exec … ;` 的内部命令直接分析。
   - 统计六类 shell 调用：列目录（`ls`、`tree`、`fd`、无动作 `find`、`rg --files`、`ag -g`）、读文件（`cat`/`bat`/`nl`/`head`/`tail`/`less`/`more`/`zcat`、`sed -n`、awk 行号与 `/start/,/end/` 区间、单文件 `jq`、单条只读 `sqlite3` 查询与 `.tables`/`.schema`、`tar -t`/`-xO`、`unzip -l`/`-p`）、搜索（带文件或 `-r` 的 `grep`、非管道输入的 `rg`/`ag`/`ack`、awk `/re/`、工作区 `git grep`）、编辑（`sed -i`、`perl -i`、`awk -i inplace`、`mv`）、写入字面内容（`echo`/`printf`/heredoc `cat` 重定向到文件或管道给 `tee`）、内联脚本（`node`/`bun`/`deno`/`python`/`ruby` 带 `-e`/`-c`/`-p`/`--eval` 或 `-` 读 stdin）；另计 `eval` 中的本地文件调用（`Path.read_text`、`open`、`glob`、`os.listdir`、`readFileSync`、`Bun.file`、`readdir`、`Bun.Glob`）。
   - 豁免项：结果用于 `$(…)` 捕获、仅经 stdin 过滤器传给 `wc`/`uniq -c`/`grep -c`、传给 `xargs`、作为 `if`/`while` 条件的 `grep -q`；目标是 `/dev/*`；以及 `tail -f`、`locate`、带 `-delete`/`-exec rm` 的 `find`、`git ls-files`、读管道 stdin 的无路径 `grep`。
   - 前 `form.afterHits`（`3`）次只计数；超出后每次以 steer 发送 `form.prompt` 并弹 UI 警告，每个上下文最多发 `form.maxNags`（`3`）次，直到下次 compaction、`/clear` 或 `branch_summary`（调高 `maxNags` 立即恢复）。计数保存在会话自定义条目 `mouriya.omp.tool-policy-nag.state` 中。
-- **`intent` 通道（`INTENT-policy.md`）**：每次调用并发发起一次不阻塞命令的 JUDGE `choice` 请求（12 个选项：`list`、`read`、`search`、`edit`、`write`、`move`、`eval`、`ast`、`pty`、`shell`、`mixed`、`none`）。当 shell 调用选中非 `none`（或 `eval` 选中非 `eval`/`none`）且概率 $\ge$ `threshold`（`0.5`）时，在下一个 step 边界插入 `aside` 提醒，标出意图名称、应改用的内置工具与原调用。
+- **`intent` 通道（`INTENT-policy.md`）**：每次调用并发发起一次不阻塞命令的 JUDGE `choice` 请求（11 个选项：`list`、`read`、`search`、`edit`、`write`、`move`、`eval`、`ast`、`shell`、`mixed`、`none`）。当 shell 调用选中非 `none`（或 `eval` 选中非 `eval`/`none`）且概率 $\ge$ `threshold`（`0.5`）时，在下一个 step 边界插入 `aside` 提醒，标出意图名称、应改用的内置工具与原调用。命令该走哪个 shell 入口由 `pty` 通道判定，不是这里的选项。
 - **`risk` 通道（仅检查 shell，不调模型）**：配置了 `risk` 时在 `tool_call` 内同步执行。同时满足三项时触发：简单命令段数 $\ge$ `minCommands`（`4`）或总字符数 $\ge$ `minChars`（`600`）；排除 shell 内置命令（`cd`、`echo`、`printf`、`export`、`source`、`test`、`mkdir` 等）后调用的不同外部程序数 $\ge$ `minPrograms`（`3`）；且包含写入动作（重定向/`tee`/就地编辑，`rm`/`cp`/`mv`/`chmod`/`dd`/`tar -c|-x`/`rsync`/`scp`/`make`/`install`/`patch`，或 `git`、`gh`、`docker`、`kubectl`、`orb`、`npm`/`pnpm`/`yarn`/`bun`、`tofu`/`terraform`、`curl`、`wget` 的写子命令）。命中时发一条提醒列出段数、字符数、外部程序和写步骤。
 
 ### watchdog-agent

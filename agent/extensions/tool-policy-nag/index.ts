@@ -1,8 +1,21 @@
 /**
- * Watches main-session shell commands and eval code for work the built-in
- * tools own (`APPEND_SYSTEM.md`), and injects an attributed reminder when the
- * shell or the eval kernel was used instead. Reminders only: no call is ever
- * blocked, and a working call is left alone.
+ * Watches shell commands and eval code at `tool_call`. Four lanes, each with
+ * its own scope and effect:
+ *
+ * - `pty` (`pty.ts`) — main AND sub sessions, BLOCKING. A `bash` call (direct,
+ *   or a write to `xd://bash`; `pty: true` does not exempt it) or an eval cell
+ *   that starts a passthrough, terminal or open-ended command is refused
+ *   before any process starts, with a tool result naming the category, the
+ *   program, `xd://exec_command` and how to rewrite the call. Runs only when
+ *   the section has `pty` and the calling session's active tools include
+ *   `exec_command`. Runs first: a refused call reaches no other lane (no
+ *   count, no reminder, no judge request, no nested-device marker).
+ *   `exec_command` is never judged by it. Entry routing, not risk judgment.
+ * - `form`/`intent` (tool routing) and `risk` — main session only,
+ *   REMINDERS ONLY: no call is ever blocked by them, and a working call is
+ *   left alone. They catch work the built-in tools own (`APPEND_SYSTEM.md`)
+ *   done through the shell or the eval kernel, and inject an attributed
+ *   reminder.
  *
  * CONFIGURED in the `tool-policy-nag` section of omomp.* (project copy first,
  * then the agent dir; re-read at every watched call, so edits apply to the next
@@ -35,21 +48,23 @@
  * programs and the writing steps. Deterministic and independent of
  * `detector`: a call can be a tool violation, a risk, both, or neither.
  *
- * BASH INTERCEPTOR. While `detector` is `heuristic`, every watched call first
- * puts a runtime-only override `bashInterceptor.enabled = false` on the main
- * session's live settings, whatever config.yml says; subagents read those
- * settings through, so they lose the interceptor too. The override is the
- * extension's own: it is cleared when the detector changes and at
- * `session_shutdown`, and no other layer is touched. Under any other detector
- * the interceptor follows config, and while it is on, `bash` calls (direct or
- * through `xd://bash`) are skipped by every lane because the interceptor
- * already refuses routing violations before they run; `exec_command`,
- * `bash_bg` and eval stay watched.
+ * BASH INTERCEPTOR. While `detector` is `heuristic`, every watched main-session
+ * call that the pty lane let through first puts a runtime-only override
+ * `bashInterceptor.enabled = false` on the main session's live settings,
+ * whatever config.yml says; subagents read those settings through, so they
+ * lose the interceptor too. The override is the extension's own: it is
+ * cleared when the detector changes and at `session_shutdown`, and no other
+ * layer is touched. Under any other detector the interceptor follows config,
+ * and while it is on, `bash` calls (direct or through `xd://bash`) are skipped
+ * by the form, intent and risk lanes because the interceptor already refuses
+ * routing violations before they run; `exec_command`, `bash_bg` and eval stay
+ * watched. The pty lane runs before this skip.
  *
  * Registers session lifecycle and tool_call hooks; appends counter entries to
- * the session branch, overrides one OMP setting at runtime and injects
- * attributed user reminders. Main sessions only. Hook failures are logged and
- * do not escape into omp.
+ * the session branch, overrides one OMP setting at runtime, injects
+ * attributed user reminders and returns pty refusals as tool-call blocks.
+ * Hook failures are logged and do not escape into omp; a pty lane failure
+ * lets the call run.
  */
 import type { Judge } from "@oh-my-pi/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
