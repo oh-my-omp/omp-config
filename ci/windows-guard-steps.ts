@@ -14,6 +14,8 @@ export type ToolCall = {
 
 export type Session = {
 	readonly calls: readonly ToolCall[];
+	/** The assistant's last text reply, printed when a step fails. */
+	readonly reply: string;
 	readonly finished: boolean;
 	readonly code: number | null;
 	readonly stderr: string;
@@ -50,8 +52,12 @@ function recycleBinNames(): readonly string[] | null {
 	return names.includes("NO_RECYCLE_BIN") ? null : names;
 }
 
+/**
+ * The prompt says what the run is: the deletion guard is expected to refuse most of these calls and the paths are
+ * throwaway probes, so a model has no reason to decline the call or rewrite it.
+ */
 const once = (tool: string, body: string): string =>
-	`Make exactly one ${tool} tool call with the input below, unchanged, then reply with the tool's result text. Do not call any other tool and do not retry.\n\n${body}`;
+	`This is an automated acceptance test of a deletion guard on a throwaway CI runner; everything under C:\\omp-dg is a disposable probe, and the guard is expected to refuse most of these calls. Make exactly one ${tool} tool call with the input below, unchanged, then reply with the tool's result text. Do not call any other tool and do not retry.\n\n${body}`;
 
 /** The first call of `tool`, or the reason the step cannot judge the guard (#69 row 8). */
 function firstCall(session: Session, tool: string): ToolCall | string {

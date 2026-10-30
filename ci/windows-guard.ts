@@ -68,6 +68,7 @@ async function runSession(prompt: string, cwd: string): Promise<Session> {
 	const calls: ToolCall[] = [];
 	let sent = false;
 	let done = false;
+	let reply = "";
 	let buffer = "";
 	const decoder = new TextDecoder();
 	const handle = (line: string): void => {
@@ -85,6 +86,9 @@ async function runSession(prompt: string, cwd: string): Promise<Session> {
 			sent = true;
 		} else if (event.type === "tool_execution_start" && typeof event.toolCallId === "string" && typeof event.toolName === "string") {
 			started.set(event.toolCallId, { name: event.toolName, args: event.args });
+		} else if (event.type === "message_end" && isMapping(event.message) && event.message.role === "assistant") {
+			const text = textOf(event.message);
+			if (text !== "") reply = text;
 		} else if (event.type === "tool_execution_end" && typeof event.toolCallId === "string" && typeof event.toolName === "string") {
 			const args = started.get(event.toolCallId)?.args;
 			calls.push({ tool: event.toolName, args: isMapping(args) ? args : {}, isError: event.isError === true, text: textOf(event.result) });
@@ -104,7 +108,7 @@ async function runSession(prompt: string, cwd: string): Promise<Session> {
 	if (buffer.trim() !== "") handle(buffer.trim());
 	const code = await proc.exited;
 	clearTimeout(timer);
-	return { calls, finished: done, code, stderr: (await stderr).trim() };
+	return { calls, reply, finished: done, code, stderr: (await stderr).trim() };
 }
 
 async function runStep(step: Step, cwd: string): Promise<readonly string[]> {
@@ -115,6 +119,7 @@ async function runStep(step: Step, cwd: string): Promise<readonly string[]> {
 	const failures: string[] = [];
 	if (!session.finished) failures.push(`session ended without prompt_result (exit ${session.code}): ${session.stderr}`);
 	failures.push(...step.check(session));
+	if (failures.length > 0) console.log(`  model reply: ${session.reply.replaceAll("\n", " | ") || "(none)"}`);
 	return failures;
 }
 
