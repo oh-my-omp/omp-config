@@ -250,6 +250,14 @@ class Parser {
 		this.skipBlanks();
 		const target = this.readWord(builder);
 		if (target.raw.length === 0) this.fail(`missing target after \`${op}\``);
+		if (op === "<<" || op === "<<-") {
+			// Every here-document body is consumed (an unquoted one has substitutions that run), whatever its
+			// descriptor; only fd 0's is the command's stdin.
+			const slot: HeredocSlot = { kind: "heredoc", quoted: /['"\\]/.test(target.raw), body: "" };
+			this.pending.push({ slot, delimiter: target.text, stripTabs: op === "<<-", owner: builder });
+			if (fd === 0) command.stdin = slot;
+			return true;
+		}
 		if (fd !== 0) return true;
 		switch (op) {
 			case "<":
@@ -259,13 +267,6 @@ class Parser {
 			case "<<<":
 				command.stdin = { kind: "herestring" };
 				break;
-			case "<<":
-			case "<<-": {
-				const slot: HeredocSlot = { kind: "heredoc", quoted: /['"\\]/.test(target.raw), body: "" };
-				this.pending.push({ slot, delimiter: target.text, stripTabs: op === "<<-", owner: builder });
-				command.stdin = slot;
-				break;
-			}
 			default:
 				command.stdin = { kind: "other" };
 		}
@@ -368,7 +369,7 @@ class Parser {
 				continue;
 			}
 			if (ch === "$" || ch === "`") {
-				const expansion = ch === "$" ? this.readDollar(builder) : this.readBacktick(builder);
+				const expansion = ch === "$" ? this.readDollar(builder, true) : this.readBacktick(builder);
 				text += expansion.text;
 				literal &&= expansion.literal;
 				continue;
@@ -379,8 +380,11 @@ class Parser {
 		this.fail('unterminated `"`');
 	}
 
-	/** `$…` at the cursor. A lone `$` is the literal character. */
-	private readDollar(builder: Builder): { readonly text: string; readonly literal: boolean } {
+	/**
+	 * `$…` at the cursor. A lone `$` is the literal character. Inside double quotes (`inQuotes`) `$'` and `$"` are a
+	 * literal `$`, and single quotes in a `${…}` body are ordinary characters, so substitutions in them still run.
+	 */
+	private readDollar(builder: Builder, inQuotes = false): { readonly text: string; readonly literal: boolean } {
 		const start = this.i;
 		const next = this.src.charAt(this.i + 1);
 		if (next === "(") {
@@ -393,7 +397,10 @@ class Parser {
 			}
 		} else if (next === "{") {
 			this.i += 2;
-			this.skipData(builder, "}");
+			this.skipData(builder, "}", inQuotes);
+		} else if (inQuotes && (next === "'" || next === '"')) {
+			this.i++;
+			return { text: "$", literal: true };
 		} else if (next === "'") {
 			this.i += 2;
 			while (this.i < this.src.length && this.src.charAt(this.i) !== "'") this.i += this.src.charAt(this.i) === "\\" ? 2 : 1;
@@ -464,8 +471,11 @@ class Parser {
 		this.fail("unterminated `((`");
 	}
 
-	/** Skips data up to the matching `closer` (`${…}` bodies, `a=(…)` arrays), parsing substitutions inside. */
-	private skipData(builder: Builder, closer: ")" | "}"): void {
+	/**
+	 * Skips data up to the matching `closer` (`${…}` bodies, `a=(…)` arrays), parsing substitutions inside. Inside
+	 * double quotes (`inQuotes`) a `'` is an ordinary character, not a quote.
+	 */
+	private skipData(builder: Builder, closer: ")" | "}", inQuotes = false): void {
 		const opener = closer === ")" ? "(" : "{";
 		if (this.src.charAt(this.i) === opener) this.i++;
 		let depth = 0;
@@ -479,7 +489,7 @@ class Parser {
 				this.i += 2;
 				continue;
 			}
-			if (ch === "'") {
+			if (ch === "'" && !inQuotes) {
 				const end = this.src.indexOf("'", this.i + 1);
 				if (end === -1) this.fail("unterminated `'`");
 				this.i = end + 1;
@@ -490,7 +500,7 @@ class Parser {
 				continue;
 			}
 			if (ch === "$" || ch === "`") {
-				if (ch === "$") this.readDollar(builder);
+				if (ch === "$") this.readDollar(builder, inQuotes);
 				else this.readBacktick(builder);
 				continue;
 			}

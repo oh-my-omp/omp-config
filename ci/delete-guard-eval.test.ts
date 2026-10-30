@@ -44,6 +44,9 @@ describe("python cells", () => {
 		'print(f"{shutil.rmtree(p)}")',
 		'os.system("\\x72m f")',
 		"def cleanup(p):\n    shutil.rmtree(p)\n",
+		'from os import remove as erase; erase("/tmp/omp-dg-c3/d/f")',
+		"import os; f\"{1:{os.remove('/tmp/omp-dg-c3/d/f')}}\"",
+		'import subprocess; flag = True; subprocess.run("echo ok; rm /tmp/omp-dg-c3/d/f", shell=flag)',
 	])("blocks deletion: %p", (code) => {
 		expect(pyRule(code)).toBe("delete");
 	});
@@ -74,6 +77,9 @@ describe("python cells", () => {
 		"def unlink_handler(): pass",
 		"if a != b: print('!')",
 		'await tool.bash({"command": "ls -la"})',
+		'import subprocess; subprocess.run(["ls", "-l"], shell=False)',
+		'x = f"{3.14159:.{2}f}"; print(x)',
+		"constructor = 1; print(constructor)",
 	])("allows: %p", (code) => {
 		expect(pyRule(code)).toBe("allow");
 	});
@@ -101,6 +107,11 @@ describe("js cells", () => {
 		'Bun.spawnSync({ cmd: ["rm", "-rf", "d"] })',
 		'require("child_process").spawn("rm f", { shell: true })',
 		'await tool.write({ path: "xd://bash", content: JSON.stringify({ command: "rm f" }) })',
+		'const fs = require("node:fs"); await fs.promises.rm("/tmp/omp-dg-c3/d/f")',
+		'import { promises as fsp } from "fs"; await fsp.rm("/tmp/omp-dg-c3/d/f")',
+		'const { promises: fsp } = require("fs"); await fsp.rm("/tmp/omp-dg-c3/d/f")',
+		'const cp = require("child_process"); cp.spawn("echo ok; rm /tmp/omp-dg-c3/d/f", [], { shell: "/bin/sh" })',
+		'const cp = require("child_process"); cp.spawn("echo ok; rm /tmp/omp-dg-c3/d/f", [], { shell: flag })',
 	])("blocks deletion: %p", async (code) => {
 		expect(await jsRule(code)).toBe("delete");
 	});
@@ -129,6 +140,9 @@ describe("js cells", () => {
 		'await Bun.write("out.txt", "x")',
 		"const o = { unlink() {} }",
 		'await tool.bash({ command: "ls" })',
+		"console.log((123).toString())",
+		'const o = { a: 1 }; o.hasOwnProperty("a")',
+		'const cp = require("child_process"); cp.spawn("ls", ["-l"], { cwd: "/tmp" })',
 	])("allows: %p", async (code) => {
 		expect(await jsRule(code)).toBe("allow");
 	});

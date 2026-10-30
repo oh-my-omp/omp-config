@@ -2,36 +2,38 @@ import { type ArgvWord, classify } from "./classify.ts";
 import { ALLOW, type Dialect, type Rule, type Verdict } from "./verdict.ts";
 
 /** API names only filesystem deletion uses: blocked wherever code names them, so aliases from earlier cells are caught too. */
-const DISTINCTIVE_DELETE: Readonly<Record<string, true>> = { rmtree: true, removedirs: true, unlink: true, rmdir: true };
+const DISTINCTIVE_DELETE: ReadonlySet<string> = new Set(["rmtree", "removedirs", "unlink", "rmdir"]);
 
 /** Shell handoffs whose first argument is a shell script. */
-const SCRIPT_CALLS: Readonly<Record<string, true>> = {
-	"os.system": true,
-	"os.popen": true,
-	"subprocess.getoutput": true,
-	"subprocess.getstatusoutput": true,
-	"asyncio.create_subprocess_shell": true,
-};
+const SCRIPT_CALLS: ReadonlySet<string> = new Set([
+	"os.system",
+	"os.popen",
+	"subprocess.getoutput",
+	"subprocess.getstatusoutput",
+	"asyncio.create_subprocess_shell",
+]);
 
-/** Process launches taking an argv list (a script with `shell=True`). */
-const ARGV_CALLS: Readonly<Record<string, true>> = {
-	"subprocess.run": true,
-	"subprocess.call": true,
-	"subprocess.check_call": true,
-	"subprocess.check_output": true,
-	"subprocess.Popen": true,
-};
+/** Process launches taking an argv list (a script when `shell` is anything but a literal false). */
+const ARGV_CALLS: ReadonlySet<string> = new Set([
+	"subprocess.run",
+	"subprocess.call",
+	"subprocess.check_call",
+	"subprocess.check_output",
+	"subprocess.Popen",
+]);
+
+type LaunchKind = "script" | "argv" | "execArgs";
 
 /** Launch names only subprocess/asyncio use, matched whatever the receiver. */
-const DISTINCTIVE_LAUNCH: Readonly<Record<string, "script" | "argv" | "execArgs">> = {
-	Popen: "argv",
-	check_output: "argv",
-	check_call: "argv",
-	getoutput: "script",
-	getstatusoutput: "script",
-	create_subprocess_shell: "script",
-	create_subprocess_exec: "execArgs",
-};
+const DISTINCTIVE_LAUNCH: ReadonlyMap<string, LaunchKind> = new Map([
+	["Popen", "argv"],
+	["check_output", "argv"],
+	["check_call", "argv"],
+	["getoutput", "script"],
+	["getstatusoutput", "script"],
+	["create_subprocess_shell", "script"],
+	["create_subprocess_exec", "execArgs"],
+]);
 
 type Token =
 	| { readonly kind: "name"; readonly value: string; readonly start: number }
@@ -48,15 +50,42 @@ type Lexed = {
 
 class LexFailure extends Error {}
 
-const ESCAPES: Readonly<Record<string, string>> = { n: "\n", t: "\t", r: "\r", "0": "\0", a: "\x07", b: "\b", f: "\f", v: "\v" };
+const ESCAPES: ReadonlyMap<string, string> = new Map([
+	["n", "\n"],
+	["t", "\t"],
+	["r", "\r"],
+	["0", "\0"],
+	["a", "\x07"],
+	["b", "\b"],
+	["f", "\f"],
+	["v", "\v"],
+]);
 
 const NAME_START = /[A-Za-z_]/;
 const NAME_CHAR = /[A-Za-z0-9_]/;
 const ASSIGN_MAGIC = /^[A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*\s*=\s*([!%])(?![=%])/;
 
 /** Line magics whose argument is Python; `%%capture`/`%%timeit` bodies are Python too. `%run`/`%load` run script files (K5). */
-const PYTHON_LINE_MAGICS: Readonly<Record<string, true>> = { time: true, timeit: true };
-const PYTHON_CELL_MAGICS: Readonly<Record<string, true>> = { capture: true, timeit: true };
+const PYTHON_LINE_MAGICS: ReadonlySet<string> = new Set(["time", "timeit"]);
+const PYTHON_CELL_MAGICS: ReadonlySet<string> = new Set(["capture", "timeit"]);
+
+/** The contents of each top-level `{…}` in an f-string format spec: expressions Python evaluates. */
+function bracedParts(spec: string): string[] {
+	const parts: string[] = [];
+	let depth = 0;
+	let start = 0;
+	for (let k = 0; k < spec.length; k++) {
+		const ch = spec.charAt(k);
+		if (ch === "{") {
+			if (depth === 0) start = k + 1;
+			depth++;
+		} else if (ch === "}" && depth > 0) {
+			depth--;
+			if (depth === 0) parts.push(spec.slice(start, k));
+		}
+	}
+	return parts;
+}
 
 class Lexer {
 	private i = 0;
@@ -102,7 +131,7 @@ class Lexer {
 			const body = newline === -1 ? "" : this.src.slice(newline + 1);
 			const name = head.split(/\s+/)[0] ?? "";
 			if (name === "bash") this.shellScripts.push(body);
-			else if (PYTHON_CELL_MAGICS[name]) this.pythonSnippets.push(body);
+			else if (PYTHON_CELL_MAGICS.has(name)) this.pythonSnippets.push(body);
 			this.i = this.src.length;
 			return true;
 		}
@@ -127,7 +156,7 @@ class Lexer {
 	private lineMagic(text: string): void {
 		const match = /^\s*([A-Za-z_]\w*)\s*(.*)$/.exec(text);
 		const name = match?.[1] ?? "";
-		if (PYTHON_LINE_MAGICS[name]) this.pythonSnippets.push(match?.[2] ?? "");
+		if (PYTHON_LINE_MAGICS.has(name)) this.pythonSnippets.push(match?.[2] ?? "");
 	}
 
 	private readString(start: number, prefix: string): void {
@@ -156,7 +185,7 @@ class Lexer {
 				} else if (next === "u") {
 					value += String.fromCharCode(Number.parseInt(this.src.slice(this.i + 2, this.i + 6), 16));
 					this.i += 4;
-				} else if (next !== "\n") value += ESCAPES[next] ?? next;
+				} else if (next !== "\n") value += ESCAPES.get(next) ?? next;
 				this.i += 2;
 				continue;
 			}
@@ -167,7 +196,7 @@ class Lexer {
 					continue;
 				}
 				if (ch === "}") this.fail("single `}` in f-string");
-				this.pythonSnippets.push(this.readPlaceholder());
+				this.pythonSnippets.push(...this.readPlaceholder());
 				literal = false;
 				continue;
 			}
@@ -177,8 +206,11 @@ class Lexer {
 		this.fail("unterminated string");
 	}
 
-	/** An f-string placeholder `{…}` (cursor on `{`): its code, without a `!r` conversion or `:spec` at nesting zero. */
-	private readPlaceholder(): string {
+	/**
+	 * An f-string placeholder `{…}` (cursor on `{`): its code, without a `!r` conversion or `:spec` at nesting zero,
+	 * followed by the expressions nested in the spec (`{x:{width}}`), which Python evaluates too.
+	 */
+	private readPlaceholder(): readonly string[] {
 		this.i++;
 		const start = this.i;
 		let codeEnd: number | null = null;
@@ -197,8 +229,9 @@ class Lexer {
 			else if (ch === "}") {
 				if (depth === 0) {
 					const code = this.src.slice(start, codeEnd ?? this.i);
+					const spec = codeEnd === null ? "" : this.src.slice(codeEnd, this.i);
 					this.i++;
-					return code;
+					return [code, ...bracedParts(spec)];
 				}
 				depth--;
 			} else if (depth === 0 && codeEnd === null && ((ch === "!" && next !== "=") || (ch === ":" && next !== "="))) codeEnd = this.i;
@@ -273,6 +306,8 @@ type Arg =
 	| { readonly kind: "seq"; readonly items: readonly Arg[] }
 	| { readonly kind: "dict"; readonly entries: ReadonlyMap<string, Arg> }
 	| { readonly kind: "true" }
+	/** `False` or `None`: a `shell=` that certainly does not start a shell. */
+	| { readonly kind: "false" }
 	| { readonly kind: "expr" };
 
 type CallArgs = { readonly positional: readonly Arg[]; readonly keywords: ReadonlyMap<string, Arg>; readonly end: number };
@@ -322,6 +357,7 @@ function argOf(tokens: readonly Token[]): Arg {
 		return { kind: "string", value: strings.map((token) => token.value).join(""), literal: strings.every((token) => token.literal) };
 	}
 	if (tokens.length === 1 && first.kind === "name" && first.value === "True") return { kind: "true" };
+	if (tokens.length === 1 && first.kind === "name" && (first.value === "False" || first.value === "None")) return { kind: "false" };
 	const last = tokens[tokens.length - 1];
 	if (
 		first.kind === "op" &&
@@ -462,6 +498,7 @@ const argvWords = (arg: Arg): ArgvWord[] | null => {
 			);
 		case "dict":
 		case "true":
+		case "false":
 		case "expr":
 			return null;
 		default: {
@@ -495,11 +532,13 @@ function judgeCall(ctx: Context, k: number): Verdict {
 			? classify(ctx.brush, { kind: "script", text: command.value }, 1)
 			: nonLiteral("the bash bridge command");
 	}
-	const shellTrue = args.keywords.get("shell")?.kind === "true";
-	const kind = SCRIPT_CALLS[qualified] ? "script" : ARGV_CALLS[qualified] ? "argv" : (DISTINCTIVE_LAUNCH[last] ?? null);
-	if (kind === null && !shellTrue) return ALLOW;
+	// `shell=` that is not a literal `False`/`None`/`0` may start a shell (`shell=flag`), so the command is a script.
+	const shellArg = args.keywords.get("shell");
+	const shell = shellArg !== undefined && shellArg.kind !== "false";
+	const kind = SCRIPT_CALLS.has(qualified) ? "script" : ARGV_CALLS.has(qualified) ? "argv" : (DISTINCTIVE_LAUNCH.get(last) ?? null);
+	if (kind === null && !shell) return ALLOW;
 	const first = args.positional[0] ?? args.keywords.get("args");
-	if (kind === "script" || shellTrue) {
+	if (kind === "script" || shell) {
 		const script = scriptOf(first);
 		return script === null ? nonLiteral("the command handed to a shell") : classify(ctx.shell, { kind: "script", text: script }, 1);
 	}
@@ -522,14 +561,15 @@ function judgeTokens(ctx: Context): Verdict {
 		const next = tokens[k + 1];
 		const declares = previous?.kind === "name" && (previous.value === "def" || previous.value === "class");
 		const assignedTo = isOp(next, "=");
-		if (DISTINCTIVE_DELETE[token.value] && !declares && !assignedTo)
+		if (DISTINCTIVE_DELETE.has(token.value) && !declares && !assignedTo)
 			return block("delete", lineAt(ctx.code, token.start), `\`${token.value}\` deletes files`);
-		if (token.value === "remove" && !declares) {
-			const receiver = isOp(previous, ".") ? tokens[k - 2] : undefined;
-			const fromOs =
-				(receiver?.kind === "name" && (receiver.value === "os" || bindings.modules.get(receiver.value) === "os")) ||
-				(!isOp(previous, ".") && bindings.members.get("remove") === "os.remove");
-			if (fromOs) return block("delete", lineAt(ctx.code, token.start), "`os.remove` deletes files");
+		// `os.remove` under any local name (`from os import remove as erase`), or `.remove` on `os` or an alias of it.
+		if (!declares && !isOp(previous, ".") && bindings.members.get(token.value) === "os.remove")
+			return block("delete", lineAt(ctx.code, token.start), `\`${token.value}\` is \`os.remove\`, which deletes files`);
+		if (token.value === "remove" && !declares && isOp(previous, ".")) {
+			const receiver = tokens[k - 2];
+			if (receiver?.kind === "name" && (receiver.value === "os" || bindings.modules.get(receiver.value) === "os"))
+				return block("delete", lineAt(ctx.code, token.start), "`os.remove` deletes files");
 		}
 		if (isOp(next, "(")) {
 			const verdict = judgeCall(ctx, k);
