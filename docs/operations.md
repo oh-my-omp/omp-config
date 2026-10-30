@@ -109,7 +109,7 @@ OMP discovers extensions one level deep under `~/.omp/agent/extensions/`: each e
 | `models.ts` | `Model`, `ThinkingLevel`: host model and helper-session thinking types |
 | `roles.ts` | `roleModels`, `roleName`, `modelLabel`: resolves the chat models of OMP model roles (`modelRoles.<role>`, then `retry.fallbackChains.<role>`, then built-in defaults) from live session settings on every call. Extension role tags are listed in `agent/config.yml` `modelTags` |
 | `helper-session.ts` | `runHelperPrompt`: runs a one-shot prompt in a tool-less, extension-less in-memory session with `taskDepth: 1` and returns a result union without throwing |
-| `judge.ts` | `openJudge`: runs OMP's judge-role chain (`resolveJudge`), falling back to `omomp.yml#judge.fallbackRole` as `TextJudge` |
+| `judge.ts` | `openJudge`: answers with the chat models of `@<purpose>` when that role is assigned; otherwise runs OMP's judge-role chain (`resolveJudge`). Either path falls back to `omomp.yml#judge.fallbackRole` as `TextJudge` |
 | `spec-files.ts` | `discoverSpecFiles`, `parseFrontmatter`, `unquote`: discovers and parses `*-<label>.md` files in the extension directory and from `cwd` up to the git root |
 | `tool-topics.ts` | `registerToolTopics`, `ToolTopic`, `ToolTopicsRegistration`, `ToolTopicsRegistrationResult`: shared `tool://` registry, indexes, readers, search enumeration and completion; usable by external plugins |
 | `context-delivery.ts` | `createContextDelivery(pi)`: once-per-actual-context marker guard shared by `repo-rules` and topic injection; only same-turn pending delivery is kept in memory |

@@ -17,8 +17,8 @@
 | 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge`（仓库） | 子代理与顾问（完整模式 `subagent-gates` + `todo-continuity`；调用 `omp-todo-more:read`） | 当场定制（本机）：在 `<agentDir>/config.yml` 将 `modelRoles.smol`（或 `@task-completion-judge`）绑到本机可用轻量模型 |
 | 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `omomp.yml#tool-policy-nag` + `INTENT-policy.md`（仓库） | 运行时偏离纠偏（完整模式 `drift-monitors` + `pty-routing`；挂载了 `exec_command` 时，`pty` 通道拦截 passthrough/terminal/open-ended 的 `bash`/eval 调用；`heuristic` 模式在运行期将 `bashInterceptor.enabled` 覆写为 `false`） | 延后调阈值（`afterHits: 3`、`maxNags: 3`），保持 `pty: {}`；非中文环境可在项目 `.omp/omomp.yml` 覆盖 `form.prompt` |
 | 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子 | 否 | `WATCHDOG-*.md`（本机） | 运行时偏离纠偏（完整模式 `drift-monitors`，可选） | 延后（本机）：未创建 `WATCHDOG-*.md` 时不运行，有需要时用 `/watchdog add` 创建 |
-| 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子（按文件 `target`） | 否 | `TURN-JUDGE-*.md`（仓库带 `gpt-talk-only`，其余归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场定制（本机）：确保 `modelRoles.judge` 或 `modelRoles.tiny` 可解析；`TURN-JUDGE-gpt-talk-only.md` 阈值（`0.8`）延后调整 |
-| 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `omomp.yml#lang-nag`（仓库默认值，首次播种后归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场诊断：依赖 `openJudge`（`judge`/`tiny`）；在 `<agentDir>/omomp.yml#lang-nag` 设置语言（更新保留），或在 `<cwd>/.omp/omomp.yml` 按项目覆盖 |
+| 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子（按文件 `target`） | 否 | `TURN-JUDGE-*.md`（仓库带 `gpt-talk-only`，其余归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场定制（本机）：确保 `modelRoles.judge` 或 `modelRoles.tiny` 可解析，或把 `@turn-judge` 绑到聊天模型；`TURN-JUDGE-gpt-talk-only.md` 阈值（`0.8`）延后调整 |
+| 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `omomp.yml#lang-nag`（仓库默认值，首次播种后归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场诊断：依赖 `openJudge`（`@lang-nag`，未绑定时用 `judge`；之后 `tiny`）；`judge` 模型判错回复语言时把 `@lang-nag` 绑到聊天模型；在 `<agentDir>/omomp.yml#lang-nag` 设置语言（更新保留），或在 `<cwd>/.omp/omomp.yml` 按项目覆盖 |
 | 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局（由主会话启动） | 是 | `omomp.yml#child-memory-warning`（仓库默认值，首次播种后归本机） | 执行与宿主安全（条件启用 `macos-memory`：仅 macOS） | 延后：保持 `thresholdGiB: 4`；大内存构建可在 `<agentDir>/omomp.yml`（更新保留）或项目 `<cwd>/.omp/omomp.yml` 修改 |
 | 15 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `omomp.yml#input-polish`（仓库；`key` 与 `instruction` 首次播种后归本机） | 人机交互与 TUI（可选增强 `polish-tools`） | 按需当场：使用 `@input-polish` / `modelRoles.smol`；终端不支持 `ctrl+enter` 时可在 `<agentDir>/omomp.yml`（更新保留）或 `<cwd>/.omp/omomp.yml` 改配 `alt+enter` 或 `instruction` |
 | 16 | `doc-polish` | [doc-polish](#doc-polish) | 主 + 子 | 否 | `omomp.yml#doc-polish`（本机） | 人机交互与 TUI（完整模式可选增强 `polish-tools`） | 按需当场（本机）：需要使用 `/polish-doc` 时在本机 `omomp.yml` 添加 `doc-polish` 段并绑定 `@doc-polish.*` 角色 |
@@ -74,11 +74,12 @@
 
 ## 基于 `JUDGE` 角色的扩展
 
-`turn-judge`、`tool-policy-nag` 的 `intent` 通道（`detector: jev` 时）、`watchdog-agent` 的选项模式与 `lang-nag` 通过 `agent/extensions/_shared/judge.ts` 中的 `openJudge` 调用模型：
+`turn-judge`、`tool-policy-nag` 的 `intent` 通道（`detector: jev` 时）、`watchdog-agent` 的选项模式与 `lang-nag` 以自身扩展名作为 purpose 调用 `agent/extensions/_shared/judge.ts` 中的 `openJudge`。purpose 既是用量记录的标签，也是该扩展自己的模型角色名（`@turn-judge`、`@tool-policy-nag`、`@watchdog-agent`、`@lang-nag`，登记在 `agent/config.yml` 的 `modelTags`）：
 
-1. 先走 OMP 的 judge 角色链（`resolveJudge`：`modelRoles.judge` → `retry.fallbackChains.judge` → OMP 内置默认链）。跳过无凭据候选，遇到 provider 错误换下一个（401/402/403 使该候选冷却 5 分钟），遇到中止或超时立即停止。从链中第一个原生判定 API 模型起只保留原生候选，`openJudge` 不把当前会话模型加入链中。
-2. 当上述链因中止、超时以外的原因失败，或未解析出任何模型时，改用 `omomp.yml#judge.fallbackRole`（仓库配置 `tiny`，即 `@tiny`：`modelRoles.tiny` → `retry.fallbackChains.tiny`，跳过本地 `local` 模型）中的聊天模型，以提示式判定（`TextJudge`）作答。提示式判定的概率为 one-hot（选中项为 1）。未配置 `judge` 段则不回退。
-3. 各阶段的请求均记入会话用量账本，相同的原生请求复用 OMP 判定缓存。角色设置与 `omomp.yml#judge` 在每次触发时重读。
+1. `@<purpose>` 解析出聊天模型时（在 `/model` 中配置，保存在本机 `modelRoles`），按链顺序由这些模型以提示式判定（`TextJudge`）作答，之后接 `omomp.yml#judge.fallbackRole` 的聊天模型。此时跳过 OMP 的 judge 角色链，该 purpose 不会由原生或本地判定模型作答。`judge` 模型答不好某个扩展的问题时绑定该角色，例如原生判定模型把英文回复判成中文时绑定 `@lang-nag`。
+2. 否则先走 OMP 的 judge 角色链（`resolveJudge`：`modelRoles.judge` → `retry.fallbackChains.judge` → OMP 内置默认链）。跳过无凭据候选，遇到 provider 错误换下一个（401/402/403 使该候选冷却 5 分钟），遇到中止或超时立即停止。从链中第一个原生判定 API 模型起只保留原生候选，`openJudge` 不把当前会话模型加入链中。
+3. 当上述链因中止、超时以外的原因失败，或未解析出任何模型时，改用 `omomp.yml#judge.fallbackRole`（仓库配置 `tiny`，即 `@tiny`：`modelRoles.tiny` → `retry.fallbackChains.tiny`，跳过本地 `local` 模型）中的聊天模型，以提示式判定（`TextJudge`）作答。未配置 `judge` 段则不回退。
+4. 提示式判定的概率为 one-hot（选中项为 1），低于 1 的阈值只看选中项。每次请求都以 purpose 记入会话用量账本，提示式请求另记作答模型所属的角色。相同的原生请求复用 OMP 判定缓存，提示式请求不复用。角色设置与 `omomp.yml#judge` 在每次触发时重读。
 
 ### tool-policy-nag
 
