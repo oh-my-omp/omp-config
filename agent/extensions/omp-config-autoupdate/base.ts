@@ -16,6 +16,8 @@
 // file (or structured value) equal to any committed version is unmodified, so
 // its base is that version. The updater clone is shallow; outside --check it
 // is deepened once on the first lookup. Without history the base is unknown.
+// A machine the updater never ran on skips history for structured files: the
+// updater merges them against an empty base (omp-config-update.ts, freshMachine).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";

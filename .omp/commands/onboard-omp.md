@@ -8,14 +8,14 @@ argument-hint: "[check|<plane>]"
 ## 核心定位与执行守则
 
 1. **为什么需要一次引导**：
-   - 与 `omp` 相比，Claude Code 和 Codex CLI 接近最小工具循环（毛坯房）；但 `omp` 原生默认状态关闭或未配置大量关键能力（`github`、`astGrep`、`checkpoint`、`extendedContext`、`inlineToolDescriptors`、`edit.mode: hashline`、`readLineNumbers` 等）。
+   - 与 `omp` 相比，Claude Code 和 Codex CLI 接近最小工具循环（毛坯房）；但 `omp` 原生默认状态关闭或未配置大量关键能力（`github`、`astGrep`、`checkpoint`、`extendedContext`、`inlineToolDescriptors`、`readLineNumbers` 等）。
    - `omp-config` 不仅打开这些原生底座，而且**围绕长程任务的正确性（而非节省 token）构建运行时控制层**——这与主流 harness 提倡“尽早压缩上下文、用 grep/sed 跳过上下文读取、限制子代理汇报字数以省 token”的做法相反。
    - 本命令只需由 AI 带着用户跑一次：不预先堆砌静态说明书，而是按控制面**当场调查** `omp://` 内置文档、`tool://` 专题与本仓库配置，只向用户呈现**运行时如何控制 AI（触发信号 → 拦截/注入/裁决 → 模型可观测行为）**，不讲内部 TypeScript 代码实现细节。
 2. **冷启动安全与工具纪律（自举约束）**：
    - 本命令可能在尚未安装 `omp-config` 的原生 `omp` 中运行：不得假定 `omp-ask-more`、`omp-unified-exec`（`exec_command`）、`tool-topics`（`tool://`）、`session-urls`（`session://`）、`wt-tool` 或 `harness-restart` 已加载。
    - 在核对并完成模型角色绑定前，不得调用任何依赖特定模型角色或作者订阅的扩展工具（如 `polish_doc`、`task`、`fork_task`）。
    - **文件与目录检查必须使用 `read`、`glob`、`grep` 工具**：严禁在 `bash` 中运行 `ls`、`cat`、`head`、`tail`、`find`、`grep` 或用 `python3 -c` 解析本地文件（会直接触发 `tool-policy-nag`）。`bash` 仅用于执行 `omp` CLI、`bun` 更新器脚本、`./plugin-audit.sh` 与 `git status`。
-   - **阶段 0–3 中的调查、讲解与诊断（及 `check` 模式）属于非工作阶段，严禁初始化 `todo`**：只有用户在 `ask` 中明确确认要写入本机配置文件（如阶段 1 写入 `<agentDir>/models.yml` 中转站配置，或进入阶段 4 执行安装与本机定制）时，才初始化 `todo`。
+   - **阶段 0–3 中的调查、讲解与诊断（及 `check` 模式）属于非工作阶段，严禁初始化 `todo`**：只有用户在 `ask` 中明确确认要写入本机配置文件（如阶段 1 写入 `<agentDir>/models.yml` 中转站配置，或进入阶段 4 执行安装与本机定制）时，才初始化 `todo`。冷启动时会话里的 `todo` 是原生工具：阶段 4 的更新器把 `todo.enabled: false` 写进 `<agentDir>/config.yml` 后 OMP 热重载设置，原生 `todo` 立即从本会话消失，替代它的 `omp-todo-more` 要重启 `omp` 才加载；因此阶段 4 的 `todo` 只列更新器运行之前的步骤，并在运行更新器之前全部完成。
    - 每完成一个阶段的现场调查，必须使用 `ask` 工具（原生或 `omp-ask-more`）让用户选择下一步深挖的控制面、确认本机定制项或决定是否执行安装；严禁一次性倾倒全部扩展与插件的细节。
 3. **所有权红线（只改本机副本，默认不改仓库工作树）**：
    - 任何写入前，先用 `read` 从 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 读取文件头的 OWNERSHIP 与 CUSTOMIZATIONS 说明，以及 `LOCAL_CONFIG_FIELDS`、`SEED_CONFIG_FIELDS`、`LOCAL_OMOMP_SECTIONS`、`SEED_OMOMP_FIELDS`、`SEED_TRANSLATOR_FIELDS`、`MACHINE_LIST_FIELDS`、`STRUCTURED` 与 `managedPlain`。
@@ -42,7 +42,7 @@ argument-hint: "[check|<plane>]"
 2. **OMP 原生默认与 `agent/config.yml` 差分**：
    - 读取 `agent/config.yml`、`agent/config-light.yml`、`agent/omomp.yml`、`install-plugins.sh`，并对照 `omp://settings.md`、`omp://compaction.md`、`omp://tools/edit.md`。
    - 提炼出两组核心对比：
-     - **原生默认关闭或未配、`omp-config` 显式打开的底座**：`github.enabled: true`、`astGrep.enabled: true`、`fetch.enabled: true`、`checkpoint.enabled: true`、`extendedContext: true`、`inlineToolDescriptors: "on"`、`tools.xdevDocs: inline`、`edit.mode: hashline`、`readLineNumbers: true`、`textVerbosity: high`、`expandThinkingBlocks: true`、`task.eager: preferred`、`task.isolation: { enabled: true, merge: branch }`、`task.maxConcurrency: 64`。
+     - **原生默认关闭或未配、`omp-config` 显式打开的底座**：`github.enabled: true`、`astGrep.enabled: true`、`fetch.enabled: true`、`checkpoint.enabled: true`、`extendedContext: true`、`inlineToolDescriptors: "on"`、`tools.xdevDocs: inline`、`readLineNumbers: true`、`textVerbosity: high`、`expandThinkingBlocks: true`、`task.eager: preferred`、`task.isolation: { enabled: true, merge: branch }`、`task.maxConcurrency: 64`；`edit.mode: hashline` 已是原生默认，仓库显式写入以固定它。
      - **原生默认开启、`omp-config` 显式关闭并替换的机制**：`todo.enabled: false`（由 `omp-todo-more` 替换）、`launch.enabled: false`（由 `omp-unified-exec` 的 `exec_command` 替换）、`eval.tools.enabled: false`、`compaction.asyncEnabled: false`（关闭提前 32k token 的后台有损预摘要）、`task.disabledAgents: [task, scout, sonic, reviewer, security-reviewer]`（禁用内置人设子代理，改用无状态 `task:high/mid/low/free` 加受边界约束的顾问 `discuss:steady`、`discuss:divergent`、`mentor:default`）。
 3. **本机与仓库配置的冲突预检**：
    - 对照 `agent/config.yml#task.agentModelOverrides`（`anthropic`、`openai-codex`、`bansos`、`opencode-go`）与 `agent/thinking-translator.json`（`futureppo-pool`、`commandcode`），找出当前机器缺少凭据或未配置 `models.yml` 兼容项的模型引用。
@@ -136,6 +136,11 @@ argument-hint: "[check|<plane>]"
 | **模型特定提示词与周期审阅（可选初始化）** | `<agentDir>/extensions/append-system-model/APPEND_SYSTEM_MODEL.md`、`<agentDir>/extensions/watchdog-agent/WATCHDOG-*.md` | 仅当用户对特定模型有专属附加指令，或需要开启后台步数审阅时才在本机创建；默认无需创建。 |
 | **供应商模型兼容项（`models.yml`）** | `<agentDir>/models.yml`（本机运行时配置） | 若用户使用 `futureppo-pool` 等需要显式开启 `supportsReasoningEffort: true` 的 provider（供 `omp-thinking-translator` 等使用），写入本机 `models.yml`。 |
 
+**推荐值先核对再呈现**：给出 `modelRoles`、`task.agentModelOverrides`、思考翻译链与 `model-compaction` 的推荐值之前，先运行 `omp models <provider>`，取得每个候选模型的 `thinking` 与 `context` 列：
+- 每个 `provider/model:effort` 的 effort 必须出现在该模型的 `thinking` 列。
+- `model-compaction` 规则按文件顺序首个匹配生效；每条规则的 `thresholdTokens` 必须小于它作为首个匹配命中的每个本机模型的 `context`，兜底规则（如 `.*`）也要覆盖窗口最小的模型。等于或超过窗口的触发点不会按所写的值生效：会改变窗口档位的规则被扩展拒绝并告警，其余被截到窗口减去预留。
+- 呈给用户批准的表就是阶段 4 要写入的值，不再另加批准表之外的键。
+
 ### 2. 受管但可在本机定制的仓库配置（三方合并保护）
 
 以下项由仓库提供并持续更新。用户需要时，AI 在确认后直接改本机副本：更新器保留本机修改，上游改动不重叠时自动合并，重叠时报告冲突并在 `/omp-config-autoupdate adapt` 中逐项适配。不改仓库工作树。
@@ -156,21 +161,23 @@ argument-hint: "[check|<plane>]"
 
 ## 阶段 4：执行安装与写入本机定制
 
-当用户在 `ask` 中确认安装与本机定制方案后，初始化 `todo` 并按顺序执行（当传入参数为 `check` 时跳过本阶段写入，仅跑 `--check` 与 `./plugin-audit.sh`）：
+当用户在 `ask` 中确认安装与本机定制方案后，初始化 `todo` 并按顺序执行（当传入参数为 `check` 时跳过本阶段写入，仅跑 `--check` 与 `./plugin-audit.sh`）。冷启动时（`omp-todo-more` 未加载，会话里的 `todo` 是原生工具），`todo` 只列第 1 步，并在运行第 2 步的更新器之前全部完成；第 2–4 步不再调用 `todo`，结果写进阶段 5 的报告。
 
-1. **执行仓库 → 本机更新器**：
+1. **写入用户在阶段 1 与阶段 3 确认的本机定制**（这些路径归本机或是播种路径，第 2 步的更新器保留已有值）：
+   - 写入的值必须等于用户批准的方案。写入前发现批准值不可用（模型不存在、effort 不在 `thinking` 列、阈值不小于 `context`）时，不自行替换，先用 `ask` 说明差异并取得新的批准。
+   - 对 `<agentDir>/config.yml` 中的本机字段与播种路径（如 `modelRoles`、`defaultThinkingLevel`、`task.agentModelOverrides`、`extensions` 中的 `~/.claude` 等）以及用户确认的其他键，使用 `omp config set` 或在读取 `<agentDir>/config.yml` 后用 `edit` 精确修改对应键。
+   - 对 `<agentDir>/omomp.yml` 中的本机段（`model-compaction`、`doc-polish`、`omp-config-autoupdate`）、播种路径（`omomp-lang`、`lang-nag`、`input-polish.key` / `instruction`）及用户确认的其他键，先 `read` `<agentDir>/omomp.yml`，再用 `edit` 只改这些键，其余键保持原样。`<agentDir>/thinking-translator.json` 同理。文件尚不存在时只写入这些本机段或播种字段：第 2 步的更新器补齐仓库的其余内容，并保留已有的本机段与播种字段。
+   - 若用户确认创建 `<agentDir>/models.yml` 兼容项（如 `futureppo-pool` 的 `supportsReasoningEffort: true`）或 `<agentDir>/commandcode-models.json`：若 `<agentDir>/models.yml` 已存在，严禁整文件重写或读取/回显含 `apiKey` 的行，只做最小字段追加或给出 YAML 片段由用户合入，保留文件中所有既有 provider 与未知字段。
+   - 用 `Bun.YAML.parse` / `JSON.parse` 校验刚写的文件（不打印 `models.yml` 凭据内容）。
+2. **执行仓库 → 本机更新器**：
    - 在仓库根目录运行：`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source .`（命名 profile 加 `--agent-dir <omp config path 输出>`）。
    - 若脚本报告 ` errors` 或 `Cutover incomplete; do not restart OMP`，立即停止后续步骤，协助排查修复后重跑。
-   - 若报告 `conflict (…), local copy kept: <id>`，按 `/update-omp` 第 2 步与用户逐项适配（`conflicts --source .`，再 `resolve --source .`）。
-2. **执行插件审计**：
+   - 若报告 `conflict (…), local copy kept: <id>`，按 `/update-omp` 第 2 步与用户逐项适配（`conflicts --source .`，再 `resolve --source .`）：每个冲突只改冲突的那个键，不整文件重写本机配置来消除冲突。
+3. **执行插件审计**：
    - 运行 `./plugin-audit.sh`。若出现 `[卸载候选]`，用 `ask` 询问用户是否执行 `omp plugin uninstall <name>`。
-3. **写入用户在阶段 1 与阶段 3 确认的本机定制**：
-   - 对 `<agentDir>/config.yml` 中的本机字段与播种路径（如 `modelRoles`、`defaultThinkingLevel`、`task.agentModelOverrides`、`extensions` 中的 `~/.claude` 等）以及用户确认的其他键，使用 `omp config set` 或在读取 `<agentDir>/config.yml` 后用 `edit` 精确修改对应键。
-   - 对 `<agentDir>/omomp.yml` 中的本机段（`model-compaction`、`doc-polish`、`omp-config-autoupdate`）、播种路径（`omomp-lang`、`lang-nag`、`input-polish.key` / `instruction`）及用户确认的其他键，先 `read` `<agentDir>/omomp.yml`，再用 `edit` 只改这些键，其余键保持原样。`<agentDir>/thinking-translator.json` 同理。
-   - 若用户确认创建 `<agentDir>/models.yml` 兼容项（如 `futureppo-pool` 的 `supportsReasoningEffort: true`）或 `<agentDir>/commandcode-models.json`：若 `<agentDir>/models.yml` 已存在，严禁整文件重写或读取/回显含 `apiKey` 的行，只做最小字段追加或给出 YAML 片段由用户合入，保留文件中所有既有 provider 与未知字段。
 4. **校验落盘状态与工作树干净度**：
-   - 用 `Bun.YAML.parse` / `JSON.parse` 校验修改过的 `<agentDir>/config.yml`、`<agentDir>/omomp.yml`（不打印 `models.yml` 凭据内容）。
-   - 运行 `omp config list --scope global --json`、`omp plugin list --json` 与 `git status --short`，确认本机配置已生效且仓库工作树未被意外污染。
+   - 用 `Bun.YAML.parse` / `JSON.parse` 校验更新器写过的 `<agentDir>/config.yml`、`<agentDir>/omomp.yml`（不打印 `models.yml` 凭据内容）。
+   - 运行 `omp config list --scope global --json`、`omp plugin list --json` 与 `git status --short`，确认本机配置已生效、第 1 步写入的值仍等于批准方案，且仓库工作树未被意外污染。
 
 ---
 
@@ -188,5 +195,5 @@ argument-hint: "[check|<plane>]"
    - 汇总用户在本轮表达的可选组件偏好（哪些属于必选基底、哪些属于条件启用、哪些当前虽随全量更新器安装但未激活或可在轻量模式跳过）。
    - 说明日常如何选择入口：复杂多步工程任务运行 `omp`（完整模式，含全部子代理治理与偏离纠偏）；简单问答或小改动运行 `omp-light`（轻量模式，跳过 `agent/config-light.yml` 列出的治理扩展与 `system-prompt-replace`）。
 4. **生效时机与重启提示**：
-   - **当前会话已热重载生效**：`<agentDir>/config.yml` 中的设置（如 `modelRoles`）、从下一条 prompt/调用起按需重读的 `APPEND_SYSTEM_MODEL.md`、`WATCHDOG-*.md`、`TURN-JUDGE-*.md`。
-   - **必须重启 `omp` 后才加载生效**：`SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`APPEND_SYSTEM.md`、新安装或更新的本地扩展与外部插件、`tool-topics`（`SURFACE-*` / `TOPIC-*`）、`omomp-lang` 界面语言。若当前会话有 `harness_restart` 工具且用户希望立即重启恢复会话，可提示或调用 `harness_restart`；否则提醒用户手动退出并重新启动 `omp`。
+   - **当前会话已热重载生效**：`<agentDir>/config.yml` 中的设置（如 `modelRoles`；`todo.enabled: false` 也已生效，本会话不再有原生 `todo`）、从下一条 prompt/调用起按需重读的 `APPEND_SYSTEM_MODEL.md`、`WATCHDOG-*.md`、`TURN-JUDGE-*.md`。
+   - **必须重启 `omp` 后才加载生效**：`SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`APPEND_SYSTEM.md`、新安装或更新的本地扩展与外部插件（含 `omp-todo-more` 的 `todo`/`ctx`）、`tool-topics`（`SURFACE-*` / `TOPIC-*`）、`omomp-lang` 界面语言。若当前会话有 `harness_restart` 工具且用户希望立即重启恢复会话，可提示或调用 `harness_restart`；否则提醒用户手动退出并重新启动 `omp`。

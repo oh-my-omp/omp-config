@@ -49,9 +49,14 @@
 // included) stays repo-wins: R is written and a customized H is listed in
 // `overwritten`. An item without a base takes it from the repo's history: a
 // host copy equal to any committed version is unmodified; one equal to none
-// gets an unknown base and conflicts until resolved. Conflicts are not
-// errors. `conflicts` prints them with the adaptation procedure; `resolve`
-// accepts them after the host copy was adapted.
+// gets an unknown base and conflicts until resolved. A machine the updater
+// never ran on (no base record and no installed updater, see freshMachine)
+// has received no repo content: its structured files, written by OMP's own
+// first-run setup or by the user, are merged against an empty base, so every
+// managed key the host lacks is written and a host value that differs from
+// the repo is a conflict. Conflicts are not errors. `conflicts` prints them
+// with the adaptation procedure; `resolve` accepts them after the host copy
+// was adapted.
 //
 // DELETIONS. An item the base has and the source dropped is deleted when the
 // host copy is unmodified (code: always), else it conflicts. Items dropped
@@ -223,6 +228,8 @@ const RETIRED_LIST_ENTRIES: Readonly<Record<string, readonly string[]>> = {
 
 /** Where this script lives, relative to the agent dir (and to `agent/` in the repo). */
 const UPDATER_REL = "extensions/omp-config-autoupdate/omp-config-update.ts";
+/** Where layouts before the extension directory kept this script. */
+const LEGACY_UPDATER_REL = "omp-config-update.ts";
 
 const TODO_PLUGIN_URL = "https://github.com/oh-my-omp/omp-todo-more";
 const TODO_PLUGIN_NAME = "omp-todo-more";
@@ -269,7 +276,7 @@ const SUPERSEDED: readonly { readonly from: string; readonly by: string }[] = [
 	].map((name) => ({ from: `extensions/${name}.ts`, by: `extensions/${name}/index.ts` })),
 	{ from: "extensions-last/system-prompt-replace.ts", by: "extensions-last/system-prompt-replace/index.ts" },
 	{ from: "extensions/read-topics/index.ts", by: "extensions/tool-topics/index.ts" },
-	{ from: "omp-config-update.ts", by: UPDATER_REL },
+	{ from: LEGACY_UPDATER_REL, by: UPDATER_REL },
 ];
 
 /**
@@ -570,6 +577,18 @@ interface PlanContext {
 	readonly base: BaseRecord;
 	readonly history: RepoHistory;
 	readonly todoRequired: boolean;
+	/** No repo content ever reached this agent dir; see freshMachine. */
+	readonly freshMachine: boolean;
+}
+
+/**
+ * The updater never ran on this agent dir: no base record and no updater at
+ * its current or legacy path. Every apply, auto run or plain copy of `agent/`
+ * installs the updater, so without both traces the structured files present
+ * come from OMP's first-run setup or the user, never from the repo.
+ */
+function freshMachine(agentDir: string, base: BaseRecord): boolean {
+	return !base.exists && !lexists(join(agentDir, UPDATER_REL)) && !lexists(join(agentDir, LEGACY_UPDATER_REL));
 }
 
 function newReport(): ApplyReport {
@@ -789,7 +808,7 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 		const source: StructuredBaseSource =
 			recorded !== undefined
 				? { kind: "recorded", value: recorded.value, unknown: recorded.unknown }
-				: host === undefined
+				: host === undefined || ctx.freshMachine
 					? { kind: "empty" }
 					: { kind: "history", versions: structuredHistory(ctx, item) };
 		const merged = mergeStructured(host, repo, source, item.rules);
@@ -1240,7 +1259,7 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		todoRequired = declared.includes(TODO_PLUGIN_URL);
 		base = BaseRecord.load(opts.agentDir);
 		const history = new RepoHistory(opts.source, !opts.check);
-		const ctx: PlanContext = { opts, report, base, history, todoRequired };
+		const ctx: PlanContext = { opts, report, base, history, todoRequired, freshMachine: freshMachine(opts.agentDir, base) };
 		const planned = [
 			...planRelocations(opts, report),
 			...planPlain(ctx),
@@ -1361,7 +1380,15 @@ export function scanConflicts(source: string, agentDir: string): ConflictScan {
 	try {
 		const sources = parseSources(opts, report);
 		const todoRequired = declaredPlugins(source).required.includes(TODO_PLUGIN_URL);
-		const ctx: PlanContext = { opts, report, base: BaseRecord.load(agentDir), history: new RepoHistory(source, false), todoRequired };
+		const base = BaseRecord.load(agentDir);
+		const ctx: PlanContext = {
+			opts,
+			report,
+			base,
+			history: new RepoHistory(source, false),
+			todoRequired,
+			freshMachine: freshMachine(agentDir, base),
+		};
 		planPlain(ctx);
 		planStructured(ctx, sources);
 	} catch (error) {

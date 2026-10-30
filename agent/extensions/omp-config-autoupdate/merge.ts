@@ -28,7 +28,7 @@ export interface PathRules {
 
 /** Where the base of one structured file comes from. */
 export type StructuredBaseSource =
-	/** No host file: every repo path is new. */
+	/** No host file, or a machine the updater never ran on: every repo path is new. */
 	| { readonly kind: "empty" }
 	/** The record the updater keeps; `unknown` paths have no trustworthy base. */
 	| { readonly kind: "recorded"; readonly value: Mapping; readonly unknown: readonly Path[] }

@@ -2,7 +2,8 @@
 // customizations survive (merged, kept, or reported as conflicts until
 // resolved), seed and machine-owned paths are never overwritten, code stays
 // repo-wins, deletions respect customizations, a machine without a base is
-// matched against the repo's history, and --check writes nothing.
+// matched against the repo's history, a first install over omp's own
+// first-run config.yml writes every managed key, and --check writes nothing.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -224,8 +225,13 @@ describe("machines without a base", () => {
 		const agentDir = temp("omp-agent-");
 		src.commit({ "agent/agents/old.md": "v1\n", "agent/agents/custom.md": "c1\n", "agent/config.yml": "lsp:\n  enabled: false\n" });
 		src.commit({ "agent/agents/old.md": "v2\n", "agent/agents/custom.md": "c2\n", "agent/config.yml": "lsp:\n  enabled: true\n" });
-		// What an older updater left behind: the first commit, plus one local edit; no base record.
-		writeTree(agentDir, { "agents/old.md": "v1\n", "agents/custom.md": "mine\n", "config.yml": "lsp:\n  enabled: false\n" });
+		// What an older updater left behind: the first commit, plus one local edit, and the updater itself; no base record.
+		writeTree(agentDir, {
+			"agents/old.md": "v1\n",
+			"agents/custom.md": "mine\n",
+			"config.yml": "lsp:\n  enabled: false\n",
+			"extensions/omp-config-autoupdate/omp-config-update.ts": "// installed updater\n",
+		});
 		const report = await apply(src.dir, agentDir);
 		expect(host(agentDir, "agents/old.md")).toBe("v2\n");
 		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({ lsp: { enabled: true } });
@@ -235,6 +241,52 @@ describe("machines without a base", () => {
 		resolveIds(src.dir, agentDir, [report.conflicts[0]?.id ?? ""]);
 		expect((await apply(src.dir, agentDir)).conflicts).toEqual([]);
 		expect(host(agentDir, "agents/custom.md")).toBe("mine\n");
+	});
+
+	test("a first install over omp's own config.yml writes every managed key; a key the user already set conflicts", async () => {
+		const src = source();
+		const agentDir = temp("omp-agent-");
+		src.commit({
+			"agent/config.yml": [
+				"github:",
+				"  enabled: true",
+				"fetch:",
+				"  enabled: true",
+				"task:",
+				"  eager: preferred",
+				"  maxConcurrency: 64",
+				"composer:",
+				"  shape: band",
+				"",
+			].join("\n"),
+		});
+		// omp's first-run setup, plus one managed key the user set before installing; no base record, no updater.
+		writeTree(agentDir, {
+			"config.yml": [
+				"modelRoles:",
+				"  default: mine/model",
+				"symbolPreset: unicode",
+				"composer:",
+				"  shape: box",
+				"setupVersion: 2",
+				"fetch:",
+				"  enabled: false",
+				"",
+			].join("\n"),
+		});
+		const report = await apply(src.dir, agentDir);
+		expect(report.conflicts.map((conflict) => [conflict.kind === "key" ? conflict.path : [], conflict.reason])).toEqual([
+			[["fetch", "enabled"], "both-changed"],
+		]);
+		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({
+			modelRoles: { default: "mine/model" },
+			symbolPreset: "unicode",
+			composer: { shape: "box" },
+			setupVersion: 2,
+			fetch: { enabled: false },
+			github: { enabled: true },
+			task: { eager: "preferred", maxConcurrency: 64 },
+		});
 	});
 
 	test("--check reports the plan and writes neither files nor a base", async () => {
