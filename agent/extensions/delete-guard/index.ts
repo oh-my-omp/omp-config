@@ -28,8 +28,39 @@
 // reason names the rule and the command; it points to `delete` when the
 // session's active tools include it, otherwise it says the session cannot
 // delete. No switch, no config, independent of `tools.approvalMode` and
-// `bashInterceptor`. Not covered: `exec_command`, `eval` (separate entry), and
-// aliases or functions the bash tool sources from the user's shell rc.
+// `bashInterceptor`.
+//
+// EVAL. The same hook judges `eval` cells by their text, before they run:
+//   - py (`eval-py.ts`, own tokenizer; an untokenizable cell is blocked):
+//     deletion APIs — the names `rmtree`, `removedirs`, `unlink`, `rmdir`
+//     wherever code names them (not in strings or comments), and `os.remove`
+//     on `os` or an `os` alias or import; shell handoffs — `os.system`,
+//     `os.popen`, `subprocess.getoutput|getstatusoutput`,
+//     `asyncio.create_subprocess_shell`, any call with `shell=True`, and the
+//     kernel's `!cmd`, `x = !cmd` and `%%bash` body: the literal command is
+//     classified as a posix script; launches without a shell — `subprocess`
+//     `run|call|check_call|check_output|Popen`, `asyncio.create_subprocess_exec`
+//     — classify a literal argv (argv[0] non-literal → blocked); the
+//     `tool.bash({"command": …})` bridge. `%time`/`%timeit` arguments,
+//     `%%capture`/`%%timeit` bodies and f-string placeholders are judged as
+//     Python. `%run`/`%load` run script files (not covered).
+//   - js (`eval-js.ts`, omp's own Babel parser with the kernel's options):
+//     deletion APIs — `rmSync`, `unlinkSync`, `rmdirSync`, `unlink`, `rmdir`
+//     wherever named, `rm` on an fs / fs.promises binding or `require`, and
+//     `.delete()` on `Bun.file(…)` or a name bound to it; child_process
+//     `exec|execSync` strings as posix scripts, `spawn|spawnSync|execFile|
+//     execFileSync` as argv (a script with `shell: true`), `Bun.spawn|spawnSync`
+//     argv, `Bun.$` templates, the `tool.bash({command})` bridge and
+//     `tool.write` to `xd://bash`.
+// A command that is not a literal string (f-string or template with
+// placeholders, variable, concatenation) is blocked as non-literal. Names are
+// matched in the cell's text only: a generic name (`remove`, `run`, `exec`,
+// `spawn`, `rm`) aliased in an earlier cell, `getattr`-style access, and
+// `os.exec*`/`os.spawn*`/`pty.spawn` are not covered. A definition whose body
+// calls a deletion API is blocked even if this cell does not call it.
+//
+// Not covered: `exec_command`, and aliases or functions the bash tool sources
+// from the user's shell rc.
 //
 // DELETE TOOL. Registers `delete` (approval `write`, top-level) on macOS and
 // Linux; on any other platform (Windows included) no tool is registered.
@@ -75,7 +106,7 @@ import { validateTargets } from "./targets.ts";
 const DELETE_TOOL = "delete";
 
 const DELETE_DESCRIPTION = [
-	"Delete files and directories given as literal paths. This is the way to delete: bash deletion commands (`rm`, `unlink`, `rmdir`, `shred`, `find -delete`, …) are refused.",
+	"Delete files and directories given as literal paths. This is the way to delete: bash deletion commands (`rm`, `unlink`, `rmdir`, `shred`, `find -delete`, …) and eval deletion APIs (`shutil.rmtree`, `os.remove`, `fs.rmSync`, `Bun.file().delete()`, …) are refused.",
 	'Default `mode: "trash"` moves each path to the system trash, where the user can restore it; `mode: "permanent"` deletes recursively and cannot be undone.',
 	"Paths are taken literally: no `~`, environment variable or glob expansion; relative paths resolve against the session cwd. List every path explicitly.",
 	"Every path is checked before anything is touched; one bad path refuses the whole call. Refused: empty paths, paths starting with `~`, paths that do not exist, the filesystem root, the home directory and its ancestors, the session cwd and its ancestors (also when reached through a symbolic link or another spelling), and paths whose `..`, `.` or trailing `/` passes through a symbolic link. A symbolic link is deleted as the link itself.",
@@ -140,9 +171,9 @@ async function runDelete(platform: Platform, rawParams: unknown, cwd: string): P
 }
 
 export default function deleteGuard(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event) => {
+	pi.on("tool_call", async (event) => {
 		try {
-			return guardToolCall(event.toolName, event.input, () => pi.getActiveTools().includes(DELETE_TOOL));
+			return await guardToolCall(event.toolName, event.input, () => pi.getActiveTools().includes(DELETE_TOOL));
 		} catch (error) {
 			pi.logger.warn("delete-guard: guard failed; the call was blocked", { error: errorText(error) });
 			return { block: true, reason: `delete-guard: internal error (${errorText(error)}); the call was blocked.` };

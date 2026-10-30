@@ -163,7 +163,14 @@ tool-policy-nag:
 - **删除命令**，与参数无关：`rm`、`unlink`、`rmdir`、`shred`（转小写、取路径的 basename、去掉引号与反斜杠：`RM`、`/bin/rm`、`\rm`），以及经 `sudo`、`doas`、`command`、`builtin`、`exec`、`env`、`nice`、`nohup`、`time`、`timeout`、`stdbuf`、`busybox`、`xargs` 调用的形式（它们的选项按表跳过；不认识的选项按"带值"与"不带值"两种读法都判定，任一读法落到删除命令即拦截），`find -delete` 与 `find -exec|-execdir|-ok|-okdir`。
 - **非字面命令**：命令名来自展开、替换、glob 或花括号模式（`$CMD x`、`$(printf rm) x`）；嵌套 shell、`eval`、`trap`、`alias` 的脚本不是字面量（`sh -c "$s"`）；`env -S`；shell 从 stdin 读脚本而来源不是带引号的 here-document（`… | sh`、here-string、未加引号的 here-document、没有脚本）。
 - **放行**：只作参数出现的词（`echo rm -rf /`、`git rm`、`npm rm`）、参数中的展开（`ls $HOME`）、不含删除的字面嵌套脚本、脚本文件（`bash x.sh`、`sh < x.sh`、`source`）以及 `-n` 语法检查。
-- **不覆盖**：`exec_command`、`eval` 工具、自带删除语义的程序（`git clean`、`rsync --delete`）、脚本文件的内容，以及 bash 工具从用户 shell rc 引入的 alias 与函数。
+- **不覆盖**：`exec_command`、自带删除语义的程序（`git clean`、`rsync --delete`）、脚本文件的内容，以及 bash 工具从用户 shell rc 引入的 alias 与函数。
+
+**Eval。** 同一钩子在 `eval` 单元格执行前按文本判定，规则与 reason 同上。交给 shell 的命令不是字面字符串时（带占位符的 f-string 或模板字面量、变量、拼接）按非字面拦截。
+
+- **Python**（自写分词器；无法分词的单元格直接拦截）：删除 API——`rmtree`、`removedirs`、`unlink`、`rmdir` 这几个名字在代码中出现即拦截（调用、`map(os.unlink, …)` 这类引用、import；字符串与注释不算），以及 `os`、`os` 别名或从 `os` 导入的 `remove`。交给 shell 的调用——`os.system`、`os.popen`、`subprocess.getoutput|getstatusoutput`、`asyncio.create_subprocess_shell`、任何带 `shell=True` 的调用，以及 kernel 的 `!cmd`、`x = !cmd` 与 `%%bash` 正文——把字面命令按 posix 脚本分类。不经 shell 的启动——`subprocess.run|call|check_call|check_output|Popen` 与 `asyncio.create_subprocess_exec`——按字面 argv 分类（argv[0] 非字面即拦截）。桥接调用 `tool.bash({"command": …})` 同样分类。`%time`/`%timeit` 的参数、`%%capture`/`%%timeit` 的正文与 f-string 占位符按 Python 判定。
+- **JavaScript**（使用 omp 自带的 Babel 解析器与 kernel 相同的选项）：删除 API——`rmSync`、`unlinkSync`、`rmdirSync`、`unlink`、`rmdir` 在代码中出现即拦截，fs 或 fs.promises 绑定或 `require` 上的 `rm`，以及 `Bun.file(…)` 或绑定到它的名字上的 `.delete()`。`child_process` 的 `exec`/`execSync` 字符串按 posix 脚本分类；`spawn`/`spawnSync`/`execFile`/`execFileSync` 按 argv 分类（带 `shell: true` 时按脚本）；`Bun.spawn`/`Bun.spawnSync` 的 argv、`Bun.$` 模板（含任何 `${}` 即非字面）、`tool.bash({command})` 与写入 `xd://bash` 的 `tool.write` 都会分类。
+- **放行**：其他程序的 argv 启动（`subprocess.run(["ls"])`）、`!ls`、`%run`、只在字符串或注释里提到 API 名的代码、`list.remove`、`Map.delete`，以及不含上述调用的单元格。
+- **不覆盖**：在之前单元格里起别名的通用名（`remove`、`run`、`exec`、`spawn`、`rm`；独有名不论在哪个单元格都会拦截）、`getattr` 式的动态访问、`os.exec*`/`os.spawn*`/`pty.spawn`，以及脚本文件（`%run`、`%load`）。函数定义体内出现删除 API 名时，即使本单元格没有调用它也会拦截。
 
 **`delete` 工具。** 在 macOS 与 Linux 上注册（审批级别 `write`，顶层工具）；其他平台（含 Windows）不注册，拦截的 reason 写明本会话不能删除。参数：`paths`（非空字符串数组）与 `mode`（`"trash"`，默认；或 `"permanent"`）。
 

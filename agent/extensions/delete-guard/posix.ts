@@ -457,6 +457,13 @@ function walkScript(script: Script, depth: number): Verdict {
 	return ALLOW;
 }
 
+/** Classifies an argv list run without a shell (`subprocess.run([...])`, `Bun.spawn([...])`): argv[0] is the command. */
+export function classifyPosixArgv(words: readonly { readonly text: string; readonly literal: boolean }[], depth: number): Verdict {
+	const fragment = words.map((word) => (word.literal ? word.text : "<expr>")).join(" ");
+	const argv: Word[] = words.map((word) => ({ text: word.text, raw: word.literal ? word.text : "<expr>", literal: word.literal }));
+	return resolveCommand({ depth, stdin: null, fragment }, argv, 0);
+}
+
 /** Classifies posix shell text: every command it runs, including substitutions and literal nested scripts. */
 export function classifyPosix(text: string, depth: number): Verdict {
 	const parsed = parsePosix(text);
