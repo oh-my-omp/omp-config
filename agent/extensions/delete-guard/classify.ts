@@ -1,4 +1,6 @@
+import { classifyCmd } from "./cmd.ts";
 import { classifyPosix, classifyPosixArgv } from "./posix.ts";
+import { classifyPowershell } from "./powershell.ts";
 import type { Dialect, Verdict } from "./verdict.ts";
 
 /** One argv word; `literal` is false when its runtime text cannot be read from the source. */
@@ -9,22 +11,30 @@ export type CommandInput =
 	| { readonly kind: "script"; readonly text: string }
 	| { readonly kind: "argv"; readonly words: readonly ArgvWord[] };
 
-/** Classifies a command input in `dialect`; `depth` counts enclosing nested scripts. */
+/**
+ * Classifies a command input; `depth` counts enclosing nested scripts. An argv list runs without a shell, so
+ * its program is resolved the same way in every dialect (`cmd`/`powershell` programs recurse into their dialect).
+ */
 export function classify(dialect: Dialect, input: CommandInput, depth: number): Verdict {
+	switch (input.kind) {
+		case "argv":
+			return classifyPosixArgv(input.words, depth);
+		case "script":
+			break;
+		default: {
+			const unreachable: never = input;
+			return unreachable;
+		}
+	}
 	switch (dialect.kind) {
 		case "posix":
-			switch (input.kind) {
-				case "script":
-					return classifyPosix(input.text, depth);
-				case "argv":
-					return classifyPosixArgv(input.words, depth);
-				default: {
-					const unreachable: never = input;
-					return unreachable;
-				}
-			}
+			return classifyPosix(input.text, depth);
+		case "powershell":
+			return classifyPowershell(input.text, depth);
+		case "cmd":
+			return classifyCmd(input.text, depth);
 		default: {
-			const unreachable: never = dialect.kind;
+			const unreachable: never = dialect;
 			return unreachable;
 		}
 	}

@@ -1,0 +1,39 @@
+# delete-guard Windows acceptance (#69): install the latest omp on a
+# windows-latest runner, apply this repo with its own updater, and run one RPC
+# session per step of ci/windows-guard-steps.ts on opencode-go DeepSeek,
+# checking each tool result and the probe files. Design: ci/README.md.
+name: delete-guard-windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - agent/extensions/delete-guard/**
+      - ci/windows-guard*.ts
+      - .github/workflows/delete-guard-windows.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delete-guard-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: delete-guard on Windows
+    # Fork pull requests get no secrets; the run needs OPENCODE_API_KEY.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+      - name: Run the acceptance steps
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: bun ci/windows-guard.ts

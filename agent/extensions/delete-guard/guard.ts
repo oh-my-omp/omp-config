@@ -12,8 +12,11 @@ type Entry =
 /** The bash tool, `Bun.$`, `Bun.spawn` and the `tool.bash` bridge run in the embedded brush shell on every platform. */
 const BRUSH: Dialect = { kind: "posix" };
 
-/** The shell an eval cell's `shell=True`, `os.system`, `!cmd` or `child_process.exec` string reaches: `/bin/sh` on macOS and Linux. */
-const SYSTEM_SHELL: Dialect = { kind: "posix" };
+/**
+ * The shell an eval cell's `shell=True`, `os.system`, `!cmd` or `child_process.exec` string reaches: `/bin/sh` on
+ * macOS and Linux, `cmd.exe` (`ComSpec`) on Windows. `%%bash`, `Bun.$`, `Bun.spawn` and `tool.bash` stay posix.
+ */
+const SYSTEM_SHELL: Dialect = process.platform === "win32" ? { kind: "cmd" } : { kind: "posix" };
 
 const FRAGMENT_LIMIT = 300;
 

@@ -9,7 +9,7 @@ This node designs omp-config's configuration check: in a throwaway environment i
 - **Non-goals**: having the model carry out tasks or call tools; verifying the verdicts of paid helpers (`task-split-check`, `task-completion-judge`); TUI-only behavior; blocking merges (no branch protection).
 - **Inputs**: the repository working tree (the thing checked), `@oh-my-pi/pi-coding-agent` on npm, the plugins declared in `install-plugins.sh`, and the Kilo gateway's anonymous free model.
 
-Implementation: `ci/check.ts` (the check run) and `.github/workflows/config-check.yml` (triggers; its `omp-session` job).
+Implementation: `ci/check.ts` (the check run) and `.github/workflows/config-check.yml` (triggers; its `omp-session` job). A second node in this directory, the [delete-guard Windows acceptance](#delete-guard-windows-acceptance), has its own workflow and is described at the end.
 
 ## Problem
 
@@ -152,3 +152,18 @@ CI_KEEP_ROOT=1 bun ci/check.ts       # keep the temporary root for debugging
 ```
 
 Needs Bun, git and public internet access.
+
+## delete-guard Windows acceptance
+
+This node checks `delete-guard` on Windows (issue #69) in real omp sessions: the nested PowerShell and cmd dialects, eval's cmd handoffs, the Recycle Bin backend and the Windows refusal set. Windows is the one platform its behavior cannot be observed on locally, because OrbStack has no Windows containers.
+
+- **Implementation**: `ci/windows-guard.ts` (setup and sessions), `ci/windows-guard-steps.ts` (the steps and their checks), `.github/workflows/delete-guard-windows.yml` (job `windows` on `windows-latest`).
+- **Setup**: `bun install -g @oh-my-pi/pi-coding-agent@latest`, the repository's updater `apply` into the runner's `~/.omp/agent`, and every `modelRoles` role bound to `opencode-go/deepseek-v4.1-flash` with `skills.enabled: false`. The runner is a throwaway VM, so it uses the runner account's real home and Recycle Bin.
+- **Steps**: one RPC session per step (`--mode rpc --no-ui --no-session`, cwd `$RUNNER_TEMP\omp-dg-work`), each asking the model for exactly one tool call: seven nested PowerShell/cmd commands and `rm -rf` through `bash`, four eval cells (two `shell=True`/`os.system`, `child_process.execSync`, `Bun.$`), a `trash` and a `permanent` `delete`, and six `delete` calls that pair `C:\omp-dg\keep` with `C:\`, `C:`, `\`, `\\localhost\C$`, `USERPROFILE` and the session cwd. Before each step the probe (`C:\omp-dg\d\f`, `C:\omp-dg\p\f` or `C:\omp-dg\keep\f`) is created.
+- **Pass criteria per step**: the first call of the requested tool exists (otherwise "model did not call <tool>"), carries the requested input unchanged, and has the expected result — a `delete-guard:` error for `bash`/`eval`, success for `delete`, an error naming the dangerous path for refusals — and the probe is as expected afterwards: `C:\omp-dg\d\f` or `C:\omp-dg\keep` still exists; after `trash` the directory is gone and the Recycle Bin (`Shell.Application` `NameSpace(10)`) lists it; after `permanent` it is gone and not listed. A runner account without a Recycle Bin fails with "no recycle bin on runner". The log prints every tool call, its result text, `Test-Path` and the Recycle Bin listing.
+- **Exit code**: 0 when every step passes, 1 otherwise, including setup failures.
+- **Triggers and permissions**: `workflow_dispatch`, and `pull_request` touching `agent/extensions/delete-guard/`, these scripts or the workflow, so a change is verified before it merges. Fork pull requests skip the job (they get no secrets). `contents: read`, `persist-credentials: false`, actions pinned by commit SHA; it reports only and does not block merges.
+- **Secret**: unlike the configuration check (R4), this node uses one repository secret, `OPENCODE_API_KEY`, the operator's opencode-go key, passed only to the step that runs `bun ci/windows-guard.ts`. Operator decision, 2026-10-30: the free Kilo model was replaced by the same model the other delete-guard checks use, so a failure is the guard's and not a weaker model's. Cost: every run is billed to that key.
+- **Not covered**: `exec_command` falling back to PowerShell; WSL; the model matrix of other low-tier models.
+
+Local run: none; the node needs Windows. Run it with `gh workflow run delete-guard-windows.yml --ref <branch>` once the workflow is on `main`, or by pushing to a pull request that touches the paths above.
