@@ -38,7 +38,7 @@ Contents enter the sandbox as tar streams or stdin pipes into `docker exec`; not
 - `~/.claude/rules`, `~/.claude/skills` and `~/.claude/CLAUDE.md`, those that exist.
 - The working tree at `/repo`: tracked and untracked files, uncommitted changes included, ignored files excluded.
 
-Then the container installs the latest `@oh-my-pi/pi-coding-agent` and runs the `/repo` updater (`omp-config-update.ts apply --source /repo`), so the extensions in the container's agent directory come from the working tree, not from what the host last applied.
+Then the container installs the latest `@oh-my-pi/pi-coding-agent`, writes `omp-config-autoupdate: { enabled: false }` into the container's agent-dir omomp file (`sandbox/autoupdate-off.ts`; every other section stays as copied, and the build prints the section read back), and runs the `/repo` updater (`omp-config-update.ts apply --source /repo`). The extensions in the container's agent directory therefore come from the working tree, not from what the host last applied, and stay so across every omp start in the sandbox: the copied host switch would otherwise apply GitHub `main` over them at the first start. The host's own omomp file is not touched.
 
 ### Credentials
 
@@ -81,4 +81,4 @@ A SIGKILLed holder leaves the row at 进行中 and its resources in place; `down
 
 - The container isolates the host's files, not remote services: sessions run with real credentials and outbound network access. Do not write scenarios that act on remote systems or accounts they must not change.
 - One run, one sandbox: runs are not reused. The run id is the build time in base 36.
-- Keep `sandbox/*.ts` self-contained: `/sandbox` in the container holds a copy of this directory, and `driver.ts` and `db.ts` run there with Bun alone.
+- Keep `sandbox/*.ts` self-contained: `/sandbox` in the container holds a copy of this directory, and `driver.ts`, `db.ts` and `autoupdate-off.ts` run there with Bun alone.

@@ -38,7 +38,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 - `~/.claude/rules`、`~/.claude/skills`、`~/.claude/CLAUDE.md`，存在才复制。
 - 工作树放到 `/repo`：已跟踪与未跟踪的文件，含未提交改动，不含被忽略的文件。
 
-之后容器安装最新的 `@oh-my-pi/pi-coding-agent`，并运行 `/repo` 里的 updater（`omp-config-update.ts apply --source /repo`），容器 agent 目录中的扩展因此来自工作树，而不是宿主机上次应用的版本。
+之后容器安装最新的 `@oh-my-pi/pi-coding-agent`，在容器 agent 目录的 omomp 文件里写入 `omp-config-autoupdate: { enabled: false }`（`sandbox/autoupdate-off.ts`；其余段保持复制来的原样，构建时打印读回的该段），再运行 `/repo` 里的 updater（`omp-config-update.ts apply --source /repo`）。容器 agent 目录中的扩展因此来自工作树，而不是宿主机上次应用的版本，并且在沙箱里每次启动 omp 后都保持如此：否则复制进来的宿主机开关会在首次启动时用 GitHub `main` 覆盖它们。宿主机自己的 omomp 文件不受影响。
 
 ### 凭据
 
@@ -81,4 +81,4 @@ OrbStack 台账是目录 `~/Ext/work/orbstack/`；沙箱运行在其中有自己
 
 - 容器隔离的是宿主机文件，不是远端服务：会话持有真实凭据并可以出网。不要写会作用于不该被改动的远端系统或账号的场景。
 - 一次运行一个沙箱，运行不复用。运行 id 是构建时间的 36 进制表示。
-- `sandbox/*.ts` 保持自包含：容器内的 `/sandbox` 是本目录的副本，`driver.ts` 与 `db.ts` 只靠 Bun 在那里运行。
+- `sandbox/*.ts` 保持自包含：容器内的 `/sandbox` 是本目录的副本，`driver.ts`、`db.ts` 与 `autoupdate-off.ts` 只靠 Bun 在那里运行。

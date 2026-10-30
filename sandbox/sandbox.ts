@@ -160,8 +160,9 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 	console.log(`  ${claude.length === 0 ? "nothing to copy" : claude.join(", ")}`);
 	const files = await step(`working tree ${options.repo} -> /repo`, () => copyRepo(names.container, options.repo));
 	console.log(`  ${files} files`);
-	const version = await step("plugins, latest omp, updater apply from /repo", () => installOmp(names.container, HOME));
-	console.log(`  ${version}`);
+	const installed = await step("plugins, latest omp, auto-update off, updater apply from /repo", () => installOmp(names.container, HOME));
+	console.log(`  ${installed.autoupdate}`);
+	console.log(`  ${installed.version}`);
 	if (options.target)
 		await step(`ssh target ${names.target}`, () => setUpTarget(names.container, HOME, names.target, labels, names.network));
 }
