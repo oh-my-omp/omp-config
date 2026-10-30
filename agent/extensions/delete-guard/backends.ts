@@ -51,24 +51,25 @@ const RECYCLE_SCRIPT = [
 	"Add-Type -AssemblyName Microsoft.VisualBasic",
 	"$target = $env:OMP_DELETE_TARGET",
 	"$root = [System.IO.Path]::GetPathRoot($target)",
-	"if ($root.StartsWith('\\\\') -or ([System.IO.DriveInfo]::new($root).DriveType -ne [System.IO.DriveType]::Fixed)) { throw 'this drive has no Recycle Bin; use mode permanent to delete' }",
+	"if ($root.StartsWith('\\\\') -or ([System.IO.DriveInfo]::new($root).DriveType -ne [System.IO.DriveType]::Fixed)) { throw 'this drive has no Recycle Bin, so nothing was deleted; mode permanent deletes for good: use it only if the user explicitly asks for unrecoverable deletion' }",
 	"$ui = [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs",
 	"$recycle = [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin",
 	"if ($env:OMP_DELETE_KIND -eq 'directory') { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($target, $ui, $recycle) } else { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($target, $ui, $recycle) }",
 ].join("; ");
 
+/** Appended where trash cannot run: the agent must not upgrade a plain delete request to permanent. */
+const PERMANENT_ONLY_ON_REQUEST = 'mode "permanent" deletes for good: use it only if the user explicitly asks for unrecoverable deletion';
+
 /** Why the trash backend cannot run at all on this machine, checked before any path is touched. */
 export function trashUnavailable(platform: Platform): string | null {
 	switch (platform) {
 		case "darwin":
-			return existsSync(MAC_TRASH)
-				? null
-				: `${MAC_TRASH} is missing, so nothing can be moved to the Trash; use mode "permanent" to delete instead`;
+			return existsSync(MAC_TRASH) ? null : `${MAC_TRASH} is missing, so nothing can be moved to the Trash; ${PERMANENT_ONLY_ON_REQUEST}`;
 		case "linux":
 			return null;
 		case "win32":
 			return windowsPowershell() === null
-				? 'powershell.exe was not found under %SystemRoot%\\System32, so nothing can be moved to the Recycle Bin; use mode "permanent" to delete instead'
+				? `powershell.exe was not found under %SystemRoot%\\System32, so nothing can be moved to the Recycle Bin; ${PERMANENT_ONLY_ON_REQUEST}`
 				: null;
 		default: {
 			const unreachable: never = platform;
@@ -82,8 +83,7 @@ async function windowsTrash(target: Target): Promise<Outcome> {
 		return {
 			kind: "failed",
 			given: target.given,
-			error:
-				'symbolic links and junctions are not sent to the Recycle Bin (it could follow them); use mode "permanent" to remove the link itself',
+			error: `symbolic links and junctions are not sent to the Recycle Bin (it could follow them); ${PERMANENT_ONLY_ON_REQUEST} (it removes the link itself)`,
 		};
 	}
 	const exe = windowsPowershell();
