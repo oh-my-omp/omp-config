@@ -38,7 +38,9 @@
 // `[System.IO.File]::Delete`, `[IO.Directory]::Delete` and any `.Delete(`
 // call are deletions; `& $cmd`, `Invoke-Expression`/`iex`,
 // `-EncodedCommand` and a script read from stdin are non-literal; `-File`
-// runs a script file and passes. `cmd` (`.exe`) with `/c` or `/k` is
+// runs a script file and passes. The command after `=` (`$x=Remove-Item`),
+// `return`/`throw`/`exit`, `&` or `.` is classified like any other, and a
+// control block's `}` ends its statement. `cmd` (`.exe`) with `/c` or `/k` is
 // classified in the cmd dialect (`cmd.ts`): `del`, `erase`, `rd`, `rmdir`
 // (also in `for … do`, `if …` and `(…)` blocks) are deletions, a command name
 // with `%VAR%`/`!VAR!` is non-literal, `cmd` without `/c`/`/k` reads stdin

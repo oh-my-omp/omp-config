@@ -107,6 +107,15 @@ function deleteRequest(paths: readonly string[], mode: "trash" | "permanent"): s
 	return once("delete", `paths: ${JSON.stringify(paths)}\nmode: ${mode}`);
 }
 
+/** The model must pass exactly the requested paths and mode, or the step says nothing about batch validation. */
+function deleteInputChanged(call: ToolCall, paths: readonly string[], mode: "trash" | "permanent"): readonly string[] {
+	const given = JSON.stringify(call.args.paths);
+	const givenMode = call.args.mode ?? "trash";
+	return given === JSON.stringify(paths) && givenMode === mode
+		? []
+		: [`model changed the input to paths ${given}, mode ${JSON.stringify(givenMode)}`];
+}
+
 function deleted(dir: string, mode: "trash" | "permanent"): Step {
 	return {
 		name: `delete (${mode}) ${dir}`,
@@ -115,7 +124,7 @@ function deleted(dir: string, mode: "trash" | "permanent"): Step {
 		check: (session) => {
 			const call = firstCall(session, "delete");
 			if (typeof call === "string") return [call];
-			const failures: string[] = [];
+			const failures: string[] = [...deleteInputChanged(call, [dir], mode)];
 			if (call.isError) failures.push(`delete failed: ${call.text}`);
 			if (existsSync(dir)) failures.push(`${dir} still exists`);
 			const names = recycleBinNames();
@@ -137,7 +146,7 @@ function refused(danger: string): Step {
 		check: (session) => {
 			const call = firstCall(session, "delete");
 			if (typeof call === "string") return [call];
-			const failures: string[] = [];
+			const failures: string[] = [...deleteInputChanged(call, [KEEP, danger], "trash")];
 			if (!call.isError || !call.text.includes(JSON.stringify(danger))) failures.push(`not refused by name: ${call.text}`);
 			if (!existsSync(KEEP)) failures.push(`${KEEP} is gone`);
 			return failures;

@@ -2,18 +2,13 @@ import type { ArgvWord } from "./classify.ts";
 import { classifyShellInvocation, programName, shellKind } from "./nested.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
-/** `Remove-Item` and its built-in aliases. */
-const DELETE_COMMANDS: Readonly<Record<string, true>> = {
-	"remove-item": true,
-	rm: true,
-	ri: true,
-	del: true,
-	erase: true,
-	rd: true,
-	rmdir: true,
-};
+/** `Remove-Item` and its built-in aliases. A Set: a plain object would also match `constructor`. */
+const DELETE_COMMANDS: ReadonlySet<string> = new Set(["remove-item", "rm", "ri", "del", "erase", "rd", "rmdir"]);
 
-/** Statements that open control structures: their conditions and script blocks are judged separately. */
+/**
+ * Keywords that open control structures: their conditions (`(…)`) and script blocks (`{…}`) are judged as nested
+ * code, and a statement starting with one ends at its block's `}`.
+ */
 const KEYWORDS: ReadonlySet<string> = new Set([
 	"if",
 	"elseif",
@@ -34,15 +29,15 @@ const KEYWORDS: ReadonlySet<string> = new Set([
 	"begin",
 	"process",
 	"end",
-	"return",
-	"exit",
-	"throw",
 	"break",
 	"continue",
 	"class",
 	"enum",
 	"using",
 ]);
+
+/** Keywords followed by a pipeline that runs (`return Remove-Item x`). */
+const PIPELINE_KEYWORDS: ReadonlySet<string> = new Set(["return", "throw", "exit"]);
 
 /** `[System.IO.File]::Delete(…)`, `[IO.Directory]::Delete(…)` and any `.Delete(` method call, outside strings. */
 const DELETE_METHOD = /(?:\]\s*::\s*|\.)delete\s*\(/i;
@@ -169,11 +164,17 @@ class PsParser {
 				this.nested.push(this.balanced("{", "}"));
 				code += " {} ";
 				words.push({ text: "{}", raw: "{}", literal: false });
+				// `if (…) { … } Remove-Item x`: what follows a control block is a statement of its own.
+				const head = words[0];
+				if (head?.literal && KEYWORDS.has(head.text.toLowerCase())) {
+					finish();
+					start = this.i;
+				}
 				continue;
 			}
 			if (ch === "}") this.fail("unexpected `}`");
 			if (ch === ">" || (ch === "<" && this.src.charAt(this.i + 1) !== "#")) {
-				while (">&12*".includes(this.src.charAt(this.i))) this.i++;
+				while (this.i < this.src.length && ">&12*".includes(this.src.charAt(this.i))) this.i++;
 				continue;
 			}
 			this.readWord(words, (piece) => {
@@ -234,35 +235,57 @@ class PsParser {
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
+/**
+ * Where the command of `$x = cmd`, `$x=cmd` or `[int]$x = cmd` starts: the words after `=`, the first one cut from
+ * the word holding `=` when it is glued on. Null when the statement is an expression without assignment.
+ */
+function assignedCommand(words: readonly PsWord[]): readonly PsWord[] | null {
+	for (let k = 0; k < words.length; k++) {
+		const word = words[k];
+		if (word === undefined) break;
+		const equals = word.raw.search(/(?<![=!<>])=(?!=)/);
+		if (equals < 0) continue;
+		const rest = word.raw.slice(equals + 1);
+		const after = words.slice(k + 1);
+		if (rest === "") return after;
+		return [{ text: rest, raw: rest, literal: !/[$@(`'"]/.test(rest) }, ...after];
+	}
+	return null;
+}
+
 function classifyStatement(statement: PsStatement, depth: number): Verdict {
 	if (DELETE_METHOD.test(statement.code)) return block("delete", statement.raw, "`.Delete()` deletes files");
-	const { words } = statement;
-	let i = 0;
+	let words: readonly PsWord[] = statement.words;
 	const first = words[0];
 	if (first === undefined) return ALLOW;
 	const head = first.text.toLowerCase();
 	if (first.literal && KEYWORDS.has(head)) return ALLOW;
-	if (first.raw.startsWith("$") || first.raw.startsWith("[") || first.raw.startsWith("(")) {
-		const assignment = words.findIndex((word) => word.raw === "=" || word.raw.endsWith("="));
-		if (assignment < 0 || assignment + 1 >= words.length) return ALLOW;
-		i = assignment + 1;
+	if (first.literal && PIPELINE_KEYWORDS.has(head)) words = words.slice(1);
+	const lead = words[0];
+	if (lead !== undefined && (lead.raw.startsWith("$") || lead.raw.startsWith("[") || lead.raw.startsWith("("))) {
+		const assigned = assignedCommand(words);
+		if (assigned === null) return ALLOW;
+		words = assigned;
 	}
-	if (words[i]?.raw === "&" || words[i]?.raw === ".") {
-		const operator = words[i]?.raw;
-		i++;
-		const target = words[i];
+	let i = 0;
+	if (words[0]?.raw === "&" || words[0]?.raw === ".") {
+		const operator = words[0].raw;
+		i = 1;
+		const target = words[1];
 		if (target === undefined) return ALLOW;
 		// `& { … }` / `. { … }` run a script block, which is judged as nested code.
 		if (target.raw === "{}") return ALLOW;
 		if (!target.literal) return block("nonLiteral", statement.raw, `\`${operator} ${target.raw}\` runs a command named by an expression`);
-		if (operator === ".") return ALLOW;
+		// A literal target is classified like any command name: `. Remove-Item x` runs the cmdlet; `. ./x.ps1` is a script file.
 	}
 	const command = words[i];
 	if (command === undefined) return ALLOW;
+	// Without `&`, a quoted first word is a string value, not a command (`$x = "rm"`).
+	if (i === 0 && (command.raw.startsWith("'") || command.raw.startsWith('"'))) return ALLOW;
 	if (!command.literal)
 		return command.raw.startsWith("$") ? ALLOW : block("nonLiteral", statement.raw, `the command name \`${command.raw}\` is not literal`);
 	const name = programName(command.text);
-	if (DELETE_COMMANDS[name]) return block("delete", statement.raw, `\`${command.text}\` deletes files`);
+	if (DELETE_COMMANDS.has(name)) return block("delete", statement.raw, `\`${command.text}\` deletes files`);
 	if (name === "invoke-expression" || name === "iex")
 		return block("nonLiteral", statement.raw, "`Invoke-Expression` runs a string as code");
 	const kind = shellKind(command.text);

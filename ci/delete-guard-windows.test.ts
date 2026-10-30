@@ -30,6 +30,11 @@ describe("nested PowerShell and cmd from brush", () => {
 		'cmd /c "powershell -Command Remove-Item x"',
 		"pwsh -c '& { Remove-Item x }'",
 		"pwsh -c 'Get-ChildItem | ForEach-Object { $_ | Remove-Item }'",
+		"pwsh -NoProfile -Command '$x=Remove-Item -LiteralPath /tmp/p'",
+		"pwsh -NoProfile -Command 'return Remove-Item -LiteralPath /tmp/p'",
+		"pwsh -NoProfile -Command '. Remove-Item -LiteralPath /tmp/p'",
+		"pwsh -c 'if ($a) { Write-Output a } Remove-Item x'",
+		String.raw`cmd /c 'start "" /b /wait /d C:\omp-dg cmd /c del C:\omp-dg\d\f'`,
 	])("blocks deletion: %p", (command) => {
 		expect(ruleOf(command)).toBe("delete");
 	});
@@ -59,6 +64,14 @@ describe("nested PowerShell and cmd from brush", () => {
 		`pwsh -c 'Write-Output "Remove-Item x"'`,
 		"pwsh -c '$x = 1'",
 		"pwsh -c 'git rm x'",
+		"pwsh -c 'Write-Output hi >'",
+		`pwsh -c '$x = "rm"; Write-Output $x'`,
+		"pwsh -c '. ./build.ps1'",
+		"pwsh -c 'if ($a) { Write-Output a } else { Write-Output b }'",
+		"pwsh -c '$n = Get-Date'",
+		String.raw`cmd /c start "" /d C:\tmp notepad`,
+		"cmd /c constructor",
+		"pwsh -c 'constructor'",
 	])("allows: %p", (command) => {
 		expect(ruleOf(command)).toBe("allow");
 	});

@@ -13,18 +13,18 @@ export function programName(text: string): string {
 	return base.endsWith(".exe") || base.endsWith(".com") ? base.slice(0, -4) : base;
 }
 
-const SHELLS: Readonly<Record<string, ShellKind>> = {
-	sh: "posix",
-	bash: "posix",
-	zsh: "posix",
-	dash: "posix",
-	ksh: "posix",
-	powershell: "powershell",
-	pwsh: "powershell",
-	cmd: "cmd",
-};
+const SHELLS: ReadonlyMap<string, ShellKind> = new Map([
+	["sh", "posix"],
+	["bash", "posix"],
+	["zsh", "posix"],
+	["dash", "posix"],
+	["ksh", "posix"],
+	["powershell", "powershell"],
+	["pwsh", "powershell"],
+	["cmd", "cmd"],
+]);
 
-export const shellKind = (name: string): ShellKind | null => SHELLS[programName(name)] ?? null;
+export const shellKind = (name: string): ShellKind | null => SHELLS.get(programName(name)) ?? null;
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 

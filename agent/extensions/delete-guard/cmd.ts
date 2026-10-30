@@ -3,15 +3,7 @@ import { classifyShellInvocation, programName, shellKind } from "./nested.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
 /** cmd's internal deletion commands, plus the posix names Git for Windows puts on PATH. */
-const DELETE_COMMANDS: Readonly<Record<string, true>> = {
-	del: true,
-	erase: true,
-	rd: true,
-	rmdir: true,
-	rm: true,
-	unlink: true,
-	shred: true,
-};
+const DELETE_COMMANDS: ReadonlySet<string> = new Set(["del", "erase", "rd", "rmdir", "rm", "unlink", "shred"]);
 
 type CmdWord = ArgvWord & { readonly raw: string };
 
@@ -104,11 +96,14 @@ function afterIf(words: readonly CmdWord[], start: number): number {
 	return i + 3;
 }
 
-/** Index of the command `start` launches: after `/flags` and an optional quoted title. */
+/** `start` options that take the next word as their value (`/d C:\dir`), unless the value is glued on (`/dC:\dir`). */
+const START_VALUE_OPTIONS: ReadonlySet<string> = new Set(["/d", "/node", "/affinity", "/machine"]);
+
+/** Index of the command `start` launches: after `/flags` (and their values) and an optional quoted title. */
 function afterStart(words: readonly CmdWord[], start: number): number {
 	let i = start;
 	if (words[i]?.raw.startsWith('"')) i++;
-	while (words[i]?.text.startsWith("/")) i++;
+	for (let word = words[i]; word?.text.startsWith("/"); word = words[i]) i += START_VALUE_OPTIONS.has(word.text.toLowerCase()) ? 2 : 1;
 	return i;
 }
 
@@ -147,7 +142,7 @@ function classifyCmdCommand(command: CmdCommand, depth: number): Verdict {
 		}
 		if (!word.literal) return block("nonLiteral", command.raw, `the command name \`${word.raw}\` comes from a \`%VAR%\` expansion`);
 		const name = programName(head);
-		if (DELETE_COMMANDS[name]) return block("delete", command.raw, `\`${name}\` deletes files`);
+		if (DELETE_COMMANDS.has(name)) return block("delete", command.raw, `\`${name}\` deletes files`);
 		const kind = shellKind(head);
 		if (kind !== null) return classifyShellInvocation(kind, word, words.slice(i + 1), depth, command.raw);
 		return ALLOW;
