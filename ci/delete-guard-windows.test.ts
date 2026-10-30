@@ -53,6 +53,7 @@ describe("nested PowerShell and cmd from brush", () => {
 		"cmd",
 		"echo del x | cmd",
 		"pwsh -c 'Write-Output hi >'",
+		"pwsh -c 'Write-Output hi 2>'",
 	])("blocks non-literal: %p", (command) => {
 		expect(ruleOf(command)).toBe("nonLiteral");
 	});

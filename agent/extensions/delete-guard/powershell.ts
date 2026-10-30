@@ -199,7 +199,9 @@ class PsParser {
 		let literal = true;
 		while (this.i < this.src.length) {
 			const ch = this.src.charAt(this.i);
-			if (" \t;\n\r|{}".includes(ch) || (ch === "&" && this.src.charAt(this.i + 1) === "&")) break;
+			// A redirect ends the word (`hi 2>` is `hi`, `2`, `>`), so the parser sees every redirect and its target.
+			if (" \t;\n\r|{}>".includes(ch) || (ch === "<" && this.src.charAt(this.i + 1) !== "#")) break;
+			if (ch === "&" && this.src.charAt(this.i + 1) === "&") break;
 			if (ch === "'" || ch === '"') {
 				const begin = this.i;
 				const expands = this.skipString(ch);
