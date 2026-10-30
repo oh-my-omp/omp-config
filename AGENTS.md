@@ -17,6 +17,7 @@ Behavior is described where it lives; read the matching one before changing it:
 |Subagent authoring traps|`agent/agents/README.txt`|
 |Extension load order|`agent/extensions-last/README.md`|
 |Configuration check (CI)|`ci/README.md`|
+|Sandbox for real sessions with this machine's config and credentials|`sandbox/README.md`|
 
 ## Rules
 
