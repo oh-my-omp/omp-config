@@ -58,7 +58,7 @@ import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { openJudge } from "../_shared/judge.ts";
 import { sessionSettings } from "../_shared/settings.ts";
-import { type WatchedCall, watchedCallOf } from "./calls.ts";
+import { type WatchedCall, watchedCallOf } from "../_shared/tool-calls.ts";
 import { type FormLane, type IntentLane, type Lanes, type LaneWarning, loadLanes } from "./detector-config.ts";
 import { detectEvalViolations, detectShellViolations } from "./heuristic.ts";
 import { type IntentSpec, intentReminder, intentViolation, JUDGE_TIMEOUT_MS, judgeIntent, loadIntentSpec } from "./intent.ts";

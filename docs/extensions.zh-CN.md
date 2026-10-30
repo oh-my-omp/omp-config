@@ -155,9 +155,17 @@ tool-policy-nag:
 
 ### delete-guard
 
-源码：`agent/extensions/delete-guard/`。主会话与子会话、完整模式与轻量模式均启用；无配置。
+源码：`agent/extensions/delete-guard/`。主会话与子会话、完整模式与轻量模式均启用；无配置、无开关，与 `tools.approvalMode`、`bashInterceptor` 无关。
 
-在 macOS 与 Linux 上注册 `delete` 工具（审批级别 `write`，顶层工具）；其他平台（含 Windows）不注册。参数：`paths`（非空字符串数组）与 `mode`（`"trash"`，默认；或 `"permanent"`）。
+**拦截。** `tool_call` 钩子判定每次 `bash` 调用：主循环发出的调用、对 `xd://bash` 的写入，以及 omp 为这类写入补发的嵌套 `bash` 事件（每次事件都判定，任一拦截即不执行）。bash 工具在所有平台都运行于内置 brush shell，因此按 posix 方言分类。被拦的调用不执行，返回 `delete-guard: …`，写明规则类别（删除命令或非字面命令）与命令原文；当前会话的活动工具含 `delete` 时指向它，否则写明本会话不能删除。钩子自身出错时记一条 warning 并拦截该调用。
+
+- **分类范围**：文本中所有将被执行的命令，包括 `$(…)`、反引号、`<(…)`/`>(…)`、未加引号 here-document 正文里的替换、字面的 `sh|bash|zsh|dash|ksh -c '…'` 脚本、shell 读取的带引号 here-document，以及字面的 `eval`、`trap`、`alias` 正文，最多嵌套 8 层。无法解析的文本（引号、替换或分组未闭合）直接拦截。
+- **删除命令**，与参数无关：`rm`、`unlink`、`rmdir`、`shred`（转小写、取路径的 basename、去掉引号与反斜杠：`RM`、`/bin/rm`、`\rm`），以及经 `sudo`、`doas`、`command`、`builtin`、`exec`、`env`、`nice`、`nohup`、`time`、`timeout`、`stdbuf`、`busybox`、`xargs` 调用的形式（它们的选项按表跳过；不认识的选项按"带值"与"不带值"两种读法都判定，任一读法落到删除命令即拦截），`find -delete` 与 `find -exec|-execdir|-ok|-okdir`。
+- **非字面命令**：命令名来自展开、替换、glob 或花括号模式（`$CMD x`、`$(printf rm) x`）；嵌套 shell、`eval`、`trap`、`alias` 的脚本不是字面量（`sh -c "$s"`）；`env -S`；shell 从 stdin 读脚本而来源不是带引号的 here-document（`… | sh`、here-string、未加引号的 here-document、没有脚本）。
+- **放行**：只作参数出现的词（`echo rm -rf /`、`git rm`、`npm rm`）、参数中的展开（`ls $HOME`）、不含删除的字面嵌套脚本、脚本文件（`bash x.sh`、`sh < x.sh`、`source`）以及 `-n` 语法检查。
+- **不覆盖**：`exec_command`、`eval` 工具、自带删除语义的程序（`git clean`、`rsync --delete`）、脚本文件的内容，以及 bash 工具从用户 shell rc 引入的 alias 与函数。
+
+**`delete` 工具。** 在 macOS 与 Linux 上注册（审批级别 `write`，顶层工具）；其他平台（含 Windows）不注册，拦截的 reason 写明本会话不能删除。参数：`paths`（非空字符串数组）与 `mode`（`"trash"`，默认；或 `"permanent"`）。
 
 - **字面路径**：不展开 `~`、环境变量与 glob；相对路径相对会话 cwd。`"$HOME"`、`"*.log"` 都是文件名。
 - **先校验、后改动**：所有路径先逐个校验，任一被拒则整次拒绝、不动任何文件。拒绝：空串或纯空白、以 `~` 开头、不存在、文件系统根、家目录及其祖先目录、会话 cwd 本身及其祖先目录。受保护目录按文件身份（`dev:ino`）比较，因此大小写变体、firmlink、bind mount 以及指向它们的符号链接都会被拒；检查覆盖路径本身、按原文经链接实际到达的文件，以及符号链接的目标。已不存在的受保护目录（如已删除的 cwd）按拼写比较。`..`、`.` 或末尾 `/` 穿过符号链接的路径（`link/../x`、`link/`）实际到达的文件与规范化后的路径不同，予以拒绝。通过校验的符号链接（含悬空链接）只删除链接本身。
