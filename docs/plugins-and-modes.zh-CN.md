@@ -38,11 +38,11 @@
 1. `futureppo-pool/glm-5.3-flash`（`effort: "low"`）
 2. `futureppo-pool/minimax-m3.1-flash`（`effort: "low"`）
 3. `futureppo-pool/grok-4.7`（`effort: "minimal"`）
-4. `commandcode/inclusionai/ling-3.1-flash:free`（`effort: "minimal"`）
+4. `commandcode/reflection/beam:free`（`effort: "minimal"`）
 5. `commandcode/poolside/laguna-s-2.1-free`（`effort: "minimal"`）
 6. `commandcode/stealth/glyph-cluster:free`（`effort: "minimal"`）
 
-`deepseek-v4.1-flash` 已从该池下架；`qwen3.8-27b` 不接受 `reasoning_effort`；`qwen3.8-flash-next` 与 `Index-Translate-35B-A3B` 无法通过 OMP 的 `max_completion_tokens` 请求体。它们均不在链中。
+`deepseek-v4.1-flash` 已从该池下架；`qwen3.8-27b` 不接受 `reasoning_effort`；`qwen3.8-flash-next` 与 `Index-Translate-35B-A3B` 无法通过 OMP 的 `max_completion_tokens` 请求体；Command Code 已不再提供 `inclusionai/ling-3.1-flash:free`。它们均不在链中。
 
 `futureppo-pool` 自动发现的模型默认不带 `reasoning_effort` 支持。使用链中的 `futureppo-pool` 条目时，需在本机 `~/.omp/agent/models.yml`（本机文件，不同步）的 `futureppo-pool` 下加上 `supportsReasoningEffort: true`，重启 `omp` 后用 `/thinking-translator status` 检查：
 

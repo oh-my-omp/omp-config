@@ -38,11 +38,11 @@ Lightweight policy and lifecycle hooks live in `agent/extensions/`, while statef
 1. `futureppo-pool/glm-5.3-flash` (`effort: "low"`)
 2. `futureppo-pool/minimax-m3.1-flash` (`effort: "low"`)
 3. `futureppo-pool/grok-4.7` (`effort: "minimal"`)
-4. `commandcode/inclusionai/ling-3.1-flash:free` (`effort: "minimal"`)
+4. `commandcode/reflection/beam:free` (`effort: "minimal"`)
 5. `commandcode/poolside/laguna-s-2.1-free` (`effort: "minimal"`)
 6. `commandcode/stealth/glyph-cluster:free` (`effort: "minimal"`)
 
-`deepseek-v4.1-flash` is no longer served by the pool; `qwen3.8-27b` rejects `reasoning_effort`, and `qwen3.8-flash-next` / `Index-Translate-35B-A3B` fail OMP's `max_completion_tokens` request shape. None of them is in the chain.
+`deepseek-v4.1-flash` is no longer served by the pool; `qwen3.8-27b` rejects `reasoning_effort`, and `qwen3.8-flash-next` / `Index-Translate-35B-A3B` fail OMP's `max_completion_tokens` request shape; Command Code no longer serves `inclusionai/ling-3.1-flash:free`. None of them is in the chain.
 
 Auto-discovered `futureppo-pool` models omit `reasoning_effort` support. To use the `futureppo-pool` entries, add `supportsReasoningEffort: true` under `providers.futureppo-pool` in the machine's `~/.omp/agent/models.yml` (machine-local, not synced), restart `omp`, and check `/thinking-translator status`:
 
