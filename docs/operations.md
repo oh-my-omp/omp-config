@@ -5,7 +5,7 @@
 ```mermaid
 flowchart LR
   gh["GitHub default branch (main)"] -->|"startup auto-update (when enabled) / /omp-config-autoupdate run"| local["~/.omp/agent and ~/.pi/agent"]
-  repo["omp-config working tree"] -->|"/update-omp"| local
+  repo["omp-config working tree"] -->|"/onboard-omp / /update-omp"| local
   local -->|"/sync-omp-config (read-only on machine)"| repo
   repo -->|"git push"| gh
   gh -->|"install launcher"| light["omp-light beside omp"]
@@ -35,8 +35,9 @@ State moves between this repository and a machine through two separate commands:
 
 Run slash commands inside `omp` started at the repository root:
 
-1. **First-time setup on a machine**:
-   - Start `omp` at the repository root and run `/update-omp` (writes configs, extensions, and the updater, installs `omp-light`, and runs `omp install` for every required plugin).
+1. **First-time setup on a machine (`/onboard-omp [check|<plane>]` or `/update-omp`)**:
+   - For a guided first-time setup, start `omp` at the repository root and run `/onboard-omp`: it inspects `omp://` built-in docs and the checkout on the spot across the 8 runtime control planes, diagnoses provider/model/language compatibility (`task.agentModelOverrides`, `omomp.yml`, `thinking-translator.json`) without dirtying the working tree, runs `/update-omp`, and writes only machine-owned settings (`LOCAL_CONFIG_FIELDS` such as `modelRoles`, `LOCAL_OMOMP_SECTIONS` such as `model-compaction` and `doc-polish`, and `models.yml`). Pass `check` for a read-only diagnosis, or `<plane>` (`1`–`8`) to inspect one plane.
+   - For a direct wholesale install without the walkthrough, run `/update-omp` (writes configs, extensions, and the updater, installs `omp-light`, and runs `omp install` for every required plugin).
    - If the machine uses `~/.claude`, add `~/.claude` at the start of `extensions` in `~/.omp/agent/config.yml`, then restart `omp`.
    - To enable startup auto-update, run `/omp-config-autoupdate on` (applies from the next start).
    - Verify with `omp config list --json`, `omp plugin list --json`, and `git status --short`.

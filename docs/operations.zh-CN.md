@@ -5,7 +5,7 @@
 ```mermaid
 flowchart LR
   gh["GitHub 默认分支 (main)"] -->|"启动自动更新（开关打开时） / /omp-config-autoupdate run"| local["~/.omp/agent 与 ~/.pi/agent"]
-  repo["omp-config 工作区"] -->|"/update-omp"| local
+  repo["omp-config 工作区"] -->|"/onboard-omp / /update-omp"| local
   local -->|"/sync-omp-config（只读本机）"| repo
   repo -->|"git push"| gh
   gh -->|"安装启动器"| light["omp 同目录的 omp-light"]
@@ -35,8 +35,9 @@ flowchart LR
 
 在仓库根目录启动 `omp` 后执行斜杠命令：
 
-1. **新机器首次配置**：
-   - 在仓库根目录启动 `omp` 运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件执行 `omp install`）。
+1. **新机器首次配置（`/onboard-omp [check|<plane>]` 或 `/update-omp`）**：
+   - 首次引导安装可在仓库根目录启动 `omp` 运行 `/onboard-omp`：按八个运行时控制面当场读取 `omp://` 内置文档与工作区配置讲解运行时控制机制，在不修改仓库工作树的前提下诊断订阅/模型/语言匹配度（`task.agentModelOverrides`、`omomp.yml`、`thinking-translator.json`），调用 `/update-omp` 完成全量安装，并只把当场定制写入本机所有项（`LOCAL_CONFIG_FIELDS` 中的 `modelRoles` 等、`LOCAL_OMOMP_SECTIONS` 中的 `model-compaction` 与 `doc-polish`，以及本机 `models.yml`）。传 `check` 只做只读诊断，传 `<plane>`（`1`–`8`）直接调查指定控制面。
+   - 若已熟悉配置、只需直接安装，运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件执行 `omp install`）。
    - 若本机使用 `~/.claude`，在 `~/.omp/agent/config.yml` 的 `extensions` 第一项加上 `~/.claude`，然后重启 `omp`。
    - 需要开启启动自动更新时，运行 `/omp-config-autoupdate on`（下次启动起生效）。
    - 用 `omp config list --json`、`omp plugin list --json`、`git status --short` 检查结果。
