@@ -1,6 +1,8 @@
 // Steps of the delete-guard Windows acceptance run (omp-config #69 rows 1-5,
-// 7, 8). Each step prepares the probe files, gives the model one prompt asking
-// for one tool call, and checks that call and the files afterwards.
+// 7, 8; #80 permanent confirmation). Each step prepares the probe files, gives
+// the model one prompt asking for one tool call, says whether the session runs
+// headless or answers confirmations, and checks that call and the files
+// afterwards.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -14,6 +16,8 @@ export type ToolCall = {
 
 export type Session = {
 	readonly calls: readonly ToolCall[];
+	/** Title and message of every `confirm` dialog the session raised, in order. */
+	readonly confirms: readonly string[];
 	/** The assistant's last text reply, printed when a step fails. */
 	readonly reply: string;
 	readonly finished: boolean;
@@ -21,9 +25,13 @@ export type Session = {
 	readonly stderr: string;
 };
 
+/** `headless`: `--no-ui`, extensions get no UI. `answer`: RPC with UI; every `confirm` gets `confirmed`, other dialogs are cancelled. */
+export type StepUi = { readonly kind: "headless" } | { readonly kind: "answer"; readonly confirmed: boolean };
+
 export type Step = {
 	readonly name: string;
 	readonly prompt: string;
+	readonly ui: StepUi;
 	readonly prepare: () => void;
 	readonly check: (session: Session) => readonly string[];
 	readonly readings: () => readonly string[];
@@ -64,6 +72,8 @@ function firstCall(session: Session, tool: string): ToolCall | string {
 	return session.calls.find((call) => call.tool === tool) ?? `model did not call ${tool}`;
 }
 
+const HEADLESS: StepUi = { kind: "headless" };
+
 function probeKept(): readonly string[] {
 	return existsSync(PROBE) ? [] : [`${PROBE} is gone`];
 }
@@ -72,6 +82,7 @@ function blockedBash(command: string): Step {
 	return {
 		name: `bash: ${command}`,
 		prompt: once("bash", `command:\n${command}`),
+		ui: HEADLESS,
 		prepare: () => ensureFile(D),
 		check: (session) => {
 			const call = firstCall(session, "bash");
@@ -89,6 +100,7 @@ function blockedEval(language: "py" | "js", code: string): Step {
 	return {
 		name: `eval ${language}: ${code}`,
 		prompt: once("eval", `language: ${language}\ncode:\n${code}`),
+		ui: HEADLESS,
 		prepare: () => ensureFile(D),
 		check: (session) => {
 			const call = firstCall(session, "eval");
@@ -120,12 +132,16 @@ function deleted(dir: string, mode: "trash" | "permanent"): Step {
 	return {
 		name: `delete (${mode}) ${dir}`,
 		prompt: deleteRequest([dir], mode),
+		// #80: permanent needs the user's confirmation, so that step runs with UI and answers yes.
+		ui: mode === "permanent" ? { kind: "answer", confirmed: true } : HEADLESS,
 		prepare: () => ensureFile(dir),
 		check: (session) => {
 			const call = firstCall(session, "delete");
 			if (typeof call === "string") return [call];
 			const failures: string[] = [...deleteInputChanged(call, [dir], mode)];
 			if (call.isError) failures.push(`delete failed: ${call.text}`);
+			if (mode === "permanent" && !session.confirms.some((confirm) => confirm.includes(dir)))
+				failures.push(`no confirmation listing ${dir}`);
 			if (existsSync(dir)) failures.push(`${dir} still exists`);
 			const names = recycleBinNames();
 			const name = dir.slice(dir.lastIndexOf("\\") + 1);
@@ -138,10 +154,34 @@ function deleted(dir: string, mode: "trash" | "permanent"): Step {
 	};
 }
 
+/** #80: a declined confirmation (with UI) or no UI at all deletes nothing and points back to the trash. */
+function permanentRefused(ui: StepUi): Step {
+	const label = ui.kind === "headless" ? "no UI" : "declined";
+	return {
+		name: `delete (permanent, ${label}) ${P}`,
+		prompt: deleteRequest([P], "permanent"),
+		ui,
+		prepare: () => ensureFile(P),
+		check: (session) => {
+			const call = firstCall(session, "delete");
+			if (typeof call === "string") return [call];
+			const failures: string[] = [...deleteInputChanged(call, [P], "permanent")];
+			if (!call.isError || !call.text.includes("nothing was deleted") || !call.text.includes("Leave `mode` unset"))
+				failures.push(`not refused: ${call.text}`);
+			if (ui.kind === "answer" && !session.confirms.some((confirm) => confirm.includes(P))) failures.push(`no confirmation listing ${P}`);
+			if (ui.kind === "headless" && session.confirms.length > 0) failures.push("a headless session raised a confirmation");
+			if (!existsSync(join(P, "f"))) failures.push(`${join(P, "f")} is gone`);
+			return failures;
+		},
+		readings: () => [`Test-Path ${join(P, "f")}: ${existsSync(join(P, "f"))}`],
+	};
+}
+
 function refused(danger: string): Step {
 	return {
 		name: `delete refuses ${danger}`,
 		prompt: deleteRequest([KEEP, danger], "trash"),
+		ui: HEADLESS,
 		prepare: () => ensureFile(KEEP),
 		check: (session) => {
 			const call = firstCall(session, "delete");
@@ -178,8 +218,10 @@ export function steps(cwd: string): readonly Step[] {
 		blockedEval("js", "await Bun.$`rm C:/omp-dg/d/f`"),
 		// Row 5: brush's own posix commands.
 		blockedBash("rm -rf C:/omp-dg/d"),
-		// Rows 3 and 7: the Recycle Bin backend and permanent mode.
+		// Rows 3 and 7: the Recycle Bin backend and permanent mode; #80: permanent only after the user confirms.
 		deleted(D, "trash"),
+		permanentRefused(HEADLESS),
+		permanentRefused({ kind: "answer", confirmed: false }),
 		deleted(P, "permanent"),
 		// Row 4: Windows roots, the home directory and the session cwd.
 		...["C:\\", "C:", "\\", "\\\\localhost\\C$", home, cwd].map(refused),

@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { type Session, type Step, steps, type ToolCall } from "./windows-guard-steps.ts";
+import { type Session, type Step, type StepUi, steps, type ToolCall } from "./windows-guard-steps.ts";
 
 const REPO = resolve(import.meta.dir, "..");
 const MODEL = "opencode-go/deepseek-v4.1-flash";
@@ -54,9 +54,17 @@ function textOf(result: unknown): string {
 	return result.content.flatMap((part) => (isMapping(part) && typeof part.text === "string" ? [part.text] : [])).join("\n");
 }
 
-/** One RPC session: send the step's prompt after `ready`, close stdin at `prompt_result`, collect tool calls. */
-async function runSession(prompt: string, cwd: string): Promise<Session> {
-	const proc = Bun.spawn(["omp", "--mode", "rpc", "--no-ui", "--no-session", "--model", MODEL], {
+/** Extension UI requests that wait for an answer; the rest (notify, setStatus, …) are fire-and-forget. */
+const DIALOGS = new Set(["select", "confirm", "input", "editor", "ask"]);
+
+/**
+ * One RPC session: send the step's prompt after `ready`, close stdin at `prompt_result`, collect tool calls. With
+ * `answer`, extensions get the RPC UI: every `confirm` is answered with the step's value and recorded, any other
+ * dialog is cancelled.
+ */
+async function runSession(prompt: string, cwd: string, ui: StepUi): Promise<Session> {
+	const uiFlags = ui.kind === "headless" ? ["--no-ui"] : [];
+	const proc = Bun.spawn(["omp", "--mode", "rpc", ...uiFlags, "--no-session", "--model", MODEL], {
 		cwd,
 		stdin: "pipe",
 		stdout: "pipe",
@@ -66,6 +74,7 @@ async function runSession(prompt: string, cwd: string): Promise<Session> {
 	const timer = setTimeout(() => proc.kill(), SESSION_TIMEOUT_MS);
 	const started = new Map<string, { name: string; args: unknown }>();
 	const calls: ToolCall[] = [];
+	const confirms: string[] = [];
 	let sent = false;
 	let done = false;
 	let reply = "";
@@ -84,6 +93,15 @@ async function runSession(prompt: string, cwd: string): Promise<Session> {
 			proc.stdin.write(`${JSON.stringify({ id: "step", type: "prompt", message: prompt })}\n`);
 			proc.stdin.flush();
 			sent = true;
+		} else if (event.type === "extension_ui_request" && typeof event.id === "string" && typeof event.method === "string") {
+			if (!DIALOGS.has(event.method)) return;
+			const answer =
+				event.method === "confirm" && ui.kind === "answer"
+					? { type: "extension_ui_response", id: event.id, confirmed: ui.confirmed }
+					: { type: "extension_ui_response", id: event.id, cancelled: true };
+			if (event.method === "confirm") confirms.push(`${String(event.title)}\n${String(event.message)}`);
+			proc.stdin.write(`${JSON.stringify(answer)}\n`);
+			proc.stdin.flush();
 		} else if (event.type === "tool_execution_start" && typeof event.toolCallId === "string" && typeof event.toolName === "string") {
 			started.set(event.toolCallId, { name: event.toolName, args: event.args });
 		} else if (event.type === "message_end" && isMapping(event.message) && event.message.role === "assistant") {
@@ -108,12 +126,14 @@ async function runSession(prompt: string, cwd: string): Promise<Session> {
 	if (buffer.trim() !== "") handle(buffer.trim());
 	const code = await proc.exited;
 	clearTimeout(timer);
-	return { calls, reply, finished: done, code, stderr: (await stderr).trim() };
+	return { calls, confirms, reply, finished: done, code, stderr: (await stderr).trim() };
 }
 
 async function runStep(step: Step, cwd: string): Promise<readonly string[]> {
 	step.prepare();
-	const session = await runSession(step.prompt, cwd);
+	const session = await runSession(step.prompt, cwd, step.ui);
+	if (session.confirms.length > 0)
+		console.log(`  confirms: ${session.confirms.map((confirm) => confirm.replaceAll("\n", " | ")).join(" || ")}`);
 	console.log(`  calls: ${session.calls.map((call) => `${call.tool}${call.isError ? "(error)" : ""}`).join(", ") || "none"}`);
 	for (const call of session.calls) console.log(`  ${call.tool} ${JSON.stringify(call.args)} -> ${call.text.replaceAll("\n", " | ")}`);
 	const failures: string[] = [];
