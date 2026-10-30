@@ -78,10 +78,15 @@ export async function copyRepo(container: string, repo: string): Promise<number>
 	return files.length;
 }
 
-/** Plugin dependencies for linux from the copied lock file, the latest omp, then the /repo updater applies the working tree. */
-export async function installOmp(container: string, home: string): Promise<string> {
+/**
+ * Plugin dependencies for linux from the copied lock file, the latest omp, the startup auto-update
+ * switched off (the copied host switch would apply GitHub `main` over /repo at the first omp start),
+ * then the /repo updater applies the working tree. Returns the omp version and the switch read back.
+ */
+export async function installOmp(container: string, home: string): Promise<{ readonly version: string; readonly autoupdate: string }> {
 	await must(["docker", "exec", "-w", join(home, ".omp", "plugins"), container, "bun", "install"]);
 	await must(["docker", "exec", container, "bun", "install", "-g", "@oh-my-pi/pi-coding-agent"]);
+	const autoupdate = (await must(["docker", "exec", container, "bun", "/sandbox/autoupdate-off.ts", join(home, ".omp", "agent")])).trim();
 	await must([
 		"docker",
 		"exec",
@@ -94,7 +99,7 @@ export async function installOmp(container: string, home: string): Promise<strin
 		"--source",
 		"/repo",
 	]);
-	return (await must(["docker", "exec", container, "omp", "--version"])).trim();
+	return { version: (await must(["docker", "exec", container, "omp", "--version"])).trim(), autoupdate };
 }
 
 /** The ssh target: sshd in `target`, a key generated inside the sandbox, and the ssh alias `target` (root). */
