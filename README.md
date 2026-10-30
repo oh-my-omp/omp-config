@@ -30,9 +30,10 @@ Slash commands run inside `omp` started at the repository root:
 
 ```text
 /onboard-omp [check|<plane>]                 # progressive guided walkthrough, live runtime check, and machine-local setup
-/update-omp [check]                          # apply working tree -> ~/.omp/agent, ~/.pi/agent, omp-light, plugins
+/update-omp [check]                          # apply working tree -> ~/.omp/agent, omp-light, plugins; keeps local customizations, adapts conflicts
 /sync-omp-config [check]                     # copy eligible machine changes -> repo, validate, commit and push
-/omp-config-autoupdate [status|on|off|run]   # toggle startup auto-update (off by default) or update from GitHub now
+/omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]
+                                             # startup auto-update (off by default), update from GitHub now, or adapt local customizations that conflict with upstream
 /migrate-omp-keys <target>                   # copy auth_credentials table to a remote host's agent.db over SSH
 ```
 
@@ -42,7 +43,7 @@ Shell commands run from the repository root:
 omp                           # full mode
 omp-light                     # light mode (skips the governance extensions in config-light.yml and system-prompt-replace)
 bun run check                 # biome check . && tsc --noEmit
-bun run test                  # bun test ci: session-urls scanner differential and type-filter tests
+bun run test                  # bun test ci: session-urls, delete-guard, tool-policy-nag pty and updater three-way apply tests
 ./plugin-audit.sh             # compare install-plugins.sh against `omp plugin list`
 bun ci/check.ts               # isolated HOME install + full and light RPC session check
 ```

@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart LR
-  gh["GitHub default branch (main)"] -->|"startup auto-update (when enabled) / /omp-config-autoupdate run"| local["~/.omp/agent and ~/.pi/agent"]
+  gh["GitHub default branch (main)"] -->|"startup auto-update (when enabled) / /omp-config-autoupdate run"| local["~/.omp/agent"]
   repo["omp-config working tree"] -->|"/onboard-omp / /update-omp"| local
   local -->|"/sync-omp-config (read-only on machine)"| repo
   repo -->|"git push"| gh
@@ -15,39 +15,39 @@ flowchart LR
 
 ## File Ownership and Sync Rules
 
-State moves between this repository and a machine through two separate commands: `agent/extensions/omp-config-autoupdate/omp-config-update.ts` (repo → machine) and `.omp/commands/sync-omp-config.md` (machine → repo):
+State moves between this repository and a machine through two separate commands: `agent/extensions/omp-config-autoupdate/omp-config-update.ts` (repo → machine) and `.omp/commands/sync-omp-config.md` (machine → repo). The updater merges every managed item three-way: the machine's copy, the repo version this machine last accepted (the base, recorded in `<agentDir>/.omp-config-base/`) and the incoming repo version. An unmodified item takes the incoming version; a customized one keeps the machine's edit; when both sides changed, text files are merged with `git merge-file` and anything that still overlaps is kept as it is and reported as a conflict (see [omp-config-autoupdate](#omp-config-autoupdate)). The owner lists named below are constants in the updater.
 
 | Path / category | Owner | Repo → Machine (updater) | Machine → Repo (`/sync-omp-config`) | Takes effect |
 |---|---|---|---|---|
-| `agent/SYSTEM_TEMPLATE.md`, `APPEND_SYSTEM.md`, `PERSONALITY.md`, `config-light.yml`, `APPEND_SYSTEM_LIGHT.md`, `omp-light.ts`, `agents/*` | Repo (whole file) | Overwrites via temp file + `rename` (writes through symlinks) | `cmp` against machine; copies changed files into repo | `agents/*` on next spawn; others on next OMP start |
-| `agent/extensions/<name>/*.ts`, `extensions/_shared/*.ts`, `extensions-last/<name>/*.ts` | Repo (whole file) | Overwrites `.ts` files; `auto` mode deletes `.ts` files removed in git diff (`extensions-last/README*.md` stay in repo only) | Compares each `.ts` and copies changes into repo | Next OMP start |
-| `PROMPT-INJECT-*.md`, `TURN-JUDGE-*.md`, `INTENT-*.md` | Repo if shipped here; machine if created locally | Overwrites shipped files; leaves machine-created files in the same directories alone | Copies back only files already tracked in repo | Next spawn / next turn / next call |
-| `extensions/tool-topics/TOPIC-*.md`, `SURFACE-*.md` | Repo if shipped here; machine if created locally | Overwrites shipped files; `auto` mode deletes files removed in git diff | Copies back only files already tracked in repo | Next OMP start |
+| `agent/SYSTEM_TEMPLATE.md`, `APPEND_SYSTEM.md`, `PERSONALITY.md`, `config-light.yml`, `APPEND_SYSTEM_LIGHT.md`, `agents/*` | Repo; machine edits kept | Three-way: unmodified files are overwritten via temp file + `rename` (writes through symlinks), customized ones keep the edit and merge separate upstream changes, overlapping changes conflict; a file the source dropped is deleted when unmodified, else it conflicts | `cmp` against machine; copies changed files into repo | `agents/*` on next spawn; others on next OMP start |
+| `agent/extensions/<name>/*.ts`, `extensions/_shared/*.ts`, `extensions-last/<name>/*.ts`, `omp-light.ts` | Repo (code is repo-wins) | Overwritten even when customized; customized files are listed in `overwritten`. Deleted when the base (or, before one exists, the previous `auto` commit) had them and the source dropped them (`extensions-last/README*.md` stay in repo only) | Compares each `.ts` and copies changes into repo | Next OMP start |
+| `PROMPT-INJECT-*.md`, `TURN-JUDGE-*.md`, `INTENT-*.md` | Repo if shipped here; machine if created locally | Shipped files: three-way like the text files above; machine-created files in the same directories are left alone | Copies back only files already tracked in repo | Next spawn / next turn / next call |
+| `extensions/tool-topics/TOPIC-*.md`, `SURFACE-*.md` | Repo if shipped here; machine if created locally | Shipped files: three-way like the text files above | Copies back only files already tracked in repo | Next OMP start |
 | `APPEND_SYSTEM_MODEL.md`, `WATCHDOG-*.md` | Machine | Never written or deleted (only moved from agent root into extension dir during flat-layout migration) | Never copied into repo | Next prompt / re-read on write |
-| `agent/config.yml` | Repo + machine per key | Overlays repo keys; preserves machine-local `LOCAL_CONFIG_FIELDS` (`providers.webSearchOrder`, `modelRoles`, `defaultThinkingLevel`, `skills`, `symbolPreset`, `theme`, `colorBlindMode`, `hideThinkingBlock`, `statusLine`, `terminal`, `tui`, `display`, `worktree`, `compaction.thresholdTokens`, `compaction.thresholdPercent`, `compaction.idleThresholdTokens`) and host-only keys; keeps machine-only `extensions` entries (`MACHINE_LIST_FIELDS`, e.g. `~/.claude`) ahead of repo entries | Edits differing non-local lines in place without re-serializing the file; skips `LOCAL_CONFIG_FIELDS` and machine `extensions` entries | Hot-reloaded by OMP |
-| `agent/omomp.yml` | Repo sections + machine sections | Overwrites repo sections (`omomp-lang`, `judge`, `lang-nag`, `input-polish`, `tool-policy-nag`, `task-completion-judge`, `task-split-check`, `child-memory-warning`, `tool-topic-injection`, `system-prompt-replace`); preserves machine sections (`doc-polish`, `model-compaction`, `omp-config-autoupdate`) | Edits differing lines in repo sections; ignores machine sections | Per extension's read timing |
-| `agent/thinking-translator.json` | Repo + machine per key | Overlays repo keys, keeping extra machine keys | Edits differing fields | Next message start |
-| `pi/agent/pi-bansos-relay-state.json` | Repo + machine per key | Writes `~/.pi/agent/pi-bansos-relay-state.json` | Edits differing fields from `~/.pi/agent/` (if missing on machine, leaves repo file unchanged) | Next session start or `/bansos` |
-| App-managed files (first line `// @orca-managed-pi-extension` or containing `marker: _otty`) | External app (Orca / Otty) | Skipped before overwrite or delete (listed in `skipped`) | Skipped | — |
-| Runtime files (`*.db*`, WAL, `*.lock`, `models.yml`, `commandcode-models.json`, `sessions/`, `blobs/`, `cache/`, `logs/`, `.omp-config-applied`, `settings.json`, installed `omp-light`) | Machine runtime | Left untouched (`.omp-config-applied` and `omp-light` are written by the updater) | Excluded from repo | — |
+| `agent/config.yml` | Repo + machine per key | Three-way per key. `LOCAL_CONFIG_FIELDS` (the machine's, OMP's or the user's consent, such as `modelRoles`, `theme`, `setupVersion`, `dev.autoqaConsent`, `codexResets`) are never written; `SEED_CONFIG_FIELDS` (defaults such as `task.agentModelOverrides`, `retry.fallbackChains`, `browser`, `task.maxConcurrency`) are written only while the machine lacks them; host-only keys stay; in `extensions` (`MACHINE_LIST_FIELDS`) machine entries such as `~/.claude` stay ahead and the repo's entries merge three-way as one value | Edits differing lines in place without re-serializing the file; skips `LOCAL_CONFIG_FIELDS`, `SEED_CONFIG_FIELDS` and machine `extensions` entries | Hot-reloaded by OMP |
+| `agent/omomp.yml` | Repo sections + machine sections | Three-way per key in repo sections; machine sections (`LOCAL_OMOMP_SECTIONS`: `doc-polish`, `model-compaction`, `omp-config-autoupdate`) are never written; `SEED_OMOMP_FIELDS` (language, input and hardware preferences: `omomp-lang`, `lang-nag`, `input-polish.key`, `input-polish.instruction`, `child-memory-warning`) are written only while missing | Edits differing lines in repo sections; skips machine sections and seed paths | Per extension's read timing |
+| `agent/thinking-translator.json` | Repo + machine per key | Three-way per key; `SEED_TRANSLATOR_FIELDS` (`enabled`, `targetLanguage`, `translatorModels`) are written only while missing | Edits differing fields outside the seed paths | Next message start |
+| `<agentDir>/.omp-config-base/` | Updater (machine) | The base of each managed item: written after its host write succeeded, and by `resolve`; `--check` never writes it | Excluded from repo | — |
+| App-managed files (first line `// @orca-managed-pi-extension` or containing `marker: _otty`) | External app (Orca / Otty) | Skipped before overwrite or delete (listed in `skipped`); their base is not touched | Skipped | — |
+| Runtime files (`*.db*`, WAL, `*.lock`, `models.yml`, `commandcode-models.json`, `sessions/`, `blobs/`, `cache/`, `logs/`, `.omp-config-applied`, `settings.json`, installed `omp-light`) and plugin state (`~/.pi/agent/pi-bansos-relay-state.json`, written by `/bansos`) | Machine runtime | Left untouched (`.omp-config-applied` and `omp-light` are written by the updater) | Excluded from repo | — |
 
 ## Maintenance Workflows
 
 Run slash commands inside `omp` started at the repository root:
 
 1. **First-time setup on a machine (`/onboard-omp [check|<plane>]` or `/update-omp`)**:
-   - For a guided first-time setup, start `omp` at the repository root and run `/onboard-omp`: after a read-only baseline check, it first asks whether to add more AI providers (walking through built-in `/login` / env-var providers from `omp://providers.md`, supplemental `pi-package` provider plugins, and custom relays/gateways in machine-local `~/.omp/agent/models.yml`), then inspects `omp://` built-in docs and the checkout on the spot across the runtime control planes defined in the command, diagnoses provider/model/language compatibility (`task.agentModelOverrides`, `omomp.yml`, `thinking-translator.json`) without dirtying the working tree, runs `/update-omp`, and writes only machine-owned settings (`LOCAL_CONFIG_FIELDS` such as `modelRoles`, `LOCAL_OMOMP_SECTIONS` such as `model-compaction` and `doc-polish`, and `models.yml`). Pass `check` for a read-only diagnosis, or `<plane>` (a plane number or keyword) to inspect one plane.
+   - For a guided first-time setup, start `omp` at the repository root and run `/onboard-omp`: after a read-only baseline check, it first asks whether to add more AI providers (walking through built-in `/login` / env-var providers from `omp://providers.md`, supplemental `pi-package` provider plugins, and custom relays/gateways in machine-local `~/.omp/agent/models.yml`), then inspects `omp://` built-in docs and the checkout on the spot across the runtime control planes defined in the command, diagnoses provider/model/language compatibility (`task.agentModelOverrides`, `omomp.yml`, `thinking-translator.json`) without dirtying the working tree, runs `/update-omp`, and writes only machine-owned settings (`LOCAL_CONFIG_FIELDS` such as `modelRoles`, `LOCAL_OMOMP_SECTIONS` such as `model-compaction` and `doc-polish`, seed paths such as `task.agentModelOverrides` once they exist on the machine, and `models.yml`). Pass `check` for a read-only diagnosis, or `<plane>` (a plane number or keyword) to inspect one plane.
    - For a direct wholesale install without the walkthrough, run `/update-omp` (writes configs, extensions, and the updater, installs `omp-light`, and runs `omp install` for every required plugin).
    - If the machine uses `~/.claude`, add `~/.claude` at the start of `extensions` in `~/.omp/agent/config.yml`, then restart `omp`.
    - To enable startup auto-update, run `/omp-config-autoupdate on` (applies from the next start).
    - Verify with `omp config list --json`, `omp plugin list --json`, and `git status --short`.
 2. **Syncing machine edits back to the repository (`/sync-omp-config [check]`)**:
-   - Run `/sync-omp-config check` to inspect diffs, then `/sync-omp-config` to edit them into the repository, validate with `Bun.YAML.parse` / `JSON.parse` and `bun run check`, and commit and push (`chore: sync snapshot with local omp config`).
+   - Run `/sync-omp-config check` to inspect diffs, then `/sync-omp-config` to edit them into the repository, validate with `Bun.YAML.parse` / `JSON.parse` and `bun run check`, and commit and push (`chore: sync snapshot with local omp config`). Machine-owned and seed paths and the base record never enter the repository.
    - Stops if the machine still has flat `extensions/<name>.ts` files (outside the retired Todo/`ctx` paths) and asks you to run `/update-omp` first.
    - Updates `install-plugins.sh` when `~/.omp/plugins/package.json` dependencies change (preserving Git/URL entries, stripping npm version ranges, and leaving commented optional entries commented).
 3. **Applying the working tree (`/update-omp [check]`)**:
    - Runs `bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source .` (`--check` is read-only).
-   - Unlike `auto` mode: has no git diff baseline, so outside flat-layout relocations and the retired Todo/`ctx` files it does not delete files or keys; does not touch `.omp-config-applied`; runs `./plugin-audit.sh` and asks before uninstalling `[卸载候选]` plugins; and asks before creating a missing `doc-polish` section in `omomp.yml` or `commandcode-models.json`.
+   - Merges three-way against the recorded base exactly like `auto` (the base it records is the working tree's version), with these differences: it has no previous commit, so files the source dropped before this machine recorded a base stay; it does not touch `.omp-config-applied`; it reports conflicts and adapts them with the user right away (`conflicts --source .`, then `resolve --source .`); it runs `./plugin-audit.sh` and asks before uninstalling `[卸载候选]` plugins; and it asks before creating a missing `doc-polish` section in `omomp.yml` or `commandcode-models.json`.
 4. **Copying credentials to a remote machine (`/migrate-omp-keys <target>`)**:
    - Copies the `auth_credentials` table from `~/.omp/agent/agent.db` over SSH to the remote host's `~/.omp/agent/agent.db`. Verifies the remote `omp` process is stopped, creates a timestamped SQLite `.backup` on the remote host, clears remote `auth_credential_blocks` and `auth_credential_refresh_leases`, and replaces `auth_credentials` in one transaction without printing credentials.
 5. **Manual copy on an empty machine**:
@@ -59,8 +59,6 @@ Run slash commands inside `omp` started at the repository root:
      agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
      "$HOME/.omp/agent/"
    cp -a agent/agents agent/extensions agent/extensions-last "$HOME/.omp/agent/"
-   mkdir -p "$HOME/.pi/agent"
-   cp pi/agent/pi-bansos-relay-state.json "$HOME/.pi/agent/"
    ./install-plugins.sh
    ```
    Run `/update-omp` (or `/omp-config-autoupdate on` and restart) afterwards to install `omp-light` on `PATH`.
@@ -69,21 +67,28 @@ Run slash commands inside `omp` started at the repository root:
 
 Source: `agent/extensions/omp-config-autoupdate/`.
 
-Reads `omomp.yml#omp-config-autoupdate.enabled` (`true` or `false`, off by default) from the agent-dir `omomp.*` once at startup:
+Reads the agent-dir `omomp.*` section `omp-config-autoupdate` once at startup: `enabled` (`true` or `false`, off by default) and `conflicts` (`notify`, the default, or `agent`):
 
 | Command | Behavior |
 |---|---|
-| `/omp-config-autoupdate` or `… status` | Shows whether startup auto-update is on and the config path |
+| `/omp-config-autoupdate` or `… status` | Shows whether startup auto-update is on, how conflicts are handled, and the config path |
 | `/omp-config-autoupdate on\|off` | Writes `enabled` in the agent-dir `omomp.*` (takes effect on the next OMP start) |
-| `/omp-config-autoupdate run` | Runs `omp-config-update.ts auto` from the GitHub default branch immediately regardless of the switch, and posts the full report as a display-only transcript message once idle |
+| `/omp-config-autoupdate conflicts notify\|agent` | Writes `conflicts` (takes effect on the next OMP start) |
+| `/omp-config-autoupdate run` | Runs `omp-config-update.ts auto` from the GitHub default branch immediately regardless of the switch, and posts the full report, conflicts included, as a display-only transcript message once idle |
+| `/omp-config-autoupdate adapt` | Lists the pending conflicts against the updater clone; when there are any, sends the adaptation request into the main session |
 
 How `omp-config-update.ts auto` runs:
 1. Spawned from a `ctx.setTimeout` callback on root `session_start`, holding the lock directory `~/.omp/omp-config-update.lock` (reclaiming stale locks whose PID is gone).
 2. Fetches `main` from `https://github.com/oh-my-omp/omp-config.git` into `~/.omp/omp-config-src` (updating old `mouriya-s-lab/omp-config.git` remotes; if offline, exits without applying the local clone).
-3. When the fetched commit differs from `<agentDir>/.omp-config-applied`, imports `applySnapshot` from the fetched clone and runs: preflight parse → `omp install` on required plugins → catalog check that `omp-todo-more` is enabled with `./index.ts` present → flat-layout relocations → file and structured-config writes → git-diff deletions and Todo/`ctx` leaf cleanup.
-4. When the fetched commit matches `.omp-config-applied`, skips file writes and runs `omp install` on every unpinned GitHub entry in `install-plugins.sh` (required plugins and already-installed optional plugins).
-5. Any move or write error skips all deletions, leaves `.omp-config-applied` unchanged, and reports `Cutover incomplete; do not restart OMP`.
+3. When the fetched commit differs from `<agentDir>/.omp-config-applied`, imports `applySnapshot` from the fetched clone and runs: preflight parse → `omp install` on required plugins → catalog check that `omp-todo-more` is enabled with `./index.ts` present → flat-layout relocations → three-way file and structured-config merges → deletions of unmodified files the source dropped and Todo/`ctx` leaf cleanup → base record.
+4. When the fetched commit matches `.omp-config-applied`, skips file writes, runs `omp install` on every unpinned GitHub entry in `install-plugins.sh` (required plugins and already-installed optional plugins), and re-scans conflicts read-only.
+5. Any move or write error skips all deletions, leaves `.omp-config-applied` unchanged, and reports `Cutover incomplete; do not restart OMP`. Conflicts are not errors: the commit is recorded and they stay pending.
 6. Shows a 5 s widget above the editor only when config files or plugins changed (`omp-config 93d519e → e5a34bc (3 files)`, `omp-todo-more 0.1.10 → 0.1.12`); up-to-date, busy, and offline runs only log, and errors show a warning.
+
+Conflicts and adaptation:
+- A machine without a base (installed before the record existed, or by plain copy) matches each copy against the repo's history: a copy equal to any committed version counts as unmodified; one equal to none gets an unknown base and stays a conflict until resolved. The updater clone is deepened once for this.
+- With pending conflicts, `conflicts: notify` shows a warning pointing at `/omp-config-autoupdate adapt`. `conflicts: agent` sends the adaptation request into the main session by itself, but only after a run that applied a new commit, in a UI session that is idle and has no user message yet; otherwise it notifies.
+- The adaptation request asks the agent to run `omp-config-update.ts conflicts`, which prints the procedure and, per conflict, the local copy, the base and the incoming version. For each one the agent explains both changes, asks the user to keep the local copy, take the incoming version or accept a merge it proposes, edits the local file, and records the result with `omp-config-update.ts resolve <id>`. `resolve` refuses an id whose upstream value changed since it was listed.
 
 ---
 
@@ -118,7 +123,7 @@ Code rules checked by `bun run check` (`biome check . && tsc --noEmit`):
 3. **`taskDepth: 1` on helper sessions**: any extension calling `createAgentSession` directly (such as `fork-task` during `shake`) must pass `taskDepth: 1`. Without it, `dispose()` treats the helper as a main session and tears down `AgentLifecycleManager`, disconnecting all idle and parked subagents (`Unknown agent`).
 4. **Imports and runtime load testing**: import only OMP host package roots (`pi-agent-core`, `pi-ai`, `pi-catalog`, `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins, and `.ts` relative paths (guard platform-specific native bindings by platform). Because `tsc` resolves packages from `node_modules/`, it does not catch unmapped host subpaths such as `@oh-my-pi/pi-tui/thinking`; apply changes to `~/.omp/agent`, restart `omp`, and trigger the modified extension in a real session.
 
-`bun run test` (`bun test ci`) runs the unit tests in `ci/`: the differential tests of the `session-urls` JSONL scanner against `JSON.parse`, the tests of its `type` filter, and the `delete-guard` tests (the `delete` tool's refusal set, Linux trash layout and permanent deletion; the posix classifier's, the nested PowerShell/cmd dialects' and the py/js eval analyzers' block/allow tables; the `tool_call` reason and fail-closed paths); CI runs it in the `code` job after `bun run check`. The Windows behavior of `delete-guard` in real sessions is checked separately by the [delete-guard Windows acceptance](../ci/README.md#delete-guard-windows-acceptance).
+`bun run test` (`bun test ci`) runs the unit tests in `ci/`: the differential tests of the `session-urls` JSONL scanner against `JSON.parse`, the tests of its `type` filter, the `delete-guard` tests (the `delete` tool's refusal set, Linux trash layout and permanent deletion; the posix classifier's, the nested PowerShell/cmd dialects' and the py/js eval analyzers' block/allow tables; the `tool_call` reason and fail-closed paths), and the updater's three-way apply tests (`ci/omp-config-update.test.ts`: unmodified items update, customizations merge or conflict until resolved, seed and machine-owned paths stay, code stays repo-wins, deletions, matching a machine without a base against history, read-only `--check`); CI runs it in the `code` job after `bun run check`. The Windows behavior of `delete-guard` in real sessions is checked separately by the [delete-guard Windows acceptance](../ci/README.md#delete-guard-windows-acceptance).
 
 ### Registering Tool Topics from Plugins
 
@@ -180,7 +185,7 @@ The built-in adapter's live configuration and default SSH triggers are documente
 
 ### Upgrade and Maintenance Notes
 
-- **Adding or removing a managed file or config section**: update `managedPlain` / `STRUCTURED` in `agent/extensions/omp-config-autoupdate/omp-config-update.ts`, `.omp/commands/sync-omp-config.md`, `README.md` / `README.zh-CN.md`, and the matching `docs/` pages together. Keep `applySnapshot(options)` and the path `extensions/omp-config-autoupdate/omp-config-update.ts` compatible with existing clones.
+- **Adding or removing a managed file or config section, or moving a path between owners**: update `managedPlain` / `STRUCTURED` (and `LOCAL_*` / `SEED_*`) in `agent/extensions/omp-config-autoupdate/omp-config-update.ts`, `.omp/commands/sync-omp-config.md`, `README.md` / `README.zh-CN.md`, and the matching `docs/` pages together. Keep `applySnapshot(options)` and the path `extensions/omp-config-autoupdate/omp-config-update.ts` compatible with existing clones: older machines run their installed `runAuto`, import the fetched `applySnapshot` and ignore report fields they do not know.
 - **Do not write the literal Otty marker in `omp-config-update.ts`**: the app-managed check looks for `marker:` + `_otty` anywhere in a file; putting the contiguous literal in the updater source would cause the updater to skip updating itself.
 - **After upgrading OMP**:
   1. Test extensions that rely on OMP internals (`AgentRegistry`, child session paths, hook order, runtime settings layers, `InteractiveMode` prototype, slash-command dispatchers, the nested `tool_call` emitted for `xd://` writes): [`fork-task`](prompts-and-context.md#fork-task), [`omp-todo-more`](plugins-and-modes.md#todo-more) (`todo`, `ctx`, task log, after-compact injection), [`user-prompt-inject`](agents.md#user-prompt-inject), [`turn-judge`](extensions.md#turn-judge), [`task-completion-judge`](extensions.md#task-completion-judge), [`model-compaction`](prompts-and-context.md#model-compaction), [`wt-tool`](extensions.md#wt-tool), [`harness-restart`](extensions.md#harness-restart), and [`delete-guard`](extensions.md#delete-guard) (a `bash` `rm` and a `write xd://bash` `rm` are both blocked).

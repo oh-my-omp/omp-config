@@ -30,9 +30,10 @@
 
 ```text
 /onboard-omp [check|<plane>]                 # 渐进式引导理解运行时控制面、当场诊断与本机配置安装
-/update-omp [check]                          # 仓库工作区 -> ~/.omp/agent、~/.pi/agent、omp-light 与插件
+/update-omp [check]                          # 仓库工作区 -> ~/.omp/agent、omp-light 与插件；保留本机定制并当场适配冲突
 /sync-omp-config [check]                     # 本机受管改动 -> 仓库（按字段比对修改、校验、提交并推送）
-/omp-config-autoupdate [status|on|off|run]   # 查看或切换启动自动更新开关（默认关），或立即从 GitHub 拉取更新
+/omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]
+                                             # 启动自动更新开关（默认关）、立即从 GitHub 拉取更新，或适配与上游冲突的本机定制
 /migrate-omp-keys <target>                   # 经 SSH 将本机 auth_credentials 表复制到远端主机 agent.db
 ```
 
@@ -42,7 +43,7 @@
 omp                           # 完整模式
 omp-light                     # 轻量模式（跳过 config-light.yml 列出的治理扩展与 system-prompt-replace）
 bun run check                 # biome check . && tsc --noEmit
-bun run test                  # bun test ci：session-urls 扫描器差分测试与 type 过滤测试
+bun run test                  # bun test ci：session-urls、delete-guard、tool-policy-nag pty 与更新器三方应用测试
 ./plugin-audit.sh             # 只读比对 install-plugins.sh 与 `omp plugin list`
 bun ci/check.ts               # 隔离 HOME 安装 + 免费模型跑完整模式与轻量模式 RPC 会话检查
 ```

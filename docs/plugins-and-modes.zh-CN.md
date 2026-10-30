@@ -14,9 +14,9 @@
 |---|---|---|---|---|---|---|
 | `https://github.com/oh-my-omp/omp-todo-more` | `omp-todo-more` | 必装（GitHub） | 工具：`todo`, `ctx`；命令：`/todo-more`；事件：`omp-todo-more:read`；Tern 面板 | 替代 `config.yml` 关闭的原生 Todo（见下方 [todo-more](#todo-more)） | 长程状态与压缩（必选基底 `todo-continuity`；与 `config.yml#todo.enabled: false`、`system-prompt-replace` 及 `task-completion-judge` 耦合） | 无需配置：`todo.enabled: false` 时不可省略 |
 | `https://github.com/oh-my-omp/omp-unified-exec` | `omp-unified-exec` | 必装（GitHub fork） | `xd://` 工具：`exec_command`, `write_stdin`, `set_on_exit`, `monitor`, `kill_session`, `list_sessions` | `iamwrm/pi-unified-exec` 的维护分支：启动长生命周期 PTY 会话并将输出写入 `/tmp/pi-unified-exec-*.log`，跳过 OMP 不支持的 `createCodemodeExtension`，在 Bun 下使用 `Bun.Terminal`（仅 Node.js 下加载 `@homebridge/node-pty-prebuilt-multiarch`）。安装前需先卸载 `pi-unified-exec` | 执行与工作区控制（必选基底 `pty-routing`；与 `config.yml#launch.enabled: false` 及 `TOPIC-exec_command-*` 耦合） | 无需配置：`launch.enabled: false` 时不可省略 |
-| `https://github.com/mouriya-s-lab/pi-bansos` | `pi-bansos` | 必装（GitHub fork） | Provider：`bansos`；命令：`/bansos` | `mannnrachman/pi-bansos` 的分支：在 `127.0.0.1:18080` 启动本地代理，为 `task:free` 提供免费模型。读写 `~/.pi/agent/pi-bansos-relay-state.json`（双向同步）；安装前需先卸载 npm 版 `pi-bansos` | 供应商与生命周期（条件必选 `free-tier-bansos`；与 `task:free` 模型绑定耦合） | 按需当场：通过 `/bansos` 管理 relay（`~/.pi/agent/pi-bansos-relay-state.json`）；`task:free` 使用 `bansos/...` 时需要 |
+| `https://github.com/mouriya-s-lab/pi-bansos` | `pi-bansos` | 必装（GitHub fork） | Provider：`bansos`；命令：`/bansos` | `mannnrachman/pi-bansos` 的分支：在 `127.0.0.1:18080` 启动本地代理，为 `task:free` 提供免费模型。读写 `~/.pi/agent/pi-bansos-relay-state.json`（本机插件状态，不进本仓库）；安装前需先卸载 npm 版 `pi-bansos` | 供应商与生命周期（条件必选 `free-tier-bansos`；与 `task:free` 模型绑定耦合） | 按需当场：通过 `/bansos` 管理 relay（`~/.pi/agent/pi-bansos-relay-state.json`）；`task:free` 使用 `bansos/...` 时需要 |
 | `pi-commandcode-provider` | `pi-commandcode-provider` | 必装（npm） | Provider：`commandcode`（`api: "commandcode-custom"`）；命令：`/commandcode-quota` | 接入 Command Code API 并生成本机 `~/.omp/agent/commandcode-models.json`，配合本地扩展 [`commandcode-model-spec`](extensions.zh-CN.md#commandcode-model-spec) 使用 | 供应商与生命周期（条件必选 `commandcode-adapter`；与 `commandcode-model-spec` 耦合） | 条件当场：仅在使用 `commandcode` 模型时登录（生成本机 `commandcode-models.json`） |
-| `https://github.com/oh-my-omp/omp-thinking-translator` | `omp-thinking-translator` | 必装（GitHub） | 助手 thinking 块实时中文翻译渲染；命令：`/thinking-translator` | 按 `~/.omp/agent/thinking-translator.json` 逐行流式翻译思考块（见下方 [思考翻译](#思考翻译)） | 人机交互与 TUI（可选增强 `thinking-translator`） | 当场诊断：用 `/thinking-translator` 切换；使用默认链需 `futureppo-pool`（并在本机 `models.yml` 加 `supportsReasoningEffort: true`）或 `commandcode` |
+| `https://github.com/oh-my-omp/omp-thinking-translator` | `omp-thinking-translator` | 必装（GitHub） | 助手 thinking 块实时中文翻译渲染；命令：`/thinking-translator` | 按 `~/.omp/agent/thinking-translator.json` 逐行流式翻译思考块（见下方 [思考翻译](#思考翻译)） | 人机交互与 TUI（可选增强 `thinking-translator`） | 当场定制（首次安装后归本机）：用 `/thinking-translator` 切换；仓库默认链需 `futureppo-pool`（并在本机 `models.yml` 加 `supportsReasoningEffort: true`）或 `commandcode`，否则修改本机的模型链 |
 | `https://github.com/oh-my-omp/omp-codex-image-gen` | `omp-codex-image-gen` | 必装（GitHub） | `xd://` 工具：`codex_generate_image`；Skill：`imagegen` | 使用本机 ChatGPT Codex 订阅凭据调用 `gpt-image-2` 生成或根据 1–5 张参考图修改 PNG | 供应商与工作流扩展（可选增强 `workflow-extras`） | 条件可用：依赖本机 ChatGPT Codex 订阅凭据，无需额外配置 |
 | `pi-package-search` | `pi-package-search` | 必装（npm） | `xd://` 工具：`search_pi_packages`, `install_pi_package`；Skill：`pi-package-search` | 检索 npm 上的 `pi-package` 扩展包，并在用户要求时安装 | 供应商与工作流扩展（可选增强 `workflow-extras`） | 无需配置 |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | 必装（npm） | TUI `Markdown.prototype.render` patch | 隐藏 TUI 中 Markdown 代码块的围栏行并去掉默认 2 列缩进，保留源码缩进与语法高亮 | 人机交互与 TUI（可选增强 `tui-tern`） | 无需配置 |
@@ -34,7 +34,7 @@
 
 ### 思考翻译
 
-`omp-thinking-translator` 从 `~/.omp/agent/thinking-translator.json` 读取有序模型链，每次翻译请求从第 1 项开始尝试，失败才换下一项（下一条消息开始时重读文件）。仓库配置的模型链：
+`omp-thinking-translator` 从 `~/.omp/agent/thinking-translator.json` 读取有序模型链，每次翻译请求从第 1 项开始尝试，失败才换下一项（下一条消息开始时重读文件）。更新器只在本机缺少 `enabled`、`targetLanguage`、`translatorModels` 时写入仓库值（`SEED_TRANSLATOR_FIELDS`），之后保留本机的值。仓库配置的模型链：
 
 1. `futureppo-pool/glm-5.3-flash`（`effort: "low"`）
 2. `futureppo-pool/minimax-m3.1-flash`（`effort: "low"`）
@@ -43,7 +43,7 @@
 5. `commandcode/poolside/laguna-s-2.1-free`（`effort: "minimal"`）
 6. `commandcode/stealth/glyph-cluster:free`（`effort: "minimal"`）
 
-`deepseek-v4.1-flash` 已从该池下架；`qwen3.8-27b` 不接受 `reasoning_effort`；`qwen3.8-flash-next` 与 `Index-Translate-35B-A3B` 无法通过 OMP 的 `max_completion_tokens` 请求体。三者均不在链中。
+`deepseek-v4.1-flash` 已从该池下架；`qwen3.8-27b` 不接受 `reasoning_effort`；`qwen3.8-flash-next` 与 `Index-Translate-35B-A3B` 无法通过 OMP 的 `max_completion_tokens` 请求体。它们均不在链中。
 
 `futureppo-pool` 自动发现的模型默认不带 `reasoning_effort` 支持。使用链中的 `futureppo-pool` 条目时，需在本机 `~/.omp/agent/models.yml`（本机文件，不同步）的 `futureppo-pool` 下加上 `supportsReasoningEffort: true`，重启 `omp` 后用 `/thinking-translator status` 检查：
 

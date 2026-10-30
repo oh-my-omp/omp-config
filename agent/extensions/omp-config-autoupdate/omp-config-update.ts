@@ -5,49 +5,63 @@
 // Lives in extensions/omp-config-autoupdate/ beside the extension that spawns
 // it; it is a standalone Bun script, not an extension module (not index.ts).
 //
-// TWO ENTRY POINTS, ONE APPLY.
-//   auto   Run by the omp-config-autoupdate extension at OMP start when the
-//          machine's switch is on (`/omp-config-autoupdate on`; off by default).
-//          Refreshes the updater-owned clone (~/.omp/omp-config-src) from
-//          origin, and applies only when the fetch succeeds and its commit
-//          differs from the commit last applied to this agent dir
-//          (`<agent dir>/.omp-config-applied`). A failed fetch (offline)
-//          applies nothing: the clone is a copy of origin as of the last
-//          fetch, never a stand-in for it. A clone of a previous repo
-//          location (PREVIOUS_REPO_URLS) is repointed to REPO_URL first;
-//          any other origin is left untouched and reported.
-//          The apply code is imported from the freshly fetched clone, so a
-//          commit that changes apply rules is applied by its own rules.
-//          An unchanged commit still refreshes the plugins whose GitHub
-//          source moves on its own (see PLUGINS).
-//   apply  Run by /update-omp against a working checkout (`--source`).
-//          `--check` reports without writing.
+// ENTRY POINTS.
+//   auto      Run by the omp-config-autoupdate extension at OMP start when the
+//             machine's switch is on (`/omp-config-autoupdate on`; off by
+//             default). Refreshes the updater-owned clone (~/.omp/omp-config-src)
+//             from origin, and applies only when the fetch succeeds and its
+//             commit differs from the commit last applied to this agent dir
+//             (`<agent dir>/.omp-config-applied`). A failed fetch (offline)
+//             applies nothing: the clone is a copy of origin as of the last
+//             fetch, never a stand-in for it. A clone of a previous repo
+//             location (PREVIOUS_REPO_URLS) is repointed to REPO_URL first;
+//             any other origin is left untouched and reported.
+//             The apply code is imported from the freshly fetched clone, so a
+//             commit that changes apply rules is applied by its own rules.
+//             An unchanged commit still refreshes the plugins whose GitHub
+//             source moves on its own (see PLUGINS) and re-scans conflicts.
+//   apply     Run by /update-omp against a working checkout (`--source`).
+//             `--check` reports without writing.
+//   conflicts Lists the current conflicts against `--source` (default: the
+//             updater clone) with the adaptation procedure; read-only.
+//   resolve   Records listed conflicts as adapted: their base becomes the
+//             source's current value. Stale ids (the source moved) are refused.
 //
-// AUTHORITY. The repo owns the managed items listed in `managedPlain` and
-// `STRUCTURED`; for those it wins outright, host edits included. Everything
-// else under the agent dir belongs to the host and is never touched:
-//   - config.yml keys outside the repo, and LOCAL_CONFIG_FIELDS even when
-//     the repo has them (absence on the host stays absence);
-//   - entries of a MACHINE_LIST_FIELDS list (config.yml `extensions`) that
-//     the repo's list does not have, unless the repo just dropped them (see
-//     DELETIONS); they stay ahead of the repo's entries;
-//   - keys a structured file has only on the host;
-//   - files not in the managed set (extra extensions, agents, templates,
-//     host-owned sections of omomp.yml (LOCAL_OMOMP_SECTIONS, e.g. doc-polish),
-//     runtime state);
-//   - app-managed files (`// @orca-managed-pi-extension` first line, or the
-//     Otty marker anywhere; see OTTY_MARKER), checked before every overwrite
-//     and delete;
-//   - symlinks: a symlinked target is written through to its resolved file.
+// OWNERSHIP. The repo ships the managed items listed in `managedPlain` and
+// `STRUCTURED`. Every structured path has one owner rule:
+//   - LOCAL_* paths are the machine's: never written, seeded or removed;
+//   - SEED_* paths are written only while the host lacks them (a first
+//     install gets the repo default), then belong to the machine;
+//   - MACHINE_LIST_FIELDS keep the host's own entries ahead of the repo's;
+//   - every other repo path is managed (see CUSTOMIZATIONS).
+// Untouched by every rule: keys and files the repo never had, app-managed
+// files (`// @orca-managed-pi-extension` first line, or the Otty marker
+// anywhere; see OTTY_MARKER), runtime state. A symlinked target is written
+// through to its resolved file.
 //
-// DELETIONS. Git-derived removals run only in `auto`, and only what the repo
-// dropped between applied and new commits: managed files, structured keys
-// and MACHINE_LIST_FIELDS entries. Without the old commit those removals skip.
-// The finite TODO_RETIREMENTS are different: when the source declares the
-// independent Todo plugin, both modes retire those exact leaves after the
-// OMP owner confirms plugin readiness, even on first apply or without history.
-// CTX_RETIREMENTS (the ctx leaves the Todo plugin now ships) follow the same rule,
-// but only when the ready plugin carries src/ctx; until then the old leaves stay.
+// CUSTOMIZATIONS. A managed item is merged three-way: host H, base B (the repo
+// content this machine last accepted, recorded under BASE_DIR; see base.ts)
+// and repo R. H==R or H==B takes R; R==B keeps H; text files changed on both
+// sides go through `git merge-file`, and a clean merge is written. Anything
+// else is a conflict: H and B stay as they are, so the next run finds the
+// conflict again until H converges to R or `resolve` moves B to R.
+// Structured files merge per path (merge.ts). Code (`*.ts`, the updater
+// included) stays repo-wins: R is written and a customized H is listed in
+// `overwritten`. An item without a base takes it from the repo's history: a
+// host copy equal to any committed version is unmodified; one equal to none
+// gets an unknown base and conflicts until resolved. Conflicts are not
+// errors. `conflicts` prints them with the adaptation procedure; `resolve`
+// accepts them after the host copy was adapted.
+//
+// DELETIONS. An item the base has and the source dropped is deleted when the
+// host copy is unmodified (code: always), else it conflicts. Items dropped
+// before this machine had a base use `git diff previousCommit HEAD` when the
+// caller passes the previous commit. The finite TODO_RETIREMENTS are
+// different: when the source declares the independent Todo plugin, both modes
+// retire those exact leaves after the OMP owner confirms plugin readiness,
+// even on first apply or without history. CTX_RETIREMENTS (the ctx leaves the
+// Todo plugin now ships) follow the same rule, but only when the ready plugin
+// carries src/ctx; until then the old leaves stay.
 //
 // RELOCATIONS. Both modes, planned like every other op. Earlier layouts kept
 // extensions flat (extensions/<name>.ts) and their files at the agent root.
@@ -68,21 +82,24 @@
 //     is deleted, as the source writes or dropped it. Symlinks are never
 //     moved, only noted.
 //   - Retired config.yml list entries (RETIRED_LIST_ENTRIES) are dropped.
-// Manual apply otherwise deletes only relocations and the ready-plugin Todo leaves.
 //
 // SAFETY. Parse and plan all source/host inputs and retirement ownership before
 // plugin installation or file writes. Preflight errors stop the whole apply.
 // Install and upgrade plugins, then freshly query OMP for the required Todo entry;
 // failed readiness leaves all managed file operations unapplied. `--check`
-// only reports candidates and prerequisites. Writes use a temp file and rename.
-// Order after readiness: moves, plain files, JSON, config.yml, deletions.
+// only reports candidates, conflicts and prerequisites: it writes no file, no
+// base and fetches no history. Writes use a temp file and rename.
+// Order after readiness: moves, plain files, structured files, deletions, then
+// the base of every item whose host operation succeeded.
 // During Todo cutover, any move/write error prevents the deletion phase entirely.
 // Automatic markers are written last after an error-free apply; manual apply
-// never records a working-tree HEAD. Partial cutover errors require a rerun
-// before restart. A lock dir (~/.omp/omp-config-update.lock) keeps
-// concurrent OMP starts and /update-omp from refreshing or applying at once;
-// the loser skips. The lock records its holder's pid: a dead holder's lock is
-// taken over, and a process only releases a lock it holds.
+// never records a working-tree HEAD but does record the base, so a later
+// commit that differs from the working tree updates unmodified items again.
+// Partial cutover errors require a rerun before restart. A lock dir
+// (~/.omp/omp-config-update.lock) keeps concurrent OMP starts, /update-omp and
+// `resolve` from refreshing, applying or recording at once; the loser skips.
+// The lock records its holder's pid: a dead holder's lock is taken over, and a
+// process only releases a lock it holds.
 //
 // PLUGINS. Every required entry of install-plugins.sh (an uncommented quoted
 // line) runs through `omp install` before managed file operations: missing
@@ -109,6 +126,7 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	readlinkSync,
@@ -119,9 +137,24 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { BASE_DIR, type BaseChange, BaseRecord, RepoHistory, type StructuredRecord } from "./base.ts";
+import {
+	type ConflictReason,
+	canonical,
+	isMapping,
+	type Mapping,
+	mergeStructured,
+	type Path,
+	type PathRules,
+	pointer,
+	related,
+	type StructuredBaseSource,
+	setAt,
+	valueAt,
+} from "./merge.ts";
 
 export const REPO_URL = "https://github.com/oh-my-omp/omp-config.git";
 /** Origins of updater clones made before the repo moved to oh-my-omp; repointed to REPO_URL on the next fetch. */
@@ -130,8 +163,9 @@ export const DEFAULT_BRANCH = "main";
 export const APPLIED_MARKER = ".omp-config-applied";
 
 /**
- * config.yml paths owned by each machine: never written from the repo, never
- * removed. /sync-omp-config keeps the repo's values for the same paths.
+ * config.yml paths owned by each machine, OMP or the user's own consent:
+ * never written from the repo, never seeded, never removed.
+ * /sync-omp-config never copies them into the repo.
  */
 export const LOCAL_CONFIG_FIELDS: readonly string[] = [
 	"providers.webSearchOrder",
@@ -150,19 +184,38 @@ export const LOCAL_CONFIG_FIELDS: readonly string[] = [
 	"compaction.thresholdTokens",
 	"compaction.thresholdPercent",
 	"compaction.idleThresholdTokens",
+	"setupVersion",
+	"dev.autoqaConsent",
+	"codexResets",
+	"claudeResets",
 ];
 
 /**
- * config.yml lists shared by repo and machine: entries the repo lists are the
- * repo's; entries it does not list belong to the machine and stay ahead of the
- * repo's. /sync-omp-config never writes machine entries into the repo.
+ * config.yml paths whose repo value is a starting default: written while the
+ * host lacks them, then the machine's. /sync-omp-config never copies them.
+ */
+export const SEED_CONFIG_FIELDS: readonly string[] = [
+	"browser",
+	"disabledProviders",
+	"composer",
+	"cycleOrder",
+	"task.maxConcurrency",
+	"task.agentModelOverrides",
+	"retry.fallbackChains",
+];
+
+/**
+ * config.yml lists shared by repo and machine: entries the repo lists (or its
+ * base listed) are the repo's subsequence, merged three-way as one value;
+ * other entries belong to the machine and stay ahead of the repo's.
+ * /sync-omp-config never writes machine entries into the repo.
  */
 export const MACHINE_LIST_FIELDS: readonly string[] = ["extensions"];
 
 /**
  * Entries earlier repo versions put in a MACHINE_LIST_FIELDS list and later
- * replaced. Manual apply has no previous commit to tell a dropped repo entry
- * from a machine one, so these are named explicitly and dropped in both modes.
+ * replaced. A machine without a base cannot tell them from its own entries,
+ * so they are named explicitly and dropped on every apply.
  */
 const RETIRED_LIST_ENTRIES: Readonly<Record<string, readonly string[]>> = {
 	extensions: ["~/.omp/agent/extensions-last/system-prompt-replace.ts"],
@@ -249,8 +302,7 @@ interface StructuredItem {
 	/** Old standalone files whose contents become sections of `rel`; see RELOCATIONS. */
 	readonly legacySections?: readonly LegacySection[];
 	readonly format: Format;
-	readonly localFields: readonly string[];
-	readonly machineLists: readonly string[];
+	readonly rules: PathRules;
 }
 
 /**
@@ -258,6 +310,18 @@ interface StructuredItem {
  * them and they are never synced back. A section the machine lacks stays absent.
  */
 export const LOCAL_OMOMP_SECTIONS: readonly string[] = ["doc-polish", "model-compaction", "omp-config-autoupdate"];
+
+/** `omomp.yml` paths seeded from the repo while the host lacks them: language, input and hardware preferences. */
+export const SEED_OMOMP_FIELDS: readonly string[] = [
+	"omomp-lang",
+	"lang-nag",
+	"input-polish.key",
+	"input-polish.instruction",
+	"child-memory-warning",
+];
+
+/** `thinking-translator.json` paths seeded from the repo: the switch, the language and the provider-bound model chain. */
+export const SEED_TRANSLATOR_FIELDS: readonly string[] = ["enabled", "targetLanguage", "translatorModels"];
 
 /** Every section's data as earlier layouts kept it. */
 const OMOMP_LEGACY_SECTIONS: readonly LegacySection[] = [
@@ -285,16 +349,22 @@ const OMOMP_LEGACY_SECTIONS: readonly LegacySection[] = [
 
 /** Structured files, in apply order: config.yml last (it is live-reloaded). */
 const STRUCTURED: readonly StructuredItem[] = [
-	{ rel: "agent/thinking-translator.json", format: "json", localFields: [], machineLists: [] },
+	{
+		rel: "agent/thinking-translator.json",
+		format: "json",
+		rules: { local: [], seed: SEED_TRANSLATOR_FIELDS, machineLists: [], retired: {} },
+	},
 	{
 		rel: "agent/omomp.yml",
 		format: "yaml",
-		localFields: LOCAL_OMOMP_SECTIONS,
-		machineLists: [],
+		rules: { local: LOCAL_OMOMP_SECTIONS, seed: SEED_OMOMP_FIELDS, machineLists: [], retired: {} },
 		legacySections: OMOMP_LEGACY_SECTIONS,
 	},
-	{ rel: "pi/agent/pi-bansos-relay-state.json", format: "json", localFields: [], machineLists: [] },
-	{ rel: "agent/config.yml", format: "yaml", localFields: LOCAL_CONFIG_FIELDS, machineLists: MACHINE_LIST_FIELDS },
+	{
+		rel: "agent/config.yml",
+		format: "yaml",
+		rules: { local: LOCAL_CONFIG_FIELDS, seed: SEED_CONFIG_FIELDS, machineLists: MACHINE_LIST_FIELDS, retired: RETIRED_LIST_ENTRIES },
+	},
 ];
 
 /**
@@ -325,11 +395,27 @@ const RESTART_SCOPED =
 export interface ApplyOptions {
 	readonly source: string;
 	readonly agentDir: string;
-	/** Commit last applied to agentDir; enables git-derived deletions. */
+	/** Commit last applied to agentDir; lets items dropped before this machine had a base be deleted. */
 	readonly previousCommit: string | undefined;
 	readonly check: boolean;
 	readonly plugins: boolean;
 }
+
+/**
+ * One managed item (file) or structured path (key) where host and repo both
+ * moved away from the base, or the base is unknown. `id` names it for
+ * `resolve` and changes when the repo value changes, so a stale id is refused.
+ */
+export type Conflict =
+	| { readonly kind: "file"; readonly id: string; readonly rel: string; readonly target: string; readonly reason: ConflictReason }
+	| {
+			readonly kind: "key";
+			readonly id: string;
+			readonly rel: string;
+			readonly target: string;
+			readonly path: string[];
+			readonly reason: ConflictReason;
+	  };
 
 export interface ApplyReport {
 	readonly written: string[];
@@ -344,6 +430,10 @@ export interface ApplyReport {
 	readonly pluginsMissing: string[];
 	/** Versions behind pluginsInstalled/pluginsUpgraded, for display; added later, so readers default it to []. */
 	readonly pluginChanges: PluginChange[];
+	/** Customizations kept against an upstream change; added later, so readers default it to []. */
+	readonly conflicts: Conflict[];
+	/** Customized code files the repo replaced (code is repo-wins); added later, so readers default it to []. */
+	readonly overwritten: string[];
 	restartNeeded: boolean;
 }
 
@@ -363,20 +453,19 @@ export interface PluginRefresh {
 	readonly changes: PluginChange[];
 }
 
+/** A read-only conflict scan: what is pending, or why it could not be told. */
+export type ConflictScan =
+	| { readonly kind: "scanned"; readonly conflicts: Conflict[] }
+	| { readonly kind: "failed"; readonly error: string };
+
 export type AutoResult =
 	| { readonly kind: "busy" }
 	| { readonly kind: "offline"; readonly error: string }
-	| { readonly kind: "up-to-date"; readonly commit: string; readonly plugins: PluginRefresh }
+	| { readonly kind: "up-to-date"; readonly commit: string; readonly plugins: PluginRefresh; readonly scan: ConflictScan }
 	| { readonly kind: "applied"; readonly commit: string; readonly previous: string | undefined; readonly report: ApplyReport }
 	| { readonly kind: "failed"; readonly error: string };
 
 // --- small helpers ----------------------------------------------------------
-
-type Mapping = Record<string, unknown>;
-
-function isMapping(value: unknown): value is Mapping {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -406,7 +495,6 @@ function serialize(value: Mapping, format: Format): string {
 
 function targetOf(rel: string, agentDir: string): string {
 	if (rel.startsWith("agent/")) return join(agentDir, rel.slice("agent/".length));
-	if (rel.startsWith("pi/agent/")) return join(homedir(), ".pi", "agent", rel.slice("pi/agent/".length));
 	throw new Error(`no target for ${rel}`);
 }
 
@@ -461,78 +549,53 @@ function atomicWrite(target: string, content: string | Uint8Array, mode?: number
 	}
 }
 
-// --- structured merge -------------------------------------------------------
-
-function pathIsLocal(path: readonly string[], localFields: readonly string[]): boolean {
-	const joined = path.join(".");
-	return localFields.some((field) => joined === field || joined.startsWith(`${field}.`));
-}
-
-type MergeRules = Pick<StructuredItem, "localFields" | "machineLists">;
-
-/** Repo values win key by key; host-only keys, local fields and machine list entries stay as they are. */
-function overlay(host: unknown, repo: Mapping, rules: MergeRules, path: readonly string[]): Mapping {
-	// Deep copy: removeDropped later mutates nested maps, which must not alias the host's.
-	const result: Mapping = isMapping(host) ? structuredClone(host) : {};
-	for (const [key, value] of Object.entries(repo)) {
-		const keyPath = [...path, key];
-		if (pathIsLocal(keyPath, rules.localFields)) continue;
-		if (isMapping(value)) {
-			result[key] = overlay(result[key], value, rules, keyPath);
-			continue;
-		}
-		// A non-map would wipe a local field nested under this key; the host's map stays.
-		const prefix = `${keyPath.join(".")}.`;
-		if (isMapping(result[key]) && rules.localFields.some((field) => field.startsWith(prefix))) continue;
-		const current = result[key];
-		// Entries the repo's list lacks stay on the host, ahead of the repo's entries.
-		result[key] =
-			Array.isArray(value) && Array.isArray(current) && rules.machineLists.includes(keyPath.join("."))
-				? [...current.filter((entry) => !value.some((own) => Bun.deepEquals(own, entry))), ...structuredClone(value)]
-				: structuredClone(value);
-	}
-	return result;
-}
-
-/** Remove from `host` the keys and machine-list entries the repo had in `oldRepo` and dropped in `newRepo`. */
-function removeDropped(host: Mapping, oldRepo: Mapping, newRepo: Mapping, rules: MergeRules, path: readonly string[]): void {
-	for (const [key, oldValue] of Object.entries(oldRepo)) {
-		const keyPath = [...path, key];
-		if (pathIsLocal(keyPath, rules.localFields)) continue;
-		const current = host[key];
-		if (Array.isArray(oldValue) && Array.isArray(current) && rules.machineLists.includes(keyPath.join("."))) {
-			// The repo's dropped entries go; entries the repo never listed are the machine's.
-			const next = newRepo[key];
-			const kept = current.filter(
-				(entry) =>
-					!oldValue.some((old) => Bun.deepEquals(old, entry)) || (Array.isArray(next) && next.some((own) => Bun.deepEquals(own, entry))),
-			);
-			if (kept.length === 0 && !(key in newRepo)) delete host[key];
-			else host[key] = kept;
-			continue;
-		}
-		if (!(key in newRepo)) {
-			// A dropped map loses only the keys the repo had; host-only and local keys under it stay.
-			if (isMapping(oldValue) && isMapping(current)) {
-				removeDropped(current, oldValue, {}, rules, keyPath);
-				if (Object.keys(current).length === 0) delete host[key];
-			} else if (!isMapping(current)) {
-				// The repo had a value here; a map in its place is the host's own and stays.
-				delete host[key];
-			}
-			continue;
-		}
-		const next = newRepo[key];
-		if (isMapping(oldValue) && isMapping(next) && isMapping(current)) removeDropped(current, oldValue, next, rules, keyPath);
-	}
-}
-
 // --- plan -------------------------------------------------------------------
 
+/** A host operation; `base` is recorded once it succeeded. A `base` op only records. */
 type Op =
-	| { readonly kind: "write"; readonly rel: string; readonly target: string; readonly content: string | Uint8Array }
+	| {
+			readonly kind: "write";
+			readonly rel: string;
+			readonly target: string;
+			readonly content: string | Uint8Array;
+			readonly base?: BaseChange;
+	  }
 	| { readonly kind: "move"; readonly rel: string; readonly from: string; readonly target: string }
-	| { readonly kind: "delete"; readonly rel: string; readonly target: string };
+	| { readonly kind: "delete"; readonly rel: string; readonly target: string; readonly base?: BaseChange }
+	| { readonly kind: "base"; readonly rel: string; readonly change: BaseChange };
+
+interface PlanContext {
+	readonly opts: ApplyOptions;
+	readonly report: ApplyReport;
+	readonly base: BaseRecord;
+	readonly history: RepoHistory;
+	readonly todoRequired: boolean;
+}
+
+function newReport(): ApplyReport {
+	return {
+		written: [],
+		moved: [],
+		deleted: [],
+		skipped: [],
+		errors: [],
+		notes: [],
+		pluginsInstalled: [],
+		pluginsUpgraded: [],
+		pluginsMissing: [],
+		pluginChanges: [],
+		conflicts: [],
+		overwritten: [],
+		restartNeeded: false,
+	};
+}
+
+/** Short content digest for conflict ids: it changes whenever the repo side changes. */
+function digest(content: string | Uint8Array): string {
+	const hasher = new Bun.CryptoHasher("sha1");
+	hasher.update(content);
+	return hasher.digest("hex").slice(0, 12);
+}
 
 function listSourceFiles(source: string): string[] {
 	const root = join(source, "agent");
@@ -550,27 +613,95 @@ function listSourceFiles(source: string): string[] {
 	return files.sort();
 }
 
-function oldRepoText(opts: ApplyOptions, rel: string): string | undefined {
-	if (opts.previousCommit === undefined) return undefined;
-	const shown = git(opts.source, ["show", `${opts.previousCommit}:${rel}`]);
-	return shown.ok ? shown.out : undefined;
+type TextMerge = { readonly kind: "clean"; readonly content: Buffer } | { readonly kind: "conflict" };
+
+/** `git merge-file` of host and repo against the base; overlapping or binary changes conflict. */
+function mergeText(host: Uint8Array, base: Uint8Array, repo: Uint8Array): TextMerge {
+	const dir = mkdtempSync(join(tmpdir(), "omp-config-merge-"));
+	try {
+		const local = join(dir, "local");
+		const ancestor = join(dir, "base");
+		const upstream = join(dir, "upstream");
+		writeFileSync(local, host);
+		writeFileSync(ancestor, base);
+		writeFileSync(upstream, repo);
+		const result = spawnSync("git", ["merge-file", "-p", local, ancestor, upstream]);
+		return result.status === 0 && !result.error ? { kind: "clean", content: result.stdout } : { kind: "conflict" };
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 }
 
-function planPlain(opts: ApplyOptions, report: ApplyReport, todoRequired: boolean): Op[] {
-	const ops: Op[] = [];
-	for (const rel of listSourceFiles(opts.source)) {
-		if (todoRequired && TODO_RETIREMENTS.includes(rel.slice("agent/".length))) continue;
-		const target = targetOf(rel, opts.agentDir);
-		const content = readFileSync(join(opts.source, rel));
-		if (existsSync(target)) {
-			if (isAppManaged(target)) {
-				report.skipped.push({ path: target, reason: "app-managed" });
-				continue;
-			}
-			if (Buffer.from(readFileSync(target)).equals(content)) continue;
-		}
-		ops.push({ kind: "write", rel, target, content });
+/**
+ * One managed plain file (see CUSTOMIZATIONS). `repo` undefined: the source
+ * dropped it. `dropped`: its content at the previous commit, standing in for a
+ * base this machine never recorded.
+ */
+function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, dropped?: Buffer): Op[] {
+	const { opts, report } = ctx;
+	const target = targetOf(rel, opts.agentDir);
+	if (lexists(target) && isAppManaged(target)) {
+		report.skipped.push({ path: target, reason: "app-managed" });
+		return [];
 	}
+	const host = existsSync(target) ? readFileSync(target) : undefined;
+	const recorded = ctx.base.plain(rel);
+	const base = recorded.kind === "none" && dropped !== undefined ? { kind: "known" as const, content: dropped } : recorded;
+	const code = rel.endsWith(".ts");
+	const accept: BaseChange = repo === undefined ? { kind: "plain-drop", rel } : { kind: "plain-known", rel, content: repo };
+	const conflict = (reason: ConflictReason): Op[] => {
+		report.conflicts.push({ kind: "file", id: `${rel}@${repo === undefined ? "absent" : digest(repo)}`, rel, target, reason });
+		// Record what the conflict was found against, so it is found again on the next run.
+		if (recorded.kind !== "none") return [];
+		const change: BaseChange = dropped !== undefined ? { kind: "plain-known", rel, content: dropped } : { kind: "plain-unknown", rel };
+		return [{ kind: "base", rel, change }];
+	};
+	if (repo === undefined) {
+		if (host === undefined) return [{ kind: "base", rel, change: accept }];
+		const unmodified = base.kind === "known" && host.equals(base.content);
+		if (!unmodified && !code) return conflict(base.kind === "known" ? "dropped-upstream" : "unknown-base");
+		if (!unmodified) report.overwritten.push(target);
+		return [{ kind: "delete", rel, target, base: accept }];
+	}
+	if (host?.equals(repo)) return base.kind === "known" && base.content.equals(repo) ? [] : [{ kind: "base", rel, change: accept }];
+	if (host === undefined) {
+		if (base.kind === "none" || code) return [{ kind: "write", rel, target, content: repo, base: accept }];
+		if (base.kind === "known" && base.content.equals(repo)) return [];
+		return conflict(base.kind === "known" ? "deleted-locally" : "unknown-base");
+	}
+	const unmodified = base.kind === "known" ? host.equals(base.content) : base.kind === "none" && ctx.history.hasVersion(rel, host);
+	if (unmodified || code) {
+		if (!unmodified) report.overwritten.push(target);
+		return [{ kind: "write", rel, target, content: repo, base: accept }];
+	}
+	if (base.kind !== "known") return conflict("unknown-base");
+	if (base.content.equals(repo)) return [];
+	const merged = mergeText(host, base.content, repo);
+	return merged.kind === "clean" ? [{ kind: "write", rel, target, content: merged.content, base: accept }] : conflict("both-changed");
+}
+
+/** Todo/ctx leaves have their own retirement planner (see DELETIONS). */
+function retiring(ctx: PlanContext, rel: string): boolean {
+	const leaf = rel.slice("agent/".length);
+	return (ctx.todoRequired && TODO_RETIREMENTS.includes(leaf)) || CTX_RETIREMENTS.includes(leaf);
+}
+
+function planPlain(ctx: PlanContext): Op[] {
+	const { opts } = ctx;
+	const shipped = listSourceFiles(opts.source).filter(
+		(rel) => !(ctx.todoRequired && TODO_RETIREMENTS.includes(rel.slice("agent/".length))),
+	);
+	const ops: Op[] = [];
+	for (const rel of shipped) ops.push(...planPlainItem(ctx, rel, readFileSync(join(opts.source, rel))));
+	const known = new Set(shipped);
+	for (const rel of ctx.base.plainRels()) {
+		if (known.has(rel)) continue;
+		known.add(rel);
+		// A rel no longer managed stays the host's, and retired leaves have their own planner: only the record goes.
+		if (!managedPlain(rel) || retiring(ctx, rel)) ops.push({ kind: "base", rel, change: { kind: "plain-drop", rel } });
+		else ops.push(...planPlainItem(ctx, rel, undefined));
+	}
+	for (const [rel, content] of droppedBeforeBase(ctx)) if (!known.has(rel)) ops.push(...planPlainItem(ctx, rel, undefined, content));
 	return ops;
 }
 
@@ -603,7 +734,21 @@ function parseSources(opts: ApplyOptions, report: ApplyReport): StructuredSource
 	return sources;
 }
 
-function planStructured(opts: ApplyOptions, report: ApplyReport, sources: readonly StructuredSource[]): Op[] {
+/** Every committed version of a structured file that still parses: the history a missing base is matched against. */
+function structuredHistory(ctx: PlanContext, item: StructuredItem): Mapping[] {
+	const versions: Mapping[] = [];
+	for (const text of ctx.history.versions(item.rel)) {
+		try {
+			versions.push(parseStructured(text, item.format));
+		} catch {
+			// A version that never parsed was never applied: it cannot be a base.
+		}
+	}
+	return versions;
+}
+
+function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]): Op[] {
+	const { opts, report } = ctx;
 	const ops: Op[] = [];
 	for (const { item, text, repo } of sources) {
 		const target = targetOf(item.rel, opts.agentDir);
@@ -616,7 +761,7 @@ function planStructured(opts: ApplyOptions, report: ApplyReport, sources: readon
 			try {
 				host = parseStructured(readFileSync(target, "utf8"), item.format);
 			} catch (error) {
-				// Replacing it would drop the host's local fields; leave it and retry next start.
+				// Replacing it would drop the host's own values; leave it and retry next start.
 				report.errors.push(`${target}: host copy unparsable (${errorText(error)}); left untouched`);
 				continue;
 			}
@@ -640,38 +785,31 @@ function planStructured(opts: ApplyOptions, report: ApplyReport, sources: readon
 			host = { ...host, [legacy.section]: value };
 			consumed.push(...present);
 		}
-		const merged = overlay(host, repo, item, []);
-		const oldText = oldRepoText(opts, item.rel);
-		if (oldText !== undefined) {
-			try {
-				removeDropped(merged, parseStructured(oldText, item.format), repo, item, []);
-			} catch {
-				report.notes.push(`${item.rel}: previous version unparsable, no keys removed`);
-			}
+		const recorded = ctx.base.structuredOf(item.rel);
+		const source: StructuredBaseSource =
+			recorded !== undefined
+				? { kind: "recorded", value: recorded.value, unknown: recorded.unknown }
+				: host === undefined
+					? { kind: "empty" }
+					: { kind: "history", versions: structuredHistory(ctx, item) };
+		const merged = mergeStructured(host, repo, source, item.rules);
+		for (const { path, reason } of merged.conflicts) {
+			const id = `${item.rel}#${pointer(path)}@${digest(canonical(valueAt(repo, path)))}`;
+			report.conflicts.push({ kind: "key", id, rel: item.rel, target, path: [...path], reason });
 		}
-		dropRetiredEntries(merged, item.machineLists);
-		if (consumed.length === 0 && host !== undefined && Bun.deepEquals(host, merged)) continue;
+		const record: StructuredRecord = { value: merged.base, unknown: merged.unknown };
+		const change: BaseChange | undefined =
+			recorded !== undefined && Bun.deepEquals(recorded, record, true) ? undefined : { kind: "structured", rel: item.rel, record };
+		if (consumed.length === 0 && host !== undefined && Bun.deepEquals(host, merged.host, true)) {
+			if (change !== undefined) ops.push({ kind: "base", rel: item.rel, change });
+			continue;
+		}
 		// Keep the repo's own formatting whenever the result is exactly the repo file.
-		const content = Bun.deepEquals(merged, repo) ? text : serialize(merged, item.format);
-		ops.push({ kind: "write", rel: item.rel, target, content });
+		const content = Bun.deepEquals(merged.host, repo, true) ? text : serialize(merged.host, item.format);
+		ops.push({ kind: "write", rel: item.rel, target, content, base: change });
 		for (const rel of consumed) ops.push({ kind: "delete", rel, target: targetOf(rel, opts.agentDir) });
 	}
 	return ops;
-}
-
-/** Remove RETIRED_LIST_ENTRIES from the merged machine lists. */
-function dropRetiredEntries(merged: Mapping, machineLists: readonly string[]): void {
-	for (const field of machineLists) {
-		const retired = RETIRED_LIST_ENTRIES[field];
-		if (retired === undefined) continue;
-		const keys = field.split(".");
-		const last = keys.pop();
-		let parent: unknown = merged;
-		for (const key of keys) parent = isMapping(parent) ? parent[key] : undefined;
-		if (last === undefined || !isMapping(parent)) continue;
-		const list = parent[last];
-		if (Array.isArray(list)) parent[last] = list.filter((entry) => !retired.includes(entry));
-	}
 }
 
 function lexists(path: string): boolean {
@@ -797,8 +935,15 @@ function planRelocations(opts: ApplyOptions, report: ApplyReport): Op[] {
 	return ops;
 }
 
-function planDeletions(opts: ApplyOptions, report: ApplyReport, todoRequired: boolean): Op[] {
-	if (opts.previousCommit === undefined) return [];
+/**
+ * Managed files the source dropped between the previous commit and HEAD, with
+ * their content at the previous commit: the base of items deleted before this
+ * machine recorded one. Empty without a previous commit.
+ */
+function droppedBeforeBase(ctx: PlanContext): Map<string, Buffer> {
+	const { opts, report } = ctx;
+	const dropped = new Map<string, Buffer>();
+	if (opts.previousCommit === undefined) return dropped;
 	// -z: NUL-separated, unquoted paths (non-ASCII names are C-quoted otherwise).
 	const diff = git(opts.source, [
 		"diff",
@@ -812,28 +957,15 @@ function planDeletions(opts: ApplyOptions, report: ApplyReport, todoRequired: bo
 		"agent",
 	]);
 	if (!diff.ok) {
-		report.notes.push(`deletions skipped: ${diff.err}`);
-		return [];
+		report.notes.push(`deletions before the base skipped: ${diff.err}`);
+		return dropped;
 	}
-	const ops: Op[] = [];
 	for (const rel of diff.out.split("\0").filter(Boolean)) {
-		// The finite planner owns these leaves, including its app-managed errors and plugin prerequisite.
-		if (todoRequired && TODO_RETIREMENTS.includes(rel.slice("agent/".length))) continue;
-		if (CTX_RETIREMENTS.includes(rel.slice("agent/".length))) continue;
-		if (!managedPlain(rel)) continue;
-		const target = targetOf(rel, opts.agentDir);
-		try {
-			lstatSync(target);
-		} catch {
-			continue;
-		}
-		if (isAppManaged(target)) {
-			report.skipped.push({ path: target, reason: "app-managed" });
-			continue;
-		}
-		ops.push({ kind: "delete", rel, target });
+		if (!managedPlain(rel) || retiring(ctx, rel)) continue;
+		const content = ctx.history.show(opts.previousCommit, rel);
+		if (content !== undefined) dropped.set(rel, content);
 	}
-	return ops;
+	return dropped;
 }
 
 // --- light launcher -----------------------------------------------------------
@@ -1096,36 +1228,28 @@ function refreshMovingPlugins(source: string): PluginRefresh {
 // --- apply ------------------------------------------------------------------
 
 export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
-	const report: ApplyReport = {
-		written: [],
-		moved: [],
-		deleted: [],
-		skipped: [],
-		errors: [],
-		notes: [],
-		pluginsInstalled: [],
-		pluginsUpgraded: [],
-		pluginsMissing: [],
-		pluginChanges: [],
-		restartNeeded: false,
-	};
+	const report = newReport();
 	let ops: Op[];
 	let declared: string[];
 	let todoRequired: boolean;
+	let base: BaseRecord;
 	let ctxReady = false;
 	try {
 		const sources = parseSources(opts, report);
 		declared = declaredPlugins(opts.source).required;
 		todoRequired = declared.includes(TODO_PLUGIN_URL);
+		base = BaseRecord.load(opts.agentDir);
+		const history = new RepoHistory(opts.source, !opts.check);
+		const ctx: PlanContext = { opts, report, base, history, todoRequired };
 		const planned = [
 			...planRelocations(opts, report),
-			...planPlain(opts, report, todoRequired),
-			...planStructured(opts, report, sources),
-			...planDeletions(opts, report, todoRequired),
+			...planPlain(ctx),
+			...planStructured(ctx, sources),
 			...(todoRequired ? planRetirements(opts, report, TODO_RETIREMENTS) : []),
 		];
-		// Moves first, managed writes next, deletions last; Todo retirement requires all preceding operations to succeed.
-		const rank: Record<Op["kind"], number> = { move: 0, write: 1, delete: 2 };
+		report.notes.push(...history.notes);
+		// Moves first, managed writes next, deletions after them, base records last; Todo retirement requires all preceding operations to succeed.
+		const rank: Record<Op["kind"], number> = { move: 0, write: 1, delete: 2, base: 3 };
 		ops = planned.toSorted((a, b) => rank[a.kind] - rank[b.kind]);
 	} catch (error) {
 		report.errors.push(errorText(error));
@@ -1170,8 +1294,14 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		}
 	}
 	if (ctxReady) ops = [...ops, ...planRetirements(opts, report, CTX_RETIREMENTS)];
+	// Base changes of the host operations that succeeded, recorded after all of them.
+	const accepted: BaseChange[] = [];
 	for (const op of ops) {
 		if (!opts.check && todoRequired && op.kind === "delete" && report.errors.length > 0) break;
+		if (op.kind === "base") {
+			accepted.push(op.change);
+			continue;
+		}
 		const leaf = op.rel.slice("agent/".length);
 		const retirement =
 			op.kind === "delete" && ((todoRequired && TODO_RETIREMENTS.includes(leaf)) || (ctxReady && CTX_RETIREMENTS.includes(leaf)));
@@ -1192,11 +1322,13 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 				case "write":
 					if (!opts.check) atomicWrite(op.target, op.content);
 					report.written.push(op.target);
+					if (op.base !== undefined) accepted.push(op.base);
 					break;
 				case "delete":
 					// Remove the managed entry itself; a symlink's backing file is not ours.
 					if (!opts.check) unlinkSync(op.target);
 					report.deleted.push(op.target);
+					if (op.base !== undefined) accepted.push(op.base);
 					break;
 				default: {
 					const unreachable: never = op;
@@ -1209,10 +1341,34 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 			if (retirement) break;
 		}
 	}
+	if (!opts.check) {
+		try {
+			base.commit(accepted);
+		} catch (error) {
+			report.errors.push(`${join(opts.agentDir, BASE_DIR)}: ${errorText(error)}`);
+		}
+	}
 	installLauncher(opts, report);
 	if (report.errors.length > 0 && !opts.check && (todoRequired || report.restartNeeded))
 		report.notes.push("Cutover incomplete; do not restart OMP. Resolve errors and rerun apply.");
 	return report;
+}
+
+/** Plan read-only against `source` and return the conflicts: no plugins, no writes, no history fetch. */
+export function scanConflicts(source: string, agentDir: string): ConflictScan {
+	const opts: ApplyOptions = { source, agentDir, previousCommit: undefined, check: true, plugins: false };
+	const report = newReport();
+	try {
+		const sources = parseSources(opts, report);
+		const todoRequired = declaredPlugins(source).required.includes(TODO_PLUGIN_URL);
+		const ctx: PlanContext = { opts, report, base: BaseRecord.load(agentDir), history: new RepoHistory(source, false), todoRequired };
+		planPlain(ctx);
+		planStructured(ctx, sources);
+	} catch (error) {
+		return { kind: "failed", error: errorText(error) };
+	}
+	if (report.errors.length > 0) return { kind: "failed", error: report.errors.join("; ") };
+	return { kind: "scanned", conflicts: report.conflicts };
 }
 
 // --- lock -------------------------------------------------------------------
@@ -1310,7 +1466,8 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 		const commit = head.out.trim();
 		const markerPath = join(agentDir, APPLIED_MARKER);
 		const applied = existsSync(markerPath) ? readFileSync(markerPath, "utf8").trim() : "";
-		if (applied === commit) return { kind: "up-to-date", commit, plugins: refreshMovingPlugins(CLONE_DIR) };
+		if (applied === commit)
+			return { kind: "up-to-date", commit, plugins: refreshMovingPlugins(CLONE_DIR), scan: scanConflicts(CLONE_DIR, agentDir) };
 		const previousCommit = applied && git(CLONE_DIR, ["cat-file", "-e", `${applied}^{commit}`]).ok ? applied : undefined;
 		// Apply with the fetched commit's own rules. Dynamic import is required:
 		// the module is the just-fetched clone's copy, chosen at runtime, not this file.
@@ -1321,7 +1478,8 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 		if (typeof fetched.applySnapshot !== "function")
 			return { kind: "failed", error: "fetched omp-config-update.ts exports no applySnapshot" };
 		const report = await fetched.applySnapshot({ source: CLONE_DIR, agentDir, previousCommit, check: false, plugins: true });
-		if (applied && previousCommit === undefined) report.notes.push(`previous commit ${applied} unavailable, no git-derived deletions`);
+		if (applied && previousCommit === undefined)
+			report.notes.push(`previous commit ${applied} unavailable: files dropped before this machine recorded a base stay`);
 		if (report.errors.length === 0) atomicWrite(markerPath, `${commit}\n`);
 		return { kind: "applied", commit, previous: applied || undefined, report };
 	} catch (error) {
@@ -1329,6 +1487,144 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 	} finally {
 		releaseLock();
 	}
+}
+
+// --- conflicts and resolve ----------------------------------------------------
+
+/** A JSON value as a fenced block, `(absent)` for a missing one. */
+function fenced(value: unknown): string {
+	return value === undefined ? "  (absent)" : `  \`\`\`json\n${JSON.stringify(value, null, 2).replace(/^/gm, "  ")}\n  \`\`\``;
+}
+
+/** What one conflict looks like on each side, for the person and agent adapting it. */
+function conflictDetail(conflict: Conflict, source: string, base: BaseRecord): string[] {
+	const incoming = join(source, conflict.rel);
+	switch (conflict.kind) {
+		case "file": {
+			const recorded = base.plain(conflict.rel);
+			const basePath = recorded.kind === "known" ? base.plainPath(conflict.rel) : `(${recorded.kind}: compare local and incoming directly)`;
+			const lines = [
+				`## ${conflict.id}`,
+				`- reason: ${conflict.reason}`,
+				`- local: ${existsSync(conflict.target) ? conflict.target : `(deleted locally) ${conflict.target}`}`,
+				`- base: ${basePath}`,
+				`- incoming: ${existsSync(incoming) ? incoming : "(removed upstream)"}`,
+			];
+			if (recorded.kind === "known" && existsSync(conflict.target) && existsSync(incoming))
+				lines.push(`- merge proposal with conflict markers: git merge-file -p "${conflict.target}" "${basePath}" "${incoming}"`);
+			return lines;
+		}
+		case "key": {
+			const format = STRUCTURED.find((item) => item.rel === conflict.rel)?.format ?? "yaml";
+			const local = existsSync(conflict.target) ? parseStructured(readFileSync(conflict.target, "utf8"), format) : undefined;
+			const repo = parseStructured(readFileSync(incoming, "utf8"), format);
+			const record = base.structuredOf(conflict.rel);
+			const baseLine =
+				conflict.reason === "unknown-base" || record === undefined
+					? "- base: (unknown: compare local and incoming directly)"
+					: `- base:\n${fenced(valueAt(record.value, conflict.path))}`;
+			return [
+				`## ${conflict.id}`,
+				`- reason: ${conflict.reason}`,
+				`- file: ${conflict.target}`,
+				`- key: ${conflict.path.map((key) => JSON.stringify(key)).join(" › ")}`,
+				`- local:\n${fenced(valueAt(local, conflict.path))}`,
+				baseLine,
+				`- incoming (${incoming}):\n${fenced(valueAt(repo, conflict.path))}`,
+			];
+		}
+		default: {
+			const unreachable: never = conflict;
+			throw new Error(String(unreachable));
+		}
+	}
+}
+
+/** The `conflicts` listing: the adaptation procedure, then every conflict. */
+function conflictsText(conflicts: readonly Conflict[], source: string, agentDir: string): string {
+	if (conflicts.length === 0) return `omp-config: no conflicts between local customizations and ${source}.`;
+	const resolveCommand = `bun "${import.meta.path}" resolve --source "${source}" --agent-dir "${agentDir}" <id>…`;
+	const base = BaseRecord.load(agentDir);
+	return [
+		`# omp-config: local customizations that conflict with upstream (${conflicts.length})`,
+		"",
+		`Upstream source: ${source}. Agent dir: ${agentDir}. Each local copy was kept as it is.`,
+		"",
+		"Adapt them with the user, one at a time:",
+		"1. Read the local copy, the base and the incoming version listed for the conflict. Base → incoming is what upstream changed; base → local is what this machine changed. With an unknown base, compare local and incoming directly.",
+		"2. Explain both changes in one sentence each. Then use `ask`: keep local, take incoming, or a merged version you propose and show. Recommend the merge when both changes can coexist.",
+		"3. Apply the choice to the local file with `edit`. In config.yml, omomp.yml and thinking-translator.json change only the conflicting key and keep comments and other keys. Keeping local needs no edit.",
+		`4. Record the adapted conflicts: ${resolveCommand}`,
+		"   A refused (stale) id means upstream moved meanwhile: list the conflicts again and adapt the new version.",
+		"5. Report what each conflict became. Extension code, system prompt files and tool topics load on the next OMP start; config.yml reloads live.",
+		"",
+		...conflicts.flatMap((conflict) => [...conflictDetail(conflict, source, base), ""]),
+	].join("\n");
+}
+
+export interface ResolveOutcome {
+	readonly resolved: string[];
+	/** The conflict is still there, but upstream changed since the id was listed. */
+	readonly stale: string[];
+	/** No such conflict: already resolved, or a wrong id. */
+	readonly unknown: string[];
+	readonly errors: string[];
+}
+
+/** Move the base of each listed conflict to the source's current value. The caller holds the lock. */
+function resolveConflicts(source: string, agentDir: string, ids: readonly string[]): ResolveOutcome {
+	const outcome: ResolveOutcome = { resolved: [], stale: [], unknown: [], errors: [] };
+	const scan = scanConflicts(source, agentDir);
+	if (scan.kind === "failed") {
+		outcome.errors.push(scan.error);
+		return outcome;
+	}
+	const base = BaseRecord.load(agentDir);
+	const changes: BaseChange[] = [];
+	const records = new Map<string, { value: Mapping; unknown: Path[] }>();
+	for (const id of ids) {
+		const conflict = scan.conflicts.find((candidate) => candidate.id === id);
+		if (conflict === undefined) {
+			const stem = id.slice(0, id.lastIndexOf("@"));
+			(scan.conflicts.some((candidate) => candidate.id.slice(0, candidate.id.lastIndexOf("@")) === stem)
+				? outcome.stale
+				: outcome.unknown
+			).push(id);
+			continue;
+		}
+		const incoming = join(source, conflict.rel);
+		switch (conflict.kind) {
+			case "file":
+				changes.push(
+					existsSync(incoming)
+						? { kind: "plain-known", rel: conflict.rel, content: readFileSync(incoming) }
+						: { kind: "plain-drop", rel: conflict.rel },
+				);
+				break;
+			case "key": {
+				const recorded = base.structuredOf(conflict.rel);
+				const record =
+					records.get(conflict.rel) ?? (recorded && { value: structuredClone(recorded.value), unknown: [...recorded.unknown] });
+				if (record === undefined) {
+					outcome.errors.push(`${id}: no base recorded for ${conflict.rel} yet; run apply first`);
+					continue;
+				}
+				const format = STRUCTURED.find((item) => item.rel === conflict.rel)?.format ?? "yaml";
+				setAt(record.value, conflict.path, valueAt(parseStructured(readFileSync(incoming, "utf8"), format), conflict.path));
+				record.unknown = record.unknown.filter((path) => !related(path, conflict.path));
+				records.set(conflict.rel, record);
+				break;
+			}
+			default: {
+				const unreachable: never = conflict;
+				throw new Error(String(unreachable));
+			}
+		}
+		outcome.resolved.push(id);
+	}
+	for (const [rel, record] of records) changes.push({ kind: "structured", rel, record });
+	base.commit(changes);
+	return outcome;
 }
 
 // --- CLI ----------------------------------------------------------------------
@@ -1346,18 +1642,29 @@ function formatReport(report: ApplyReport, check: boolean): string {
 	for (const { from, to } of report.moved) lines.push(`${check ? "would move" : "moved"}: ${from} -> ${to}`);
 	for (const path of report.deleted) lines.push(`${check ? "would delete" : "deleted"}: ${path}`);
 	for (const { path, reason } of report.skipped) lines.push(`skipped (${reason}): ${path}`);
+	for (const path of report.overwritten) lines.push(`${check ? "would overwrite" : "overwrote"} customized code: ${path}`);
+	for (const conflict of report.conflicts) lines.push(`conflict (${conflict.reason}), local copy kept: ${conflict.id}`);
 	for (const change of report.pluginChanges) lines.push(pluginChangeLine(change));
 	for (const spec of report.pluginsMissing) lines.push(`plugin missing: ${spec}`);
 	for (const note of report.notes) lines.push(`note: ${note}`);
 	for (const error of report.errors) lines.push(`error: ${error}`);
 	if (report.written.length + report.moved.length + report.deleted.length === 0) lines.push("no file changes");
+	if (report.conflicts.length > 0) lines.push("adapt the conflicts: omp-config-update.ts conflicts --source <same source>");
 	if (report.restartNeeded && report.errors.length === 0) lines.push("restart OMP: system prompt, extensions or plugins changed");
 	return lines.join("\n");
 }
 
 function usage(): never {
 	process.stderr.write(
-		"usage:\n  omp-config-update.ts auto [--agent-dir DIR] [--branch NAME] [--json]\n  omp-config-update.ts apply --source DIR [--agent-dir DIR] [--check] [--no-plugins] [--json]\n",
+		[
+			"usage:",
+			"  omp-config-update.ts auto [--agent-dir DIR] [--branch NAME] [--json]",
+			"  omp-config-update.ts apply --source DIR [--agent-dir DIR] [--check] [--no-plugins] [--json]",
+			"  omp-config-update.ts conflicts [--source DIR] [--agent-dir DIR] [--json]",
+			"  omp-config-update.ts resolve [--source DIR] [--agent-dir DIR] ID...",
+			"(conflicts and resolve default --source to the updater clone)",
+			"",
+		].join("\n"),
 	);
 	process.exit(2);
 }
@@ -1370,6 +1677,7 @@ async function main(argv: readonly string[]): Promise<number> {
 	let check = false;
 	let plugins = true;
 	let json = false;
+	const ids: string[] = [];
 	for (let i = 0; i < rest.length; i++) {
 		const arg = rest[i];
 		const value = (): string => rest[++i] ?? usage();
@@ -1379,6 +1687,7 @@ async function main(argv: readonly string[]): Promise<number> {
 		else if (arg === "--check") check = true;
 		else if (arg === "--no-plugins") plugins = false;
 		else if (arg === "--json") json = true;
+		else if (mode === "resolve" && arg !== undefined && !arg.startsWith("--")) ids.push(arg);
 		else usage();
 	}
 	if (mode === "auto") {
@@ -1386,11 +1695,14 @@ async function main(argv: readonly string[]): Promise<number> {
 		if (json) process.stdout.write(`${JSON.stringify(result)}\n`);
 		else if (result.kind === "applied") process.stdout.write(`applied ${result.commit}\n${formatReport(result.report, false)}\n`);
 		else if (result.kind === "up-to-date") {
-			const { plugins } = result;
+			const { plugins, scan } = result;
 			const lines = [
 				`up-to-date ${result.commit}`,
 				...plugins.changes.map(pluginChangeLine),
 				...plugins.errors.map((error) => `error: ${error}`),
+				...(scan.kind === "scanned"
+					? scan.conflicts.map((conflict) => `conflict (${conflict.reason}), local copy kept: ${conflict.id}`)
+					: [`error: conflict scan failed: ${scan.error}`]),
 			];
 			if (plugins.installed.length + plugins.upgraded.length > 0 && plugins.errors.length === 0) lines.push("restart OMP: plugins changed");
 			process.stdout.write(`${lines.join("\n")}\n`);
@@ -1415,6 +1727,36 @@ async function main(argv: readonly string[]): Promise<number> {
 			const report = await applySnapshot({ source, agentDir, previousCommit: undefined, check, plugins });
 			process.stdout.write(json ? `${JSON.stringify(report)}\n` : `${formatReport(report, check)}\n`);
 			return report.errors.length > 0 ? 1 : 0;
+		} finally {
+			releaseLock();
+		}
+	}
+	if (mode === "conflicts") {
+		const from = source ?? CLONE_DIR;
+		const scan = scanConflicts(from, agentDir);
+		if (json) process.stdout.write(`${JSON.stringify(scan)}\n`);
+		else process.stdout.write(`${scan.kind === "scanned" ? conflictsText(scan.conflicts, from, agentDir) : `error: ${scan.error}`}\n`);
+		return scan.kind === "scanned" ? 0 : 1;
+	}
+	if (mode === "resolve") {
+		if (ids.length === 0) usage();
+		if (!acquireLock()) {
+			process.stderr.write(`another update holds ${LOCK_DIR}; retry later\n`);
+			return 1;
+		}
+		try {
+			const outcome = resolveConflicts(source ?? CLONE_DIR, agentDir, ids);
+			const lines = [
+				...outcome.resolved.map((id) => `resolved: ${id}`),
+				...outcome.stale.map((id) => `stale (upstream changed since it was listed; list the conflicts again): ${id}`),
+				...outcome.unknown.map((id) => `not a current conflict (already resolved or a wrong id): ${id}`),
+				...outcome.errors.map((error) => `error: ${error}`),
+			];
+			process.stdout.write(`${lines.join("\n")}\n`);
+			return outcome.stale.length + outcome.unknown.length + outcome.errors.length > 0 ? 1 : 0;
+		} catch (error) {
+			process.stdout.write(`error: ${errorText(error)}\n`);
+			return 1;
 		} finally {
 			releaseLock();
 		}

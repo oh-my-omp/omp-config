@@ -3,8 +3,8 @@
 `omp-config` holds the reviewable inputs of the user's Oh My Pi (`omp`)
 configuration: harness config, prompt templates, subagent definitions, local
 extensions, the plugin list, and the tooling that moves them between this repo
-and a machine's `~/.omp/agent` (plus `~/.pi/agent`). Runtime state, credentials
-and installed plugins never enter the repo.
+and a machine's `~/.omp/agent`. Runtime state, plugin state, credentials and
+installed plugins never enter the repo.
 
 Behavior is described where it lives; read the matching one before changing it:
 
@@ -24,16 +24,20 @@ Behavior is described where it lives; read the matching one before changing it:
 - **Two one-way directions.** Repo → machine is the updater (`/update-omp`
   applies the working tree; the opt-in startup auto-update applies GitHub
   `main`). Machine → repo is `/sync-omp-config`, which never writes the
-  machine. Adding or removing a managed file or `omomp.yml` section changes the
-  updater's `managedPlain` / `STRUCTURED`, `.omp/commands/sync-omp-config.md`
-  and the docs pages together.
+  machine. Adding or removing a managed file or `omomp.yml` section, or moving
+  a path between the updater's owner lists, changes the updater's
+  `managedPlain` / `STRUCTURED` / `LOCAL_*` / `SEED_*`,
+  `.omp/commands/sync-omp-config.md` and the docs pages together.
 - **Updater compatibility.** Older machines import `applySnapshot(options)` from
   the fetched clone at `agent/extensions/omp-config-autoupdate/omp-config-update.ts`;
-  keep both the signature and the path compatible.
-- **Machine-owned state stays on the machine:** host-only files and keys,
-  `LOCAL_CONFIG_FIELDS` of `config.yml`, machine entries of `config.yml`
-  `extensions`, and the machine-local `omomp.yml` sections (`doc-polish`,
-  `model-compaction`, `omp-config-autoupdate`).
+  keep both the signature and the path compatible, and only add report fields.
+- **Machine customizations survive updates.** Outside code (`*.ts`), the
+  updater never overwrites a managed item the machine changed since its base:
+  it merges or reports a conflict for adaptation. Keep that invariant.
+- **Machine-owned state stays on the machine:** host-only files and keys, the
+  updater's `LOCAL_*` and `SEED_*` paths, machine entries of `config.yml`
+  `extensions`, the base record `.omp-config-base/`, and plugin state under
+  `~/.pi/agent`.
 - **App-managed files** (`// @orca-managed-pi-extension` or `marker: _otty`)
   are never overwritten; the marker, not the filename, decides. Never write the
   contiguous Otty marker literal in the updater: it would skip updating itself.

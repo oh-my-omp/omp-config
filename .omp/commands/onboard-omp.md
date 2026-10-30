@@ -17,10 +17,11 @@ argument-hint: "[check|<plane>]"
    - **文件与目录检查必须使用 `read`、`glob`、`grep` 工具**：严禁在 `bash` 中运行 `ls`、`cat`、`head`、`tail`、`find`、`grep` 或用 `python3 -c` 解析本地文件（会直接触发 `tool-policy-nag`）。`bash` 仅用于执行 `omp` CLI、`bun` 更新器脚本、`./plugin-audit.sh` 与 `git status`。
    - **阶段 0–3 中的调查、讲解与诊断（及 `check` 模式）属于非工作阶段，严禁初始化 `todo`**：只有用户在 `ask` 中明确确认要写入本机配置文件（如阶段 1 写入 `<agentDir>/models.yml` 中转站配置，或进入阶段 4 执行安装与本机定制）时，才初始化 `todo`。
    - 每完成一个阶段的现场调查，必须使用 `ask` 工具（原生或 `omp-ask-more`）让用户选择下一步深挖的控制面、确认本机定制项或决定是否执行安装；严禁一次性倾倒全部扩展与插件的细节。
-3. **所有权红线（仅改本机所有项，仓库项默认只诊断不改工作树）**：
-   - 任何写入前，先用 `read` 从 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 读取 `LOCAL_CONFIG_FIELDS`、`LOCAL_OMOMP_SECTIONS`、`MACHINE_LIST_FIELDS`、`STRUCTURED` 与 `managedPlain`。
-   - **本机所有项**（`<agentDir>/config.yml` 的 `LOCAL_CONFIG_FIELDS` 与 `extensions` 本机前置项、`<agentDir>/omomp.yml` 的 `LOCAL_OMOMP_SECTIONS`、`<agentDir>/models.yml`、`<agentDir>/commandcode-models.json`、`APPEND_SYSTEM_MODEL.md`、`WATCHDOG-*.md`）：在用户确认后直接写入本机 `<agentDir>`（由 `omp config path` 或 `PI_CODING_AGENT_DIR` / `~/.omp/agent` 决定），更新器与启动自动更新不会覆盖它们。
-   - **仓库所有项**（`agent/config.yml` 的 `task.agentModelOverrides` 等非本机字段、`agent/omomp.yml` 的仓库段、`agent/thinking-translator.json`、`install-plugins.sh`、`agent/agents/*.md`、仓库自带的 `PROMPT-INJECT-user-goal.md` / `TURN-JUDGE-gpt-talk-only.md`）：**默认只做当场可用性诊断并输出定制片段，不修改仓库工作树，也不直接改 `<agentDir>` 中会被 `/update-omp` 覆盖的同名字段**。这样工作树保持干净，可安全开启 `/omp-config-autoupdate on`。只有用户明确要求维护个人分支/fork 并修改工作树时，才编辑工作树并提醒关闭上游自动更新。
+3. **所有权红线（只改本机副本，默认不改仓库工作树）**：
+   - 任何写入前，先用 `read` 从 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 读取文件头的 OWNERSHIP 与 CUSTOMIZATIONS 说明，以及 `LOCAL_CONFIG_FIELDS`、`SEED_CONFIG_FIELDS`、`LOCAL_OMOMP_SECTIONS`、`SEED_OMOMP_FIELDS`、`SEED_TRANSLATOR_FIELDS`、`MACHINE_LIST_FIELDS`、`STRUCTURED` 与 `managedPlain`。
+   - **本机所有项**（`<agentDir>/config.yml` 的 `LOCAL_CONFIG_FIELDS` 与 `extensions` 本机前置项、`<agentDir>/omomp.yml` 的 `LOCAL_OMOMP_SECTIONS`、首次安装后已归本机的播种路径 `SEED_*`（如 `task.agentModelOverrides`、`omomp-lang`、`lang-nag`、`thinking-translator.json` 的 `translatorModels`）、`<agentDir>/models.yml`、`<agentDir>/commandcode-models.json`、`APPEND_SYSTEM_MODEL.md`、`WATCHDOG-*.md`）：在用户确认后直接写入本机 `<agentDir>`（由 `omp config path` 或 `PI_CODING_AGENT_DIR` / `~/.omp/agent` 决定），更新器与启动自动更新不会覆盖它们。
+   - **受管但可在本机定制的项**（`agent/config.yml` 与 `agent/omomp.yml` 中其余仓库键、`agent/agents/*.md`、系统提示词文件、仓库自带的 `PROMPT-INJECT-*.md` / `TURN-JUDGE-*.md` / `INTENT-*.md`）：在用户确认后可以直接改本机副本。更新器按记录的基准三方合并，保留本机修改；上游同处也改了时报告冲突，由 `/omp-config-autoupdate adapt`（或 `/update-omp` 当场）逐项适配。仓库工作树默认不改，可安全开启 `/omp-config-autoupdate on`。
+   - **代码与插件列表**（`agent/extensions/**/*.ts`、`omp-light.ts`、`install-plugins.sh`）：以仓库为准，本机改动会在下次更新时被覆盖（报告列入 `overwritten`）。只有用户明确要求维护个人分支/fork 时才编辑工作树，并提醒关闭上游自动更新。
 4. **当前全量安装与可选划分的诚实边界**：
    - 当前更新器 `omp-config-update.ts` 对仓库受管文件与 `install-plugins.sh` 未注释插件执行**全量安装**；日常轻量会话通过 `omp-light` 在进程启动时跳过 `agent/config-light.yml` 的 `disabledExtensions` 列出的长程监督/子代理治理扩展与 `system-prompt-replace`。
    - 引导中对“必选基底 / 条件必选 / 可选增强”的划分，一方面帮用户决定当前启用哪些本机开关、使用 `omp` 还是 `omp-light`，另一方面作为后续可选安装器（selective installer）的行为闭包规格；不得向用户谎称当前更新器会按勾选跳过文件写入。
@@ -116,36 +117,32 @@ argument-hint: "[check|<plane>]"
 
 ---
 
-## 阶段 3：可定制项分类、定制思路与当场定制（仅写本机项）
+## 阶段 3：可定制项分类、定制思路与当场定制（只写本机副本）
 
 向用户展示以下定制划分（这也是后续可选安装器的配置分类基准），并通过 `ask` 收集用户的当场定制决定：
 
-### 1. 需要当场定制并写入本机的配置（本机所有，更新器永不覆盖）
+### 1. 需要当场定制并写入本机的配置（本机所有，或首次播种后归本机；更新器不覆盖）
 
 | 定制项 | 本机写入位置 | 定制思路（为什么需要根据用户环境决定） |
 |---|---|---|
 | **通用与扩展模型角色（`modelRoles`）** | `<agentDir>/config.yml#modelRoles`（属于 `LOCAL_CONFIG_FIELDS`） | 决定主模型与各扩展的调用链：`default`、`smol`（`input-polish`/`task-split-check`/`task-completion-judge` 的默认回退）、`slow`、`plan`、`judge`（`openJudge` 主链）、`tiny`（`judge` 回退链），以及可选的专用角色 `@input-polish`、`@task-split-check`、`@task-completion-judge`、`@doc-polish.split`、`@doc-polish.polish`、`@doc-polish.check`。必须绑定到用户本机已有凭据的 provider/model。 |
+| **子代理模型绑定（`task.agentModelOverrides`）** | `<agentDir>/config.yml#task.agentModelOverrides`（属于 `SEED_CONFIG_FIELDS`） | 仓库默认值按作者订阅绑定：`task:high` / `discuss:divergent` 用 `anthropic/claude-opus-*`，`task:mid` / `discuss:steady` / `mentor:default` 用 `openai-codex/gpt-*-sol`，`task:low` 及回退链用 `openai-codex/gpt-*-luna`，`task:free` 用 `bansos` / `opencode-go` / `openai-codex`。逐个检查每个子代理绑定的模型在本机是否有可用凭据，缺失的改绑到本机现有 provider；首次安装后它归本机，之后的仓库改动不再覆盖。 |
+| **界面与监督语言（`omomp-lang`、`lang-nag`、`input-polish.key` / `instruction`）** | `<agentDir>/omomp.yml` 对应段（属于 `SEED_OMOMP_FIELDS`） | 仓库默认中文（`language: zh`、`lang-nag: 说中文`）。用户偏好其他语言时直接改本机值；也可用环境变量 `OMOMP_LANG=en` 临时覆盖界面语言，或在具体项目的 `<cwd>/.omp/omomp.yml` 按项目覆盖（项目 `.omp/omomp.*` 优先于 `<agentDir>/omomp.*`）。终端不支持 `ctrl+enter` 时改 `input-polish.key`。 |
+| **思考翻译（`thinking-translator.json`）** | `<agentDir>/thinking-translator.json` 的 `enabled`、`targetLanguage`、`translatorModels`（属于 `SEED_TRANSLATOR_FIELDS`） | 仓库默认链依赖 `futureppo-pool` 与 `commandcode` 凭据；本机没有时改用本机可用的模型，或用 `/thinking-translator` 关闭。 |
 | **按模型匹配的长上下文压缩阈值（`model-compaction`）** | `<agentDir>/omomp.yml#model-compaction`（属于 `LOCAL_OMOMP_SECTIONS`） | 不同模型的有效上下文窗口与计费阶梯不同（例如 Claude Opus 适合在 `150000`–`180000` 压缩，而支持大窗口的 GPT/Gemini 模型可设到 `500000`–`650000`）。用正则按 `provider`/`model` 精细设定 `thresholdTokens`。 |
 | **文档润色本机配置（`doc-polish`）** | `<agentDir>/omomp.yml#doc-polish`（属于 `LOCAL_OMOMP_SECTIONS`） | 若用户需要使用 `/polish-doc` 或 `polish_doc` 工具，需配置 `fallbackRole`（如 `default` 或 `smol`）与 `concurrency`（如 `6` 或 `8`）；不使用则跳过不创建。 |
-| **启动自动更新开关（`omp-config-autoupdate`）** | `<agentDir>/omomp.yml#omp-config-autoupdate`（属于 `LOCAL_OMOMP_SECTIONS`） | 保持仓库工作树干净时，可开启 `enabled: true` 让 OMP 每次启动自动跟随 GitHub `main` 更新配置与插件；若后续打算自行修改工作树则保持 `false`。 |
-| **本机扩展加载项与界面偏好** | `<agentDir>/config.yml` 的 `extensions` 前置项及 `LOCAL_CONFIG_FIELDS` | 若本机使用 `~/.claude`，需在 `<agentDir>/config.yml` 的 `extensions` 列表最前面保留 `~/.claude`；另可按需设置 `defaultThinkingLevel`、`theme`、`terminal`、`tui`、`statusLine`、`worktree`。 |
+| **启动自动更新与冲突处理（`omp-config-autoupdate`）** | `<agentDir>/omomp.yml#omp-config-autoupdate`（属于 `LOCAL_OMOMP_SECTIONS`） | `enabled: true` 让 OMP 每次启动自动跟随 GitHub `main` 更新配置与插件，本机定制靠三方合并保留；若后续打算自行修改仓库工作树则保持 `false`。`conflicts` 决定本机定制与上游冲突时的处理：`notify`（默认，只提示 `/omp-config-autoupdate adapt`）或 `agent`（刚应用新提交且会话还没有用户消息时自动发起适配）。 |
+| **本机扩展加载项与界面偏好** | `<agentDir>/config.yml` 的 `extensions` 前置项、`LOCAL_CONFIG_FIELDS` 与 `SEED_CONFIG_FIELDS` | 若本机使用 `~/.claude`，需在 `<agentDir>/config.yml` 的 `extensions` 列表最前面保留 `~/.claude`；另可按需设置 `defaultThinkingLevel`、`theme`、`terminal`、`tui`、`statusLine`、`worktree`，以及播种后归本机的 `browser`、`task.maxConcurrency`、`retry.fallbackChains`。 |
 | **模型特定提示词与周期审阅（可选初始化）** | `<agentDir>/extensions/append-system-model/APPEND_SYSTEM_MODEL.md`、`<agentDir>/extensions/watchdog-agent/WATCHDOG-*.md` | 仅当用户对特定模型有专属附加指令，或需要开启后台步数审阅时才在本机创建；默认无需创建。 |
 | **供应商模型兼容项（`models.yml`）** | `<agentDir>/models.yml`（本机运行时配置） | 若用户使用 `futureppo-pool` 等需要显式开启 `supportsReasoningEffort: true` 的 provider（供 `omp-thinking-translator` 等使用），写入本机 `models.yml`。 |
 
-### 2. 当场诊断但默认不改工作树的仓库配置（仓库所有）
+### 2. 受管但可在本机定制的仓库配置（三方合并保护）
 
-对以下仓库受管项，AI **当场对比用户本机实际可用的 provider 与语言偏好，输出诊断结论与可复制的配置片段**，但默认不改仓库文件（避免污染 git 工作树或被自动更新冲掉）：
+以下项由仓库提供并持续更新。用户需要时，AI 在确认后直接改本机副本：更新器保留本机修改，上游改动不重叠时自动合并，重叠时报告冲突并在 `/omp-config-autoupdate adapt` 中逐项适配。不改仓库工作树。
 
-- **子代理模型绑定（`agent/config.yml#task.agentModelOverrides`）**：
-  - 仓库默认将 `task:high` / `discuss:divergent` 绑到 `anthropic/claude-opus-5-5`，将 `task:mid` / `discuss:steady` / `mentor:default` 绑到 `openai-codex/gpt-*-sol`，将 `task:low` 及回退链绑到 `openai-codex/gpt-*-luna`，将 `task:free` 绑到 `bansos` / `opencode-go` / `openai-codex`。
-  - **诊断要求**：逐个检查 `task.agentModelOverrides` 中每个子代理绑定的模型在本机是否有可用凭据。若有缺失，向用户列出受影响的子代理及用本机现有 provider 替换的 YAML 片段，说明：若要在全局长期改绑，需在个人 fork/工作树修改 `agent/config.yml` 并保持上游自动更新关闭；若只想在单个项目覆盖扩展配置，可使用项目 `.omp/` 配置。
-- **界面与监督语言（`agent/omomp.yml` 的 `omomp-lang`、`lang-nag`、`input-polish.instruction`、`tool-policy-nag.form.prompt`）**：
-  - 仓库默认设为中文（`language: zh`、`lang-nag: 说中文`）。
-  - **诊断要求**：若用户偏好英文或其他语言，说明界面语言可通过环境变量 `OMOMP_LANG=en` 无侵入覆盖，而 `lang-nag`、`input-polish`、`tool-policy-nag` 支持在具体项目的 `<cwd>/.omp/omomp.yml` 中按项目覆盖（项目 `.omp/omomp.*` 优先于 `<agentDir>/omomp.*`）。
-- **思考翻译模型链（`agent/thinking-translator.json`）**：
-  - 检查本机是否具备 `futureppo-pool` 或 `commandcode` 凭据；若均无，提示用户可通过 `/thinking-translator` 命令关闭或了解如何在个人分支调整模型链。
-- **可选与条件插件（`install-plugins.sh`）**：
-  - 诊断本机是否具备 `omp-playbooks`（`PATH` 上是否有 `tern`）、`omp-codex-image-gen`（是否有 Codex 订阅）、`omp-remote-build`（默认注释；是否需要 Mutagen + `km` + 远端构建机）的运行前提，并记录用户的可选偏好。
+- **监督提示词措辞（`agent/omomp.yml` 的 `tool-policy-nag.form.prompt` 等仓库键）**：用户偏好其他语言时改本机值。
+- **子代理定义、系统提示词与模板（`agents/*.md`、`SYSTEM_TEMPLATE.md`、`APPEND_SYSTEM.md`、`PERSONALITY.md`、`PROMPT-INJECT-*.md`、`TURN-JUDGE-*.md`）**：只在用户有明确需求时修改，并说明修改在下次派发、下一轮或重启后生效。
+- **可选与条件插件（`install-plugins.sh`）**：插件列表以仓库为准，不能在本机定制。诊断本机是否具备 `omp-playbooks`（`PATH` 上是否有 `tern`）、`omp-codex-image-gen`（是否有 Codex 订阅）、`omp-remote-build`（默认注释；是否需要 Mutagen + `km` + 远端构建机）的运行前提，并记录用户的可选偏好。
 
 ### 3. 建议延后定制的参数（默认保留仓库值，有实测体感后再调）
 
@@ -164,11 +161,12 @@ argument-hint: "[check|<plane>]"
 1. **执行仓库 → 本机更新器**：
    - 在仓库根目录运行：`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source .`（命名 profile 加 `--agent-dir <omp config path 输出>`）。
    - 若脚本报告 ` errors` 或 `Cutover incomplete; do not restart OMP`，立即停止后续步骤，协助排查修复后重跑。
+   - 若报告 `conflict (…), local copy kept: <id>`，按 `/update-omp` 第 2 步与用户逐项适配（`conflicts --source .`，再 `resolve --source .`）。
 2. **执行插件审计**：
    - 运行 `./plugin-audit.sh`。若出现 `[卸载候选]`，用 `ask` 询问用户是否执行 `omp plugin uninstall <name>`。
-3. **写入用户在阶段 1 与阶段 3 确认的本机所有项**：
-   - 对 `<agentDir>/config.yml` 中的本机字段（如 `modelRoles`、`defaultThinkingLevel`、`extensions` 中的 `~/.claude` 等），使用 `omp config set` 或在读取 `<agentDir>/config.yml` 后用 `edit` 精确修改对应本机键。
-   - 对 `<agentDir>/omomp.yml` 中的本机段（`model-compaction`、`doc-polish`、`omp-config-autoupdate`），先 `read` `<agentDir>/omomp.yml`，再用 `edit` 写入或更新对应本机段，严禁触碰仓库管理段。
+3. **写入用户在阶段 1 与阶段 3 确认的本机定制**：
+   - 对 `<agentDir>/config.yml` 中的本机字段与播种路径（如 `modelRoles`、`defaultThinkingLevel`、`task.agentModelOverrides`、`extensions` 中的 `~/.claude` 等）以及用户确认的其他键，使用 `omp config set` 或在读取 `<agentDir>/config.yml` 后用 `edit` 精确修改对应键。
+   - 对 `<agentDir>/omomp.yml` 中的本机段（`model-compaction`、`doc-polish`、`omp-config-autoupdate`）、播种路径（`omomp-lang`、`lang-nag`、`input-polish.key` / `instruction`）及用户确认的其他键，先 `read` `<agentDir>/omomp.yml`，再用 `edit` 只改这些键，其余键保持原样。`<agentDir>/thinking-translator.json` 同理。
    - 若用户确认创建 `<agentDir>/models.yml` 兼容项（如 `futureppo-pool` 的 `supportsReasoningEffort: true`）或 `<agentDir>/commandcode-models.json`：若 `<agentDir>/models.yml` 已存在，严禁整文件重写或读取/回显含 `apiKey` 的行，只做最小字段追加或给出 YAML 片段由用户合入，保留文件中所有既有 provider 与未知字段。
 4. **校验落盘状态与工作树干净度**：
    - 用 `Bun.YAML.parse` / `JSON.parse` 校验修改过的 `<agentDir>/config.yml`、`<agentDir>/omomp.yml`（不打印 `models.yml` 凭据内容）。
@@ -182,9 +180,9 @@ argument-hint: "[check|<plane>]"
 
 1. **本机已安装与已定制项**：
    - 更新器写入的文件、已安装/升级的插件、`omp-light` 安装位置。
-   - 已写入 `<agentDir>` 的本机所有项（`modelRoles`、`model-compaction`、`doc-polish`、`omp-config-autoupdate` 等）及其当前实际值。
-2. **仓库所有项的兼容性诊断与定制备忘**：
-   - `task.agentModelOverrides` 各子代理档位在本机凭据下的可用状态，以及未改动工作树的替换参考片段（如有不可用项）。
+   - 已写入 `<agentDir>` 的本机定制（`modelRoles`、`task.agentModelOverrides`、语言段、`model-compaction`、`doc-polish`、`omp-config-autoupdate` 等）及其当前实际值。
+2. **定制在后续更新中的去向**：
+   - 哪些定制属于本机所有或播种路径（更新器不再覆盖），哪些是受管项的本机修改（三方合并保留，冲突时适配），哪些是代码（会被覆盖）。
    - 语言与思考翻译链在本机的可用状态与项目级 `.omp/omomp.yml` / 环境变量覆盖方式。
 3. **全量安装与日常模式选择（面向后续可选安装器的映射）**：
    - 汇总用户在本轮表达的可选组件偏好（哪些属于必选基底、哪些属于条件启用、哪些当前虽随全量更新器安装但未激活或可在轻量模式跳过）。
