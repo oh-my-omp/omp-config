@@ -24,11 +24,14 @@
 // through a shell (missing binary: the call fails before touching anything and
 // points to `permanent`); Linux follows the freedesktop.org Trash spec itself
 // (home trash `$XDG_DATA_HOME/Trash` or `~/.local/share/Trash` when the path is
-// on the same device, otherwise `$topdir/.Trash/$uid` or `$topdir/.Trash-$uid`
-// on the path's mount), writing `files/<name>` and `info/<name>.trashinfo`.
+// on the same device, otherwise, on the mount really holding the path, its
+// parent's links resolved, `$topdir/.Trash/$uid`, falling back to
+// `$topdir/.Trash-$uid` when that cannot be created), writing `files/<name>`
+// and `info/<name>.trashinfo`; a name taken in either is never overwritten.
 // A failed move is reported; it never falls back to permanent deletion.
 // `permanent` deletes recursively. Paths run in order and the result reports
-// each one; a failure on one path leaves the earlier ones as they are.
+// each one; a failure on one path, a backend that throws included, leaves the
+// earlier ones as they are.
 //
 // Main and sub sessions, full and light mode. Writes and deletes only the
 // requested paths and the trash entries for them; no extension config files.
