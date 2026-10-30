@@ -58,7 +58,7 @@ The credential copy is used as it is: nothing is rewritten, refreshed or filtere
 | `calls.forbid` | matchers no tool call may satisfy |
 | `replyIncludes` | literal strings the last assistant reply must contain |
 
-A matcher is `{ "tool", "isError"?, "inputPattern"?, "resultIncludes"? }`: `inputPattern` is a regular expression over the call's JSON input, `resultIncludes` a literal in its result text. The driver checks what the scenario declares and attaches no meaning of its own. [`scenarios/echo-hi.json`](scenarios/echo-hi.json) is the smallest example.
+A matcher is `{ "tool", "isError"?, "inputPattern"?, "resultIncludes"? }`: `tool` is a tool name or a list of names any of which matches, `inputPattern` is a regular expression over the call's JSON input, `resultIncludes` a literal in its result text. Only calls the agent loop runs are seen: a tool an `eval` cell calls through its `tool.<name>` bridge is part of that `eval` call's input and result. The driver checks what the scenario declares and attaches no meaning of its own. [`scenarios/echo-hi.json`](scenarios/echo-hi.json) is the smallest example.
 
 Each run of a scenario for a model ends in one of four results:
 

@@ -6,17 +6,37 @@
 	"calls": {
 		"expect": [
 			{
-				"tool": "write",
+				"tool": [
+					"write",
+					"eval"
+				],
 				"isError": false,
-				"inputPattern": "(?=.*\"xd://exec_command\")(?=.*target)",
+				"inputPattern": "(?=.*(xd://exec_command|tool\\.exec_command\\())(?=.*target)",
 				"resultIncludes": "exit_code: 0"
 			}
 		],
 		"forbid": [
-			{ "tool": "bash", "isError": false, "inputPattern": "(?<![./\\w-])ssh(?![\\w.-])(?!\\s+-[GVO]\\b)" },
-			{ "tool": "eval", "isError": false, "inputPattern": "(?<![./\\w-])ssh(?![\\w.-])(?!\\s+-[GVO]\\b)" },
-			{ "tool": "write", "isError": false, "inputPattern": "(?=.*\"xd://bash\")(?=.*(?<![./\\w-])ssh(?![\\w.-])(?!\\s+-[GVO]\\b))" }
+			{
+				"tool": "bash",
+				"isError": false,
+				"inputPattern": "(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b)"
+			},
+			{
+				"tool": "eval",
+				"isError": false,
+				"inputPattern": "^(?!.*(xd://exec_command|xd://write_stdin|tool\\.exec_command\\(|tool\\.write_stdin\\())(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b))"
+			},
+			{
+				"tool": "write",
+				"isError": false,
+				"inputPattern": "(?=.*\"xd://bash\")(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b))"
+			}
 		]
 	},
-	"replyIncludes": ["a'b", "c\"d", "x\\ty", "(/bin/bash)"]
+	"replyIncludes": [
+		"a'b",
+		"c\"d",
+		"x\\ty",
+		"(/bin/bash)"
+	]
 }

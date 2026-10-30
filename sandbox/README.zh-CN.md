@@ -58,7 +58,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 | `calls.forbid` | 任何工具调用都不得满足的匹配器 |
 | `replyIncludes` | 最后一条助手回复必须包含的字面串 |
 
-匹配器是 `{ "tool", "isError"?, "inputPattern"?, "resultIncludes"? }`：`inputPattern` 是作用于调用 JSON 输入的正则表达式，`resultIncludes` 是结果文本中的字面串。驱动只检查场景声明的内容，自己不附加任何含义。[`scenarios/echo-hi.json`](scenarios/echo-hi.json) 是最小示例。
+匹配器是 `{ "tool", "isError"?, "inputPattern"?, "resultIncludes"? }`：`tool` 是一个工具名，或一组工具名（命中任一即可）；`inputPattern` 是作用于调用 JSON 输入的正则表达式，`resultIncludes` 是结果文本中的字面串。驱动只看得到 agent 循环直接执行的调用：`eval` cell 经 `tool.<name>` 桥调用的工具，算作那次 `eval` 调用的输入和结果。驱动只检查场景声明的内容，自己不附加任何含义。[`scenarios/echo-hi.json`](scenarios/echo-hi.json) 是最小示例。
 
 一个场景对一个模型的运行，结果是以下四种之一：
 
