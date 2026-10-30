@@ -124,7 +124,7 @@ describe("classifyPosix", () => {
 	});
 });
 
-type Handler = (event: { toolName: string; input: unknown }) => { block: true; reason: string } | undefined;
+type Handler = (event: { toolName: string; input: unknown }) => Promise<{ block: true; reason: string } | undefined>;
 
 function loadHook(activeTools: readonly string[]): { readonly handler: Handler; readonly warnings: unknown[] } {
 	let handler: Handler | undefined;
@@ -144,37 +144,44 @@ function loadHook(activeTools: readonly string[]): { readonly handler: Handler; 
 }
 
 describe("tool_call hook", () => {
-	test("points to delete when the session has it", () => {
+	test("points to delete when the session has it", async () => {
 		const { handler } = loadHook(["bash", "delete"]);
-		const result = handler({ toolName: "bash", input: { command: "rm /tmp/omp-dg-probe/f" } });
+		const result = await handler({ toolName: "bash", input: { command: "rm /tmp/omp-dg-probe/f" } });
 		expect(result?.block).toBe(true);
 		expect(result?.reason).toContain("`delete` tool");
 		expect(result?.reason).toContain("rm /tmp/omp-dg-probe/f");
 	});
 
-	test("says the session cannot delete without naming the tool when delete is absent", () => {
+	test("says the session cannot delete without naming the tool when delete is absent", async () => {
 		const { handler } = loadHook(["bash"]);
-		const result = handler({ toolName: "bash", input: { command: "rm /tmp/omp-dg-probe/f" } });
+		const result = await handler({ toolName: "bash", input: { command: "rm /tmp/omp-dg-probe/f" } });
 		expect(result?.block).toBe(true);
 		expect(result?.reason).toContain("cannot delete");
 		expect(result?.reason).not.toContain("`delete` tool");
 	});
 
-	test("judges writes to xd://bash and ignores other devices", () => {
+	test("judges writes to xd://bash and eval cells, and ignores other devices", async () => {
 		const { handler } = loadHook(["bash", "delete"]);
-		expect(handler({ toolName: "write", input: { path: "xd://bash", content: JSON.stringify({ command: "rm f" }) } })?.block).toBe(true);
-		expect(handler({ toolName: "write", input: { path: "xd://exec_command", content: JSON.stringify({ cmd: "rm f" }) } })).toBeUndefined();
-		expect(handler({ toolName: "bash", input: { command: "ls -la" } })).toBeUndefined();
+		expect((await handler({ toolName: "write", input: { path: "xd://bash", content: JSON.stringify({ command: "rm f" }) } }))?.block).toBe(
+			true,
+		);
+		expect(
+			await handler({ toolName: "write", input: { path: "xd://exec_command", content: JSON.stringify({ cmd: "rm f" }) } }),
+		).toBeUndefined();
+		expect(await handler({ toolName: "bash", input: { command: "ls -la" } })).toBeUndefined();
+		expect((await handler({ toolName: "eval", input: { language: "py", code: "import shutil; shutil.rmtree('d')" } }))?.block).toBe(true);
+		expect((await handler({ toolName: "eval", input: { language: "js", code: "require('fs').rmSync('d')" } }))?.block).toBe(true);
+		expect(await handler({ toolName: "eval", input: { language: "js", code: "console.log(1 + 1)" } })).toBeUndefined();
 	});
 
-	test("blocks and warns once when reading the call throws", () => {
+	test("blocks and warns once when reading the call throws", async () => {
 		const { handler, warnings } = loadHook(["bash", "delete"]);
 		const input = {
 			get command(): string {
 				throw new Error("boom");
 			},
 		};
-		const result = handler({ toolName: "bash", input });
+		const result = await handler({ toolName: "bash", input });
 		expect(result?.block).toBe(true);
 		expect(result?.reason).toContain("internal error");
 		expect(warnings).toHaveLength(1);

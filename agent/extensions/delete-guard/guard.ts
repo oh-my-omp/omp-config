@@ -1,16 +1,23 @@
 import { watchedCallOf } from "../_shared/tool-calls.ts";
 import { classify } from "./classify.ts";
+import { classifyJs } from "./eval-js.ts";
+import { classifyPy } from "./eval-py.ts";
 import type { Dialect, Rule, Verdict } from "./verdict.ts";
 
-/** One guarded tool call, parsed once at the hook boundary. #68 adds the eval entry. */
-type Entry = { readonly kind: "bash"; readonly command: string };
+/** One guarded tool call, parsed once at the hook boundary. */
+type Entry =
+	| { readonly kind: "bash"; readonly command: string }
+	| { readonly kind: "eval"; readonly language: "py" | "js"; readonly code: string };
 
-/** The bash tool runs in the embedded brush shell on every platform. */
+/** The bash tool, `Bun.$`, `Bun.spawn` and the `tool.bash` bridge run in the embedded brush shell on every platform. */
 const BRUSH: Dialect = { kind: "posix" };
+
+/** The shell an eval cell's `shell=True`, `os.system`, `!cmd` or `child_process.exec` string reaches: `/bin/sh` on macOS and Linux. */
+const SYSTEM_SHELL: Dialect = { kind: "posix" };
 
 const FRAGMENT_LIMIT = 300;
 
-/** `bash` calls from the loop, writes to `xd://bash` and the nested `bash` event of such a write; other tools are not guarded. */
+/** `bash` calls (loop, `xd://bash` writes and their nested `bash` event) and `eval` cells in py or js; other tools are not guarded. */
 function entryOf(toolName: string, input: unknown): Entry | null {
 	const call = watchedCallOf(toolName, input);
 	if (call === null) return null;
@@ -18,7 +25,7 @@ function entryOf(toolName: string, input: unknown): Entry | null {
 		case "shell":
 			return call.tool === "bash" ? { kind: "bash", command: call.command } : null;
 		case "eval":
-			return null;
+			return call.language === "py" || call.language === "js" ? { kind: "eval", language: call.language, code: call.code } : null;
 		default: {
 			const unreachable: never = call;
 			return unreachable;
@@ -26,12 +33,14 @@ function entryOf(toolName: string, input: unknown): Entry | null {
 	}
 }
 
-function judge(entry: Entry): Verdict {
+async function judge(entry: Entry): Promise<Verdict> {
 	switch (entry.kind) {
 		case "bash":
-			return classify(BRUSH, entry.command, 0);
+			return classify(BRUSH, { kind: "script", text: entry.command }, 0);
+		case "eval":
+			return entry.language === "py" ? classifyPy(entry.code, SYSTEM_SHELL, BRUSH) : classifyJs(entry.code, SYSTEM_SHELL, BRUSH);
 		default: {
-			const unreachable: never = entry.kind;
+			const unreachable: never = entry;
 			return unreachable;
 		}
 	}
@@ -57,10 +66,10 @@ function reasonFor(rule: Rule, fragment: string, detail: string, deleteAvailable
 export type GuardResult = { readonly block: true; readonly reason: string } | undefined;
 
 /** The `tool_call` decision: a block with its reason, or undefined to let the call run. */
-export function guardToolCall(toolName: string, input: unknown, deleteAvailable: () => boolean): GuardResult {
+export async function guardToolCall(toolName: string, input: unknown, deleteAvailable: () => boolean): Promise<GuardResult> {
 	const entry = entryOf(toolName, input);
 	if (entry === null) return undefined;
-	const verdict = judge(entry);
+	const verdict = await judge(entry);
 	switch (verdict.kind) {
 		case "allow":
 			return undefined;
