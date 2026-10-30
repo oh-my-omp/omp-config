@@ -20,11 +20,15 @@
  * - `risk` — the risk lane (`risk.ts`): flags a long chain that both reads and
  *   writes, whose side-effect surface is unreadable. No judge. Missing or
  *   `null` leaves it off.
+ * - `pty` — the pty lane (`pty.ts`): refuses, before they run, `bash` and eval
+ *   calls that belong in an `exec_command` PTY session. An object (`{}`) turns
+ *   it on under either detector; missing or `null` leaves it off.
  *
  *   { "detector": "heuristic",
  *     "form": { "prompt": "…", "afterHits": 3, "maxNags": 3 },
  *     "intent": { "threshold": 0.5 },
- *     "risk": { "minCommands": 4, "minChars": 600, "minPrograms": 3 } }
+ *     "risk": { "minCommands": 4, "minChars": 600, "minPrograms": 3 },
+ *     "pty": {} }
  *
  * Nothing is preset in code: without a valid section no lane runs.
  */
@@ -51,6 +55,9 @@ export type IntentLane = {
 /** The risk lane: deterministic, for calls whose side-effect surface is unreadable. */
 export type RiskLane = { readonly kind: "risk" } & RiskConfig;
 
+/** The pty lane: deterministic, blocking; it has no settings. */
+export type PtyLane = { readonly kind: "pty" };
+
 /** How tool-routing violations are caught, chosen by `detector`. */
 export type ToolLanes =
 	| { readonly detector: "heuristic"; readonly form: FormLane }
@@ -59,10 +66,11 @@ export type ToolLanes =
 export type Lanes = {
 	readonly tool: ToolLanes | null;
 	readonly risk: RiskLane | null;
+	readonly pty: PtyLane | null;
 };
 export type LaneWarning = { readonly en: string; readonly zh: string };
 
-const NO_LANES: Lanes = { tool: null, risk: null };
+const NO_LANES: Lanes = { tool: null, risk: null, pty: null };
 
 const thresholdSchema = z.number().refine((value) => value > 0 && value <= 1, "threshold must be a number in (0, 1]");
 const positiveCount = (label: string) =>
@@ -78,18 +86,21 @@ const riskBlock = z.object({
 	minChars: positiveCount("minChars"),
 	minPrograms: positiveCount("minPrograms"),
 });
+const ptyBlock = z.object({}).strict();
 
 const lanesSchema = z.union([
 	z.object({
 		detector: z.literal("heuristic"),
 		form: formBlock,
 		risk: riskBlock.nullable().optional(),
+		pty: ptyBlock.nullable().optional(),
 	}),
 	z.object({
 		detector: z.literal("jev"),
 		intent: intentBlock,
 		form: formBlock.nullable().optional(),
 		risk: riskBlock.nullable().optional(),
+		pty: ptyBlock.nullable().optional(),
 	}),
 ]);
 
@@ -104,9 +115,10 @@ function lanesOf(value: z.infer<typeof lanesSchema>): Lanes {
 		value.risk == null
 			? null
 			: { kind: "risk", minCommands: value.risk.minCommands, minChars: value.risk.minChars, minPrograms: value.risk.minPrograms };
+	const pty: PtyLane | null = value.pty == null ? null : { kind: "pty" };
 	switch (value.detector) {
 		case "heuristic":
-			return { tool: { detector: "heuristic", form: formOf(value.form) }, risk };
+			return { tool: { detector: "heuristic", form: formOf(value.form) }, risk, pty };
 		case "jev":
 			return {
 				tool: {
@@ -115,6 +127,7 @@ function lanesOf(value: z.infer<typeof lanesSchema>): Lanes {
 					fallback: value.form == null ? null : formOf(value.form),
 				},
 				risk,
+				pty,
 			};
 		default: {
 			const unreachable: never = value;

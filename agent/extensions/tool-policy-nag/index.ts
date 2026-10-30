@@ -62,6 +62,7 @@ import { type WatchedCall, watchedCallOf } from "../_shared/tool-calls.ts";
 import { type FormLane, type IntentLane, type Lanes, type LaneWarning, loadLanes } from "./detector-config.ts";
 import { detectEvalViolations, detectShellViolations } from "./heuristic.ts";
 import { type IntentSpec, intentReminder, intentViolation, JUDGE_TIMEOUT_MS, judgeIntent, loadIntentSpec } from "./intent.ts";
+import { ptyEvalHit, ptyRefusal, ptyShellHit } from "./pty.ts";
 import { inspectRisk, riskReminder } from "./risk.ts";
 
 const STATE_ENTRY_TYPE = "mouriya.omp.tool-policy-nag.state";
@@ -178,6 +179,41 @@ async function runForMainSession(pi: ExtensionAPI, ctx: ExtensionContext, handle
 		await handler();
 	} catch (error) {
 		pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) });
+	}
+}
+
+/**
+ * The pty lane's refusal for a watched call, or null to let it through: the
+ * lane is configured, the calling session has `exec_command` to go to, and a
+ * `bash` line or an eval cell hits a rule. Never throws; a failure lets the
+ * call run.
+ */
+async function ptyRefusalFor(pi: ExtensionAPI, lanes: Lanes, call: WatchedCall): Promise<string | null> {
+	if (lanes.pty === null) return null;
+	try {
+		if (!pi.getActiveTools().includes("exec_command")) return null;
+		switch (call.kind) {
+			case "shell": {
+				if (call.tool !== "bash") return null;
+				const hit = ptyShellHit(call.command);
+				if (hit === null) return null;
+				pi.logger.info("Tool-policy pty route refused", { tool: call.tool, ...hit });
+				return ptyRefusal(hit, call.tool, call.command, "sh");
+			}
+			case "eval": {
+				const hit = await ptyEvalHit(call.language, call.code);
+				if (hit === null) return null;
+				pi.logger.info("Tool-policy pty route refused", { tool: "eval", language: call.language, ...hit });
+				return ptyRefusal(hit, "eval", call.code, call.language);
+			}
+			default: {
+				const unreachable: never = call;
+				return unreachable;
+			}
+		}
+	} catch (error) {
+		pi.logger.warn("Tool-policy pty lane failed; call allowed", { error: errorText(error) });
+		return null;
 	}
 }
 
@@ -339,14 +375,25 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", (_event, ctx) => runForMainSession(pi, ctx, () => releaseInterceptor("session_shutdown")));
 
-	pi.on("tool_call", (event, ctx) =>
-		runForMainSession(pi, ctx, async () => {
-			if (event.toolName !== "write" && nestedDeviceCalls.delete(event.toolCallId)) return;
-			const call = watchedCallOf(event.toolName, event.input);
-			if (call === null) return;
-			// The device re-dispatches its payload as a nested tool call with the same id.
-			if (event.toolName === "write") nestedDeviceCalls.add(event.toolCallId);
-			const { lanes, warnings }: { lanes: Lanes; warnings: readonly LaneWarning[] } = loadLanes(ctx.cwd);
+	pi.on("tool_call", async (event, ctx) => {
+		// The device re-dispatches its payload as a nested tool call with the same id;
+		// the outer write already went through every lane.
+		if (event.toolName !== "write" && nestedDeviceCalls.delete(event.toolCallId)) return;
+		const call = watchedCallOf(event.toolName, event.input);
+		if (call === null) return;
+		let loaded: { lanes: Lanes; warnings: readonly LaneWarning[] };
+		try {
+			loaded = loadLanes(ctx.cwd);
+		} catch (error) {
+			pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) });
+			return;
+		}
+		const { lanes, warnings } = loaded;
+		// Main and sub sessions: a refused call is stopped before every other lane, so nothing counts or reminds.
+		const refusal = await ptyRefusalFor(pi, lanes, call);
+		if (refusal !== null) return { block: true, reason: refusal };
+		if (event.toolName === "write") nestedDeviceCalls.add(event.toolCallId);
+		await runForMainSession(pi, ctx, async () => {
 			for (const warning of warnings) warnOnce(ctx, warning);
 			// The tool runs after this hook, so the override reaches this very call.
 			const settings = syncInterceptor(ctx, lanes);
@@ -398,6 +445,6 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 					return unreachable;
 				}
 			}
-		}),
-	);
+		});
+	});
 }

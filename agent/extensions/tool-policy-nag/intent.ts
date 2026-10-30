@@ -131,7 +131,7 @@ export async function judgeIntent(judge: Judge, spec: IntentSpec, call: WatchedC
 }
 
 /** A code fence longer than any backtick run inside `text`. */
-function fenced(text: string, language: string): string {
+export function fenced(text: string, language: string): string {
 	let longest = 2;
 	for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
 	const marks = "`".repeat(longest + 1);
