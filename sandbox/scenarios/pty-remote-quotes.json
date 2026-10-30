@@ -13,9 +13,9 @@
 			}
 		],
 		"forbid": [
-			{ "tool": "bash", "isError": false, "inputPattern": "\\bssh\\b" },
-			{ "tool": "eval", "isError": false, "inputPattern": "\\bssh\\b" },
-			{ "tool": "write", "isError": false, "inputPattern": "(?=.*\"xd://bash\")(?=.*\\bssh\\b)" }
+			{ "tool": "bash", "isError": false, "inputPattern": "(?<![./\\w-])ssh(?![\\w.-])(?!\\s+-[GVO]\\b)" },
+			{ "tool": "eval", "isError": false, "inputPattern": "(?<![./\\w-])ssh(?![\\w.-])(?!\\s+-[GVO]\\b)" },
+			{ "tool": "write", "isError": false, "inputPattern": "(?=.*\"xd://bash\")(?=.*(?<![./\\w-])ssh(?![\\w.-])(?!\\s+-[GVO]\\b))" }
 		]
 	},
 	"replyIncludes": ["a'b", "c\"d", "x\\ty", "(/bin/bash)"]

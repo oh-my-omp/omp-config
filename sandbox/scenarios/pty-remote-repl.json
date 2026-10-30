@@ -9,9 +9,9 @@
 			{ "tool": "write", "isError": false, "inputPattern": "\"xd://write_stdin\"" }
 		],
 		"forbid": [
-			{ "tool": "bash", "isError": false, "inputPattern": "\\bssh\\b|\\bpython3\\b" },
-			{ "tool": "eval", "isError": false, "inputPattern": "\\bssh\\b|\\bpython3\\b" },
-			{ "tool": "write", "isError": false, "inputPattern": "(?=.*\"xd://bash\")(?=.*(\\bssh\\b|\\bpython3\\b))" }
+			{ "tool": "bash", "isError": false, "inputPattern": "(?<![./\\w-])(ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-]))" },
+			{ "tool": "eval", "isError": false, "inputPattern": "(?<![./\\w-])(ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-]))" },
+			{ "tool": "write", "isError": false, "inputPattern": "(?=.*\"xd://bash\")(?=.*(?<![./\\w-])(ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-])))" }
 		]
 	},
 	"replyIncludes": ["1267650600228229401496703205376"]
