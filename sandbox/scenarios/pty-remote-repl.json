@@ -1,0 +1,18 @@
+{
+	"name": "pty-remote-repl",
+	"init": "true",
+	"prompt": "登录主机 target，在交互式 python3 里计算 2**100，把结果告诉我。",
+	"finalAssertion": "true",
+	"calls": {
+		"expect": [
+			{ "tool": "write", "isError": false, "inputPattern": "\"xd://exec_command\"" },
+			{ "tool": "write", "isError": false, "inputPattern": "\"xd://write_stdin\"" }
+		],
+		"forbid": [
+			{ "tool": "bash", "isError": false, "inputPattern": "\\bssh\\b|\\bpython3\\b" },
+			{ "tool": "eval", "isError": false, "inputPattern": "\\bssh\\b|\\bpython3\\b" },
+			{ "tool": "write", "isError": false, "inputPattern": "(?=.*\"xd://bash\")(?=.*(\\bssh\\b|\\bpython3\\b))" }
+		]
+	},
+	"replyIncludes": ["1267650600228229401496703205376"]
+}
