@@ -72,6 +72,16 @@ describe("validateTargets", () => {
 		expect(refusedPaths([variant])).toEqual([variant]);
 	});
 
+	test("refuses an existing ancestor of a removed cwd by identity, not only by spelling", () => {
+		const real = path.join(root, "real");
+		mkdirSync(path.join(real, "gone"), { recursive: true });
+		symlinkSync(real, path.join(root, "alias"));
+		const removed = path.join(root, "alias", "gone");
+		rmSync(path.join(real, "gone"), { recursive: true });
+		const result = validateTargets([real], removed);
+		expect(result.kind === "refused" && result.refusals[0]?.reason).toContain("ancestor of the session cwd");
+	});
+
 	test("accepts a dangling symbolic link as the link itself", () => {
 		const link = path.join(root, "dangling");
 		symlinkSync(path.join(root, "gone"), link);
@@ -142,6 +152,15 @@ describe("runDeletion", () => {
 			expect(again.map((outcome) => outcome.kind)).toEqual(["done"]);
 			expect(readFileSync(path.join(trash, "files", "a.txt.2"), "utf8")).toBe("second");
 			expect(existsSync(path.join(trash, "info", "a.txt.2.trashinfo"))).toBe(true);
+
+			// A payload left in files/ without its info file is never overwritten.
+			writeFileSync(path.join(trash, "files", "b.txt"), "old");
+			const b = path.join(root, "b.txt");
+			writeFileSync(b, "new");
+			const third = await runDeletion("linux", "trash", [{ given: "b.txt", operand: b }]);
+			expect(third.map((outcome) => outcome.kind)).toEqual(["done"]);
+			expect(readFileSync(path.join(trash, "files", "b.txt"), "utf8")).toBe("old");
+			expect(readFileSync(path.join(trash, "files", "b.txt.2"), "utf8")).toBe("new");
 		} finally {
 			if (previous === undefined) delete process.env.XDG_DATA_HOME;
 			else process.env.XDG_DATA_HOME = previous;

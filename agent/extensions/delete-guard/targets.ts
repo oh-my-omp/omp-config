@@ -46,12 +46,12 @@ function protectChain(
 	try {
 		real = realpathSync.native(dir);
 	} catch {
-		// A home or cwd that no longer exists is protected by spelling only.
+		// A home or cwd that no longer exists is protected by spelling; its existing ancestors still by identity.
 	}
 	let current = real ?? path.resolve(dir);
 	let reason = selfReason;
 	for (;;) {
-		const stats = real === null ? null : statOrNull(current, true);
+		const stats = statOrNull(current, true);
 		const map = stats === null ? spelled : identities;
 		const key = stats === null ? current : identityOf(stats);
 		if (!map.has(key)) map.set(key, reason);
