@@ -42,8 +42,8 @@ Behavior is described where it lives; read the matching one before changing it:
   are never overwritten; the marker, not the filename, decides. Never write the
   contiguous Otty marker literal in the updater: it would skip updating itself.
 - **Never commit** runtime state or anything credential-bearing (databases,
-  locks, sessions, caches, logs, `models.yml`, `commandcode-models.json`,
-  `node_modules/`, `bun.lock`), including files `.gitignore` misses.
+  locks, sessions, caches, logs, `models.yml`, `node_modules/`, `bun.lock`),
+  including files `.gitignore` misses.
 - **Load order.** `extensions-last/system-prompt-replace/index.ts` stays the
   last `config.yml` `extensions` entry and outside `extensions/`. Order inside
   `extensions/` is unspecified, so filename prefixes cannot order hooks.

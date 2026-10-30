@@ -258,7 +258,6 @@ const CTX_RETIREMENTS: readonly string[] = [
 const SUPERSEDED: readonly { readonly from: string; readonly by: string }[] = [
 	...[
 		"append-system-model",
-		"commandcode-model-spec",
 		"doc-polish",
 		"fork-task",
 		"input-polish",

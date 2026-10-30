@@ -24,14 +24,13 @@
 | 16 | `doc-polish` | [doc-polish](#doc-polish) | 主 + 子 | 否 | `omomp.yml#doc-polish`（本机） | 人机交互与 TUI（完整模式可选增强 `polish-tools`） | 按需当场（本机）：需要使用 `/polish-doc` 时在本机 `omomp.yml` 添加 `doc-polish` 段并绑定 `@doc-polish.*` 角色 |
 | 17 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 执行与工作区控制（必选基底 `workspace-lifecycle`） | 无需配置：在回合空闲时排队执行 `/wt` 与 `/move` |
 | 18 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 执行与工作区控制（必选基底 `workspace-lifecycle`） | 无需配置：在回合空闲时重启进程并自动恢复会话继续任务 |
-| 19 | `commandcode-model-spec` | [commandcode-model-spec](#commandcode-model-spec) | 主 + 子 | 是 | 读取本机 `commandcode-models.json` | 供应商与生命周期（条件必选 `commandcode-adapter`；与 `pi-commandcode-provider` 耦合） | 条件当场（本机）：仅在使用 Command Code 且本机生成 `commandcode-models.json` 时生效 |
-| 20 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话（表为进程全局） | 是 | 后端 `fetchAvailableModels`；无文件 | 供应商与生命周期（条件必选 `antigravity-compat`） | 无需配置：本机存有 Antigravity 账号时自动刷新 `maxOutputTokens` |
-| 21 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） | 供应商与生命周期（必选基底 `workspace-lifecycle`） | 按需当场（本机）：用 `/omp-config-autoupdate on\|off` 切换，用 `/omp-config-autoupdate conflicts notify\|agent` 选择冲突处理方式，用 `/omp-config-autoupdate adapt` 适配冲突的本机定制 |
-| 22 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局（模块加载） | 是 | `omomp.yml#omomp-lang`（仓库默认值，首次播种后归本机） | 人机交互与 TUI（必选基底 `workspace-lifecycle`） | 当场诊断：仓库默认 `zh`；在 `<agentDir>/omomp.yml` 修改 `language`（更新保留），或在环境变量设置 `OMOMP_LANG=en` |
-| 23 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子（提示词）；进程全局（`tool://` scheme） | 是 | 同目录的 `TOPIC-*.md` / `SURFACE-*.md`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`；`TOPIC-exec_command-*` 与 `omp-unified-exec` 耦合） | 延后：自带 `SURFACE-*` / `TOPIC-*` 随仓库维护；仅在扩展自定义工具专题时新增本机文件 |
-| 24 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`；依赖 `tool-topics`） | 延后：保持仓库默认只读触发规则；有特殊需求可在 `<cwd>/.omp/omomp.yml` 覆盖 |
-| 25 | `session-urls` | [session-urls](#session-urls) | 进程全局（`session://` scheme） | 是 | 读取会话文件、recap 记录与 prompt 历史；无配置 | 长程状态与压缩（必选基底 `compaction-baseline`） | 无需配置：进程全局注册只读 `session://` 路由 |
-| 26 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无 | 执行与宿主安全（必选基底 `safe-deletion`） | 无需配置：常驻拦截 `bash`/`eval` 删除操作并注册字面路径 `delete` 工具 |
+| 19 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话（表为进程全局） | 是 | 后端 `fetchAvailableModels`；无文件 | 供应商与生命周期（条件必选 `antigravity-compat`） | 无需配置：本机存有 Antigravity 账号时自动刷新 `maxOutputTokens` |
+| 20 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） | 供应商与生命周期（必选基底 `workspace-lifecycle`） | 按需当场（本机）：用 `/omp-config-autoupdate on\|off` 切换，用 `/omp-config-autoupdate conflicts notify\|agent` 选择冲突处理方式，用 `/omp-config-autoupdate adapt` 适配冲突的本机定制 |
+| 21 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局（模块加载） | 是 | `omomp.yml#omomp-lang`（仓库默认值，首次播种后归本机） | 人机交互与 TUI（必选基底 `workspace-lifecycle`） | 当场诊断：仓库默认 `zh`；在 `<agentDir>/omomp.yml` 修改 `language`（更新保留），或在环境变量设置 `OMOMP_LANG=en` |
+| 22 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子（提示词）；进程全局（`tool://` scheme） | 是 | 同目录的 `TOPIC-*.md` / `SURFACE-*.md`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`；`TOPIC-exec_command-*` 与 `omp-unified-exec` 耦合） | 延后：自带 `SURFACE-*` / `TOPIC-*` 随仓库维护；仅在扩展自定义工具专题时新增本机文件 |
+| 23 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`；依赖 `tool-topics`） | 延后：保持仓库默认只读触发规则；有特殊需求可在 `<cwd>/.omp/omomp.yml` 覆盖 |
+| 24 | `session-urls` | [session-urls](#session-urls) | 进程全局（`session://` scheme） | 是 | 读取会话文件、recap 记录与 prompt 历史；无配置 | 长程状态与压缩（必选基底 `compaction-baseline`） | 无需配置：进程全局注册只读 `session://` 路由 |
+| 25 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无 | 执行与宿主安全（必选基底 `safe-deletion`） | 无需配置：常驻拦截 `bash`/`eval` 删除操作并注册字面路径 `delete` 工具 |
 
 ---
 
@@ -244,12 +243,6 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 
 使用与 `wt-tool` 相同的空闲队列机制与武装条件触发 `InteractiveMode.restart()`。在调用 `restart()` 前向当前分支写入自定义条目 `mouriya.omp.harness-restart.request`（记录 `reason` 与时间戳）；新进程恢复会话时，在 `session_start` 读到该条目并发送 `"Harness restart completed（<时间>）。Reason was: <原因>。Continue what you were doing."`（`attribution: "agent"`）。
 
-### commandcode-model-spec
-
-源码：`agent/extensions/commandcode-model-spec/`。
-
-修复 `--model` 启动参数指定 `commandcode` 模型时的认证失败：`models.db` 将模型缓存为 `openai-completions`/`anthropic-messages` 导致请求未走插件的 `commandcode-custom` 而报 401，以及 `google/gemini-3.5-flash-lite` 等模型名被匹配到无凭据的内置 `google` provider。扩展在 `session_start` 读取 `<agentDir>/commandcode-models.json`（或 `COMMANDCODE_MODELS_CACHE`），若当前模型在该列表中、`api !== "commandcode-custom"` 且不是已配置凭据的内置模型，则调用 `setModel` 重新绑定到 `pi-commandcode-provider` 注册的实时模型。
-
 ### antigravity-wire-profiles
 
 源码：`agent/extensions/antigravity-wire-profiles/`。
@@ -321,4 +314,4 @@ tool-topic-injection:
 - 从 agent 目录的 `omomp.*` 读取 `omomp.yml#omomp-lang.language`（仓库配置 `zh`；不读项目 `.omp/` 副本，修改后下次启动生效）。
 - 模块加载时将 `process.env.OMOMP_LANG` 设为该值，但若启动环境已设置（如 `OMOMP_LANG=en omp`）则保留环境值。
 - `_shared/i18n.ts` 的 `tr(en, zh)` 在每次生成文字时按 `OMOMP_LANG` → `omomp-lang` 配置段 → `LC_ALL` / `LC_MESSAGES` / `LANG`（`zh*` 为中文）→ 英文 的顺序解析，并直接读取配置段，使早于 `omomp-lang` 加载的扩展也能拿到配置语言。
-- 仅运行在 OMP 的插件（`omp-todo-more`、`omp-playbooks`、`omp-thinking-translator`、`omp-codex-image-gen`、`omp-remote-build`）使用相同解析顺序；`omp-ask-more` 在模块加载时按 `OMOMP_LANG` → `LC_ALL` / `LC_MESSAGES` / `LANG` 从环境变量读取一次；兼容 Pi 的插件（`omp-unified-exec`、`pi-bansos`）只读环境变量；第三方 npm 插件（`pi-commandcode-provider`、`pi-package-search`）仅英文。
+- 仅运行在 OMP 的插件（`omp-todo-more`、`omp-playbooks`、`omp-thinking-translator`、`omp-codex-image-gen`、`omp-remote-build`）使用相同解析顺序；`omp-ask-more` 在模块加载时按 `OMOMP_LANG` → `LC_ALL` / `LC_MESSAGES` / `LANG` 从环境变量读取一次；兼容 Pi 的插件（`omp-unified-exec`、`pi-bansos`）只读环境变量；第三方 npm 插件（`pi-package-search`）仅英文。

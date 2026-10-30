@@ -10,7 +10,6 @@ plugins=(
   'https://github.com/mouriya-s-lab/pi-bansos'
   'https://github.com/oh-my-omp/omp-unified-exec'
   'https://github.com/oh-my-omp/omp-todo-more'
-  'pi-commandcode-provider'
   'pi-package-search'
   'pi-pretty-codeblocks'
   'https://github.com/oh-my-omp/omp-thinking-translator'

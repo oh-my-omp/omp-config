@@ -6,7 +6,6 @@ agent/config.yml.lock
 agent/*.lock
 agent/models.yml
 agent/models.yml.bak-*
-agent/commandcode-models.json
 agent/last-changelog-version
 agent/sessions/
 agent/terminal-sessions/

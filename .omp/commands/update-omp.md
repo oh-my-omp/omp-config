@@ -21,7 +21,7 @@ description: 用本仓库工作区更新本机 OMP 配置（repo → 本机）�
    写入按更新器文件头的 CUSTOMIZATIONS 三方合并：本机没改过的受管项取工作区版本，改过的保留本机修改，文本文件两边都改时用 `git merge-file` 合并；`*.ts` 代码以仓库为准，被覆盖的本机修改列在 `overwrote customized code`。
 2. 报告里有 `conflict (…), local copy kept: <id>` 时，与用户逐项适配：运行 `bun agent/extensions/omp-config-autoupdate/omp-config-update.ts conflicts --source .`（named profile 加同样的 `--agent-dir`），按它打印的步骤处理每个冲突，适配完用它给出的 `resolve --source .` 命令记录。用户选择以后再处理的冲突保持原样，在报告里列出。
 3. 跑 `./plugin-audit.sh`，只处理 `[卸载候选]`：问用户是否 `omp plugin uninstall <name>`，并告知作者从脚本移除通常已经验证过，可以直接删。`[安装]` 已由更新器补装，`[保留]` 不动。没有安装任何插件时，审计仍正常输出分类报告并成功退出：`已安装` 为 `(无)`，`[安装]` 列出当前全部声明插件。
-4. 本机初始化项（`omomp.yml` 里的 `doc-polish` 段，以及 `commandcode-model-spec` 依赖的 `commandcode-models.json`）脚本不碰。已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。仓库不带 `doc-polish` 段，示例见 `docs/extensions.zh-CN.md` 的 `doc-polish` 一节。
+4. 本机初始化项（`omomp.yml` 里的 `doc-polish` 段）脚本不碰。已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。仓库不带 `doc-polish` 段，示例见 `docs/extensions.zh-CN.md` 的 `doc-polish` 一节。
 5. 报告脚本输出的写入、移动、删除、跳过（应用托管文件）、被覆盖的代码修改、冲突及其适配结果、安装和升级的插件、note 和 error，以及卸载结果和初始化项的处理。
 
 ## 手动更新与自动更新的差别

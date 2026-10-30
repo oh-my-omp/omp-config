@@ -21,7 +21,7 @@ description: 把本机 ~/.omp/agent 配置同步进本仓库快照（单向）
 插件状态不在范围内：`pi-bansos` 的 `~/.pi/agent/pi-bansos-relay-state.json` 由 `/bansos` 命令维护，属于本机，不收回仓库。
 
 不进仓库：
-- 运行时文件：`*.db*`、`*-wal`、`*-shm`、`*.lock`、`models.yml`、`models.yml.bak-*`、`commandcode-models.json`、`last-changelog-version`、`sessions/`、`terminal-sessions/`、`blobs/`、`cache/`、`logs/`，以及更新器的记录 `.omp-config-applied` 和基准目录 `.omp-config-base/`。本机开关是 `omomp.yml` 里的 `omp-config-autoupdate` 段，同样不收回。
+- 运行时文件：`*.db*`、`*-wal`、`*-shm`、`*.lock`、`models.yml`、`models.yml.bak-*`、`last-changelog-version`、`sessions/`、`terminal-sessions/`、`blobs/`、`cache/`、`logs/`，以及更新器的记录 `.omp-config-applied` 和基准目录 `.omp-config-base/`。本机开关是 `omomp.yml` 里的 `omp-config-autoupdate` 段，同样不收回。
 - `omp` 安装目录里的 `omp-light`、`omp-light.ts`、`omp-light.cmd`；light 三件只从 `~/.omp/agent` 取。
 - 应用托管的扩展：首行为 `// @orca-managed-pi-extension`，或任意位置含 `marker: _otty`。以标记为准，不凭文件名判断。
 - 结构化配置中的本机路径与播种路径，仓库保留原值：即更新器的 `LOCAL_CONFIG_FIELDS`、`SEED_CONFIG_FIELDS`（`config.yml`）、`LOCAL_OMOMP_SECTIONS`、`SEED_OMOMP_FIELDS`（`omomp.yml`）与 `SEED_TRANSLATOR_FIELDS`（`thinking-translator.json`）。更新器从不写本机路径；播种路径只在本机缺少时写入一次，之后归本机，所以本机的值不代表仓库默认值。要改仓库默认值，直接改仓库。
