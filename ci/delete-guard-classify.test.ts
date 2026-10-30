@@ -118,6 +118,7 @@ describe("classifyPosix", () => {
 		"bash --version",
 		"cat 3<<'EOF'\nrm f\nEOF",
 		"echo \"$'x'\"",
+		"constructor x",
 	])("allows: %p", (command) => {
 		expect(ruleOf(command)).toBe("allow");
 	});
