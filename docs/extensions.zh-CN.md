@@ -313,4 +313,4 @@ tool-topic-injection:
 - 从 agent 目录的 `omomp.*` 读取 `omomp.yml#omomp-lang.language`（仓库配置 `zh`；不读项目 `.omp/` 副本，修改后下次启动生效）。
 - 模块加载时将 `process.env.OMOMP_LANG` 设为该值，但若启动环境已设置（如 `OMOMP_LANG=en omp`）则保留环境值。
 - `_shared/i18n.ts` 的 `tr(en, zh)` 在每次生成文字时按 `OMOMP_LANG` → `omomp-lang` 配置段 → `LC_ALL` / `LC_MESSAGES` / `LANG`（`zh*` 为中文）→ 英文 的顺序解析，并直接读取配置段，使早于 `omomp-lang` 加载的扩展也能拿到配置语言。
-- 仅运行在 OMP 的插件（`omp-todo-more`、`omp-playbooks`、`omp-thinking-translator`、`omp-codex-image-gen`、`omp-remote-build`）使用相同解析顺序；兼容 Pi 的插件（`omp-unified-exec`、`pi-bansos`）只读环境变量；第三方 npm 插件（`pi-commandcode-provider`、`pi-package-search`）仅英文。
+- 仅运行在 OMP 的插件（`omp-todo-more`、`omp-playbooks`、`omp-thinking-translator`、`omp-codex-image-gen`、`omp-remote-build`）使用相同解析顺序；`omp-ask-more` 在模块加载时按 `OMOMP_LANG` → `LC_ALL` / `LC_MESSAGES` / `LANG` 从环境变量读取一次；兼容 Pi 的插件（`omp-unified-exec`、`pi-bansos`）只读环境变量；第三方 npm 插件（`pi-commandcode-provider`、`pi-package-search`）仅英文。
