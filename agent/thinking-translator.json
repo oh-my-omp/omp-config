@@ -4,7 +4,7 @@
   "translatorModels": [
     {
       "provider": "futureppo-pool",
-      "id": "glm-5.3-flash",
+      "id": "grok-4.7",
       "effort": "low"
     },
     {
@@ -14,13 +14,32 @@
     },
     {
       "provider": "futureppo-pool",
-      "id": "grok-4.7",
+      "id": "nemotron-3.5-bolt-e4b"
+    },
+    {
+      "provider": "futureppo-pool",
+      "id": "nemotron-3-nano-omni-30b-a3b-reasoning"
+    },
+    {
+      "provider": "futureppo-pool",
+      "id": "glm-4.6v-flash"
+    },
+    {
+      "provider": "futureppo-pool",
+      "id": "nemotron-3.5-lightning",
       "effort": "minimal"
     },
     {
-      "provider": "commandcode",
-      "id": "reflection/beam:free",
-      "effort": "minimal"
+      "provider": "futureppo-pool",
+      "id": "nemotron-3.5-lightning-30b-a3b"
+    },
+    {
+      "provider": "futureppo-pool",
+      "id": "nemotron-3-ultra-550b-a55b"
+    },
+    {
+      "provider": "futureppo-pool",
+      "id": "nemotron-3.5-super-vl-120b-a12b"
     },
     {
       "provider": "commandcode",
@@ -31,6 +50,10 @@
       "provider": "commandcode",
       "id": "stealth/glyph-cluster:free",
       "effort": "minimal"
+    },
+    {
+      "provider": "commandcode",
+      "id": "reflection/beam:free"
     }
   ],
   "trace": false

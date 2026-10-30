@@ -33,30 +33,36 @@
 
 ### 思考翻译
 
-`omp-thinking-translator` 从 `~/.omp/agent/thinking-translator.json` 读取有序模型链，每次翻译请求从第 1 项开始尝试，失败才换下一项（下一条消息开始时重读文件）。更新器只在本机缺少 `enabled`、`targetLanguage`、`translatorModels` 时写入仓库值（`SEED_TRANSLATOR_FIELDS`），之后保留本机的值。仓库配置的模型链：
+`omp-thinking-translator` 从 `~/.omp/agent/thinking-translator.json` 读取有序模型链，每次翻译请求从第 1 项开始尝试，失败才换下一项（下一条消息开始时重读文件）。更新器只在本机缺少 `enabled`、`targetLanguage`、`translatorModels` 时写入仓库值（`SEED_TRANSLATOR_FIELDS`），之后保留本机的值。仓库配置的模型链先试 `futureppo-pool` 中所有能翻译的对话模型（又快又稳的排前面），最后回退到 Command Code 的免费模型：
 
-1. `futureppo-pool/glm-5.3-flash`（`effort: "low"`）
+1. `futureppo-pool/grok-4.7`（`effort: "low"`）
 2. `futureppo-pool/minimax-m3.1-flash`（`effort: "low"`）
-3. `futureppo-pool/grok-4.7`（`effort: "minimal"`）
-4. `commandcode/reflection/beam:free`（`effort: "minimal"`）
-5. `commandcode/poolside/laguna-s-2.1-free`（`effort: "minimal"`）
-6. `commandcode/stealth/glyph-cluster:free`（`effort: "minimal"`）
+3. `futureppo-pool/nemotron-3.5-bolt-e4b`
+4. `futureppo-pool/nemotron-3-nano-omni-30b-a3b-reasoning`
+5. `futureppo-pool/glm-4.6v-flash`
+6. `futureppo-pool/nemotron-3.5-lightning`（`effort: "minimal"`）
+7. `futureppo-pool/nemotron-3.5-lightning-30b-a3b`
+8. `futureppo-pool/nemotron-3-ultra-550b-a55b`
+9. `futureppo-pool/nemotron-3.5-super-vl-120b-a12b`
+10. `commandcode/poolside/laguna-s-2.1-free`（`effort: "minimal"`）
+11. `commandcode/stealth/glyph-cluster:free`（`effort: "minimal"`）
+12. `commandcode/reflection/beam:free`
 
-`deepseek-v4.1-flash` 已从该池下架；`qwen3.8-27b` 不接受 `reasoning_effort`；`qwen3.8-flash-next` 与 `Index-Translate-35B-A3B` 无法通过 OMP 的 `max_completion_tokens` 请求体；Command Code 已不再提供 `inclusionai/ling-3.1-flash:free`。它们均不在链中。
+没写 `effort` 的条目用模型默认值。`glm-4.6v-flash` 不带 `reasoning_effort` 时约 1.5 秒出结果，带上后要思考约 30 秒，所以不设。不在链中：`glm-5.3-flash` 与 `deepseek-v4.1-flash` 已从该池下架；`nemotron-3-ultra` 对 OMP 的请求返回 `400 invalid_request`；`elephant-1` 是判定模型；`Index-Translate-35B-A3B` 无法通过 OMP 的 `max_completion_tokens` 请求体；Command Code 已不再提供 `inclusionai/ling-3.1-flash:free`。
 
-`futureppo-pool` 自动发现的模型默认不带 `reasoning_effort` 支持。使用链中的 `futureppo-pool` 条目时，需在本机 `~/.omp/agent/models.yml`（本机文件，不同步）的 `futureppo-pool` 下加上 `supportsReasoningEffort: true`，重启 `omp` 后用 `/thinking-translator status` 检查：
+`futureppo-pool` 自动发现的模型默认不带 `reasoning_effort` 支持，池内条目的 `effort` 只有在本机 `~/.omp/agent/models.yml`（本机文件，不同步）的 `providers.futureppo-pool` 下为该模型加上 `supportsReasoningEffort: true` 后才生效。改完重启 `omp`，用 `/thinking-translator status` 检查：
 
 ```yaml
 providers:
   futureppo-pool:
     modelOverrides:
-      glm-5.3-flash:
+      grok-4.7:
         compat:
           supportsReasoningEffort: true
       minimax-m3.1-flash:
         compat:
           supportsReasoningEffort: true
-      grok-4.7:
+      nemotron-3.5-lightning:
         compat:
           supportsReasoningEffort: true
 ```

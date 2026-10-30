@@ -33,30 +33,36 @@ Lightweight policy and lifecycle hooks live in `agent/extensions/`, while statef
 
 ### Thinking translation
 
-`omp-thinking-translator` reads its model list from `~/.omp/agent/thinking-translator.json`, trying candidates in order on each request and re-reading the file at the start of the next message. The updater writes the repo's `enabled`, `targetLanguage` and `translatorModels` only while the machine lacks them (`SEED_TRANSLATOR_FIELDS`); afterwards the machine's values stay. Shipped chain:
+`omp-thinking-translator` reads its model list from `~/.omp/agent/thinking-translator.json`, trying candidates in order on each request and re-reading the file at the start of the next message. The updater writes the repo's `enabled`, `targetLanguage` and `translatorModels` only while the machine lacks them (`SEED_TRANSLATOR_FIELDS`); afterwards the machine's values stay. The shipped chain tries every `futureppo-pool` chat model that translates, fastest and most consistent first, and falls back to Command Code's free models last:
 
-1. `futureppo-pool/glm-5.3-flash` (`effort: "low"`)
+1. `futureppo-pool/grok-4.7` (`effort: "low"`)
 2. `futureppo-pool/minimax-m3.1-flash` (`effort: "low"`)
-3. `futureppo-pool/grok-4.7` (`effort: "minimal"`)
-4. `commandcode/reflection/beam:free` (`effort: "minimal"`)
-5. `commandcode/poolside/laguna-s-2.1-free` (`effort: "minimal"`)
-6. `commandcode/stealth/glyph-cluster:free` (`effort: "minimal"`)
+3. `futureppo-pool/nemotron-3.5-bolt-e4b`
+4. `futureppo-pool/nemotron-3-nano-omni-30b-a3b-reasoning`
+5. `futureppo-pool/glm-4.6v-flash`
+6. `futureppo-pool/nemotron-3.5-lightning` (`effort: "minimal"`)
+7. `futureppo-pool/nemotron-3.5-lightning-30b-a3b`
+8. `futureppo-pool/nemotron-3-ultra-550b-a55b`
+9. `futureppo-pool/nemotron-3.5-super-vl-120b-a12b`
+10. `commandcode/poolside/laguna-s-2.1-free` (`effort: "minimal"`)
+11. `commandcode/stealth/glyph-cluster:free` (`effort: "minimal"`)
+12. `commandcode/reflection/beam:free`
 
-`deepseek-v4.1-flash` is no longer served by the pool; `qwen3.8-27b` rejects `reasoning_effort`, and `qwen3.8-flash-next` / `Index-Translate-35B-A3B` fail OMP's `max_completion_tokens` request shape; Command Code no longer serves `inclusionai/ling-3.1-flash:free`. None of them is in the chain.
+Entries without `effort` use the model default. `glm-4.6v-flash` answers in about 1.5 s without `reasoning_effort` and thinks for about 30 s with it, so it carries none. Not in the chain: `glm-5.3-flash` and `deepseek-v4.1-flash` are no longer served by the pool; `nemotron-3-ultra` answers OMP's request with `400 invalid_request`; `elephant-1` is a decisions model; `Index-Translate-35B-A3B` fails OMP's `max_completion_tokens` request shape; Command Code no longer serves `inclusionai/ling-3.1-flash:free`.
 
-Auto-discovered `futureppo-pool` models omit `reasoning_effort` support. To use the `futureppo-pool` entries, add `supportsReasoningEffort: true` under `providers.futureppo-pool` in the machine's `~/.omp/agent/models.yml` (machine-local, not synced), restart `omp`, and check `/thinking-translator status`:
+Auto-discovered `futureppo-pool` models omit `reasoning_effort` support, so an `effort` on a pool entry takes effect only after `supportsReasoningEffort: true` is set for that model under `providers.futureppo-pool` in the machine's `~/.omp/agent/models.yml` (machine-local, not synced). Restart `omp` and check `/thinking-translator status`:
 
 ```yaml
 providers:
   futureppo-pool:
     modelOverrides:
-      glm-5.3-flash:
+      grok-4.7:
         compat:
           supportsReasoningEffort: true
       minimax-m3.1-flash:
         compat:
           supportsReasoningEffort: true
-      grok-4.7:
+      nemotron-3.5-lightning:
         compat:
           supportsReasoningEffort: true
 ```
