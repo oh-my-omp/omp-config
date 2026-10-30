@@ -27,9 +27,8 @@ argument-hint: "[check|<plane>]"
 
 当前传入参数：`$ARGUMENTS`
 - 参数为空：按阶段 0 → 阶段 4 渐进执行完整引导、本机定制与安装。
-- 参数为 `check`：只读诊断模式（非工作阶段，不建 `todo`）。执行阶段 0 现场盘点、输出本机模型/订阅/语言/插件与仓库配置的匹配诊断表，并运行 `bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source . --check` 与 `./plugin-audit.sh`；不修改任何本机或仓库文件。
+- 参数为 `check`：只读诊断模式（非工作阶段，不建 `todo`、不调 `ask`、不修改任何本机或仓库文件）。依次执行阶段 0 现场盘点、`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source . --check` 与 `./plugin-audit.sh`，直接输出完整的《本机兼容性与原子行为闭包诊断报告》并结束。
 - 参数为 `<plane>`（`1`–`8` 或控制面关键词）：执行阶段 0 盘点后直接跳转至指定控制面的深度现场调查与定制。
-
 ---
 
 ## 阶段 0：现场盘点（只读调查，不改文件、不建 `todo`）
@@ -70,6 +69,25 @@ argument-hint: "[check|<plane>]"
 | **6. 命令执行、安全删除与工作区控制** | `agent/extensions/delete-guard/`、`agent/extensions/wt-tool/index.ts`、`agent/extensions/harness-restart/index.ts`、`agent/extensions/child-memory-warning/index.ts`、`agent/extensions/tool-topics/TOPIC-exec_command-*.md` | **触发链**：`config.yml#launch.enabled: false` 关闭原生后台服务模式，所有长生命周期/交互式进程统一走 `omp-unified-exec` 的 `exec_command` PTY 会话。`delete-guard` 在 `tool_call` 解析 `bash`（含 `xd://bash`、嵌套 shell、Windows `powershell`/`cmd`）与 `eval`（Python/JS），拦截任何删除命令（`rm`/`unlink`/`rmdir`/`shred`/`find -delete`/`rmtree`/`rmSync` 等）和非字面命令，引导模型改用只收字面路径的 `delete` 工具（默认进系统回收站 `trash`；`permanent` 每次弹窗确认，无 UI 会话禁止永久删除）。`wt-tool` 与 `harness-restart` 将 `/wt`、`/move` 与进程重启排入回合空闲队列，重启后自动发恢复消息继续任务；`child-memory-warning`（仅 macOS）每 2 秒采样后代进程物理内存，超 `4 GiB` 告警。<br>**行为闭包**：`launch.enabled: false` + `omp-unified-exec` + `TOPIC-exec_command-*` 构成**PTY 执行路由必选闭包（`pty-routing`）**；`delete-guard` 构成**安全删除必选闭包（`safe-deletion`）**。 |
 | **7. 人机交互、润色与展示** | `docs/plugins-and-modes.zh-CN.md`、`agent/extensions/input-polish/index.ts`、`agent/extensions/doc-polish/index.ts`、`agent/extensions/omomp-lang/index.ts`、`agent/thinking-translator.json` | **触发链**：`omp-ask-more` 将 `ask` 升级为带 `brief`（where/what/how、磁盘实时读取的代码 `evidence`、图表、演示）和选项 `tradeoff` 的全屏决策页（保持原生返回格式供 `turn-judge` 与 `user-prompt-inject` 读取，无 TUI 时回退原生 `ask`）。`input-polish` 在输入框按 `ctrl+enter` 时调 `@input-polish` 流式润色草稿；`doc-polish` 提供三阶段（Split → Polish → Check）不改原意的文档重排工具 `polish_doc`；`omp-thinking-translator` 按 `thinking-translator.json` 模型链实时流式翻译思考块；`pi-pretty-codeblocks` 优化代码块渲染；`omp-playbooks` 在 Tern 桌面端提供 YAML Playbook 协同面板；`omomp-lang` 控制面向人的 UI 语言（`zh`/`en`）。<br>**行为闭包**：除 `omomp-lang` 外均为**可选增强（Optional）**；若卸载 `omp-ask-more`，原生 `ask` 必须保持开启。 |
 | **8. 供应商适配、外部能力与配置同步** | `install-plugins.sh`、`agent/extensions/commandcode-model-spec/index.ts`、`agent/extensions/antigravity-wire-profiles/index.ts`、`agent/extensions/omp-config-autoupdate/`、`docs/operations.zh-CN.md` | **触发链**：`pi-bansos` 在本地 `127.0.0.1:18080` 提供免费模型代理供 `task:free` 使用；`pi-commandcode-provider` + `commandcode-model-spec` 修复 `--model` 选 Command Code 时的 provider 绑定；`antigravity-wire-profiles` 启动时拉取 Antigravity 模型的真实 `maxOutputTokens`，避免压缩摘要因 512 token 预算被 thinking 耗尽而报错；`omp-codex-image-gen` 用 Codex 订阅调 `gpt-image-2` 生图；`pi-package-search` 搜索 npm 扩展包；默认注释的 `omp-remote-build` 提供远端 Docker + Mutagen 构建环境。`omp-config-autoupdate`、`/update-omp`、`/sync-omp-config` 与 `omp-light` 管理配置生命周期。<br>**行为闭包**：供应商与工作流扩展属于**条件必选（Conditional）或可选工作流（Optional）**。 |
+
+### 面向后续可选安装器的原子行为闭包总表（Bundle Closure Matrix）
+
+未来的可选安装器（selective installer）必须按**原子行为闭包（Bundle）**而非单个文件开关裁剪。引导用户决定“启用哪些行为”时，以此表为准：
+
+| 闭包 ID | 必要性层级 | 包含的全部构件（配置键 / 提示词 / 子代理 / 扩展 / 插件） | 替换与依赖关系（`replaces` / `requires` / 拆卸后果） | `omp-light` 状态 |
+|---|---|---|---|---|
+| `engine-baseline` | **必选基底（Core）** | `config.yml`：`edit.mode: hashline`、`readLineNumbers: true`、`github.enabled: true`、`astGrep.enabled: true`、`fetch.enabled: true`、`checkpoint.enabled: true`、`extendedContext: true`、`inlineToolDescriptors: "on"`、`tools.xdevDocs: inline`、`eval.tools.enabled: false`、`textVerbosity: high`、`expandThinkingBlocks: true` | 关闭 `hashline` 或 `inlineToolDescriptors` 会使 `tool-topics` 与 `TOPIC-edit-hashline-*` 失效 | 启用 |
+| `prompt-topics` | **必选基底（Core）** | `SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`tool-topics`（`SURFACE-*` / `TOPIC-*`）、`tool-topic-injection`（`omomp.yml#tool-topic-injection`）、`repo-rules` | `requires: engine-baseline`；拆分会导致工具说明缺失或规则无法按路径触发 | 启用 |
+| `todo-continuity` | **必选基底（Core）** | `config.yml#todo.enabled: false`、插件 `omp-todo-more`（`todo`、`ctx`、`Task log`、compact 后注入）、`system-prompt-replace`（删除子代理禁止 Todo 的句子）、`task-completion-judge`（读取 `omp-todo-more:read`） | `replaces: 原生 todo`；若不装 `omp-todo-more` 必须同时恢复 `todo.enabled: true` 并移除子代理 Todo 要求与 `omp-todo-more:read` 检查，否则会话完全丧失 Todo 能力 | 插件启用（`system-prompt-replace` 跳过） |
+| `pty-routing` | **必选基底（Core）** | `config.yml#launch.enabled: false`、`config.yml#bashInterceptor`、插件 `omp-unified-exec`（`exec_command` 等 6 个 `xd://` 设备）、`tool-topics` 的 `TOPIC-exec_command-*.md` | `replaces: 原生 launch 服务模式`；若不装 `omp-unified-exec` 必须恢复 `launch.enabled: true` 并移除 `TOPIC-exec_command-*`，否则长生命周期命令无处执行 | 启用 |
+| `safe-deletion` | **必选基底（Core）** | 扩展 `delete-guard`（拦截 `bash`/`eval` 删除与非字面命令，注册字面路径 `delete` 工具）、`TOPIC-bash-policy.md` | 独立安全闭包；移除后模型可在 `bash`/`eval` 中直接执行不可逆 `rm -rf` | 启用 |
+| `compaction-baseline` | **必选基底（Core）** | `config.yml#compaction`（`methodOrder: [remote, soft, snapcompact, handoff, shake]`、`asyncEnabled: false`、`thresholdTokens`）、`model-compaction`（本机 `omomp.yml#model-compaction`）、`session-urls`（`session://`） | 与 `omp-todo-more` 的 compact 后恢复协同保护长程约束 | 启用 |
+| `workspace-lifecycle` | **必选基底（Core）** | `wt-tool`（`wt`、`wt_remove`）、`harness-restart`（`harness_restart`）、`omp-config-autoupdate`、`omomp-lang`、`omp-light.ts` | 提供工作树隔离切换、自举重启、界面语言与更新器入口 | 启用 |
+| `advisor-governance` | **长程治理包（Full-mode Pack，可整体选装）** | `APPEND_SYSTEM.md` 顾问规则、`agent/agents/{discuss-steady,discuss-divergent,mentor-default}.md`、`config.yml#task.agentModelOverrides` 顾问绑定、`user-prompt-inject`、`PROMPT-INJECT-user-goal.md` | 必须成组启用或成组移除：仅留 `APPEND_SYSTEM.md` 而缺顾问定义/模型绑定会导致主会话调用不存在的角色；仅卸 `user-prompt-inject` 会使顾问丧失用户原话与 `ask` 决策上下文 | 整体跳过（用空 `APPEND_SYSTEM_LIGHT.md`） |
+| `subagent-gates` | **长程治理包（Full-mode Pack，可整体选装）** | `config.yml#task.disabledAgents`（禁用 `task, scout, sonic, reviewer, security-reviewer`）、`agent/agents/task-{high,mid,low,free}.md`、`fork-task`（含 `fork:self`）、`isolation-nudge`、`task-split-check`、`task-completion-judge` | `replaces: 内置人设子代理`；`requires: todo-continuity`（`task-completion-judge` 依赖 `omp-todo-more`） | 跳过 `fork-task` 与三个检查扩展 |
+| `drift-monitors` | **长程治理包（Full-mode Pack，可整体选装）** | `tool-policy-nag`（`omomp.yml#tool-policy-nag` + `INTENT-policy.md`）、`turn-judge`（`TURN-JUDGE-gpt-talk-only.md`）、`lang-nag`（`omomp.yml#lang-nag`）、`watchdog-agent`（本机 `WATCHDOG-*.md`） | `tool-policy-nag` 在默认 `detector: heuristic` 下将运行期 `bashInterceptor.enabled` 设为 `false`；关闭 `tool-policy-nag` 后 `bashInterceptor` 恢复硬拦截 | 整体跳过 |
+| `provider-adapters` | **条件必选（Conditional）** | `pi-bansos`（配 `~/.pi/agent/pi-bansos-relay-state.json`，供 `task:free` 首选链使用）、`pi-commandcode-provider` + `commandcode-model-spec`（配本机 `commandcode-models.json`）、`antigravity-wire-profiles` | 按用户实际使用的 provider 条件启用：不用 `bansos` 时需改绑 `task:free`；不用 `commandcode` 或 `google-antigravity` 时对应组件空转无害，可选安装器可省略 | 启用 |
+| `ui-workflow-extras` | **可选增强（Optional）** | 插件 `omp-ask-more`（`requires: 原生 ask 保持开启`）、`omp-thinking-translator`（配 `thinking-translator.json` + 本机 `models.yml` `supportsReasoningEffort`）、`pi-pretty-codeblocks`、`omp-playbooks`（仅 `TERN_PANE` 内激活）、`omp-codex-image-gen`、`pi-package-search`、`omp-remote-build`（默认注释，`requires: omp-unified-exec`）；扩展 `input-polish`、`doc-polish`（本机 `omomp.yml#doc-polish`）、`append-system-model`（本机 `APPEND_SYSTEM_MODEL.md`）、`child-memory-warning`（仅 macOS） | 均可按个人工作流独立选装或省略，不影响长程任务正确性基底 | 除 `doc-polish` 跳过外其余启用 |
 
 ---
 
@@ -126,9 +144,9 @@ argument-hint: "[check|<plane>]"
 3. **写入用户在阶段 2 确认的本机所有项**：
    - 对 `<agentDir>/config.yml` 中的本机字段（如 `modelRoles`、`defaultThinkingLevel`、`extensions` 中的 `~/.claude` 等），使用 `omp config set` 或在读取 `<agentDir>/config.yml` 后用 `edit` 精确修改对应本机键。
    - 对 `<agentDir>/omomp.yml` 中的本机段（`model-compaction`、`doc-polish`、`omp-config-autoupdate`），先 `read` `<agentDir>/omomp.yml`，再用 `edit` 写入或更新对应本机段，严禁触碰仓库管理段。
-   - 若用户确认创建 `<agentDir>/models.yml` 兼容项或 `<agentDir>/commandcode-models.json`，按确认内容写入。
+   - 若用户确认创建 `<agentDir>/models.yml` 兼容项（如 `futureppo-pool` 的 `supportsReasoningEffort: true`）或 `<agentDir>/commandcode-models.json`：若 `<agentDir>/models.yml` 已存在，严禁整文件重写或读取/回显含 `apiKey` 的行，只做最小字段追加或给出 YAML 片段由用户合入，保留文件中所有既有 provider 与未知字段。
 4. **校验落盘状态与工作树干净度**：
-   - 用 `Bun.YAML.parse` / `JSON.parse` 校验修改过的 `<agentDir>/config.yml`、`<agentDir>/omomp.yml`、`<agentDir>/models.yml`。
+   - 用 `Bun.YAML.parse` / `JSON.parse` 校验修改过的 `<agentDir>/config.yml`、`<agentDir>/omomp.yml`（不打印 `models.yml` 凭据内容）。
    - 运行 `omp config list --scope global --json`、`omp plugin list --json` 与 `git status --short`，确认本机配置已生效且仓库工作树未被意外污染。
 
 ---
