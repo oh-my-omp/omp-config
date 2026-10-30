@@ -15,6 +15,10 @@ export type ArgumentFeed = { readonly kind: "argv" } | { readonly kind: "xargs";
 /** The program a simple command actually runs, after wrappers, with what it reads and writes. */
 export type Invocation = {
 	readonly program: string;
+	/** The program word holds `$…` or a substitution, so `program` is not what runs. */
+	readonly programDynamic: boolean;
+	/** Wrappers passed on the way to the program, outermost first (`timeout`, `nohup`, `env`, …). */
+	readonly wrappers: readonly string[];
 	readonly words: readonly ShellWord[];
 	readonly args: readonly string[];
 	/** Targets of `<` on stdin. */
@@ -29,6 +33,14 @@ export type Invocation = {
 	readonly condition: boolean;
 	readonly feed: ArgumentFeed;
 };
+
+/**
+ * Which programs resolve to nothing: `elevatedAndRemote` stops at `sudo`,
+ * `doas`, `su` and `ssh`, whose command runs where the built-in tools cannot
+ * reach (the tool-routing lanes); `none` resolves them like any program (the
+ * pty lane, which judges the entry point, not the work).
+ */
+export type Exemption = "elevatedAndRemote" | "none";
 
 export const basename = (path: string): string => {
 	const slash = path.lastIndexOf("/");
@@ -231,15 +243,16 @@ function splitRedirections(tokens: readonly CommandToken[]): Redirections {
  * Finds the program a simple command runs: skips leading redirections and
  * `NAME=value` assignments, reserved words at the start, and wrappers with
  * their own options (`timeout 5`, `nice -n 10`, `xargs -0 -n 1`). Returns null
- * for an empty command, an exempt program (`sudo`, `ssh`, …), or a wrapper
- * that runs nothing nameable (`command -v`, `env -S`).
+ * for an empty command, an exempt program under `elevatedAndRemote` (`sudo`,
+ * `ssh`, …), or a wrapper that runs nothing nameable (`command -v`, `env -S`).
  */
-export function resolveCommand(tokens: readonly CommandToken[], piped: boolean): Invocation | null {
+export function resolveCommand(tokens: readonly CommandToken[], piped: boolean, exemption: Exemption): Invocation | null {
 	const { words, readInputs, hereInput, outputs } = splitRedirections(tokens);
 	let index = 0;
 	let atStart = true;
 	let condition = false;
 	let feed: ArgumentFeed = { kind: "argv" };
+	const wrappers: string[] = [];
 	while (index < words.length) {
 		const word = words[index];
 		if (word === undefined) return null;
@@ -253,12 +266,14 @@ export function resolveCommand(tokens: readonly CommandToken[], piped: boolean):
 			continue;
 		}
 		const program = basename(word.text);
-		if (EXEMPT_PROGRAMS[program] === true) return null;
+		if (exemption === "elevatedAndRemote" && EXEMPT_PROGRAMS[program] === true) return null;
 		const wrapper = WRAPPERS[program];
 		if (wrapper === undefined) {
 			const rest = words.slice(index + 1);
 			return {
 				program,
+				programDynamic: word.dynamic,
+				wrappers,
 				words: rest,
 				args: rest.map((each) => each.text),
 				readInputs,
@@ -270,6 +285,7 @@ export function resolveCommand(tokens: readonly CommandToken[], piped: boolean):
 				feed,
 			};
 		}
+		wrappers.push(program);
 		atStart = false;
 		const rest = words.slice(index + 1).map((each) => each.text);
 		const skip = skipWrapper(wrapper, rest);

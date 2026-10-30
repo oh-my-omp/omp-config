@@ -86,16 +86,58 @@ function parseRedirect(command: string, index: number, ch: "<" | ">", fdPrefix: 
  * `piped`: the command is a later stage of a `|`/`|&` pipeline, so its stdin is
  * the previous stage's stdout. `captured`: the command runs inside a `$(…)` or
  * backtick substitution, so its stdout becomes words of the enclosing command.
+ * `background`: its pipeline ends in a lone `&` (not `&&`), so the shell does
+ * not wait for it. `loopBody`: it runs between a `while`/`until`/`for` loop's
+ * `do` and `done` (the `do` command included), so it repeats; the loop's
+ * condition or header is not body.
  */
 export type SimpleCommand = {
 	readonly tokens: CommandToken[];
 	readonly pipelineId: number;
 	readonly piped: boolean;
 	readonly captured: boolean;
+	readonly background: boolean;
+	readonly loopBody: boolean;
 };
 
+type ParsedCommand = Omit<SimpleCommand, "background" | "loopBody">;
+
+const LOOP_OPENERS: ReadonlySet<string> = new Set(["while", "until", "for"]);
+
+/**
+ * Marks loop bodies from each command's first word: `while`/`until`/`for`
+ * opens a loop, `do` starts its body, `done` closes it. Only a command's first
+ * word counts, so `echo done` changes nothing.
+ */
+function markLoops(commands: readonly ParsedCommand[], background: ReadonlySet<number>): SimpleCommand[] {
+	const loops: boolean[] = [];
+	return commands.map((command) => {
+		const first = command.tokens[0];
+		const head = first?.kind === "word" && !first.dynamic ? first.text : "";
+		if (LOOP_OPENERS.has(head)) loops.push(false);
+		else if (head === "do" && loops.length > 0) loops[loops.length - 1] = true;
+		else if (head === "done") loops.pop();
+		return { ...command, background: background.has(command.pipelineId), loopBody: head !== "done" && loops.includes(true) };
+	});
+}
+
+/** `unterminated`: a quote or `$(`/backtick substitution never closes, so the shell would refuse the line. */
+export type ShellParse = { readonly kind: "complete"; readonly commands: SimpleCommand[] } | { readonly kind: "unterminated" };
+
+/** The simple commands of a line, best effort: an unterminated line yields what was read. */
 export function splitSimpleCommands(command: string): SimpleCommand[] {
-	const commands: SimpleCommand[] = [];
+	return scanCommands(command).commands;
+}
+
+/** The simple commands of a line, or `unterminated` when the line cannot run as written. */
+export function parseShellCommands(command: string): ShellParse {
+	const scanned = scanCommands(command);
+	return scanned.complete ? { kind: "complete", commands: scanned.commands } : { kind: "unterminated" };
+}
+
+function scanCommands(command: string): { readonly commands: SimpleCommand[]; readonly complete: boolean } {
+	const commands: ParsedCommand[] = [];
+	const background = new Set<number>();
 	let current: CommandToken[] = [];
 	let pipelineId = 0;
 	let nextPipelineId = 1;
@@ -241,6 +283,12 @@ export function splitSimpleCommands(command: string): SimpleCommand[] {
 			i += 1 + redirect.consumed;
 			continue;
 		}
+		if (ch === "&" && command[i + 1] === "&") {
+			flushPipeline();
+			i++;
+			continue;
+		}
+		if (ch === "&") background.add(pipelineId);
 		if (isOperatorChar(ch)) {
 			flushPipeline();
 			continue;
@@ -266,6 +314,7 @@ export function splitSimpleCommands(command: string): SimpleCommand[] {
 		if (ch === "$") wordDynamic = true;
 		word += ch;
 	}
+	const complete = quote === null && substitutions.length === 0;
 	flushPipeline();
-	return commands;
+	return { commands: markLoops(commands, background), complete };
 }

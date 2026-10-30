@@ -46,7 +46,7 @@ type Stage = { readonly program: ShellProgram | null; readonly analysis: Analysi
 const UNKNOWN_STAGE: Stage = { program: null, analysis: { findings: [], nested: [], role: "other" }, xargs: false };
 
 function analyzeTokens(tokens: readonly CommandToken[], piped: boolean, provenance: StreamRole | null): Stage {
-	const invocation = resolveCommand(tokens, piped);
+	const invocation = resolveCommand(tokens, piped, "elevatedAndRemote");
 	if (invocation === null) return UNKNOWN_STAGE;
 	if (!isShellProgram(invocation.program)) return { ...UNKNOWN_STAGE, xargs: invocation.feed.kind === "xargs" };
 	// `find … | xargs grep foo`: xargs appends the paths, so the program gets file operands.
