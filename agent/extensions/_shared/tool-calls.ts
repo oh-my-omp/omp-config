@@ -1,5 +1,6 @@
 import { z } from "@oh-my-pi/pi-coding-agent";
 
+/** A tool call that runs shell text or eval code, read from a `tool_call` event of any extension. */
 export type WatchedCall =
 	| { readonly kind: "shell"; readonly tool: string; readonly command: string }
 	| { readonly kind: "eval"; readonly language: string; readonly code: string };

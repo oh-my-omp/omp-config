@@ -1,11 +1,11 @@
 ---
 tool: bash
 name: policy
-title: Blocked commands and approval
-when: after a command returned `Blocked:` or was refused, or before running a destructive command
-upstream: pi-coding-agent@18.13.2 src/tools/bash.ts, src/tools/bash-interceptor.ts, src/exec/settings.ts; agent/config.yml bashInterceptor
+title: Blocked commands, deletion and approval
+when: after a command returned `Blocked:` or a `delete-guard:` error, or before deleting files or running a destructive command
+upstream: pi-coding-agent@18.14.0 src/tools/bash.ts, src/tools/bash-interceptor.ts, src/tools/approval.ts, src/tools/settings.ts, src/exec/settings.ts; agent/config.yml bashInterceptor; agent/extensions/delete-guard
 ---
-# Blocked commands and approval
+# Blocked commands, deletion and approval
 
 - `Blocked: <message>` means the command matched a routing rule and never ran. Redo the work with the tool the message names. Routes in this setup:
   - `cat`/`head`/`tail`/`less`/`more` on files (not `tail -f`) → `read`
@@ -14,4 +14,6 @@ upstream: pi-coding-agent@18.13.2 src/tools/bash.ts, src/tools/bash-interceptor.
   - in-place `sed -i`/`perl -i`/`awk -i` → `edit`
   - `echo`/`printf`/`cat <<` redirected into a file → `write`
 - Routing checks each `&&`/`||`/`;`/`|` segment; a stage reading piped stdin (`… | grep x`) is not routed.
-- Approval is separate from routing: high-risk commands (recursive deletes of root paths, `sudo rm`, disk/filesystem destruction, fetch-to-shell such as `curl … | sh`, shutdown/PID 1 control, fork bombs) always require human approval and may be refused. Ask before running destructive commands at all.
+- Deleting files: call the `delete` tool with literal paths (default moves them to the system trash; `mode: "permanent"` deletes for good). Bash never deletes: a call containing `rm`, `unlink`, `rmdir`, `shred`, `find -delete` or `find -exec rm` anywhere it would run (also after `sudo`/`env`/`xargs`/`timeout`…, inside `$(…)`, `sh -c '…'`, `eval`, `trap`) is refused with a `delete-guard:` error and does not run, whatever its arguments. Arguments that only mention these words (`echo rm`, `git rm`) are fine.
+- `delete-guard:` also refuses commands it cannot read: a command name from a variable or substitution (`$CMD x`), a non-literal `sh -c "$s"` / `eval "$s"`, or a script piped into a shell (`… | sh`). Write the command out literally.
+- Approval does not protect you: under the default `tools.approvalMode` (`yolo`) even high-risk commands run without asking. Ask the user before destructive work.

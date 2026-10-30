@@ -1,5 +1,40 @@
 // ============================================================================
-// delete-guard — deletion goes through one tool that takes literal paths.
+// delete-guard — deletion goes through one tool that takes literal paths, and
+// agent-issued shell deletion commands are blocked before they run.
+//
+// GUARD. A `tool_call` hook judges every `bash` call: the loop's own calls,
+// writes to `xd://bash`, and the nested `bash` event omp emits for such a write
+// with the same call id (each event is judged; either one blocking stops the
+// call). The command text is parsed once (`posix-parse.ts`, fail closed:
+// unparsable text is blocked) and every command it runs is classified in the
+// posix dialect (`posix.ts`), because the bash tool runs in the embedded brush
+// shell on every platform: commands in `$(…)`, backticks, `<(…)`, unquoted
+// here-document bodies, literal `sh|bash|zsh|dash|ksh -c` scripts, quoted
+// here-documents read by a shell, and literal `eval`, `trap` and `alias`
+// bodies, up to 8 nested levels. Blocked:
+//   - deletion commands, whatever their arguments: `rm`, `unlink`, `rmdir`,
+//     `shred` (name lowercased, basename of a path, quotes and backslashes
+//     removed), also behind `sudo`, `doas`, `command`, `builtin`, `exec`,
+//     `env`, `nice`, `nohup`, `time`, `timeout`, `stdbuf`, `busybox`, `xargs`
+//     (their options skipped by table; an unknown option is read both with and
+//     without a value), `find -delete` and `find -exec|-execdir|-ok|-okdir`;
+//   - non-literal commands: a command name from an expansion, substitution,
+//     glob or brace pattern; a non-literal nested shell, `eval`, `trap` or
+//     `alias` script; a shell argument from an expansion (`bash "$FLAGS"`, it
+//     may be `-c` or `-s`); `env -S`; a shell reading its script from stdin
+//     other than a quoted here-document (pipe, here-string, unquoted
+//     here-document, nothing). Literal script files (`bash x.sh`, `sh < x.sh`,
+//     `source`), `-n` (syntax check, undone by `+n`) and `--version`/`--help`
+//     run nothing the text shows and pass. An unknown long shell option is read
+//     both with and without a value. Here-document bodies on any descriptor
+//     are scanned for substitutions, and inside double quotes `'` does not
+//     quote (`"${x:-'$(…)'}"` runs the substitution).
+// Words that are only arguments pass (`echo rm -rf /`, `git rm`). The block
+// reason names the rule and the command; it points to `delete` when the
+// session's active tools include it, otherwise it says the session cannot
+// delete. No switch, no config, independent of `tools.approvalMode` and
+// `bashInterceptor`. Not covered: `exec_command`, `eval` (separate entry), and
+// aliases or functions the bash tool sources from the user's shell rc.
 //
 // DELETE TOOL. Registers `delete` (approval `write`, top-level) on macOS and
 // Linux; on any other platform (Windows included) no tool is registered.
@@ -33,20 +68,22 @@
 // each one; a failure on one path, a backend that throws included, leaves the
 // earlier ones as they are.
 //
-// Main and sub sessions, full and light mode. Writes and deletes only the
-// requested paths and the trash entries for them; no extension config files.
-// Tool failures are returned to the agent and logged; nothing escapes into omp.
+// Main and sub sessions, full and light mode. The tool writes and deletes only
+// the requested paths and the trash entries for them; no extension config
+// files. Tool failures are returned to the agent and logged. A guard failure is
+// logged with `pi.logger.warn` and blocks the call; nothing escapes into omp.
 // ============================================================================
 import { type ExtensionAPI, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { type Outcome, type Platform, runDeletion, supportedPlatform, trashUnavailable } from "./backends.ts";
+import { guardToolCall } from "./guard.ts";
 import { validateTargets } from "./targets.ts";
 
 const DELETE_TOOL = "delete";
 
 const DELETE_DESCRIPTION = [
-	"Delete files and directories given as literal paths.",
+	"Delete files and directories given as literal paths. This is the way to delete: bash deletion commands (`rm`, `unlink`, `rmdir`, `shred`, `find -delete`, …) are refused.",
 	'Default `mode: "trash"` moves each path to the system trash, where the user can restore it; `mode: "permanent"` deletes recursively and cannot be undone.',
 	"Paths are taken literally: no `~`, environment variable or glob expansion; relative paths resolve against the session cwd. List every path explicitly.",
 	"Every path is checked before anything is touched; one bad path refuses the whole call. Refused: empty paths, paths starting with `~`, paths that do not exist, the filesystem root, the home directory and its ancestors, the session cwd and its ancestors (also when reached through a symbolic link or another spelling), and paths whose `..`, `.` or trailing `/` passes through a symbolic link. A symbolic link is deleted as the link itself.",
@@ -111,6 +148,14 @@ async function runDelete(platform: Platform, rawParams: unknown, cwd: string): P
 }
 
 export default function deleteGuard(pi: ExtensionAPI): void {
+	pi.on("tool_call", (event) => {
+		try {
+			return guardToolCall(event.toolName, event.input, () => pi.getActiveTools().includes(DELETE_TOOL));
+		} catch (error) {
+			pi.logger.warn("delete-guard: guard failed; the call was blocked", { error: errorText(error) });
+			return { block: true, reason: `delete-guard: internal error (${errorText(error)}); the call was blocked.` };
+		}
+	});
 	const platform = supportedPlatform(process.platform);
 	if (platform === null) return;
 	pi.registerTool({

@@ -16,7 +16,7 @@
 |---|---|
 | [提示词与上下文](docs/prompts-and-context.zh-CN.md) | 提示词分层（`SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`APPEND_SYSTEM.md`、`tool-topics`、`system-prompt-replace`、`append-system-model`、`repo-rules`）与上下文保留（`fork-task`、`model-compaction`、`ctx`、`Task log`） |
 | [子代理](docs/agents.zh-CN.md) | 7 个可选 worker/顾问定义与内部 `fork:self`、模型绑定、顾问上下文、派发规则与 worktree 隔离 |
-| [本地扩展](docs/extensions.zh-CN.md) | 26 个本地扩展总表，以及派发/交付检查（`isolation-nudge`、`task-split-check`、`task-completion-judge`）、`JUDGE` 判定扩展（`tool-policy-nag`、`watchdog-agent`、`turn-judge`、`lang-nag`）、只收字面路径的 `delete` 工具（`delete-guard`）、宿主/TUI 扩展与读取其他会话的 `session://`（`session-urls`） |
+| [本地扩展](docs/extensions.zh-CN.md) | 26 个本地扩展总表，以及派发/交付检查（`isolation-nudge`、`task-split-check`、`task-completion-judge`）、`JUDGE` 判定扩展（`tool-policy-nag`、`watchdog-agent`、`turn-judge`、`lang-nag`）、shell 删除拦截与只收字面路径的 `delete` 工具（`delete-guard`）、宿主/TUI 扩展与读取其他会话的 `session://`（`session-urls`） |
 | [插件与运行模式](docs/plugins-and-modes.zh-CN.md) | `install-plugins.sh` 中的外部插件（`omp-todo-more`、`omp-thinking-translator` 等）以及 `omp` 与 `omp-light` 的差异 |
 | [安装、同步与维护](docs/operations.zh-CN.md) | 仓库与本机的文件归属、`/update-omp`、`/sync-omp-config`、`omp-config-autoupdate`、`_shared` 模块与升级检查 |
 | [配置检查（`ci/README.zh-CN.md`）](ci/README.zh-CN.md) | `bun ci/check.ts` 如何安装 `omp`、应用配置、接入免费模型与影子代理并去重报告故障 |

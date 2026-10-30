@@ -27,7 +27,7 @@ import { join } from "node:path";
 import type { Judge, JudgmentState } from "@oh-my-pi/pi-ai";
 import { z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
-import type { WatchedCall } from "./calls.ts";
+import type { WatchedCall } from "../_shared/tool-calls.ts";
 
 const JUDGE_TIMEOUT_MS = 90_000;
 const SPEC_NAME = /^INTENT-.*\.md$/;
