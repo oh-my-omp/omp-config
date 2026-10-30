@@ -161,8 +161,8 @@ tool-policy-nag:
 
 - **分类范围**：文本中所有将被执行的命令，包括 `$(…)`、反引号、`<(…)`/`>(…)`、未加引号 here-document 正文里的替换、字面的 `sh|bash|zsh|dash|ksh -c '…'` 脚本、shell 读取的带引号 here-document，以及字面的 `eval`、`trap`、`alias` 正文，最多嵌套 8 层。无法解析的文本（引号、替换或分组未闭合）直接拦截。
 - **删除命令**，与参数无关：`rm`、`unlink`、`rmdir`、`shred`（转小写、取路径的 basename、去掉引号与反斜杠：`RM`、`/bin/rm`、`\rm`），以及经 `sudo`、`doas`、`command`、`builtin`、`exec`、`env`、`nice`、`nohup`、`time`、`timeout`、`stdbuf`、`busybox`、`xargs` 调用的形式（它们的选项按表跳过；不认识的选项按"带值"与"不带值"两种读法都判定，任一读法落到删除命令即拦截），`find -delete` 与 `find -exec|-execdir|-ok|-okdir`。
-- **非字面命令**：命令名来自展开、替换、glob 或花括号模式（`$CMD x`、`$(printf rm) x`）；嵌套 shell、`eval`、`trap`、`alias` 的脚本不是字面量（`sh -c "$s"`）；`env -S`；shell 从 stdin 读脚本而来源不是带引号的 here-document（`… | sh`、here-string、未加引号的 here-document、没有脚本）。
-- **放行**：只作参数出现的词（`echo rm -rf /`、`git rm`、`npm rm`）、参数中的展开（`ls $HOME`）、不含删除的字面嵌套脚本、脚本文件（`bash x.sh`、`sh < x.sh`、`source`）以及 `-n` 语法检查。
+- **非字面命令**：命令名来自展开、替换、glob 或花括号模式（`$CMD x`、`$(printf rm) x`）；嵌套 shell、`eval`、`trap`、`alias` 的脚本不是字面量（`sh -c "$s"`）；shell 的参数来自展开（`bash "$FLAGS"`，它可能是 `-c` 或 `-s`）；`env -S`；shell 从 stdin 读脚本而来源不是带引号的 here-document（`… | sh`、here-string、未加引号的 here-document、没有脚本）。不认识的 shell 长选项按"带值"与"不带值"两种读法都判定。任何描述符上的 here-document 正文都会检查替换；双引号内的 `'` 不起引号作用（`"${x:-'$(…)'}"` 会执行其中的替换）。
+- **放行**：只作参数出现的词（`echo rm -rf /`、`git rm`、`npm rm`）、参数中的展开（`ls $HOME`）、不含删除的字面嵌套脚本、字面的脚本文件（`bash x.sh`、`sh < x.sh`、`source`）、`-n` 语法检查（`+n` 会撤销它）以及 `--version`/`--help`。
 - **不覆盖**：`exec_command`、`eval` 工具、自带删除语义的程序（`git clean`、`rsync --delete`）、脚本文件的内容，以及 bash 工具从用户 shell rc 引入的 alias 与函数。
 
 **`delete` 工具。** 在 macOS 与 Linux 上注册（审批级别 `write`，顶层工具）；其他平台（含 Windows）不注册，拦截的 reason 写明本会话不能删除。参数：`paths`（非空字符串数组）与 `mode`（`"trash"`，默认；或 `"permanent"`）。

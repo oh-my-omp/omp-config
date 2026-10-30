@@ -189,7 +189,7 @@ const PREFIXES: Readonly<Record<string, PrefixSpec>> = {
 			"--replace",
 			"--max-lines",
 		),
-		queries: set("--help", "--version", "--show-limits"),
+		queries: set("--help", "--version"),
 	}),
 };
 
@@ -315,38 +315,81 @@ function stdinLabel(stdin: StdinSource | null): string {
 	}
 }
 
+type ShellState = { readonly commandMode: boolean; readonly stdinMode: boolean; readonly noExec: boolean };
+
+/** Long shell options that print and exit without running any script. */
+const SHELL_QUERIES: ReadonlySet<string> = new Set(["--version", "--help"]);
+
+/** Long shell options that take the next word as their value (bash `--rcfile`/`--init-file`, zsh `--emulate`). */
+const SHELL_VALUE_OPTIONS: ReadonlySet<string> = new Set(["--rcfile", "--init-file", "--emulate"]);
+
+/** Long shell options known to take no value. */
+const SHELL_FLAGS: ReadonlySet<string> = new Set([
+	"--login",
+	"--noprofile",
+	"--norc",
+	"--posix",
+	"--restricted",
+	"--verbose",
+	"--debugger",
+	"--noediting",
+	"--dump-strings",
+	"--dump-po-strings",
+	"--pretty-print",
+]);
+
 /** `sh|bash|zsh|dash|ksh`: `-c` scripts and quoted here-documents on stdin are classified; script files are K5's. */
 function resolveShell(ctx: Context, words: readonly Word[], start: number): Verdict {
+	return resolveShellFrom(ctx, words, start, { commandMode: false, stdinMode: false, noExec: false }, AMBIGUITY_BUDGET);
+}
+
+/**
+ * Reads shell options from `start`. Any argument from an expansion may be an option (`"$FLAGS"` = `-c`), so it is
+ * non-literal. `+n` undoes `-n`. An unknown long option (zsh takes any option name as `--name`) is read both
+ * without and with a value; either reading that reaches a deletion blocks.
+ */
+function resolveShellFrom(ctx: Context, words: readonly Word[], start: number, initial: ShellState, budget: number): Verdict {
 	let j = start;
-	let commandMode = false;
-	let stdinMode = false;
-	let noExec = false;
+	let { commandMode, stdinMode, noExec } = initial;
 	while (j < words.length) {
 		const word = words[j];
 		if (word === undefined) break;
 		const text = word.text;
-		if (!word.literal) {
-			if (text.startsWith("-") || text.startsWith("+"))
-				return block("nonLiteral", ctx.fragment, `the shell option \`${word.raw}\` comes from an expansion`);
-			break;
-		}
+		if (!word.literal)
+			return block("nonLiteral", ctx.fragment, `the shell argument \`${word.raw}\` comes from an expansion, so it may be an option`);
 		if (text === "--" || text === "-") {
 			j++;
 			break;
 		}
 		if (text.startsWith("--")) {
-			j += text === "--rcfile" || text === "--init-file" ? 2 : 1;
-			continue;
+			const name = text.split("=")[0] ?? text;
+			if (SHELL_QUERIES.has(name)) return ALLOW;
+			if (text.includes("=") || SHELL_FLAGS.has(name)) {
+				j++;
+				continue;
+			}
+			if (SHELL_VALUE_OPTIONS.has(name)) {
+				j += 2;
+				continue;
+			}
+			if (budget <= 0) return block("nonLiteral", ctx.fragment, `the shell option \`${text}\` is not known`);
+			const state: ShellState = { commandMode, stdinMode, noExec };
+			const withoutValue = resolveShellFrom(ctx, words, j + 1, state, budget - 1);
+			if (withoutValue.kind === "block") return withoutValue;
+			return resolveShellFrom(ctx, words, j + 2, state, budget - 1);
 		}
 		if (text.length < 2 || (!text.startsWith("-") && !text.startsWith("+"))) break;
-		let takesValue = false;
+		const set = text.startsWith("-");
+		let value: "o" | "O" | null = null;
 		for (const letter of text.slice(1)) {
 			if (letter === "c") commandMode = true;
 			else if (letter === "s") stdinMode = true;
-			else if (letter === "n" && text.startsWith("-")) noExec = true;
-			else if (letter === "o" || letter === "O") takesValue = true;
+			else if (letter === "n") noExec = set;
+			else if (letter === "o" || letter === "O") value = letter;
 		}
-		j += takesValue ? 2 : 1;
+		const next = words[j + 1];
+		if (value === "o" && next?.literal && next.text === "noexec") noExec = set;
+		j += value === null ? 1 : 2;
 	}
 	if (commandMode) {
 		const script = words[j];
@@ -431,6 +474,11 @@ function classifyCommand(command: SimpleCommand, depth: number): Verdict {
 			continue;
 		}
 		if (!word.literal) break;
+		// `coproc NAME { … }`: the name is not a command; the compound body after it is.
+		if (word.text === "coproc" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(words[i + 1]?.text ?? "") && words[i + 2]?.text === "{") {
+			i += 3;
+			continue;
+		}
 		if (RESERVED.has(word.text)) {
 			i++;
 			continue;

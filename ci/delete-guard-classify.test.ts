@@ -53,6 +53,13 @@ describe("classifyPosix", () => {
 		"cat <<EOF\n$(rm f)\nEOF",
 		"case x in a) rm f;; esac",
 		"echo $(case x in a) rm f;; esac)",
+		`unset x; echo "\${x:-'$(rm /tmp/omp-dg-probe/f)'}"`,
+		"cat 3<<EOF\n'$(rm /tmp/omp-dg-probe/f)'\nEOF",
+		"zsh --emulate sh -c 'rm /tmp/omp-dg-probe/f'",
+		"zsh --no-rcs -c 'rm f'",
+		"bash -n +n -c 'rm /tmp/omp-dg-probe/f'",
+		"echo /tmp/omp-dg-probe/f | xargs --show-limits rm",
+		"bash -c 'coproc WORKER { rm /tmp/omp-dg-probe/f; }; wait'",
 	])("blocks deletion: %p", (command) => {
 		expect(ruleOf(command)).toBe("delete");
 	});
@@ -76,6 +83,8 @@ describe("classifyPosix", () => {
 		'trap "$cleanup" EXIT',
 		"echo 'unterminated",
 		"echo $(ls",
+		"FLAGS=-s; echo 'rm f' | bash \"$FLAGS\"",
+		"FLAGS=-c; bash \"$FLAGS\" 'rm f'",
 	])("blocks non-literal: %p", (command) => {
 		expect(ruleOf(command)).toBe("nonLiteral");
 	});
@@ -106,6 +115,9 @@ describe("classifyPosix", () => {
 		"trap - EXIT",
 		"git clean -fdx",
 		'echo "a" > out.txt 2>&1',
+		"bash --version",
+		"cat 3<<'EOF'\nrm f\nEOF",
+		"echo \"$'x'\"",
 	])("allows: %p", (command) => {
 		expect(ruleOf(command)).toBe("allow");
 	});

@@ -20,10 +20,15 @@
 //     without a value), `find -delete` and `find -exec|-execdir|-ok|-okdir`;
 //   - non-literal commands: a command name from an expansion, substitution,
 //     glob or brace pattern; a non-literal nested shell, `eval`, `trap` or
-//     `alias` script; `env -S`; a shell reading its script from stdin other
-//     than a quoted here-document (pipe, here-string, unquoted here-document,
-//     nothing). Script files (`bash x.sh`, `sh < x.sh`, `source`) and `-n`
-//     (syntax check) run nothing the text shows and pass.
+//     `alias` script; a shell argument from an expansion (`bash "$FLAGS"`, it
+//     may be `-c` or `-s`); `env -S`; a shell reading its script from stdin
+//     other than a quoted here-document (pipe, here-string, unquoted
+//     here-document, nothing). Literal script files (`bash x.sh`, `sh < x.sh`,
+//     `source`), `-n` (syntax check, undone by `+n`) and `--version`/`--help`
+//     run nothing the text shows and pass. An unknown long shell option is read
+//     both with and without a value. Here-document bodies on any descriptor
+//     are scanned for substitutions, and inside double quotes `'` does not
+//     quote (`"${x:-'$(…)'}"` runs the substitution).
 // Words that are only arguments pass (`echo rm -rf /`, `git rm`). The block
 // reason names the rule and the command; it points to `delete` when the
 // session's active tools include it, otherwise it says the session cannot
