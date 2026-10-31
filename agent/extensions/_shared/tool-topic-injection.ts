@@ -1,8 +1,8 @@
 /**
  * Progressive topic delivery for any tool's string argument (dotted paths allowed).
- * installToolTopicInjection binds one provider to this extension/session; external
- * plugins may use it with a distinct stable owner. It does not register topics.
- * Bodies come only from the tool:// registry. Matched rules are delivered after
+ * installToolTopicInjection binds one provider, with a stable owner, to the calling
+ * extension/session. It does not register topics: bodies come from the tool://
+ * topics the tool-topics extension serves. Matched rules are delivered after
  * the tool batch via trusted additionalContext, including failed tool results.
  * The actual-context guard also handles resume/branch/compaction; no durable
  * counters, fake context ids, user messages, command changes or body cache.

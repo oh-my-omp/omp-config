@@ -32,11 +32,11 @@ function nativeSection(native: string, heading: string): string | undefined {
 		.trimEnd();
 }
 
-/** Index lines for the description: each topic's name and when to read it, as registered for tool://. */
+/** Index lines for the description: one line per topic with its full URL and when to read it. */
 export function renderIndex(tool: string, topics: readonly Pick<Topic, "name" | "when">[]): string {
 	return [
-		`Topics — before a call that needs one, read \`tool://${tool}/<topic>\`:`,
-		...topics.map((topic) => `- \`${topic.name}\`: ${topic.when}`),
+		"Topics — read the one a call needs before making it:",
+		...topics.map((topic) => `- \`tool://${tool}/${topic.name}\` — ${topic.when}`),
 	].join("\n");
 }
 

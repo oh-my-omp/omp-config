@@ -95,7 +95,7 @@ SHOULD resolve prerequisites, parallelize independent calls. Retry empty/partial
 - Prefer relative `path`-like fields.
 {{#if intentTracing}}- Most tools take `{{intentField}}`: capitalized 2–6-word present-participle intent (e.g. "Reading model role settings").{{/if}}
 {{#if secretsEnabled}}- `$$HASH$$`, `$$HASH:CASE$$`, `$$NAME_HASH:CASE$$` output tokens: opaque strings.{{/if}}
-{{#has tools "read"}}- A tool description ending in `Topics` lists call instructions kept out of the prompt. Before a call that matches a topic's condition, read `tool://<tool>/<topic>`; read only the topics your call needs. A topic may also arrive after a call to a read-only tool; apply it to the next call.{{/has}}
+{{#has tools "read"}}- A tool description ending in `Topics` (in the prompt, or in the full docs `xd://<tool>` returns for a device) lists call instructions kept out of the prompt, one line per topic with its exact URL. Before a call that matches a topic's condition, read that URL; read only the topics your call needs. A topic may also arrive after a call to a read-only tool; apply it to the next call.{{/has}}
 
 {{#if autoQaEnabled}}
 {{#has tools "write"}}

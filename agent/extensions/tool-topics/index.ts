@@ -1,35 +1,34 @@
-// tool-topics — progressive tool instructions: a short surface plus a topic index in each tool's
-// description, with the detailed call instructions served on demand as tool://<tool>/<topic>.
+// tool-topics — progressive instructions for tools omp-config does not own (OMP's built-in tools):
+// a short surface plus a topic index in each tool's description, with the detailed call
+// instructions served on demand as tool://<tool>/<topic>. Tools a plugin or another extension
+// registers serve their own topics as xd://<tool>/<topic> through `docTopics()` and list them in
+// their own description; this extension neither indexes nor serves them.
 //
 // FILES. Authored beside this module (repo-managed): `TOPIC-*.md` (header: tool, name, title,
 // when, upstream) and `SURFACE-*.md` (header: tool, upstream). Loaded once at factory time;
 // edits apply on the next omp start. `upstream` names the OMP version and sources the text was
 // checked against; after an OMP upgrade, re-check each tool against them.
 //
-// REGISTRATION. Each tool's topics are published through _shared/tool-topics.ts under owner
-// `omp-config/tool-topics`. A tool whose registration fails gets no index, so an index never
-// points at missing topics.
+// ROUTING. registry.ts puts the topics on OMP's URL router as the `tool://` scheme, replacing the
+// handler of an earlier load (subagents, isolated children). When OMP or another handler holds
+// `tool://`, no tool gets an index, so an index never points at missing topics.
 //
 // PROMPT. On every `before_agent_start` (main and sub, full and light), when the session has
 // `read`, each tool with authored docs that the prompt renders gets its description replaced by
 // its surface (or kept native when it has none) followed by its index. `{{native:<Heading>}}` in
 // a surface splices that native `# Heading` section, for content OMP generates per session
-// (task's agent list). Tools whose topics another owner (a plugin) registered keep their native
-// description and get the index of those topics, read from the registry at each prompt. Sessions
-// without `read` keep the native descriptions: they could not read the topics. The tool is located
-// by name in OMP's rendered layout (prompt.ts), not by wording; when a rendered tool cannot be
-// rewritten (layout change, missing native section), its native description stays and a warning is
-// logged, and shown once in the main session.
+// (task's agent list). Sessions without `read` keep the native descriptions: they could not read
+// the topics. The tool is located by name in OMP's rendered layout (prompt.ts), not by wording;
+// when a rendered tool cannot be rewritten (layout change, missing native section), its native
+// description stays and a warning is logged, and shown once in the main session.
 //
 // FAILURE. Bad files are skipped with one warning each. Hooks never throw into omp.
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { registeredToolTopics, registerToolTopics } from "../_shared/tool-topics.ts";
 import { type Catalog, loadCatalog, type ToolDocs } from "./catalog.ts";
 import { composeDescription, renderIndex, rewriteTool } from "./prompt.ts";
-
-const OWNER = "omp-config/tool-topics";
+import { publishTopics } from "./registry.ts";
 
 /** Drift already reported, per tool and reason, for the life of the process. */
 const reported = new Set<string>();
@@ -48,44 +47,28 @@ function report(pi: ExtensionAPI, ctx: ExtensionContext, tool: string, reason: s
 	else process.stderr.write(`${notice}\n`);
 }
 
-/** Register every tool's topics; returns the tools whose index may be shown. */
-function registerAll(pi: ExtensionAPI, catalog: Catalog): ReadonlySet<string> {
-	const indexed = new Set<string>();
-	for (const docs of catalog.tools.values()) {
-		if (docs.topics.length === 0) continue;
-		const result = registerToolTopics({
-			tool: docs.tool,
-			owner: OWNER,
-			topics: docs.topics.map((topic) => ({ name: topic.name, title: topic.title, when: topic.when, read: () => topic.body })),
-		});
-		switch (result.kind) {
-			case "registered":
-				indexed.add(docs.tool);
-				break;
-			case "invalid":
-			case "conflict":
-				pi.logger.warn(`tool-topics: ${docs.tool} topics not registered`, { reason: result.reason });
-				break;
-			default: {
-				const unreachable: never = result;
-				throw new Error(`Unhandled registration result: ${unreachable}`);
-			}
+/** Publish every tool's topics as `tool://`; true when the index may be shown. */
+function publish(pi: ExtensionAPI, catalog: Catalog): boolean {
+	const topics = new Map([...catalog.tools.values()].filter((docs) => docs.topics.length > 0).map((docs) => [docs.tool, docs.topics]));
+	const result = publishTopics(topics);
+	switch (result.kind) {
+		case "published":
+			return true;
+		case "taken":
+			pi.logger.warn("tool-topics: topics not published", { reason: result.reason });
+			return false;
+		default: {
+			const unreachable: never = result;
+			throw new Error(`Unhandled publish result: ${unreachable}`);
 		}
 	}
-	return indexed;
 }
 
-function rewritePrompt(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	blocks: string[],
-	docsList: readonly ToolDocs[],
-	indexed: ReadonlySet<string>,
-) {
+function rewritePrompt(pi: ExtensionAPI, ctx: ExtensionContext, blocks: string[], docsList: readonly ToolDocs[], indexed: boolean) {
 	let current = blocks;
 	let changed = false;
 	for (const docs of docsList) {
-		const index = indexed.has(docs.tool) ? renderIndex(docs.tool, docs.topics) : undefined;
+		const index = indexed && docs.topics.length > 0 ? renderIndex(docs.tool, docs.topics) : undefined;
 		if (docs.surface === undefined && index === undefined) continue;
 		const result = rewriteTool(current, docs.tool, (native) => composeDescription(native, docs, index));
 		switch (result.kind) {
@@ -108,47 +91,13 @@ function rewritePrompt(
 	return changed ? current : undefined;
 }
 
-/**
- * Index the topics other owners (plugins) registered for their own tools: the native description
- * stays, the index follows it. Read per prompt, so registrations made after this extension loaded
- * count. A tool not in this prompt is skipped; a layout it no longer matches is reported.
- */
-function indexRegistered(pi: ExtensionAPI, ctx: ExtensionContext, blocks: string[], catalog: Catalog): string[] | undefined {
-	let current = blocks;
-	let changed = false;
-	for (const entry of registeredToolTopics()) {
-		if (entry.owner === OWNER || catalog.tools.has(entry.tool)) continue;
-		const index = renderIndex(
-			entry.tool,
-			entry.topics.map((topic) => ({ name: topic.name, when: topic.when ?? topic.title })),
-		);
-		const result = rewriteTool(current, entry.tool, (native) => ({ kind: "ok", text: `${native.trim()}\n\n${index}` }));
-		switch (result.kind) {
-			case "rewritten":
-				current = result.blocks;
-				changed = true;
-				break;
-			case "drift":
-				report(pi, ctx, entry.tool, result.reason);
-				break;
-			case "absent":
-				break;
-			default: {
-				const unreachable: never = result;
-				return unreachable;
-			}
-		}
-	}
-	return changed ? current : undefined;
-}
-
 export default function toolTopics(pi: ExtensionAPI): void {
 	let catalog: Catalog;
-	let indexed: ReadonlySet<string>;
+	let indexed: boolean;
 	try {
 		catalog = loadCatalog(import.meta.dir);
 		for (const problem of catalog.problems) pi.logger.warn(`tool-topics: skipped ${problem}`);
-		indexed = registerAll(pi, catalog);
+		indexed = publish(pi, catalog);
 	} catch (error) {
 		pi.logger.warn("tool-topics: loading failed", { error: errorText(error) });
 		return;
@@ -158,9 +107,8 @@ export default function toolTopics(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", (event, ctx) => {
 		try {
 			if (!pi.getActiveTools().includes("read")) return;
-			const authored = rewritePrompt(pi, ctx, event.systemPrompt, docsList, indexed);
-			const systemPrompt = indexRegistered(pi, ctx, authored ?? event.systemPrompt, catalog);
-			if (systemPrompt ?? authored) return { systemPrompt: systemPrompt ?? authored };
+			const systemPrompt = rewritePrompt(pi, ctx, event.systemPrompt, docsList, indexed);
+			if (systemPrompt) return { systemPrompt };
 		} catch (error) {
 			pi.logger.warn("tool-topics: before_agent_start failed", { error: errorText(error) });
 		}

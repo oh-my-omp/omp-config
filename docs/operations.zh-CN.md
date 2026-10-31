@@ -111,7 +111,6 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 | `helper-session.ts` | `runHelperPrompt`：在无工具、无扩展、`taskDepth: 1` 的内存辅助会话中执行单次请求，返回结果联合类型而不抛异常 |
 | `judge.ts` | `openJudge`：`@<purpose>` 角色已绑定时由其聊天模型作答，否则构建 OMP 的 judge 角色链（`resolveJudge`）；两条路径失败或未配时都回退到 `omomp.yml#judge.fallbackRole` 的聊天模型（`TextJudge`） |
 | `spec-files.ts` | `discoverSpecFiles`、`parseFrontmatter`、`unquote`：扫描并解析扩展目录及 `cwd` 至 git 根各层（含 `.omp/`）的 `*-<label>.md` 文件 |
-| `tool-topics.ts` | `registerToolTopics`、`ToolTopic`、`ToolTopicsRegistration`、`ToolTopicsRegistrationResult`：共享的 `tool://` 注册表、索引、正文读取、搜索枚举与补全；外部插件也可调用 |
 | `context-delivery.ts` | `createContextDelivery(pi)`：`repo-rules` 和专题注入共用的真实上下文标记判重；内存只保存同 turn 待交付标记 |
 | `tool-topic-injection.ts` | `installToolTopicInjection`、`ToolTopicInjectionRule`、`toolTopicInjectionRulesSchema`：通用的工具参数正则匹配与可信专题投递 |
 | `tool-calls.ts` | `watchedCallOf`、`WatchedCall`：从 `tool_call` 事件读出 shell 命令（`bash`、`bash_bg`、`exec_command` 及其 `xd://` 设备写入）或 eval 代码；`tool-policy-nag` 与 `delete-guard` 使用 |
@@ -126,57 +125,17 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 
 `bun run test`（`bun test ci`）运行 `ci/` 下的单元测试：`session-urls` 的 JSONL 扫描器与 `JSON.parse` 的差分测试、它的 `type` 过滤与 `since`/`until` 时间窗测试、`delete-guard` 的测试（`delete` 工具的拒绝集、Linux 回收站布局与永久删除；posix 分类器、嵌套 PowerShell/cmd 方言与 py/js eval 分析器的拦截/放行表；`tool_call` 的 reason 与出错即拦截路径），以及更新器三方应用的测试（`ci/omp-config-update.test.ts`：未改的项随上游更新、本机定制被合并或在解决前一直是冲突、播种与本机路径保持不动、代码以仓库为准、删除、无基准机器按历史匹配、在 omp 首次启动写下的 `config.yml` 上首次安装、只读的 `--check`）；CI 在 `code` job 中于 `bun run check` 之后运行它。`delete-guard` 在真实会话中的 Windows 行为由 [delete-guard Windows 验收](../ci/README.zh-CN.md#delete-guard-windows-验收) 单独检查。
 
-### 插件注册工具专题
+### 工具专题
 
-本地扩展从 `../_shared/tool-topics.ts` 静态导入 `registerToolTopics` 及其类型。外部插件使用指向已安装 helper 的静态相对导入，不复制实现。外部插件位于 `~/.omp/plugins/example/index.ts`、agent 使用默认 `~/.omp/agent` 时，导入方式如下：
+`tool://<tool>/<topic>` 只承载本仓库为不归它所有的工具（OMP 内置工具）编写的专题：[tool-topics](extensions.zh-CN.md#tool-topics) 加载自己的 `TOPIC-*.md` 文件，并把这个 scheme 挂到 OMP 的 URL router 上，其他扩展或插件都不往这里注册。
 
-```ts
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { registerToolTopics } from "../../agent/extensions/_shared/tool-topics.ts";
-
-export default function exampleTopics(pi: ExtensionAPI): void {
-  try {
-    const result = registerToolTopics({
-      tool: "example",
-      owner: "my-plugin",
-      topics: [{
-        name: "usage",
-        title: "用法",
-        read: () => "# 用法\n向 example 工具传入输入路径。\n",
-      }],
-    });
-    switch (result.kind) {
-      case "registered": return;
-      case "invalid":
-      case "conflict":
-        pi.logger.warn("example topics registration failed", { reason: result.reason });
-        return;
-      default: {
-        const unreachable: never = result;
-        throw new Error(`Unhandled registration result: ${unreachable}`);
-      }
-    }
-  } catch (error) {
-    pi.logger.warn("example topics initialization failed", { error: String(error) });
-  }
-}
-```
-
-先通过 `/update-omp` 安装 helper。插件位于其他目录或使用自定义 agent 目录时，在部署阶段计算从插件真实源码目录到 `<getAgentDir()>/extensions/_shared/tool-topics.ts` 的相对路径。必须保留为静态相对导入：OMP 的扩展依赖图会遍历相对路径源码；绝对导入或独立的原生动态导入可能绕过宿主包重写，报 `Cannot find package '@oh-my-pi/pi-coding-agent'`。导入或初始化失败时明确报告，不另建注册表。
-
-- `ToolTopic` 包含 `name`、`title`、可选的一行 `when`（何时读取；`tool://<tool>` 列表和补全优先显示它而非 `title`）以及 `read(): string | Promise<string>`；`ToolTopicsRegistration` 包含 `tool`、稳定的 `owner` 和 `topics`。工具名和专题名区分大小写，限 `[A-Za-z0-9_.-]+`；owner/title 不能全为空白，专题数组不能为空且名称不能重复。共享边界验证注册信息和正文读取函数的返回值。
-- `registerToolTopics` 返回 `registered`、`invalid` 或 `conflict`，后两者携带 `reason`。每个工具归一个 owner；相同 owner 原子替换整份专题快照，未再提交的旧专题被移除；无效或冲突注册不会破坏现有内容。owner 用于协调注册，不是鉴权凭据。
-- 注册表由 router 持有的 handler 保存；带版本的能力标识让不同导入实例加入同一个 handler，而不是覆盖它。OMP 内置、其他宿主或不兼容的 `tool` handler 不会被覆盖。注册会复制描述，调用方之后修改原对象不会改变已发布快照。
-- `read tool://` 列工具，`read tool://example` 列专题，`read tool://example/usage` 读正文，支持行号和 raw 选择器。对工具或 scheme 根执行 `grep`/`find` 会枚举对应正文；未知工具或专题报错并列出可用名称。补全只读描述，正文读取和搜索每次调用 reader；reader 失败会使请求失败，不静默漏掉专题。
-- 注册生命周期是整个 OMP 进程，跨会话保留，禁用扩展也不删除。reader 不得捕获会话 UI、context、abort signal 或临时资源；helper 不保留 `pi`。各插件自行决定正文缓存和失效方式。删除注册或加载新的 helper 代码需重启；会话关闭不会注销共享的进程状态。
-- `tool-topics` 扩展在每个提示词里把其他 owner 注册的专题列成索引，接在该工具原生说明后面（显示 `when`，没有时显示 `title`）；工具不在本次提示词里时不加。插件因此只需让自己的工具说明保持简短（OMP 只显示插件设备说明的前 200 个字符），细节写成专题。`registeredToolTopics()` 返回当前全部注册的元数据（`tool`、`owner`、各专题的 `name`/`title`/`when`，不含正文），由 `Symbol.for("omp-config.tool-topics.index.v1")` 能力提供；没有注册表或注册表不支持该能力时返回空。
-- 不便静态相对导入 helper 的插件（例如开发目录与安装目录布局不同、需要在开发目录做类型检查），可直接调用 router 上的注册表：`InternalUrlRouter.instance().getHandler("tool")` 带有 `Symbol.for("omp-config.tool-topics.registration.v1")` 为 `true` 的属性时，调用它的 `registerTopics(registration)`，参数与返回值同 `registerToolTopics`。没有这样的 handler 时（omp-config 未安装，或 `tool-topics` 尚未加载）只报告、不另建注册表；在 `session_start` 注册可保证 omp-config 的扩展已加载。`omp-playbooks` 用的就是这种方式。
+本仓库扩展或插件注册的工具，自己提供专题：在 `pi.registerTool` 的定义对象上提供 `docTopics()`，返回 专题名 → Markdown 正文；OMP 按 `xd://<tool>/<topic>` 读取（每次读取都会调用它，因此专题可以在读取时生成）。工具说明的最后几行，在 `Topics — read the one a call needs before making it:` 之下逐行写出每个专题的完整 URL；对于设备，OMP 在提示词里只显示说明的前 200 个字符，完整文本在 `xd://<tool>`。`ToolDefinition` 没有声明 `docTopics`，所以定义对象的类型写成 `ToolDefinition<…> & { docTopics(): Readonly<Record<string, string>> }`；本仓库的例子是 `agent/extensions/fork-task/topics.ts`。
 
 ### 渐进式专题注入 API
 
-外部插件按相同的静态相对导入约定使用 `_shared/tool-topic-injection.ts`。`toolTopicInjectionRulesSchema.safeParse(rawRules)` 验证原始规则数组，将每个 pattern 编译为 `RegExp`；输出类型 `ToolTopicInjectionRule` 包含 `id`、`tool`、`parameter`、已编译的 `pattern` 和 `topic`。重复 id、无效正则、非专题正文 URL 都会被拒绝。
+`_shared/tool-topic-injection.ts` 是 [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection) 的引擎。`toolTopicInjectionRulesSchema.safeParse(rawRules)` 验证原始规则数组，将每个 pattern 编译为 `RegExp`；输出类型 `ToolTopicInjectionRule` 包含 `id`、`tool`、`parameter`、已编译的 `pattern` 和 `topic`。重复 id、无效正则、`tool://<tool>/<topic>` 以外的专题 URL 都会被拒绝。
 
-`installToolTopicInjection(pi, { owner, rules })` 每个扩展/会话安装一次规则读取函数。`owner` 必须非空且稳定，`rules(ctx)` 返回该会话的已验证规则。共享 helper 不含 read、SSH、bash 或 eval 特例，也不注册专题；插件自己的正文通过 registry API 单独注册。插件传入带状态的正则时，引擎会在匹配前重置它。
+`installToolTopicInjection(pi, { owner, rules })` 每个扩展/会话安装一次规则读取函数。`owner` 必须非空且稳定，`rules(ctx)` 返回该会话的已验证规则。引擎不含 read、SSH、bash 或 eval 特例，也不注册专题。带状态的正则会在匹配前重置。
 
 内置适配器的动态配置和默认 SSH 触发条件见 [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection)。投递身份是 owner + 规则 id，不是专题 URL。同一逻辑规则应保留 id；如果旧标记仍在上下文中但需要再次具备注入资格，则使用新的 id。共享上下文守卫只检查活动叶节点模型投影中的 developer 消息，不把压缩摘要或兄弟分支当成已投递内容。
 

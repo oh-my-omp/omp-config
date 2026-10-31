@@ -111,7 +111,6 @@ OMP discovers extensions one level deep under `~/.omp/agent/extensions/`: each e
 | `helper-session.ts` | `runHelperPrompt`: runs a one-shot prompt in a tool-less, extension-less in-memory session with `taskDepth: 1` and returns a result union without throwing |
 | `judge.ts` | `openJudge`: answers with the chat models of `@<purpose>` when that role is assigned; otherwise runs OMP's judge-role chain (`resolveJudge`). Either path falls back to `omomp.yml#judge.fallbackRole` as `TextJudge` |
 | `spec-files.ts` | `discoverSpecFiles`, `parseFrontmatter`, `unquote`: discovers and parses `*-<label>.md` files in the extension directory and from `cwd` up to the git root |
-| `tool-topics.ts` | `registerToolTopics`, `ToolTopic`, `ToolTopicsRegistration`, `ToolTopicsRegistrationResult`: shared `tool://` registry, indexes, readers, search enumeration and completion; usable by external plugins |
 | `context-delivery.ts` | `createContextDelivery(pi)`: once-per-actual-context marker guard shared by `repo-rules` and topic injection; only same-turn pending delivery is kept in memory |
 | `tool-topic-injection.ts` | `installToolTopicInjection`, `ToolTopicInjectionRule`, `toolTopicInjectionRulesSchema`: reusable tool-argument regex matching and trusted topic delivery |
 | `tool-calls.ts` | `watchedCallOf`, `WatchedCall`: reads a `tool_call` event's shell command (`bash`, `bash_bg`, `exec_command`, and their `xd://` device writes) or eval code; used by `tool-policy-nag` and `delete-guard` |
@@ -126,57 +125,17 @@ Code rules checked by `bun run check` (`biome check . && tsc --noEmit`):
 
 `bun run test` (`bun test ci`) runs the unit tests in `ci/`: the differential tests of the `session-urls` JSONL scanner against `JSON.parse`, the tests of its `type` filter and `since`/`until` time window, the `delete-guard` tests (the `delete` tool's refusal set, Linux trash layout and permanent deletion; the posix classifier's, the nested PowerShell/cmd dialects' and the py/js eval analyzers' block/allow tables; the `tool_call` reason and fail-closed paths), and the updater's three-way apply tests (`ci/omp-config-update.test.ts`: unmodified items update, customizations merge or conflict until resolved, seed and machine-owned paths stay, code stays repo-wins, deletions, matching a machine without a base against history, a first install over omp's own first-run `config.yml`, read-only `--check`); CI runs it in the `code` job after `bun run check`. The Windows behavior of `delete-guard` in real sessions is checked separately by the [delete-guard Windows acceptance](../ci/README.md#delete-guard-windows-acceptance).
 
-### Registering Tool Topics from Plugins
+### Tool Topics
 
-Local extensions statically import `registerToolTopics` and its types from `../_shared/tool-topics.ts`. External plugins use a static relative import to the installed helper, with no copy of the implementation. For an external plugin at `~/.omp/plugins/example/index.ts` and the default `~/.omp/agent`, the import is:
+`tool://<tool>/<topic>` holds only the topics this repository writes for tools it does not own (OMP's built-in tools): [tool-topics](extensions.md#tool-topics) loads its `TOPIC-*.md` files and puts the scheme on OMP's URL router, and nothing else registers there.
 
-```ts
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { registerToolTopics } from "../../agent/extensions/_shared/tool-topics.ts";
-
-export default function exampleTopics(pi: ExtensionAPI): void {
-  try {
-    const result = registerToolTopics({
-      tool: "example",
-      owner: "my-plugin",
-      topics: [{
-        name: "usage",
-        title: "Usage",
-        read: () => "# Usage\nRun the example tool with its input path.\n",
-      }],
-    });
-    switch (result.kind) {
-      case "registered": return;
-      case "invalid":
-      case "conflict":
-        pi.logger.warn("example topics registration failed", { reason: result.reason });
-        return;
-      default: {
-        const unreachable: never = result;
-        throw new Error(`Unhandled registration result: ${unreachable}`);
-      }
-    }
-  } catch (error) {
-    pi.logger.warn("example topics initialization failed", { error: String(error) });
-  }
-}
-```
-
-Install the helper through `/update-omp` first. For another plugin location or custom agent directory, calculate the relative path from the plugin's real source directory to `<getAgentDir()>/extensions/_shared/tool-topics.ts` at deployment time. Keep it a static relative import: OMP's extension graph follows relative source dependencies, whereas absolute imports and standalone native dynamic imports can bypass host-package rewriting and fail with `Cannot find package '@oh-my-pi/pi-coding-agent'`. Report import/initialization failures rather than creating a separate registry.
-
-- `ToolTopic` contains `name`, `title`, an optional one-line `when` (when to read it; shown in `tool://<tool>` listings and completion instead of `title`) and `read(): string | Promise<string>`; `ToolTopicsRegistration` contains `tool`, stable `owner` and `topics`. Tool/topic names are case-sensitive `[A-Za-z0-9_.-]+`; owner/title must be non-blank, the topic list non-empty and topic names unique. The boundary validates registration metadata and reader return values.
-- `registerToolTopics` returns `registered`, `invalid` or `conflict`; the latter two include `reason`. A tool belongs to one owner. The same owner atomically replaces the entire topic snapshot, removing omitted topics; invalid/conflicting registrations preserve existing content. Owner names coordinate registrations; they are not authentication.
-- The router-held handler owns the registry. A versioned capability joins independent imports without replacing the handler; an OMP-owned, foreign or incompatible `tool` handler is never overwritten. Registration copies descriptors so later caller mutations do not alter the published snapshot.
-- `read tool://` lists tools; `read tool://example` lists topics; `read tool://example/usage` reads one body, including line/raw selectors. `grep`/`find` over a tool or the scheme root enumerate its leaves. Unknown tools/topics report the available names. Completion uses descriptors only; leaf reads and search call readers each time, and reader failures propagate rather than silently dropping leaves.
-- Registrations live for the OMP process, across sessions and extension disabling. Readers must not capture session UI, context, abort signals or temporary resources; no `pi` is retained by the helper. Each plugin owns any body caching and invalidation. Restart to remove registrations or load changed helper code; session shutdown does not unregister shared process state.
-- The `tool-topics` extension lists the topics another owner registered as an index after that tool's native description, in every prompt (`when`, else `title`); a tool not in the prompt gets none. A plugin therefore keeps its own tool descriptions short (OMP shows the first 200 characters of a plugin device's description) and writes the details as topics. `registeredToolTopics()` returns the metadata of every registration now (`tool`, `owner`, each topic's `name`/`title`/`when`, no bodies) through the `Symbol.for("omp-config.tool-topics.index.v1")` capability; it is empty when there is no registry or the registry lacks that capability.
-- A plugin that cannot statically import the helper (its development and installed layouts differ, and it type-checks in the development checkout) may call the registry on the router directly: when `InternalUrlRouter.instance().getHandler("tool")` has a `Symbol.for("omp-config.tool-topics.registration.v1")` property set to `true`, call its `registerTopics(registration)`, with the arguments and results of `registerToolTopics`. With no such handler (omp-config not installed, or `tool-topics` not yet loaded) report it and create no registry; registering at `session_start` ensures omp-config's extensions have loaded. `omp-playbooks` registers this way.
+A tool registered by an extension of this repository or by a plugin serves its own topics. `docTopics()` on its `pi.registerTool` definition returns topic name → Markdown body; OMP reads it as `xd://<tool>/<topic>` (and calls it on every read, so a topic may be built per read). The last lines of the tool's description point to each topic by its full URL, under `Topics — read the one a call needs before making it:`; for a device, OMP shows the first 200 characters of the description in the prompt and the full text at `xd://<tool>`. `ToolDefinition` does not declare `docTopics`, so the definition is typed `ToolDefinition<…> & { docTopics(): Readonly<Record<string, string>> }`; `agent/extensions/fork-task/topics.ts` is the example here.
 
 ### Progressive Topic Injection API
 
-External plugins use the same static-relative import convention for `_shared/tool-topic-injection.ts`. `toolTopicInjectionRulesSchema.safeParse(rawRules)` validates raw rule arrays and compiles each pattern into a `RegExp`. The output type `ToolTopicInjectionRule` has `id`, `tool`, `parameter`, compiled `pattern` and `topic`. Parsing rejects duplicate ids, invalid regexes and non-leaf topic URLs.
+`_shared/tool-topic-injection.ts` is the engine of [tool-topic-injection](extensions.md#tool-topic-injection). `toolTopicInjectionRulesSchema.safeParse(rawRules)` validates raw rule arrays and compiles each pattern into a `RegExp`. The output type `ToolTopicInjectionRule` has `id`, `tool`, `parameter`, compiled `pattern` and `topic`. Parsing rejects duplicate ids, invalid regexes and topic URLs other than `tool://<tool>/<topic>`.
 
-`installToolTopicInjection(pi, { owner, rules })` installs one provider per extension/session. `owner` must be non-empty and stable; `rules(ctx)` returns the validated rules for that session. This shared helper contains no read/SSH/bash/eval special cases and does not register topics. Use the registry API separately for plugin-owned content. Stateful regexes supplied by a plugin are reset before matching.
+`installToolTopicInjection(pi, { owner, rules })` installs one provider per extension/session. `owner` must be non-empty and stable; `rules(ctx)` returns the validated rules for that session. The engine contains no read/SSH/bash/eval special cases and does not register topics. Stateful regexes are reset before matching.
 
 The built-in adapter's live configuration and default SSH triggers are documented in [tool-topic-injection](extensions.md#tool-topic-injection). Delivery identity is owner + rule id, not topic URL. Keep ids when a rule remains the same logical rule; change its id if it must be eligible again while the old marker is still present. The shared context guard checks developer messages in the active-leaf model projection, so compressed summaries and sibling branches are not mistaken for delivered content.
 

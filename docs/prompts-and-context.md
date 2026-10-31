@@ -79,7 +79,7 @@ OMP scans `.omp/rules`, `.agent(s)/rules`, `.cursor/rules`, `.windsurf/rules`, `
 
 ### fork-task
 
-Source: `agent/extensions/fork-task/`. Registers `fork_task` (`context` + `tasks[]` without `solutionSpace`; requires `async.enabled: true`).
+Source: `agent/extensions/fork-task/`. Registers `fork_task` (`context` + `tasks[]` without `solutionSpace`; requires `async.enabled: true`). Its prerequisites, unsupported fields and source errors are the topic `xd://fork_task/limits`, served by the tool's own `docTopics()` (`topics.ts`) and listed at the end of its description.
 
 `fork_task` preserves native Agent Hub, result delivery, `agent://`/`history://`, follow-ups and isolated merge-back. Every child replicates its source's latest model request — the caller's, or that of the live agent named by `from` — so forks of one source share the provider's cached prefix; no item rewrites the system prompt. `agent` decides only the model and a role:
 

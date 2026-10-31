@@ -70,6 +70,7 @@ import {
 	type ExtensionContext,
 	SessionManager,
 	type TaskItem,
+	type ToolDefinition,
 	z,
 } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -81,6 +82,7 @@ import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { applyReplica, captureReplica, observeRequests, type Replica } from "./replica.ts";
+import { forkTaskTopics, TOPIC_POINTERS } from "./topics.ts";
 
 const itemSchema = z.object({
 	from: z.string().optional(),
@@ -552,12 +554,14 @@ export default function forkTask(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.registerTool({
+	// `docTopics` serves xd://fork_task/<topic>; OMP keeps it on the tool object, though ToolDefinition does not declare it.
+	const tool: ToolDefinition<typeof paramsSchema> & { docTopics(): Readonly<Record<string, string>> } = {
 		name: "fork_task",
 		label: tr("Fork Task", "分叉任务"),
-		description: DESCRIPTION,
+		description: `${DESCRIPTION}\n\n${TOPIC_POINTERS}`,
 		loadMode: "essential",
 		parameters: paramsSchema,
+		docTopics: forkTaskTopics,
 		async execute(toolCallId, rawParams, signal, onUpdate, ctx) {
 			const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true });
 			const params = paramsSchema.parse(rawParams);
@@ -645,5 +649,6 @@ export default function forkTask(pi: ExtensionAPI): void {
 				content: [...result.content, { type: "text" as const, text: `\n[fork_task] ${notes.join("; ")}` }],
 			};
 		},
-	});
+	};
+	pi.registerTool(tool);
 }

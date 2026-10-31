@@ -27,7 +27,7 @@
 | 19 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话（表为进程全局） | 是 | 后端 `fetchAvailableModels`；无文件 | 供应商与生命周期（条件必选 `antigravity-compat`） | 无需配置：本机存有 Antigravity 账号时自动刷新 `maxOutputTokens` |
 | 20 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） | 供应商与生命周期（必选基底 `workspace-lifecycle`） | 按需当场（本机）：用 `/omp-config-autoupdate on\|off` 切换，用 `/omp-config-autoupdate conflicts notify\|agent` 选择冲突处理方式，用 `/omp-config-autoupdate adapt` 适配冲突的本机定制 |
 | 21 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局（模块加载） | 是 | `omomp.yml#omomp-lang`（仓库默认值，首次播种后归本机） | 人机交互与 TUI（必选基底 `workspace-lifecycle`） | 当场诊断：仓库默认 `zh`；在 `<agentDir>/omomp.yml` 修改 `language`（更新保留），或在环境变量设置 `OMOMP_LANG=en` |
-| 22 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子（提示词）；进程全局（`tool://` scheme） | 是 | 同目录的 `TOPIC-*.md` / `SURFACE-*.md`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`；`TOPIC-exec_command-*` 与 `omp-unified-exec` 耦合） | 延后：自带 `SURFACE-*` / `TOPIC-*` 随仓库维护；仅在扩展自定义工具专题时新增本机文件 |
+| 22 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子（提示词）；进程全局（`tool://` scheme） | 是 | 同目录的 `TOPIC-*.md` / `SURFACE-*.md`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`） | 延后：自带 `SURFACE-*` / `TOPIC-*` 随仓库维护；仅在为 OMP 内置工具扩展专题时新增本机文件 |
 | 23 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`；依赖 `tool-topics`） | 延后：保持仓库默认只读触发规则；有特殊需求可在 `<cwd>/.omp/omomp.yml` 覆盖 |
 | 24 | `session-urls` | [session-urls](#session-urls) | 进程全局（`session://` scheme） | 是 | 读取会话文件、recap 记录与 prompt 历史；无配置 | 长程状态与压缩（必选基底 `compaction-baseline`） | 无需配置：进程全局注册只读 `session://` 路由 |
 | 25 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无 | 执行与宿主安全（必选基底 `safe-deletion`） | 无需配置：常驻拦截 `bash`/`eval` 删除操作并注册字面路径 `delete` 工具 |
@@ -253,14 +253,14 @@ OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PR
 
 ### tool-topics
 
-源码：`agent/extensions/tool-topics/`；路由和注册由 [`_shared/tool-topics.ts`](operations.zh-CN.md#插件注册工具专题) 提供。
+源码：`agent/extensions/tool-topics/`（`tool://` handler 在其 `registry.ts`；哪些专题由谁提供见[工具专题](operations.zh-CN.md#工具专题)）。
 
 渐进式工具说明。被覆盖的工具在 system prompt 里的说明只保留常用调用说明，末尾附 `Topics` 索引；详细调用说明是按需读取的专题 `tool://<tool>/<topic>`（支持行选择器；`read tool://<tool>` 列出该工具的专题及读取条件；对 `tool://` 执行 `grep`/`find` 可检索全部专题）。`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题；[tool-topic-injection](#tool-topic-injection) 另在只读工具调用后补送专题。
 
 - **文件**：`TOPIC-<tool>-<name>.md` 带严格 YAML 头（`tool`、`name`、`title`、`when`、`upstream`）和 Markdown 正文；`SURFACE-<tool>.md`（头为 `tool`、`upstream`）整段替换该工具的说明。专题写调用说明——参数、语法、取值、前置条件、结果、出错后的改法——不写实现细节。`when` 是索引显示的一行（“before …”“when …”）。`upstream` 记录核对时依据的 OMP 版本与来源。
-- **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；有专题的工具：read、bash、edit（hashline 模式）、eval、grep、find、task、write、ask、fork_task，设备 ast_edit、debug、github、checkpoint，以及 `exec_command` 插件设备（等待外部条件、终端生命周期与回收、交互输入与监视）。简单工具 `wait`、`glob`、`web_search`、`ast_grep`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。
-- **生命周期**：扩展加载时读取一次文件，以 owner `omp-config/tool-topics` 注册各工具的专题；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引。其他 owner（插件）为自己的工具注册的专题，每次 `before_agent_start` 从注册表读取，保留该工具原生说明并在其后加索引，所以插件的专题由插件自己维护（见[插件注册工具专题](operations.zh-CN.md#插件注册工具专题)）。没有 `read` 的会话保留原生说明。
-- **失败处理**：解析失败的文件跳过并记 warning。找不到工具格式或 `{{native:…}}` 段时，该工具保留原生说明，记 warning，主会话按工具与原因各提示一次。注册失败的工具不显示索引。
+- **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；有专题的工具：read、bash（含等待外部条件）、edit（hashline 模式）、eval、grep、find、task、write、ask，设备 ast_edit、debug、github、checkpoint。简单工具 `wait`、`glob`、`web_search`、`ast_grep`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。本仓库扩展或插件注册的工具（`fork_task`、`exec_command`、`playbook_*` 等）不在这里覆盖：它们以 `xd://<tool>/<topic>` 自己提供专题，并在自己的说明里列出。
+- **生命周期**：扩展加载时读取一次文件，把专题以 `tool://` 挂到 router 上，并替换之前加载（子代理、隔离子代理）留下的 handler；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引，每行一个专题及其完整 `tool://` URL。没有 `read` 的会话保留原生说明。
+- **失败处理**：解析失败的文件跳过并记 warning。找不到工具格式或 `{{native:…}}` 段时，该工具保留原生说明，记 warning，主会话按工具与原因各提示一次。OMP 或其他 handler 已占用 `tool://` 时，所有工具都不显示索引。
 
 ### tool-topic-injection
 
@@ -287,11 +287,9 @@ tool-topic-injection:
 
 仓库规则只覆盖不改动任何东西、重来没有代价的调用（read、grep），外加 eval/bash 里 `ssh … cat` 的误用提醒：调用后送达的专题用于改进下一次调用。`task`、`fork_task`、`edit`、`write` 和会改动状态的设备没有规则：调用之后再送专题已经晚了，它们的专题要在调用前读。
 
-`tool` 精确匹配工具名；`parameter` 指定字符串参数名，也支持点分属性路径。`pattern` 是不带斜杠定界符和 flags 的 JavaScript 正则源码，只匹配文本，不解释 shell 语义。参数缺失或不是字符串时不匹配。`topic` 指向已注册的 `tool://<tool>/<topic>` 正文。规则 id 在同一 owner 内须唯一且稳定。
+`tool` 精确匹配工具名；`parameter` 指定字符串参数名，也支持点分属性路径。`pattern` 是不带斜杠定界符和 flags 的 JavaScript 正则源码，只匹配文本，不解释 shell 语义。参数缺失或不是字符串时不匹配。`topic` 指向 [tool-topics](#tool-topics) 提供的 `tool://<tool>/<topic>` 正文。规则 id 在同一 owner 内须唯一且稳定。
 
 每条规则在活动叶节点重建的真实模型上下文中保有自身标记时只注入一次。共享 `_shared/context-delivery.ts` 也服务 `repo-rules`；临时集合只覆盖当前 turn 中宿主尚未持久化 developer 消息的窗口。compact 移除标记后，该规则可再次注入；若标记仍在保留尾部，则不重复注入。resume 和树导航按当前分支判断，不扫描整份历史。两条规则即使指向同一专题，也各有一次注入机会。专题缺失、为空或加载失败时记 warning，不消耗资格，也不妨碍其他规则执行。
-
-外部插件可通过[导出的引擎和 schema](operations.zh-CN.md#渐进式专题注入-api)提供自己的 owner 和规则读取函数，无需导入本扩展。
 
 ### session-urls
 
