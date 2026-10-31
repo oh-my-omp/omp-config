@@ -6,7 +6,9 @@
 //   type=marker:compaction    markers of one kind (`-`, `_` and spaces are interchangeable)
 //   type=-call  type=!marker  exclusion; with no inclusion everything else is kept
 // Matching is case-insensitive. Unknown tokens throw, listing the accepted forms.
+// EventFilter ANDs this filter with the `since`/`until` window of window.ts.
 import type { SessionEvent } from "./events.ts";
+import { type TimeWindow, within } from "./window.ts";
 
 const KINDS = ["user", "developer", "thinking", "say", "call", "irc_out", "irc_in", "dispatch", "subresult", "exec", "marker"] as const;
 type Kind = (typeof KINDS)[number];
@@ -114,4 +116,15 @@ function matches(selector: Selector, event: SessionEvent): boolean {
 export function keeps(filter: TypeFilter, event: SessionEvent): boolean {
 	if (filter.include.length > 0 && !filter.include.some((item) => matches(item, event))) return false;
 	return !filter.exclude.some((item) => matches(item, event));
+}
+
+/** Everything a URL filters events by: its type filter and its time window, combined by AND. */
+export interface EventFilter {
+	readonly types: TypeFilter | null;
+	readonly window: TimeWindow | null;
+}
+
+/** Whether `event` passes both the type filter and the time window. */
+export function shows(filter: EventFilter, event: SessionEvent): boolean {
+	return (filter.types === null || keeps(filter.types, event)) && (filter.window === null || within(filter.window, event));
 }

@@ -7,7 +7,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadEntry, loadSession } from "./events.ts";
-import { parseTypeFilter, type TypeFilter } from "./filter.ts";
+import { type EventFilter, parseTypeFilter, type TypeFilter } from "./filter.ts";
 import {
 	executeJsonQuery,
 	getSessionsDir,
@@ -42,12 +42,14 @@ import {
 	type SessionRef,
 	type Target,
 } from "./routes.ts";
+import { parseWindow, resolveWindow, type WindowSpec, windowQuery } from "./window.ts";
 
 export const HANDLER_MARK = Symbol.for("omp-config.session-urls.handler.v1");
 
 const JQ_KEYS: Readonly<Record<string, true>> = { q: true, query: true, raw: true, compact: true, offset: true, limit: true };
 const FIND_KEYS: Readonly<Record<string, true>> = { text: true, project: true, max: true };
 const TYPE_KEYS: Readonly<Record<string, true>> = { type: true };
+const TIME_KEYS: Readonly<Record<string, true>> = { since: true, until: true };
 const ALL_SESSIONS = 1_000_000;
 const DEFAULT_FIND = 20;
 
@@ -116,6 +118,20 @@ async function jsonlResource(
 /** The type filter of a URL: its `type/<filter>/` path prefix and every `?type=` value, as one union. */
 function typeFilter(url: InternalUrl, target: Target): TypeFilter | null {
 	return parseTypeFilter([...target.pathTypes, ...query(url).getAll("type")]);
+}
+
+/**
+ * The `since`/`until` bounds as written. Read from the raw query: URLSearchParams
+ * would turn the `+` of a `+0800` zone into a space.
+ */
+function windowSpec(url: InternalUrl): WindowSpec | null {
+	const pairs = (url.search.startsWith("?") ? url.search.slice(1) : url.search).split("&");
+	const value = (key: string): string | null => {
+		const values = pairs.filter((pair) => pair.startsWith(`${key}=`)).map((pair) => decodeURIComponent(pair.slice(key.length + 1)));
+		if (values.length > 1) throw new Error(`Give ${key}= once; a time window has one start and one end.`);
+		return values[0] ?? null;
+	};
+	return parseWindow(value("since"), value("until"));
 }
 
 /** Whether a route takes a type filter: the event views it filters, and the directories a glob walks to reach them. */
@@ -290,18 +306,28 @@ async function leaf(target: Target, url: InternalUrl, context: ResolveContext | 
 		case "find":
 			return jsonlResource(url, await find(url, cwd), signal);
 		case "timeline": {
-			const filter = typeFilter(url, target);
+			const types = typeFilter(url, target);
+			const spec = windowSpec(url);
 			const located = await locate(route.at, cwd);
 			const loaded = await loadSession(located.file, located.ref.sid, route.at.agent, signal);
+			const filter: EventFilter = { types, window: spec === null ? null : resolveWindow(spec, loaded.events, Date.now()) };
 			// OMP keeps generated titles in its session index; the journal's own title slot is often empty.
 			const title = route.at.agent === "" && !loaded.meta.title ? ((await readSessionInfo(located.file))?.title ?? null) : null;
 			return text(url.href, renderTimeline(loaded, located.base, located.root, title, filter));
 		}
 		case "events": {
-			const filter = typeFilter(url, target);
+			const types = typeFilter(url, target);
+			const spec = windowSpec(url);
 			const located = await locate(route.at, cwd);
 			const loaded = await loadSession(located.file, located.ref.sid, route.at.agent, signal);
-			const keep = filter === null ? "" : `type=${filter.source.replaceAll("%", "%25").replaceAll("&", "%26")}`;
+			const filter: EventFilter = { types, window: spec === null ? null : resolveWindow(spec, loaded.events, Date.now()) };
+			// jq's next page keeps the same input: the types as written, the window as absolute bounds.
+			const keep = [
+				types === null ? "" : `type=${types.source.replaceAll("%", "%25").replaceAll("&", "%26")}`,
+				filter.window === null ? "" : windowQuery(filter.window),
+			]
+				.filter((part) => part !== "")
+				.join("&");
 			return jsonlResource(url, eventRecords(loaded, located.base, filter), signal, keep);
 		}
 		case "entry": {
@@ -337,9 +363,9 @@ async function leaf(target: Target, url: InternalUrl, context: ResolveContext | 
 function allowedKeys(route: Route): readonly Readonly<Record<string, true>>[] {
 	switch (route.kind) {
 		case "timeline":
-			return [TYPE_KEYS];
+			return [TYPE_KEYS, TIME_KEYS];
 		case "events":
-			return [JQ_KEYS, TYPE_KEYS];
+			return [JQ_KEYS, TYPE_KEYS, TIME_KEYS];
 		case "allSessions":
 		case "bucketSessions":
 			return [JQ_KEYS];
@@ -358,7 +384,7 @@ export class SessionUrlHandler implements ProtocolHandler {
 	readonly spec: SchemeSpec = { backing: "file", selectors: "lines", immutable: true, linkable: false };
 
 	promptDoc(): string {
-		return "`session://`: other OMP sessions on this machine (read-only). Find: `session://find?text=<words>`, `session://sessions.jsonl?q=<jq>`; read: `session://<id>/timeline` (thinking, speech, IRC, calls as signatures; `?type=thinking,irc` filters), `…/entry/<id>` for one call's full args/result, `…/events.jsonl?q=<jq>`; grep `session://here/<date>/*/timeline` (filtered: `session://type/<types>/here/…`). Grammar: `read session://README`.";
+		return "`session://`: other OMP sessions on this machine (read-only). Find: `session://find?text=<words>`, `session://sessions.jsonl?q=<jq>`; read: `session://<id>/timeline` (thinking, speech, IRC, calls as signatures; `?type=thinking,irc` filters by kind, `?since=1430&until=1500` or `?since=2h` by time, no raw `:` at the URL's end), `…/entry/<id>` for one call's full args/result, `…/events.jsonl?q=<jq>`; grep `session://here/<date>/*/timeline` (filtered: `session://type/<types>/here/…`). Grammar: `read session://README`.";
 	}
 
 	async locate(url: InternalUrl, context?: ResolveContext): Promise<string | null> {

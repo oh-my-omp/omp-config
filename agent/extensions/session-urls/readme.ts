@@ -49,6 +49,21 @@ FILTER BY TYPE   (timeline and events.jsonl, root sessions and subagents)
   each turn's full counts in its "── turn" line and print a "filter …" header line; jq on a
   filtered events.jsonl continues pages with the same type.
 
+FILTER BY TIME   (timeline and events.jsonl, root sessions and subagents; ANDed with type)
+  ?since=<when>&until=<when>     either bound may be left out; e.g. timeline?since=1430&until=1500
+  <when>  30m 2h 3d                    that long before now
+          2026-10-28                   a local calendar day
+          2026-10-28T1430[15[.250]]    a local wall time (a space works in place of T)
+          2026-10-28T1430Z  …+0800     with a zone (Z, ±hhmm) the time is absolute
+          1430  143015                 a wall time on the session's date; a session spanning several
+                                       local dates refuses it and lists them: add the date
+  Both bounds include their whole written unit: until=2026-10-28 is the entire day, until=1430
+  runs through 14:30:59. Write times without colons (or as 14%3A30): read takes a trailing
+  ":<digits>" of a URL as a line selector, so ?until=14:30 arrives as until=14 and fails.
+  The "filter …" header line shows the resolved window as [start, end); events outside it do
+  not count toward "── idle" gaps. jq on events.jsonl continues pages with the window frozen
+  to absolute bounds. No path-prefix form: under a grep glob, narrow by the <YYYY-MM-DD> segment.
+
 GREP (walks only this tree, so each session is searched once)
   session://projects/<bucket>/<YYYY-MM-DD>/<full-id>/timeline   and …/agents/<AgentId>/timeline
   session://here/…                                              the current project

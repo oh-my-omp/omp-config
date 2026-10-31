@@ -3,8 +3,9 @@
 // loaded session; `base` is the session:// URL the reader used for this session
 // (or subagent), so every pointer printed here can be read back directly.
 import { type Call, type EntryDetail, type LoadedSession, rewriteRefs, type SessionEvent, type Text } from "./events.ts";
-import { keeps, type TypeFilter } from "./filter.ts";
+import { type EventFilter, keeps, shows } from "./filter.ts";
 import { Clipped, type Projected, type ProjectedObject } from "./scanner.ts";
+import { within } from "./window.ts";
 
 const IDLE_MS = 5 * 60_000;
 const SLOW_MS = 10_000;
@@ -204,16 +205,35 @@ function eventLines(event: Exclude<SessionEvent, { kind: "call" }>, time: string
 }
 
 /**
+ * The `filter …` header line, or null when nothing is filtered. The window is
+ * printed as a half-open interval of local stamps: `time [14:30:00 …, 15:00:00 …)`.
+ */
+function filterLine(events: readonly SessionEvent[], filter: EventFilter): string | null {
+	if (filter.types === null && filter.window === null) return null;
+	const parts = ["filter"];
+	if (filter.types !== null) parts.push(`type=${filter.types.source}`);
+	if (filter.window !== null) {
+		const stamp = (at: number | null): string => (at === null ? "…" : localStamp(new Date(at).toISOString()));
+		parts.push(`time [${stamp(filter.window.start)}, ${stamp(filter.window.end)})`);
+	}
+	const summary = [parts.join(" "), `${events.filter((event) => shows(filter, event)).length} of ${plural(events.length, "event")} shown`];
+	const untimed = filter.window === null ? 0 : events.filter((event) => Number.isNaN(Date.parse(event.t))).length;
+	if (untimed > 0) summary.push(`${untimed} without a timestamp`);
+	return summary.join(" · ");
+}
+
+/**
  * The timeline: header, then per turn a turn line and its events; consecutive
  * calls of one assistant entry share a `calls` header. `root` is the root
  * session's canonical URL (subagent results point under it); `title` is OMP's
  * indexed title, else the journal's, else the first prompt (as OMP's own
- * session listing names untitled sessions). With a `filter`, only matching
+ * session listing names untitled sessions). With a filter, only matching
  * events are printed; turn lines keep the whole turn's span and counts, turns
- * without a match are left out, and an idle gap or date change that fell on a
- * hidden event is printed before the next shown one.
+ * without a match are left out, and an idle gap or date change that fell on an
+ * event hidden by type is printed before the next shown one. Events outside the
+ * time window do not count toward idle gaps.
  */
-export function renderTimeline(loaded: LoadedSession, base: string, root: string, title: string | null, filter: TypeFilter | null): string {
+export function renderTimeline(loaded: LoadedSession, base: string, root: string, title: string | null, filter: EventFilter): string {
 	const { meta, events } = loaded;
 	const firstPrompt = events.find((event) => event.kind === "user");
 	const fallback = firstPrompt?.kind === "user" ? textOf(firstPrompt.text).split("\n", 1)[0]?.slice(0, 120) : undefined;
@@ -228,10 +248,8 @@ export function renderTimeline(loaded: LoadedSession, base: string, root: string
 			`warning ${plural(meta.stats.invalidLines.length, "unparsable line")} skipped: ${meta.stats.invalidLines.slice(0, 20).join(", ")}`,
 		);
 	if (meta.stats.incompleteTail !== null) lines.push(`warning line ${meta.stats.incompleteTail} is still being written and is not shown`);
-	if (filter !== null) {
-		const shown = events.filter((event) => keeps(filter, event)).length;
-		lines.push(`filter type=${filter.source} · ${shown} of ${plural(events.length, "event")} shown`);
-	}
+	const filtered = filterLine(events, filter);
+	if (filtered !== null) lines.push(filtered);
 	lines.push("");
 
 	const turns = new Map<number, SessionEvent[]>();
@@ -243,10 +261,15 @@ export function renderTimeline(loaded: LoadedSession, base: string, root: string
 		let headerDone = false;
 		let callsEntry: string | null = null;
 		for (const event of turnEvents) {
+			if (filter.window !== null && !within(filter.window, event)) {
+				previousAt = null;
+				gap = 0;
+				continue;
+			}
 			const at = Date.parse(event.t);
 			if (previousAt !== null && !Number.isNaN(at)) gap = Math.max(gap, at - previousAt);
 			if (!Number.isNaN(at)) previousAt = at;
-			if (filter !== null && !keeps(filter, event)) continue;
+			if (filter.types !== null && !keeps(filter.types, event)) continue;
 			if (!headerDone) {
 				lines.push(turnHeader(turn, turnEvents));
 				headerDone = true;
@@ -326,10 +349,10 @@ function eventFields(event: SessionEvent): Record<string, unknown> {
 	}
 }
 
-/** One JSON object per event (those `filter` keeps, when given), for jq. */
-export function eventRecords(loaded: LoadedSession, base: string, filter: TypeFilter | null): Array<Record<string, unknown>> {
+/** One JSON object per event that `filter` shows, for jq. */
+export function eventRecords(loaded: LoadedSession, base: string, filter: EventFilter): Array<Record<string, unknown>> {
 	const { meta } = loaded;
-	const events = filter === null ? loaded.events : loaded.events.filter((event) => keeps(filter, event));
+	const events = loaded.events.filter((event) => shows(filter, event));
 	return events.map((event) => ({
 		sid: meta.sid,
 		agent: meta.agent,

@@ -1,7 +1,8 @@
 // session-urls — a read-only `session://` internal-URL scheme over the OMP
 // session files on this machine (~/.omp/agent/sessions). `read` renders a
 // session's active-branch timeline (thinking, speech, IRC, dispatches and
-// subagent results in full; tool calls as one-line signatures), single entries
+// subagent results in full; tool calls as one-line signatures), filterable by
+// event type and by a since/until time window, single entries
 // in full, events/metadata JSONL with jq (OMP's jaq), and finds sessions by
 // prompt-history FTS, title and recap; `grep`/`glob` walk one tree
 // (projects/<bucket>/<date>/<id>/timeline) through readDirectory.
