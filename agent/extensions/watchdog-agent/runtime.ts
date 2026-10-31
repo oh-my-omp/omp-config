@@ -38,7 +38,7 @@ import {
 type Runtime = {
 	readonly pi: ExtensionAPI;
 	identity: Identity | null;
-	cwd: string;
+	cwd: () => string;
 	roster: WatchdogSpec[];
 	overrides: Map<string, boolean>;
 	states: Map<string, WatchdogState>;
@@ -51,7 +51,7 @@ export function registerWatchdog(pi: ExtensionAPI): void {
 	const runtime: Runtime = {
 		pi,
 		identity: null,
-		cwd: process.cwd(),
+		cwd: () => process.cwd(),
 		roster: [],
 		overrides: new Map(),
 		states: new Map(),
@@ -200,7 +200,7 @@ function effectiveEnabled(runtime: Runtime, spec: WatchdogSpec): boolean {
 /** Re-read every watchdog file and rebuild the active set, keeping state of watchdogs that stay active. */
 function refresh(runtime: Runtime, warn: boolean): void {
 	const specs: WatchdogSpec[] = [];
-	for (const file of discoverWatchdogFiles(runtime.cwd)) {
+	for (const file of discoverWatchdogFiles(runtime.cwd())) {
 		const parsed = parseWatchdogFile(file);
 		if (parsed.kind === "ok") specs.push(parsed.spec);
 		else if (warn) runtime.pi.logger?.warn?.(`watchdog "${file}": ${parsed.reason}`);
@@ -241,7 +241,7 @@ function logActive(runtime: Runtime): void {
 /** Session boundary: identity, overrides and the active set are rebuilt; state is restored from the branch. */
 function load(runtime: Runtime, ctx: ExtensionContext): void {
 	runtime.identity = resolveIdentity(ctx);
-	runtime.cwd = ctx.cwd;
+	runtime.cwd = () => ctx.sessionManager.getCwd();
 	runtime.branchOf = () => ctx.sessionManager.getBranch();
 	runtime.overrides = overridesFromBranch(runtime.branchOf());
 	runtime.states = new Map();
@@ -334,7 +334,7 @@ function fileStatus(runtime: Runtime, path: string): string {
 	const parsed = parseWatchdogFile(path);
 	if (parsed.kind === "invalid") return `watchdog file ${path}: NOT recognised (${parsed.reason}); it is ignored until fixed.`;
 	if (!runtime.roster.some((spec) => spec.filePath === path)) {
-		return `watchdog file ${path}: valid but not searched from ${runtime.cwd}; watchdogs load from ${import.meta.dir} and from <dir>/ or <dir>/.omp/ for each dir between ${runtime.cwd} and its git root.`;
+		return `watchdog file ${path}: valid but not searched from ${runtime.cwd()}; watchdogs load from ${import.meta.dir} and from <dir>/ or <dir>/.omp/ for each dir between ${runtime.cwd()} and its git root.`;
 	}
 	const spec = parsed.spec;
 	const active = !targetsHere(runtime, spec)
@@ -400,7 +400,7 @@ function draftPrompt(
 	refresh(runtime, false);
 	const model = defaultReviewerModel(ctx);
 	const draft: DraftContext = {
-		projectDir: join(projectRoot(runtime.cwd), ".omp"),
+		projectDir: join(projectRoot(runtime.cwd()), ".omp"),
 		globalDir: import.meta.dir,
 		existing: runtime.roster,
 		defaultModel: model ? `${model.provider}/${model.id}` : null,
@@ -710,7 +710,7 @@ function registerEvents(runtime: Runtime): void {
 	runtime.pi.on("tool_result", (event) => {
 		try {
 			if (event.isError) return;
-			const files = touchedWatchdogFiles(event.toolName, event.input, runtime.cwd);
+			const files = touchedWatchdogFiles(event.toolName, event.input, runtime.cwd());
 			if (files.length === 0) return;
 			refresh(runtime, true);
 			logActive(runtime);
@@ -744,6 +744,7 @@ function registerEvents(runtime: Runtime): void {
 	});
 	runtime.pi.on("before_agent_start", () => {
 		try {
+			refresh(runtime, false);
 			const armed = runtime.userTurnArmed;
 			runtime.userTurnArmed = false;
 			if (runtime.nextTurnQueue.length === 0 || (runtime.identity?.kind === "main" && !armed)) return;

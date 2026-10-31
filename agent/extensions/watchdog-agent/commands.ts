@@ -90,6 +90,8 @@ export function touchedWatchdogFiles(toolName: string, input: Record<string, unk
 	}
 	const files = new Set<string>();
 	for (const path of raw) {
+		// Virtual resource writes (out://, local://, etc.) are not local spec-file writes.
+		if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) continue;
 		const expanded = path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
 		const absolute = resolve(cwd, expanded);
 		if (WATCHDOG_FILE_PATTERN.test(basename(absolute))) files.add(absolute);

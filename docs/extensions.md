@@ -124,7 +124,7 @@ tool-policy-nag:
 
 Source: `agent/extensions/watchdog-agent/`.
 
-Runs periodic reviews configured by `WATCHDOG-<label>.md` files in `~/.omp/agent/extensions/watchdog-agent/` and `<dir>/WATCHDOG-*.md` or `<dir>/.omp/WATCHDOG-*.md` from `cwd` up to the git root (machine-local, not synced):
+Runs periodic reviews configured by `WATCHDOG-<label>.md` files in `~/.omp/agent/extensions/watchdog-agent/` and `<dir>/WATCHDOG-*.md` or `<dir>/.omp/WATCHDOG-*.md` from the live session `cwd` up to its git root (machine-local, not synced). Linked worktrees use their own root; after `/move`, discovery uses the destination on the next prompt or `/watchdog` command.
 
 | Frontmatter field | Values and default | Behavior |
 |---|---|---|
@@ -137,7 +137,7 @@ Runs periodic reviews configured by `WATCHDOG-<label>.md` files in `~/.omp/agent
 | `instructions`, `option.<label>[.prompt\|.delivery]` | JUDGE mode (enabled when $\ge 2$ `option.*` keys are set) | Cannot be combined with `model`/`tools`/`note`; calls `openJudge` to pick a declared lowercase option and injects its `.prompt` (no `.prompt` = pass). Errors or 90 s timeouts do not fall back to chat mode |
 
 - **Cursor state**: stores the last reviewed position in session custom entry `mouriya.omp.watchdog-agent.cursor` and rebuilds it on resume or branch switch.
-- **Commands**: `/watchdog [list]`, `/watchdog on|off <name> [session|global]`, `/watchdog rm <name>`. `/watchdog add <request>` and `/watchdog edit <name> [change]` send an `attribution: "agent"` prompt to the active model that steps through **1. Draft (expected behavior, settings table, full file text, and absolute path; no file write) → 2. Revise → 3. Write after user confirmation**. Any `write` or `edit` on a `WATCHDOG-*.md` file appends its recognition status to the tool result.
+- **Commands**: `/watchdog [list]`, `/watchdog on|off <name> [session|global]`, `/watchdog rm <name>`. `/watchdog add <request>` and `/watchdog edit <name> [change]` send an `attribution: "agent"` prompt to the active model that steps through **1. Draft (expected behavior, settings table, full file text, and absolute path; no file write) → 2. Revise → 3. Write after user confirmation**. Any filesystem `write` or `edit` on a `WATCHDOG-*.md` file appends its recognition status to the tool result; resource URI writes such as `out://` do not.
 
 ### turn-judge
 

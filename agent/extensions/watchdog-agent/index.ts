@@ -19,7 +19,9 @@
 // FILE FORMAT. `WATCHDOG-<label>.md`, discovered at:
 //   - user level:  <agent dir>/extensions/watchdog-agent/WATCHDOG-*.md
 //   - repo level:  <dir>/WATCHDOG-*.md and <dir>/.omp/WATCHDOG-*.md, walking
-//                  from cwd up to the git root.
+//                  from the live session cwd up to the git root (including a
+//                  linked worktree's .git file). A /move takes effect on the next
+//                  prompt or /watchdog command, without reloading the extension.
 // Frontmatter (Claude rule.md style, between `---` fences):
 //   target: main            # main | <subagent-name> | * | subagents | CSV list
 //   model:  anthropic/claude-sonnet-4-5:medium   # chat reviewer; else @advisor role
@@ -76,10 +78,10 @@
 // behaviour (for `edit`, what changes against now), revises it in chat as the
 // user names changes (no `ask`), and writes only after explicit confirmation.
 // `/watchdog rm <name>` deletes the file after a UI confirmation and drops
-// this session's override of it. Any successful `write`/`edit` touching a
-// `WATCHDOG-*.md` re-reads the roster at once and appends the file's status
+// this session's override of it. Any successful filesystem `write`/`edit` touching
+// a `WATCHDOG-*.md` re-reads the roster at once and appends the file's status
 // (recognised and active, NOT recognised with the reason, valid but not
-// searched, or removed) to that tool result.
+// searched, or removed) to that tool result. Resource URI writes are excluded.
 // Subcommands, names and scopes are offered as argument completions.
 //
 // FAILURE POLICY. Every failure path (no match, unresolved model, judge
