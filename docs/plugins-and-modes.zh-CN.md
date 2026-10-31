@@ -15,7 +15,7 @@
 | `https://github.com/oh-my-omp/omp-todo-more` | `omp-todo-more` | 必装（GitHub） | 工具：`todo`, `ctx`；命令：`/todo-more`；事件：`omp-todo-more:read`；Tern 面板 | 替代 `config.yml` 关闭的原生 Todo（见下方 [todo-more](#todo-more)） | 长程状态与压缩（必选基底 `todo-continuity`；与 `config.yml#todo.enabled: false`、`system-prompt-replace` 及 `task-completion-judge` 耦合） | 无需配置：`todo.enabled: false` 时不可省略 |
 | `https://github.com/oh-my-omp/omp-unified-exec` | `omp-unified-exec` | 必装（GitHub fork） | `xd://` 工具：`exec_command`, `write_stdin`, `set_on_exit`, `monitor`, `kill_session`, `list_sessions`；专题 `xd://exec_command/*` | `iamwrm/pi-unified-exec` 的维护分支：启动长生命周期 PTY 会话并将输出写入 `/tmp/pi-unified-exec-*.log`，跳过 OMP 不支持的 `createCodemodeExtension`，在 Bun 下使用 `Bun.Terminal`（仅 Node.js 下加载 `@homebridge/node-pty-prebuilt-multiarch`）。安装前需先卸载 `pi-unified-exec` | 执行与工作区控制（必选基底 `pty-routing`；与 `config.yml#launch.enabled: false`、`SURFACE-bash.md` 及 `TOPIC-bash-waiting.md` 耦合） | 无需配置：`launch.enabled: false` 时不可省略 |
 | `https://github.com/mouriya-s-lab/pi-bansos` | `pi-bansos` | 必装（GitHub fork） | Provider：`bansos`；命令：`/bansos` | `mannnrachman/pi-bansos` 的分支：在 `127.0.0.1:18080` 启动本地代理，为 `task:free` 提供免费模型。读写 `~/.pi/agent/pi-bansos-relay-state.json`（本机插件状态，不进本仓库）；安装前需先卸载 npm 版 `pi-bansos` | 供应商与生命周期（条件必选 `free-tier-bansos`；与 `task:free` 模型绑定耦合） | 按需当场：通过 `/bansos` 管理 relay（`~/.pi/agent/pi-bansos-relay-state.json`）；`task:free` 使用 `bansos/...` 时需要 |
-| `https://github.com/oh-my-omp/omp-thinking-translator` | `omp-thinking-translator` | 必装（GitHub） | 助手 thinking 块实时中文翻译渲染；命令：`/thinking-translator` | 按 `~/.omp/agent/thinking-translator.json` 逐行流式翻译思考块（见下方 [思考翻译](#思考翻译)） | 人机交互与 TUI（可选增强 `thinking-translator`） | 当场定制（首次安装后归本机）：用 `/thinking-translator` 切换；仓库默认链需 `futureppo-pool`（并在本机 `models.yml` 加 `supportsReasoningEffort: true`）或 OMP 内置的 `commandcode` provider（`/login commandcode`），否则修改本机的模型链 |
+| `https://github.com/oh-my-omp/omp-thinking-translator` | `omp-thinking-translator` | 必装（GitHub） | 助手 thinking 块实时翻译 | 独立插件，见下方 [思考翻译](#思考翻译) | 人机交互与 TUI（可选增强 `thinking-translator`） | 本机配置：遵循插件 README；omp-config 不提供翻译偏好或模型链 |
 | `https://github.com/oh-my-omp/omp-codex-image-gen` | `omp-codex-image-gen` | 必装（GitHub） | `xd://` 工具：`codex_generate_image`；Skill：`imagegen` | 使用本机 ChatGPT Codex 订阅凭据调用 `gpt-image-2` 生成或根据 1–5 张参考图修改 PNG | 供应商与工作流扩展（可选增强 `workflow-extras`） | 条件可用：依赖本机 ChatGPT Codex 订阅凭据，无需额外配置 |
 | `pi-package-search` | `pi-package-search` | 必装（npm） | `xd://` 工具：`search_pi_packages`, `install_pi_package`；Skill：`pi-package-search` | 检索 npm 上的 `pi-package` 扩展包，并在用户要求时安装 | 供应商与工作流扩展（可选增强 `workflow-extras`） | 无需配置 |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | 必装（npm） | TUI `Markdown.prototype.render` patch | 隐藏 TUI 中 Markdown 代码块的围栏行并去掉默认 2 列缩进，保留源码缩进与语法高亮 | 人机交互与 TUI（可选增强 `tui-tern`） | 无需配置 |
@@ -33,39 +33,7 @@
 
 ### 思考翻译
 
-`omp-thinking-translator` 从 `~/.omp/agent/thinking-translator.json` 读取有序模型链，每次翻译请求从第 1 项开始尝试，失败才换下一项（下一条消息开始时重读文件）。更新器只在本机缺少 `enabled`、`targetLanguage`、`translatorModels` 时写入仓库值（`SEED_TRANSLATOR_FIELDS`），之后保留本机的值。仓库配置的模型链先试 `futureppo-pool` 中所有能翻译的对话模型（又快又稳的排前面），最后回退到 Command Code 的免费模型：
-
-1. `futureppo-pool/grok-4.7`（`effort: "low"`）
-2. `futureppo-pool/minimax-m3.1-flash`（`effort: "low"`）
-3. `futureppo-pool/nemotron-3.5-bolt-e4b`
-4. `futureppo-pool/nemotron-3-nano-omni-30b-a3b-reasoning`
-5. `futureppo-pool/glm-4.6v-flash`
-6. `futureppo-pool/nemotron-3.5-lightning`（`effort: "minimal"`）
-7. `futureppo-pool/nemotron-3.5-lightning-30b-a3b`
-8. `futureppo-pool/nemotron-3-ultra-550b-a55b`
-9. `futureppo-pool/nemotron-3.5-super-vl-120b-a12b`
-10. `commandcode/poolside/laguna-s-2.1-free`（`effort: "minimal"`）
-11. `commandcode/stealth/glyph-cluster:free`（`effort: "minimal"`）
-12. `commandcode/reflection/beam:free`
-
-没写 `effort` 的条目用模型默认值。`glm-4.6v-flash` 不带 `reasoning_effort` 时约 1.5 秒出结果，带上后要思考约 30 秒，所以不设。不在链中：`glm-5.3-flash` 与 `deepseek-v4.1-flash` 已从该池下架；`nemotron-3-ultra` 对 OMP 的请求返回 `400 invalid_request`；`elephant-1` 是判定模型；`Index-Translate-35B-A3B` 无法通过 OMP 的 `max_completion_tokens` 请求体；Command Code 已不再提供 `inclusionai/ling-3.1-flash:free`。
-
-`futureppo-pool` 自动发现的模型默认不带 `reasoning_effort` 支持，池内条目的 `effort` 只有在本机 `~/.omp/agent/models.yml`（本机文件，不同步）的 `providers.futureppo-pool` 下为该模型加上 `supportsReasoningEffort: true` 后才生效。改完重启 `omp`，用 `/thinking-translator status` 检查：
-
-```yaml
-providers:
-  futureppo-pool:
-    modelOverrides:
-      grok-4.7:
-        compat:
-          supportsReasoningEffort: true
-      minimax-m3.1-flash:
-        compat:
-          supportsReasoningEffort: true
-      nemotron-3.5-lightning:
-        compat:
-          supportsReasoningEffort: true
-```
+翻译设置见 [omp-thinking-translator README](https://github.com/oh-my-omp/omp-thinking-translator#readme)。配置和模型选择由插件与本机管理，不属于本仓库。更新器不会创建、重写或删除已有的 `~/.omp/agent/thinking-translator.json`，即使旧版更新器曾为其记录结构化基准；`/sync-omp-config` 也不收回该文件。
 
 ---
 

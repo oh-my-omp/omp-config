@@ -1,16 +1,16 @@
 /**
- * Watches shell commands and eval code at `tool_call`. Four lanes, each with
- * its own scope and effect:
+ * Watches host shell commands and eval code at `tool_call`; plugin calls are
+ * ignored. Four lanes, each with its own scope and effect:
  *
  * - `pty` (`pty.ts`) — main AND sub sessions, BLOCKING. A `bash` call (direct,
  *   or a write to `xd://bash`; `pty: true` does not exempt it) or an eval cell
  *   that starts a passthrough, terminal or open-ended command is refused
- *   before any process starts, with a tool result naming the category, the
- *   program, `xd://exec_command` and how to rewrite the call. Runs only when
+ *   before any process starts, with a short reason and one
+ *   `xd://exec_command` pointer. Runs only when
  *   the section has `pty` and the calling session's active tools include
  *   `exec_command`. Runs first: a refused call reaches no other lane (no
  *   count, no reminder, no judge request, no nested-device marker).
- *   `exec_command` is never judged by it. Entry routing, not risk judgment.
+ *   Entry routing, not risk judgment; no lane inspects plugin calls.
  * - `form`/`intent` (tool routing) and `risk` — main session only,
  *   REMINDERS ONLY: no call is ever blocked by them, and a working call is
  *   left alone. They catch work the built-in tools own (`APPEND_SYSTEM.md`)
@@ -57,8 +57,8 @@
  * layer is touched. Under any other detector the interceptor follows config,
  * and while it is on, `bash` calls (direct or through `xd://bash`) are skipped
  * by the form, intent and risk lanes because the interceptor already refuses
- * routing violations before they run; `exec_command`, `bash_bg` and eval stay
- * watched. The pty lane runs before this skip.
+ * routing violations before they run; `bash_bg` and eval stay watched.
+ * The pty lane runs before this skip.
  *
  * Registers session lifecycle and tool_call hooks; appends counter entries to
  * the session branch, overrides one OMP setting at runtime, injects
@@ -213,13 +213,13 @@ async function ptyRefusalFor(pi: ExtensionAPI, lanes: Lanes, call: WatchedCall):
 				const hit = ptyShellHit(call.command);
 				if (hit === null) return null;
 				pi.logger.info("Tool-policy pty route refused", { tool: call.tool, ...hit });
-				return ptyRefusal(hit, call.tool, call.command, "sh");
+				return ptyRefusal(hit, call.tool);
 			}
 			case "eval": {
 				const hit = await ptyEvalHit(call.language, call.code);
 				if (hit === null) return null;
 				pi.logger.info("Tool-policy pty route refused", { tool: "eval", language: call.language, ...hit });
-				return ptyRefusal(hit, "eval", call.code, call.language);
+				return ptyRefusal(hit, "eval");
 			}
 			default: {
 				const unreachable: never = call;

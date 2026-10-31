@@ -326,9 +326,6 @@ export const SEED_OMOMP_FIELDS: readonly string[] = [
 	"child-memory-warning",
 ];
 
-/** `thinking-translator.json` paths seeded from the repo: the switch, the language and the provider-bound model chain. */
-export const SEED_TRANSLATOR_FIELDS: readonly string[] = ["enabled", "targetLanguage", "translatorModels"];
-
 /** Every section's data as earlier layouts kept it. */
 const OMOMP_LEGACY_SECTIONS: readonly LegacySection[] = [
 	{ section: "lang-nag", rels: ["agent/extensions/lang-nag/lang-nag.json", "agent/extensions/lang-nag.json"] },
@@ -355,11 +352,6 @@ const OMOMP_LEGACY_SECTIONS: readonly LegacySection[] = [
 
 /** Structured files, in apply order: config.yml last (it is live-reloaded). */
 const STRUCTURED: readonly StructuredItem[] = [
-	{
-		rel: "agent/thinking-translator.json",
-		format: "json",
-		rules: { local: [], seed: SEED_TRANSLATOR_FIELDS, machineLists: [], retired: {} },
-	},
 	{
 		rel: "agent/omomp.yml",
 		format: "yaml",
@@ -1579,7 +1571,7 @@ function conflictsText(conflicts: readonly Conflict[], source: string, agentDir:
 		"Adapt them with the user, one at a time:",
 		"1. Read the local copy, the base and the incoming version listed for the conflict. Base → incoming is what upstream changed; base → local is what this machine changed. With an unknown base, compare local and incoming directly.",
 		"2. Explain both changes in one sentence each. Then use `ask`: keep local, take incoming, or a merged version you propose and show. Recommend the merge when both changes can coexist.",
-		"3. Apply the choice to the local file with `edit`. In config.yml, omomp.yml and thinking-translator.json change only the conflicting key and keep comments and other keys. Keeping local needs no edit.",
+		"3. Apply the choice to the local file with `edit`. In config.yml and omomp.yml change only the conflicting key and keep comments and other keys. Keeping local needs no edit.",
 		`4. Record the adapted conflicts: ${resolveCommand}`,
 		"   A refused (stale) id means upstream moved meanwhile: list the conflicts again and adapt the new version.",
 		"5. Report what each conflict became. Extension code, system prompt files and tool topics load on the next OMP start; config.yml reloads live.",

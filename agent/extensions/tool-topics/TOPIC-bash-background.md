@@ -13,4 +13,5 @@ upstream: pi-coding-agent@18.13.2 src/tools/bash.ts, src/exec/settings.ts, omp:/
 - `read proc://bg_N` shows status/output for one-off diagnosis without consuming delivery; `write proc://bg_N/kill` (no content) cancels.
 - A non-zero exit or a reached timeout marks the job `failed`; progress updates carry `details.async.state` `running` / `completed` / `failed`.
 - A requested timeout outside 1–3600 is clamped and the result says so (`details.requestedTimeoutSeconds` vs `timeoutSeconds`).
-- Service mode (`name`/`ready`) is disabled in this setup (`launch.enabled: false`); long-lived processes belong in `xd://exec_command`.
+- Service mode (`name`/`ready`) is disabled in this setup (`launch.enabled: false`).
+xd://exec_command

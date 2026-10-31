@@ -160,15 +160,18 @@ describe("pty eval cells", () => {
 });
 
 describe("pty refusal", () => {
-	test("names the category, the program, the destination and the category's rewrite", () => {
-		const passthrough = ptyShellHit("zsh -c 'true'");
-		const terminal = ptyShellHit("python3");
-		const openEnded = ptyShellHit("tail -f log");
-		if (passthrough === null || terminal === null || openEnded === null) throw new Error("fixture lines must hit");
-		const shown = ptyRefusal(passthrough, "bash", "zsh -c 'true'", "sh");
-		for (const part of ["passthrough", "`zsh`", "xd://exec_command", "<<'EOF'", "write_stdin", "`shell`", "ssh://", "zsh -c 'true'"])
-			expect(shown).toContain(part);
-		expect(ptyRefusal(terminal, "bash", "python3", "sh")).toContain("terminal");
-		expect(ptyRefusal(openEnded, "bash", "tail -f log", "sh")).toContain("monitor");
+	test("names the reason and gives only one owner pointer, without plugin recipes", () => {
+		for (const command of ["zsh -c 'true'", "python3", "tail -f log"]) {
+			const hit = ptyShellHit(command);
+			if (hit === null) throw new Error("fixture line must hit");
+			const shown = ptyRefusal(hit, "bash");
+			const lines = shown.split("\n");
+			expect(lines).toHaveLength(2);
+			expect(lines[0]).toContain(hit.category);
+			expect(lines[0]).toContain(`\`${hit.program}\``);
+			expect(lines[0]).toContain(hit.rule);
+			expect(lines[1]).toBe("xd://exec_command");
+			for (const recipe of ["write_stdin", "monitor", "kill_session", "heredoc", "cmd", "shell 参数"]) expect(shown).not.toContain(recipe);
+		}
 	});
 });

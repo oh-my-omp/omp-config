@@ -19,6 +19,7 @@ description: 用本仓库工作区更新本机 OMP 配置（repo → 本机）�
    agent 目录默认取 `PI_CODING_AGENT_DIR`，否则 `~/.omp/agent`；使用 named profile 时加 `--agent-dir <omp config path 的输出>`。脚本报告 `another update holds …` 时，说明有一次自动更新正在进行，稍后重跑。
    更新器先完整 preflight，再对每个声明插件执行 `omp install`（缺的补装，已装的升级），并向 OMP owner 核对 `omp-todo-more` 的 enabled、manifest entry 与实际入口；就绪后才写消费者并退休已知的旧 Todo 路径。插件无法安装或升级、disabled、坏 entry、app-managed/父链接/异常退休对象时不切换。报告 errors 时停止后续卸载、冲突适配和初始化项流程：保留实际部分结果，先修复并重跑；出现 `Cutover incomplete; do not restart OMP` 时不能重启混合状态。
    写入按更新器文件头的 CUSTOMIZATIONS 三方合并：本机没改过的受管项取工作区版本，改过的保留本机修改，文本文件两边都改时用 `git merge-file` 合并；`*.ts` 代码以仓库为准，被覆盖的本机修改列在 `overwrote customized code`。
+   `thinking-translator.json` 不属于受管项：不会创建、重写或删除已有本机文件，旧结构化基准也不参与操作；翻译设置只参考 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme)。
 2. 报告里有 `conflict (…), local copy kept: <id>` 时，与用户逐项适配：运行 `bun agent/extensions/omp-config-autoupdate/omp-config-update.ts conflicts --source .`（named profile 加同样的 `--agent-dir`），按它打印的步骤处理每个冲突，适配完用它给出的 `resolve --source .` 命令记录。用户选择以后再处理的冲突保持原样，在报告里列出。
 3. 跑 `./plugin-audit.sh`，只处理 `[卸载候选]`：问用户是否 `omp plugin uninstall <name>`，并告知作者从脚本移除通常已经验证过，可以直接删。`[安装]` 已由更新器补装，`[保留]` 不动。没有安装任何插件时，审计仍正常输出分类报告并成功退出：`已安装` 为 `(无)`，`[安装]` 列出当前全部声明插件。
 4. 本机初始化项（`omomp.yml` 里的 `doc-polish` 段）脚本不碰。已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。仓库不带 `doc-polish` 段，示例见 `docs/extensions.zh-CN.md` 的 `doc-polish` 一节。

@@ -1,22 +1,20 @@
 import { z } from "@oh-my-pi/pi-coding-agent";
 
-/** A tool call that runs shell text or eval code, read from a `tool_call` event of any extension. */
+/** A host tool call that runs shell text or eval code, read from a `tool_call` event. */
 export type WatchedCall =
-	| { readonly kind: "shell"; readonly tool: string; readonly command: string }
+	| { readonly kind: "shell"; readonly tool: DeviceTool; readonly command: string }
 	| { readonly kind: "eval"; readonly language: string; readonly code: string };
 
 const shellSchema = z.object({ command: z.string() });
-const execSchema = z.object({ cmd: z.string() });
 const writeSchema = z.object({ path: z.string(), content: z.string() });
 const evalSchema = z.object({ language: z.string(), code: z.string() });
 
-type DeviceTool = "bash" | "bash_bg" | "exec_command";
+type DeviceTool = "bash" | "bash_bg";
 
 /** Device paths that carry a shell command, mapped to the tool the payload runs. */
 const DEVICE_TOOLS: Record<string, DeviceTool> = {
 	"xd://bash": "bash",
 	"xd://bash_bg": "bash_bg",
-	"xd://exec_command": "exec_command",
 };
 
 /** Device JSON is untrusted; malformed or non-shell payloads are intentionally ignored. */
@@ -34,11 +32,7 @@ function deviceShellCall(path: string, content: string): WatchedCall | null {
 	// then describe the same operation the same way whichever lane called it.
 	return shellCall(tool, payload);
 }
-function shellCall(tool: string, input: unknown): WatchedCall | null {
-	if (tool === "exec_command") {
-		const parsed = execSchema.safeParse(input);
-		return parsed.success ? { kind: "shell", tool, command: parsed.data.cmd } : null;
-	}
+function shellCall(tool: DeviceTool, input: unknown): WatchedCall | null {
 	const parsed = shellSchema.safeParse(input);
 	return parsed.success ? { kind: "shell", tool, command: parsed.data.command } : null;
 }
@@ -47,7 +41,6 @@ export function watchedCallOf(toolName: string, input: unknown): WatchedCall | n
 	switch (toolName) {
 		case "bash":
 		case "bash_bg":
-		case "exec_command":
 			return shellCall(toolName, input);
 		case "write": {
 			const parsed = writeSchema.safeParse(input);

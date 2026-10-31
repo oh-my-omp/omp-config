@@ -37,7 +37,6 @@
 
 import { jsLaunchOf, parseJs, walk } from "../_shared/eval-js-launches.ts";
 import { type LaunchWord, type PyScan, pyLaunchAt, scanPy } from "../_shared/eval-py-launches.ts";
-import { fenced } from "./intent.ts";
 import { optionName, resolveCommand } from "./shell-command.ts";
 import { type CommandToken, parseShellCommands } from "./shell-parser.ts";
 
@@ -674,34 +673,10 @@ const CATEGORY_TEXT: Record<PtyCategory, string> = {
 	"open-ended": "不会自己结束，或在等外部条件",
 };
 
-const RECIPES: Record<PtyCategory, readonly string[]> = {
-	passthrough: [
-		"- 内层是脚本：`cmd` 写成「外层程序 + 带引号的 heredoc」，例如 `ssh host bash -s <<'EOF'`、`docker exec -i c sh -s <<'EOF'`、`kubectl exec -i p -- sh -s <<'EOF'`；heredoc 体照原样写，不再转义，最后一行 `EOF`，退出码就是内层脚本的退出码。",
-		'- 需要交互：`cmd` 只写外层（`ssh host`、`docker exec -it c sh`），再用 `write_stdin` 在提示符下输入；每行以 `\\r` 结尾，`chars` 会解码 `\\n \\t \\\\ \\"`，含反斜杠的文本改用 `chars_b64`。',
-		"- 需要换 shell：用 `exec_command` 的 `shell` 参数选 shell，`cmd` 直接写原来 `-c` 后面的命令体。",
-		"- 只是读远端 UTF-8 文本文件：用 `read ssh://host/path`。",
-		"把原字符串原样搬进 `cmd`，引号层不会消失：`cmd` 本身仍由一层 shell 解析。",
-	],
-	terminal: [
-		"- `cmd` 写该程序本身，再用 `write_stdin` 输入、`monitor` 等待输出。",
-		"- 密码和 passphrase 由人在终端页里输入，不经过对话，也不通过 `write_stdin` 传递。",
-	],
-	"open-ended": [
-		"- 用 `exec_command` 启动，用 `monitor` 等它结束或等匹配的输出。",
-		"- 不要在 bash 里用 `sleep` 轮询，也不要用 `&`、`nohup` 放到后台。",
-	],
-};
-
-/** The refusal the model reads as the tool result: category, program, rewrite recipes and the call itself. */
-export function ptyRefusal(hit: PtyHit, tool: string, call: string, language: string): string {
+/** The host-tool refusal the model reads: a short reason and the owner's entry point. */
+export function ptyRefusal(hit: PtyHit, tool: string): string {
 	return [
-		`pty 路由：这次 \`${tool}\` 调用没有执行。它属于 ${hit.category}（\`${hit.program}\` ${CATEGORY_TEXT[hit.category]}，规则 \`${hit.rule}\`），这类命令要用 \`xd://exec_command\`（PTY 会话）发出。`,
-		"这是入口路由，不是风险判断：命令本身可以照做，只是换个工具。",
-		"",
-		"改写方法：",
-		...RECIPES[hit.category],
-		"",
-		"这次调用：",
-		fenced(call, language),
+		`pty 路由：这次 \`${tool}\` 调用没有执行：\`${hit.program}\` ${CATEGORY_TEXT[hit.category]}（${hit.category}，规则 \`${hit.rule}\`）。`,
+		"xd://exec_command",
 	].join("\n");
 }

@@ -26,7 +26,7 @@ flowchart LR
 | `APPEND_SYSTEM_MODEL.md`、`WATCHDOG-*.md` | 本机 | 不写入也不删除（仅在旧平铺目录迁移时从根目录移入扩展目录） | 不收回仓库 | 下一条 prompt / 写入即重读 |
 | `agent/config.yml` | 仓库 + 本机按字段合并 | 按字段三方合并。`LOCAL_CONFIG_FIELDS`（本机、OMP 或用户本人同意所有，如 `modelRoles`、`theme`、`setupVersion`、`dev.autoqaConsent`、`codexResets`）从不写入；`SEED_CONFIG_FIELDS`（默认值，如 `task.agentModelOverrides`、`retry.fallbackChains`、`browser`、`task.maxConcurrency`）只在本机缺少时写入；本机独有键保留；`extensions`（`MACHINE_LIST_FIELDS`）中的本机条目（如 `~/.claude`）保留在前，仓库条目作为一个整体三方合并 | 只用 `edit` 修改差异行，不整文件重序列化；跳过 `LOCAL_CONFIG_FIELDS`、`SEED_CONFIG_FIELDS` 与本机 `extensions` 条目 | OMP 热重载 |
 | `agent/omomp.yml` | 仓库段 + 本机段 | 仓库段按字段三方合并；本机段（`LOCAL_OMOMP_SECTIONS`：`doc-polish`、`model-compaction`、`omp-config-autoupdate`）从不写入；`SEED_OMOMP_FIELDS`（语言、输入与硬件偏好：`omomp-lang`、`lang-nag`、`input-polish.key`、`input-polish.instruction`、`child-memory-warning`）只在缺少时写入 | 只修改仓库段的差异行，跳过本机段与播种路径 | 按各扩展读取时机生效 |
-| `agent/thinking-translator.json` | 仓库 + 本机按字段合并 | 按字段三方合并；`SEED_TRANSLATOR_FIELDS`（`enabled`、`targetLanguage`、`translatorModels`）只在缺少时写入 | 只修改播种路径以外的差异字段 | 下一条消息开始时 |
+| `<agentDir>/thinking-translator.json` | 插件 / 本机 | 从不创建、重写或删除；旧结构化基准记录不再参与操作 | 不收回仓库；设置见 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) | 由插件定义 |
 | `<agentDir>/.omp-config-base/` | 更新器（本机） | 每个受管项的基准：本机写入成功后写入，`resolve` 也会写；`--check` 从不写 | 不进仓库 | — |
 | 外部应用管理的文件（首行 `// @orca-managed-pi-extension` 或含 `marker: _otty`） | 外部应用（Orca / Otty） | 覆盖或删除前检查标记并跳过（记入 `skipped`）；不改它们的基准 | 跳过 | — |
 | 运行时文件（`*.db*`、WAL、`*.lock`、`models.yml`、`sessions/`、`blobs/`、`cache/`、`logs/`、`.omp-config-applied`、`settings.json`、已安装的 `omp-light`）与插件状态（`~/.pi/agent/pi-bansos-relay-state.json`，由 `/bansos` 写入） | 本机运行时 | 不改动（`.omp-config-applied` 与 `omp-light` 由更新器写入） | 不进仓库 | — |
@@ -36,7 +36,7 @@ flowchart LR
 在仓库根目录启动 `omp` 后执行斜杠命令：
 
 1. **新机器首次配置（`/onboard-omp [check|<plane>]` 或 `/update-omp`）**：
-   - 首次引导安装可在仓库根目录启动 `omp` 运行 `/onboard-omp`：完成只读基线盘点后，先询问是否扩充 AI 提供商（当场对照 `omp://providers.md` 梳理 `/login` 与环境变量支持的内置渠道、检索补充的 `pi-package` 提供商扩展包、协助将第三方中转站/聚合网关写入本机 `~/.omp/agent/models.yml`），再按命令中定义的运行时控制面当场读取 `omp://` 内置文档与工作区配置讲解运行时控制机制，在不修改仓库工作树的前提下诊断订阅/模型/语言匹配度（`task.agentModelOverrides`、`omomp.yml`、`thinking-translator.json`），调用 `/update-omp` 完成全量安装，并只把当场定制写入本机所有项（`LOCAL_CONFIG_FIELDS` 中的 `modelRoles` 等、`LOCAL_OMOMP_SECTIONS` 中的 `model-compaction` 与 `doc-polish`、本机已有的播种路径如 `task.agentModelOverrides`，以及本机 `models.yml`）。传 `check` 只做只读诊断，传 `<plane>`（控制面编号或关键词）直接调查指定控制面。
+   - 首次引导安装可在仓库根目录运行 `/onboard-omp`：只读盘点后先询问是否扩充 AI 提供商（`omp://providers.md` 中的 `/login` / 环境变量渠道、`pi-package` 提供商与本机 `models.yml` 的中转站），再按命令定义的运行时控制面调查内置文档与工作区，诊断模型和语言匹配度（`task.agentModelOverrides`、`omomp.yml`），保持工作树干净。随后调用 `/update-omp`，仅将定制写入本机所有项（`LOCAL_CONFIG_FIELDS`、`LOCAL_OMOMP_SECTIONS`、已有播种路径与 `models.yml`）。思考翻译设置按 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) 操作，不使用仓库模型链。传 `check` 只读诊断，传 `<plane>` 调查指定控制面。
    - 若已熟悉配置、只需直接安装，运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件执行 `omp install`）。
    - 若本机使用 `~/.claude`，在 `~/.omp/agent/config.yml` 的 `extensions` 第一项加上 `~/.claude`，然后重启 `omp`。
    - 需要开启启动自动更新时，运行 `/omp-config-autoupdate on`（下次启动起生效）。
@@ -55,7 +55,7 @@ flowchart LR
    ```bash
    mkdir -p "$HOME/.omp/agent"
    cp agent/config.yml agent/SYSTEM_TEMPLATE.md agent/APPEND_SYSTEM.md \
-     agent/PERSONALITY.md agent/omomp.yml agent/thinking-translator.json agent/config-light.yml \
+     agent/PERSONALITY.md agent/omomp.yml agent/config-light.yml \
      agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
      "$HOME/.omp/agent/"
    cp -a agent/agents agent/extensions agent/extensions-last "$HOME/.omp/agent/"
@@ -113,7 +113,7 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 | `spec-files.ts` | `discoverSpecFiles`、`parseFrontmatter`、`unquote`：扫描并解析扩展目录及 `cwd` 至 git 根各层（含 `.omp/`）的 `*-<label>.md` 文件 |
 | `context-delivery.ts` | `createContextDelivery(pi)`：`repo-rules` 和专题注入共用的真实上下文标记判重；内存只保存同 turn 待交付标记 |
 | `tool-topic-injection.ts` | `installToolTopicInjection`、`ToolTopicInjectionRule`、`toolTopicInjectionRulesSchema`：通用的工具参数正则匹配与可信专题投递 |
-| `tool-calls.ts` | `watchedCallOf`、`WatchedCall`：从 `tool_call` 事件读出 shell 命令（`bash`、`bash_bg`、`exec_command` 及其 `xd://` 设备写入）或 eval 代码；`tool-policy-nag` 与 `delete-guard` 使用 |
+| `tool-calls.ts` | `watchedCallOf`、`WatchedCall`：从宿主 `tool_call` 事件读出 shell 命令（`bash`、`bash_bg` 及其 `xd://` 设备写入）或 eval 代码；忽略插件调用；`tool-policy-nag` 与 `delete-guard` 使用 |
 | `eval-py-launches.ts` | `scanPy`、`pyLaunchAt`、`isOp`、`PyLaunch`、`LaunchWord`、`LaunchVia`：对 Python eval cell 做词法分析（字符串、f-string、`!cmd`、`%%bash`、magic），读出 import 绑定，以及某个调用启动的进程，并标明识别来源 `direct`/`alias`/`distinctive`；`delete-guard`（失败即阻断）与 `tool-policy-nag` 的 pty 通道（失败即放行）使用 |
 | `eval-js-launches.ts` | `parseJs`、`jsLaunchOf`、`walk`、`propertyName`、`receiverModule`、`isBunFile`、`JsLaunch`：用 omp 的 Babel 选项解析 JS eval cell，读出模块绑定，以及某个节点启动的 child_process/Bun/桥接进程；`delete-guard` 与 `tool-policy-nag` 的 pty 通道使用 |
 

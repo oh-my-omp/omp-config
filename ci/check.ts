@@ -145,11 +145,6 @@ function parseSelector(raw: string): ModelRef | undefined {
 	return slash > 0 ? { provider: bare.slice(0, slash), id: bare.slice(slash + 1) } : undefined;
 }
 
-function readJson(rel: string): Mapping {
-	const value: unknown = JSON.parse(readFileSync(join(REPO, rel), "utf8"));
-	return isMapping(value) ? value : {};
-}
-
 /** Every provider-qualified model the managed configuration names. */
 function configuredModels(): ModelRef[] {
 	const selectors: string[] = [];
@@ -157,11 +152,6 @@ function configuredModels(): ModelRef[] {
 	const overrides =
 		isMapping(config) && isMapping(config.task) && isMapping(config.task.agentModelOverrides) ? config.task.agentModelOverrides : {};
 	for (const chain of Object.values(overrides)) if (typeof chain === "string") selectors.push(...chain.split(","));
-	const translators = readJson("agent/thinking-translator.json").translatorModels;
-	for (const translator of Array.isArray(translators) ? translators : []) {
-		if (isMapping(translator) && typeof translator.provider === "string" && typeof translator.id === "string")
-			selectors.push(`${translator.provider}/${translator.id}`);
-	}
 	const refs = new Map<string, ModelRef>();
 	for (const selector of selectors) {
 		const ref = parseSelector(selector);

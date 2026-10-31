@@ -15,7 +15,7 @@ Lightweight policy and lifecycle hooks live in `agent/extensions/`, while statef
 | `https://github.com/oh-my-omp/omp-todo-more` | `omp-todo-more` | Required (GitHub) | Tools: `todo`, `ctx`; command: `/todo-more`; event: `omp-todo-more:read`; Tern pane | Replaces native Todo (`todo.enabled: false` in `config.yml`); see [todo-more](#todo-more) | Long-horizon state & compaction (Core `todo-continuity`; coupled with `config.yml#todo.enabled: false`, `system-prompt-replace`, & `task-completion-judge`) | No config needed: cannot be omitted while `todo.enabled: false` |
 | `https://github.com/oh-my-omp/omp-unified-exec` | `omp-unified-exec` | Required (GitHub fork) | `xd://` tools: `exec_command`, `write_stdin`, `set_on_exit`, `monitor`, `kill_session`, `list_sessions`; topics `xd://exec_command/*` | Fork of `iamwrm/pi-unified-exec`: runs PTY sessions logged to `/tmp/pi-unified-exec-*.log`, skips Pi-only `createCodemodeExtension`, and uses `Bun.Terminal` on macOS/Linux/Windows under Bun (loading `@homebridge/node-pty-prebuilt-multiarch` only under Node.js). Uninstall `pi-unified-exec` before installing | Execution & workspace control (Core `pty-routing`; coupled with `config.yml#launch.enabled: false`, `SURFACE-bash.md` & `TOPIC-bash-waiting.md`) | No config needed: cannot be omitted while `launch.enabled: false` |
 | `https://github.com/mouriya-s-lab/pi-bansos` | `pi-bansos` | Required (GitHub fork) | Provider: `bansos`; command: `/bansos` | Fork of `mannnrachman/pi-bansos`: local proxy on `127.0.0.1:18080` providing free models for `task:free`. Reads and writes `~/.pi/agent/pi-bansos-relay-state.json` (machine-local plugin state, not in this repo); uninstall npm `pi-bansos` before installing | Providers & lifecycle (Conditional `free-tier-bansos`; coupled with `task:free` model binding) | Optional now: manage relays via `/bansos` (`~/.pi/agent/pi-bansos-relay-state.json`); needed if `task:free` uses `bansos/...` |
-| `https://github.com/oh-my-omp/omp-thinking-translator` | `omp-thinking-translator` | Required (GitHub) | Live Chinese translation for assistant thinking blocks; command: `/thinking-translator` | Translates thinking blocks line by line using `~/.omp/agent/thinking-translator.json`; see [Thinking translation](#thinking-translation) | Human interaction & TUI (Optional `thinking-translator`) | Customize now (machine-local after the first install): toggle via `/thinking-translator`; the shipped chain requires `futureppo-pool` (plus `supportsReasoningEffort: true` in machine `models.yml`) or OMP's built-in `commandcode` provider (`/login commandcode`), otherwise edit the machine's chain |
+| `https://github.com/oh-my-omp/omp-thinking-translator` | `omp-thinking-translator` | Required (GitHub) | Live translation for assistant thinking blocks | Independent plugin; see [Thinking translation](#thinking-translation) | Human interaction & TUI (Optional `thinking-translator`) | Machine-local setup: follow the plugin's README; omp-config supplies no translator preferences or model chain |
 | `https://github.com/oh-my-omp/omp-codex-image-gen` | `omp-codex-image-gen` | Required (GitHub) | `xd://` tool: `codex_generate_image`; skill: `imagegen` | Calls `gpt-image-2` with the local ChatGPT Codex subscription to generate or edit PNGs from 1–5 reference images | Providers & workflow extras (Optional `workflow-extras`) | Conditional: requires local ChatGPT Codex subscription credentials; no extra config |
 | `pi-package-search` | `pi-package-search` | Required (npm) | `xd://` tools: `search_pi_packages`, `install_pi_package`; skill: `pi-package-search` | Searches npm for `pi-package` packages and installs them when requested | Providers & workflow extras (Optional `workflow-extras`) | No config needed |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | Required (npm) | TUI `Markdown.prototype.render` patch | Hides Markdown code fences in the TUI and removes default 2-column code indentation while keeping source indentation and syntax highlighting | Human interaction & TUI (Optional `tui-tern`) | No config needed |
@@ -33,39 +33,7 @@ Lightweight policy and lifecycle hooks live in `agent/extensions/`, while statef
 
 ### Thinking translation
 
-`omp-thinking-translator` reads its model list from `~/.omp/agent/thinking-translator.json`, trying candidates in order on each request and re-reading the file at the start of the next message. The updater writes the repo's `enabled`, `targetLanguage` and `translatorModels` only while the machine lacks them (`SEED_TRANSLATOR_FIELDS`); afterwards the machine's values stay. The shipped chain tries every `futureppo-pool` chat model that translates, fastest and most consistent first, and falls back to Command Code's free models last:
-
-1. `futureppo-pool/grok-4.7` (`effort: "low"`)
-2. `futureppo-pool/minimax-m3.1-flash` (`effort: "low"`)
-3. `futureppo-pool/nemotron-3.5-bolt-e4b`
-4. `futureppo-pool/nemotron-3-nano-omni-30b-a3b-reasoning`
-5. `futureppo-pool/glm-4.6v-flash`
-6. `futureppo-pool/nemotron-3.5-lightning` (`effort: "minimal"`)
-7. `futureppo-pool/nemotron-3.5-lightning-30b-a3b`
-8. `futureppo-pool/nemotron-3-ultra-550b-a55b`
-9. `futureppo-pool/nemotron-3.5-super-vl-120b-a12b`
-10. `commandcode/poolside/laguna-s-2.1-free` (`effort: "minimal"`)
-11. `commandcode/stealth/glyph-cluster:free` (`effort: "minimal"`)
-12. `commandcode/reflection/beam:free`
-
-Entries without `effort` use the model default. `glm-4.6v-flash` answers in about 1.5 s without `reasoning_effort` and thinks for about 30 s with it, so it carries none. Not in the chain: `glm-5.3-flash` and `deepseek-v4.1-flash` are no longer served by the pool; `nemotron-3-ultra` answers OMP's request with `400 invalid_request`; `elephant-1` is a decisions model; `Index-Translate-35B-A3B` fails OMP's `max_completion_tokens` request shape; Command Code no longer serves `inclusionai/ling-3.1-flash:free`.
-
-Auto-discovered `futureppo-pool` models omit `reasoning_effort` support, so an `effort` on a pool entry takes effect only after `supportsReasoningEffort: true` is set for that model under `providers.futureppo-pool` in the machine's `~/.omp/agent/models.yml` (machine-local, not synced). Restart `omp` and check `/thinking-translator status`:
-
-```yaml
-providers:
-  futureppo-pool:
-    modelOverrides:
-      grok-4.7:
-        compat:
-          supportsReasoningEffort: true
-      minimax-m3.1-flash:
-        compat:
-          supportsReasoningEffort: true
-      nemotron-3.5-lightning:
-        compat:
-          supportsReasoningEffort: true
-```
+Set up translation using the [omp-thinking-translator README](https://github.com/oh-my-omp/omp-thinking-translator#readme). Its configuration and model selection belong to the plugin and the machine, not this repository. The updater does not create, rewrite or delete an existing `~/.omp/agent/thinking-translator.json`, even when an older updater recorded a structured base for it; `/sync-omp-config` excludes it.
 
 ---
 

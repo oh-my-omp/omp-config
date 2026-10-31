@@ -217,6 +217,44 @@ describe("structured files", () => {
 		expect((await apply(src.dir, agentDir)).conflicts).toEqual([]);
 		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({ task: { eager: "default" } });
 	});
+
+	test("translator cutover leaves existing bytes alone with an old structured base and deletion history", async () => {
+		const src = source();
+		const original = '{\n  "enabled": true,\n  "trace": false\n}\n';
+		src.commit({ "agent/thinking-translator.json": original });
+		src.commit({ "agent/thinking-translator.json": null, "agent/config.yml": "lsp:\n  enabled: false\n" });
+		for (const content of [original, '{ "enabled": false, "custom": "本机" }\n']) {
+			const agentDir = temp("omp-translator-cutover-");
+			writeTree(agentDir, {
+				"thinking-translator.json": content,
+				".omp-config-base/state.json": JSON.stringify({
+					version: 1,
+					unknownPlain: [],
+					structured: { "agent/thinking-translator.json": { value: { trace: false }, unknown: [] } },
+				}),
+			});
+			for (const check of [true, false]) {
+				const report = await applySnapshot({
+					source: src.dir,
+					agentDir,
+					previousCommit: "HEAD~1",
+					check,
+					plugins: false,
+				});
+				expect(report.errors).toEqual([]);
+				expect(report.conflicts).toEqual([]);
+				expect(readFileSync(join(agentDir, "thinking-translator.json"))).toEqual(Buffer.from(content));
+			}
+		}
+	});
+
+	test("a translator file in an older snapshot is not seeded on a fresh machine", async () => {
+		const src = source();
+		const agentDir = temp("omp-translator-unmanaged-");
+		src.commit({ "agent/thinking-translator.json": '{"enabled":true}\n' });
+		expect((await apply(src.dir, agentDir)).errors).toEqual([]);
+		expect(existsSync(join(agentDir, "thinking-translator.json"))).toBe(false);
+	});
 });
 
 describe("machines without a base", () => {
