@@ -12,9 +12,9 @@
 //   2. reads finished subagent transcripts of this directory's session bucket
 //      (the main session's own directory, or `sessionDirForCwd` from a
 //      subagent, whose session directory is its parent's artifact folder) plus
-//      its git and agent-managed worktrees (`worktreeSessionDirs`), newest first and
-//      bounded (samples.ts), keeping dispatches that ran wholly on that first
-//      model with no fallback;
+//      its git and agent-managed worktrees (`worktreeSessionDirs`), newest first
+//      until each agent holds its newest 20 dispatches that ran wholly on that
+//      first model with no fallback (samples.ts);
 //   3. estimates USD per dispatch: with n >= 1 observed dispatches, the
 //      lognormal mean exp(mean(ln cost) + sigma^2/2) with the hardcoded spread
 //      sigma; with none, the hardcoded per-dispatch USD for agent+model+thinking,
@@ -207,7 +207,7 @@ async function report(ctx: ExtensionContext, signal: AbortSignal | undefined): P
 	const [scan, reports] = await Promise.all([collectSamples(dirs, targets, now), session.fetchUsageReports(signal)]);
 	const lines = [
 		`Subagent dispatch budget at ${new Date(now).toISOString()}.`,
-		`Observed dispatches: newest ${MAX_SAMPLES_PER_AGENT} per agent that ran wholly on its first model, from ${dirs.length} session dir(s) (this directory and its worktrees); ${scan.inspected} transcript(s) inspected${scan.capped ? ", older ones beyond the scan cap skipped" : ""}.`,
+		`Observed dispatches: the newest ${MAX_SAMPLES_PER_AGENT} per agent that ran wholly on its first model, pooled over every session in ${dirs.length} session dir(s) (this directory and its worktrees); ${scan.inspected} transcript(s) inspected.`,
 		`Fallback USD per dispatch and USD per quota window: built-in constants calibrated ${CALIBRATED_AT}.`,
 		"Each count assumes the provider's whole remaining quota goes to that agent; agents on one provider share it, and refills at window resets are not counted.",
 		...(reports === null ? ["Usage reporting is not configured for this session: no quota data."] : []),

@@ -18,16 +18,15 @@ export type SampleScan = {
 	readonly costs: ReadonlyMap<string, readonly number[]>;
 	/** Transcripts whose head was read. */
 	readonly inspected: number;
-	/** True when older candidate transcripts were left unread by the candidate cap. */
-	readonly capped: boolean;
 };
 
+/** The estimator's window: the newest eligible dispatches per agent across the pooled sessions. */
 export const MAX_SAMPLES_PER_AGENT = 20;
-const MAX_CANDIDATES = 4000;
-const MAX_AGE_MS = 60 * 24 * 60 * 60 * 1000;
-/** A transcript without `session_exit` counts as finished once untouched this long. */
+/** A transcript without `session_exit` counts as settled once untouched this long. */
 const SETTLED_MS = 30 * 60 * 1000;
-const HEAD_BYTES = 256 * 1024;
+const HEAD_CHUNK = 16 * 1024;
+/** `session_init` follows the title, header, model and thinking entries; a head without it is not a dispatch. */
+const HEAD_LINES = 8;
 const HEAD_BATCH = 32;
 
 const sessionInitSchema = z.object({ type: z.literal("session_init"), agent: z.string(), resolvedModel: z.string().optional() });
@@ -76,27 +75,39 @@ async function listTranscripts(dir: string, depth: number, out: Candidate[]): Pr
 	);
 }
 
+/** Reads only as far as the `session_init` line: in chunks, since an assignment can make that line long. */
 async function readHead(file: string): Promise<Head | undefined> {
-	let text: string;
+	let handle: fs.FileHandle;
 	try {
-		const handle = await fs.open(file);
-		try {
-			const buffer = Buffer.alloc(HEAD_BYTES);
-			const { bytesRead } = await handle.read(buffer, 0, HEAD_BYTES, 0);
-			text = buffer.subarray(0, bytesRead).toString("utf8");
-		} finally {
-			await handle.close();
-		}
+		handle = await fs.open(file);
 	} catch {
 		// Removed or unreadable transcripts are skipped.
 		return undefined;
 	}
-	for (const line of text.split("\n")) {
-		if (!line.startsWith('{"type":"session_init"')) continue;
-		const parsed = sessionInitSchema.safeParse(parseLine(line));
-		return parsed.success ? { agent: parsed.data.agent, resolvedModel: parsed.data.resolvedModel } : undefined;
+	try {
+		const chunks: Buffer[] = [];
+		for (let offset = 0; ; ) {
+			const buffer = Buffer.alloc(HEAD_CHUNK);
+			const { bytesRead } = await handle.read(buffer, 0, HEAD_CHUNK, offset);
+			if (bytesRead === 0) return undefined;
+			chunks.push(buffer.subarray(0, bytesRead));
+			offset += bytesRead;
+			// The last element may be a partial line; only newline-terminated lines are judged.
+			const lines = Buffer.concat(chunks).toString("utf8").split("\n").slice(0, -1);
+			for (const [index, line] of lines.entries()) {
+				if (line.startsWith('{"type":"session_init"')) {
+					const parsed = sessionInitSchema.safeParse(parseLine(line));
+					return parsed.success ? { agent: parsed.data.agent, resolvedModel: parsed.data.resolvedModel } : undefined;
+				}
+				if (index >= HEAD_LINES) return undefined;
+			}
+		}
+	} catch {
+		// A read error mid-file leaves the transcript unusable.
+		return undefined;
+	} finally {
+		await handle.close();
 	}
-	return undefined;
 }
 
 /** Thinking suffix of a resolved selector such as `openai-codex/gpt-5.6-sol:high@route`. */
@@ -144,14 +155,13 @@ async function dispatchCost(candidate: Candidate, target: Target, now: number): 
 }
 
 /**
- * Newest-first bounded scan: at most MAX_SAMPLES_PER_AGENT eligible dispatches per target, from
- * transcripts modified within MAX_AGE_MS, reading at most MAX_CANDIDATES transcript heads.
+ * Newest-first scan over every subagent transcript of the pooled directories, stopping once each
+ * target holds MAX_SAMPLES_PER_AGENT eligible dispatches or the transcripts run out.
  */
 export async function collectSamples(dirs: readonly string[], targets: readonly Target[], now: number): Promise<SampleScan> {
-	const found: Candidate[] = [];
-	await Promise.all(dirs.map((dir) => listTranscripts(dir, 0, found)));
-	const recent = found.filter((candidate) => now - candidate.mtimeMs <= MAX_AGE_MS).sort((a, b) => b.mtimeMs - a.mtimeMs);
-	const candidates = recent.slice(0, MAX_CANDIDATES);
+	const candidates: Candidate[] = [];
+	await Promise.all(dirs.map((dir) => listTranscripts(dir, 0, candidates)));
+	candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
 	const byAgent = new Map(targets.map((target) => [target.agent, target]));
 	const costs = new Map<string, number[]>(targets.map((target) => [target.agent, []]));
 	let openAgents = targets.length;
@@ -173,5 +183,5 @@ export async function collectSamples(dirs: readonly string[], targets: readonly 
 			if (list.length === MAX_SAMPLES_PER_AGENT) openAgents--;
 		}
 	}
-	return { costs, inspected, capped: recent.length > candidates.length };
+	return { costs, inspected };
 }
