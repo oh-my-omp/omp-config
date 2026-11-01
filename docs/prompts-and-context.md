@@ -15,6 +15,7 @@ Any non-minimal harness ships predefined text across its base template, built-in
 | [tool-topics](extensions.md#tool-topics) | Main + Subagents (full and light) | Replaces covered tool descriptions with common call instructions plus a `Topics` index; detailed call instructions are read on demand as `tool://<tool>/<topic>`, and `SYSTEM_TEMPLATE.md` requires reading the matching topic before such a call. |
 | [system-prompt-replace](#system-prompt-replace) | Main + Subagents (full mode only) | Runs last among path-loaded extensions and makes wording-level edits to the rendered system prompt. |
 | [append-system-model](#append-system-model) | Main + Subagents | Appends model-specific prompt blocks from `APPEND_SYSTEM_MODEL.md` when the session's `model` or `provider` matches. |
+| [argon-long-output](extensions.md#argon-long-output) | Main + Subagents (each matched on its own model) | Appends the repo's `ARGON_PROMPT.md` when the model is `gemini-4-argon` on `google-gemini-cli`: each `write`/`edit` payload and final reply stays within 8,000 characters by writing a skeleton first and filling it one section per `edit`. |
 | [tool-topic-injection](extensions.md#tool-topic-injection) | Main + Subagents | Loads a topic only after a configured tool argument matches, once per rule in the actual uncompacted context; it adds developer context rather than growing the static tool description. |
 
 ### system-prompt-replace

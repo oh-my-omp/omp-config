@@ -32,6 +32,7 @@
 | 24 | `session-urls` | [session-urls](#session-urls) | Process-wide (`session://` scheme) | Yes | Reads the session files, recap journal and prompt history; no config | Long-horizon state & compaction (Core `compaction-baseline`) | No config needed: registers read-only `session://` scheme globally |
 | 25 | `delete-guard` | [delete-guard](#delete-guard) | Main + Sub | Yes | None | Execution & host safety (Core `safe-deletion`) | No config needed: always blocks `bash`/`eval` deletions and registers literal-path `delete` tool |
 | 26 | `subagent-usage` | [subagent-usage](#subagent-usage) | Main + Sub | Yes | Built-in calibration in `calibration.ts`; no config | Subagents & advisors (Optional) | No config needed: reads subagent transcripts and live usage reports per call; the built-in constants describe the calibrating machine's accounts |
+| 27 | `argon-long-output` | [argon-long-output](#argon-long-output) | Main + Sub | Yes | `ARGON_PROMPT.md` beside it (repo) | Providers & lifecycle (Conditional `antigravity-compat`) | No config needed: disables the stream watchdogs only for `gemini-4-argon` on `google-gemini-cli` (explicit env/settings/`models.yml` timeouts still win); edit `ARGON_PROMPT.md` to change the long-output rules |
 
 ---
 
@@ -261,6 +262,17 @@ Source: `agent/extensions/antigravity-wire-profiles/`.
 OMP's `google-antigravity` provider only overrides the caller's `maxTokens` for wire ids present in its static `ANTIGRAVITY_MODEL_WIRE_PROFILES` table (`@oh-my-pi/pi-catalog/wire/gemini-headers`); newer wire ids (`gemini-4-argon-*`) were missing, so compaction's 512-token short summary request spent its entire budget on thinking and failed with `thought-only response without final output`.
 
 At root `session_start` (awaited up to 20 s; `before_agent_start` awaits the same promise), the extension calls `POST <baseUrl>/v1internal:fetchAvailableModels` for the session credential and every stored Antigravity account, merges served models (non-internal, non-disabled, positive integer `maxOutputTokens`), and updates `ANTIGRAVITY_MODEL_WIRE_PROFILES` in place (adding and overwriting entries, never deleting). If all accounts fail, it keeps the existing table, warns in the log and main UI, and retries on the next root session start.
+
+### argon-long-output
+
+Source: `agent/extensions/argon-long-output/`. Main and sub sessions, full and light mode; no config.
+
+Cloud Code Assist sends a `functionCall` as one finished part, so while `gemini-4-argon` generates a long `write` the stream is silent after the thinking summary. OMP's watchdogs read the silence as a stall: after 300 s the wrapper aborts with `Provider stream stalled while waiting for the next event` (before the first event, `Cloud Code Assist stream timed out while waiting for the first event`), and every retry regenerates the same call and stops at the same limit. The extension acts only on models whose `api` is `google-gemini-cli` and whose id matches `^gemini-4-argon`, whatever the provider:
+
+- **Timeouts**: the three watchdogs (wrapper idle, provider first-event, provider pre-response) resolve their budget as caller option > settings `providers.streamIdleTimeoutSeconds` / `providers.streamFirstEventTimeoutSeconds` > env `PI_STREAM_IDLE_TIMEOUT_MS` / `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` > `model.compat.stream{Idle,FirstEvent}TimeoutMs` > 300000, and 0 disables a watchdog. The extension fills only the compat layer of matching model rows: a value the host resolved stays; else the `models.yml` `compat` value (OMP's Google compat resolution keeps it only in `compatConfig`, so the extension carries it over); else `0`. Explicit options, settings and env therefore still win, and every other model keeps the 300 s default. Esc and session dispose still end a silent request at once.
+- **Where**: `session_start` and `before_agent_start` patch the session model and every available registry row (rows are shared process-wide, so subagents and compaction candidates get the default too); `context`, before every model call, patches the session model again. A row OMP rebuilds mid-turn (a `models.yml` reload, a context-window refit for compaction) keeps the 300 s default until the next prompt.
+- **Prompt**: on `before_agent_start` of an argon session (main and each subagent, matched on its own model) appends `ARGON_PROMPT.md` (beside the extension, shipped by the repo, re-read per prompt): no single `write` content, `edit` body or final reply over 8,000 characters; a longer deliverable is first written as a skeleton of headings and then filled one section per `edit`; an existing large file is changed by editing only the changed sections. A missing or unreadable file warns once per reason and appends nothing.
+- **Oversized calls**: a single call that still exceeds the backend output limit follows OMP's existing handling (`MAX_TOKENS` → `length`; a truncated function call → `MALFORMED_FUNCTION_CALL` → `error`, not executed).
 
 ### tool-topics
 

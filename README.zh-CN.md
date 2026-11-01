@@ -14,7 +14,7 @@
 
 | 页面 | 内容 |
 |---|---|
-| [提示词与上下文](docs/prompts-and-context.zh-CN.md) | 提示词分层（`SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`APPEND_SYSTEM.md`、`tool-topics`、`system-prompt-replace`、`append-system-model`、`repo-rules`）与上下文保留（`fork-task`、`model-compaction`、`ctx`、`Task log`） |
+| [提示词与上下文](docs/prompts-and-context.zh-CN.md) | 提示词分层（`SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`APPEND_SYSTEM.md`、`tool-topics`、`system-prompt-replace`、`append-system-model`、`argon-long-output`、`repo-rules`）与上下文保留（`fork-task`、`model-compaction`、`ctx`、`Task log`） |
 | [子代理](docs/agents.zh-CN.md) | 可选 worker/顾问定义与内部 `fork:self`、模型绑定、顾问上下文、派发规则与 worktree 隔离 |
 | [本地扩展](docs/extensions.zh-CN.md) | 全部本地扩展总表，以及派发/交付检查（`isolation-nudge`、`task-split-check`、`task-completion-judge`）与估算子代理剩余可派发次数的 AI 侧 `/usage`（`subagent-usage`）、`JUDGE` 判定扩展（`tool-policy-nag`、`watchdog-agent`、`turn-judge`、`lang-nag`）、bash 与 eval 删除拦截和只收字面路径的 `delete` 工具（`delete-guard`）、宿主/TUI 扩展与读取其他会话的 `session://`（`session-urls`） |
 | [插件与运行模式](docs/plugins-and-modes.zh-CN.md) | `install-plugins.sh` 中的外部插件（`omp-todo-more`、`omp-thinking-translator` 等）以及 `omp` 与 `omp-light` 的差异 |
