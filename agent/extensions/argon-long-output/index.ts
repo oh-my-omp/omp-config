@@ -30,12 +30,13 @@
 // WHERE. Every sweep patches the session model and every available registry
 // row. It runs on `session_start`, `before_agent_start`, `context` (before
 // every model call: turns, subagent turns, auto-retry continuations) and
-// `auto_compaction_start` (before automatic compaction picks its model from the
-// session model or the registry). Gap: a row the host builds after the last
-// sweep keeps the 300 s default until the next one, e.g. a models.yml reload
-// between turns followed by a manual `/compact` that falls back past the
-// session model, or a context-window refit (OMP gives the argon rows no window
-// tiers, so it does not refit them).
+// `session.compacting`. OMP emits `session.compacting` on every LLM compaction
+// path (manual `/compact`, automatic, speculative) before the summary request,
+// and picks the compaction model from the session model and the registry rows,
+// so rows rebuilt by a models.yml reload since the last turn are patched before
+// they stream. The handler returns nothing, so the compaction itself is
+// unchanged. A context-window refit would build a row no sweep sees; OMP gives
+// the argon rows no window tiers, so it does not refit them.
 //
 // PROMPT. `before_agent_start`, in the main session and in every subagent, each
 // matched against its own model, appends `ARGON_PROMPT.md` (beside this
@@ -43,7 +44,7 @@
 // payload and final reply within 8,000 characters by writing a skeleton first
 // and filling it one section per `edit`.
 //
-// Registers session_start, before_agent_start, context and auto_compaction_start; no tools or
+// Registers session_start, before_agent_start, context and session.compacting; no tools or
 // commands; writes no files. Failure policy: a missing or unreadable
 // ARGON_PROMPT.md warns once per reason and appends nothing; any other error is
 // logged and the prompt or request proceeds unchanged. Nothing throws into omp.
@@ -111,7 +112,7 @@ export default function argonLongOutput(pi: ExtensionAPI): void {
 	};
 	pi.on("session_start", sweepHook);
 	pi.on("context", sweepHook);
-	pi.on("auto_compaction_start", sweepHook);
+	pi.on("session.compacting", sweepHook);
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		try {
