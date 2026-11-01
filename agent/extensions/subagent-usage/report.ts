@@ -4,6 +4,7 @@ import type { UsageHistoryEntry, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Binding } from "./agents.ts";
 import type { Channel } from "./channels.ts";
 import { type AccountQuota, type Binding as LimitBinding, poolFor } from "./quota.ts";
+import { OBSERVED_WINDOW_DAYS } from "./samples.ts";
 import type { Calibration } from "./store.ts";
 
 export type Estimate =
@@ -14,9 +15,10 @@ export type Estimate =
 type Resolved = Extract<Binding, { kind: "resolved" }>;
 
 /**
- * Observed dispatches win from n = 1: the lognormal mean exp(mean ln c + sigma^2 / 2) with this machine's
- * pooled sigma, or the arithmetic mean without one or when a dispatch cost 0. Without observations, this
- * machine's mean for agent+model+thinking, else model+thinking; else no estimate.
+ * Observed dispatches (every eligible one of the project in the last OBSERVED_WINDOW_DAYS) win from n = 1:
+ * the lognormal mean exp(mean ln c + sigma^2 / 2) with this machine's pooled sigma, or the arithmetic mean
+ * without one or when a dispatch cost 0. Without observations, this machine's mean for agent+model+thinking,
+ * else model+thinking; else no estimate.
  */
 export function estimate(binding: Resolved, costs: readonly number[], dispatch: Calibration["dispatch"]): Estimate {
 	if (costs.length > 0) {
@@ -63,9 +65,9 @@ function day(at: number): string {
 function costText(cost: Exclude<Estimate, { kind: "none" }>): string {
 	switch (cost.kind) {
 		case "observed":
-			return `${money(cost.usd)} per dispatch (from ${cost.n} recent dispatch${cost.n === 1 ? "" : "es"} in this project${cost.n < 3 ? ", low confidence" : ""})`;
+			return `${money(cost.usd)} per dispatch (average of ${cost.n} dispatch${cost.n === 1 ? "" : "es"} in this project in the last ${OBSERVED_WINDOW_DAYS} days${cost.n < 3 ? ", low confidence" : ""})`;
 		case "prior":
-			return `${money(cost.usd)} per dispatch (no dispatch in this project yet; this machine's average over ${cost.n} dispatches of ${cost.basis === "agent" ? "this agent on this model" : "any agent on this model"})`;
+			return `${money(cost.usd)} per dispatch (no dispatch in this project in the last ${OBSERVED_WINDOW_DAYS} days; this machine's average over ${cost.n} dispatches of ${cost.basis === "agent" ? "this agent on this model" : "any agent on this model"})`;
 		default: {
 			const never: never = cost;
 			return never;

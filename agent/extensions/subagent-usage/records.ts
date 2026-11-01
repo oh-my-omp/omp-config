@@ -16,6 +16,9 @@ export type DispatchRecord = {
 	readonly costByProvider: Readonly<Record<string, number>>;
 };
 
+/** A dispatch with the transcript it came from, as the scan returns it. */
+export type ScannedDispatch = DispatchRecord & { readonly file: string };
+
 export type ScanRequest = { readonly sessionsRoot: string; readonly cachePath: string };
 
 export type ScanResult =
@@ -23,7 +26,7 @@ export type ScanResult =
 			readonly kind: "done";
 			/** `provider/model` -> hour index (epoch ms / 3_600_000) -> USD, from event timestamps. */
 			readonly spend: Readonly<Record<string, Readonly<Record<string, number>>>>;
-			readonly dispatches: readonly DispatchRecord[];
+			readonly dispatches: readonly ScannedDispatch[];
 			readonly files: number;
 			/** Transcripts parsed this run; the rest came from the per-file cache. */
 			readonly parsed: number;

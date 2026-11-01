@@ -8,7 +8,8 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { getSessionsDir } from "@oh-my-pi/pi-utils";
 import { providerChannel } from "./channels.ts";
 import { accountKeyOf, limitKey, reserveUsageLimits } from "./quota.ts";
-import type { DispatchRecord, ScanRequest, ScanResult } from "./records.ts";
+import type { ScannedDispatch, ScanRequest, ScanResult } from "./records.ts";
+import { eligible } from "./samples.ts";
 import { type Calibration, type Prior, readCalibration, scanCachePath, writeCalibration } from "./store.ts";
 
 const HOUR_MS = 3_600_000;
@@ -17,8 +18,6 @@ const DAY_HOURS = 24;
 export const QUOTA_WINDOW_MS = 21 * 24 * HOUR_MS;
 /** Quota constants older than this are refreshed before use. */
 export const QUOTA_MAX_AGE_MS = 24 * HOUR_MS;
-/** A transcript without `session_exit` counts as settled once untouched this long. */
-const SETTLED_MS = 30 * 60 * 1000;
 /** Snapshot pairs further apart than this are not attributed. */
 const MAX_PAIR_SPAN_MS = 3 * HOUR_MS;
 /** A prior needs this many local dispatches. */
@@ -28,7 +27,6 @@ const MIN_SIGMA_GROUP = 5;
 /** A day counts toward the low quantile when the account's limit moved at least this much. */
 const MIN_DAY_DELTA = 0.05;
 const MIN_QUALIFYING_DAYS = 3;
-const THINKING = /:(off|minimal|low|medium|high|xhigh|max)(?=@|$)/;
 
 export type CalibrationMode = "full" | "quota";
 
@@ -38,32 +36,20 @@ export type CalibrationOutcome =
 	| { readonly kind: "declined" }
 	| { readonly kind: "failed"; readonly reason: string };
 
-/** Splits `openai-codex/gpt-5.6-sol:high@route` into `openai-codex/gpt-5.6-sol` and `high`. */
-function parseResolved(resolvedModel: string): { readonly model: string; readonly thinking: string } {
-	const thinking = THINKING.exec(resolvedModel)?.[1] ?? "";
-	const model = resolvedModel.replace(THINKING, "").split("@")[0] ?? "";
-	return { model, thinking };
-}
-
 /** Mean USD per eligible dispatch by agent+model+thinking and model+thinking, and the pooled log spread. */
-function priorsFrom(dispatches: readonly DispatchRecord[], trackedProviders: ReadonlySet<string>, now: number): Calibration["dispatch"] {
+function priorsFrom(dispatches: readonly ScannedDispatch[], trackedProviders: ReadonlySet<string>, now: number): Calibration["dispatch"] {
 	const byAgent = new Map<string, number[]>();
 	const byModel = new Map<string, number[]>();
 	for (const dispatch of dispatches) {
-		if (dispatch.fallback || (!dispatch.exited && now - dispatch.mtimeMs < SETTLED_MS)) continue;
-		const { model, thinking } = parseResolved(dispatch.resolvedModel);
-		const [only] = dispatch.models;
-		if (dispatch.models.length !== 1 || only !== model) continue;
-		const provider = model.slice(0, model.indexOf("/"));
-		if (!trackedProviders.has(provider)) continue;
-		const cost = dispatch.costByProvider[provider] ?? 0;
-		const agentKey = `${dispatch.agent}|${model}|${thinking}`;
-		const modelKey = `${model}|${thinking}`;
+		const counted = eligible(dispatch, now);
+		if (!counted || !trackedProviders.has(counted.provider)) continue;
+		const agentKey = `${dispatch.agent}|${counted.model}|${counted.thinking}`;
+		const modelKey = `${counted.model}|${counted.thinking}`;
 		const agentCosts = byAgent.get(agentKey) ?? [];
-		agentCosts.push(cost);
+		agentCosts.push(counted.usd);
 		byAgent.set(agentKey, agentCosts);
 		const modelCosts = byModel.get(modelKey) ?? [];
-		modelCosts.push(cost);
+		modelCosts.push(counted.usd);
 		byModel.set(modelKey, modelCosts);
 	}
 	const table = (groups: ReadonlyMap<string, readonly number[]>): Record<string, Prior> => {
@@ -226,6 +212,7 @@ function quotaFrom(
 }
 
 let worker: Worker | undefined;
+let scanning: Promise<ScanResult> | undefined;
 
 function runScan(): Promise<ScanResult> {
 	const { promise, resolve } = Promise.withResolvers<ScanResult>();
@@ -245,6 +232,19 @@ function runScan(): Promise<ScanResult> {
 	return promise;
 }
 
+/**
+ * Every transcript's aggregate, re-reading only files changed since the cached scan. One scan per process at
+ * a time: callers arriving mid-scan share it, so two workers never write the cache together.
+ */
+export function scanTranscripts(): Promise<ScanResult> {
+	if (scanning) return scanning;
+	const run = runScan().finally(() => {
+		if (scanning === run) scanning = undefined;
+	});
+	scanning = run;
+	return run;
+}
+
 /** Stops a running scan; its run then commits nothing. `/subagent-usage off` and `reset`. */
 export function stopCalibration(): void {
 	worker?.terminate();
@@ -253,7 +253,7 @@ export function stopCalibration(): void {
 
 async function calibrateOnce(session: AgentSession, mode: CalibrationMode, consented: () => boolean): Promise<CalibrationOutcome> {
 	if (!consented()) return { kind: "declined" };
-	const scan = await runScan();
+	const scan = await scanTranscripts();
 	if (scan.kind === "failed") return { kind: "failed", reason: scan.reason };
 	const now = Date.now();
 	const sinceMs = now - QUOTA_WINDOW_MS;

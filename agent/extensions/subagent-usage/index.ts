@@ -22,10 +22,10 @@
 //
 // Per call the tool discovers agents like the task tool, keeps only each
 // agent's FIRST bound model, skips untracked channels (no omp usage provider,
-// or a models.yml transport/model; channels.ts), reads the newest 20 eligible
-// dispatches of the project's sessions and worktrees (samples.ts), prices each
-// account's live quota with its constant (quota.ts) and prints pools grouped
-// by provider (report.ts).
+// or a models.yml transport/model; channels.ts), rescans through the cache and
+// averages every eligible dispatch of the last 21 days in the project's
+// sessions and worktrees (samples.ts), prices each account's live quota with
+// its constant (quota.ts) and prints pools grouped by provider (report.ts).
 //
 // Registers tool `subagent_usage` (defaultInactive; activated on
 // session_start/switch while enabled) and command `/subagent-usage` in main
@@ -38,10 +38,10 @@ import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { defineOmompSection, loadOmompSection, writeOmompSection } from "../_shared/omomp.ts";
 import { availableAgents, bindAgent, rootSession } from "./agents.ts";
-import { type CalibrationOutcome, calibrate, QUOTA_MAX_AGE_MS, QUOTA_WINDOW_MS, stopCalibration } from "./calibrate.ts";
+import { type CalibrationOutcome, calibrate, QUOTA_MAX_AGE_MS, QUOTA_WINDOW_MS, scanTranscripts, stopCalibration } from "./calibrate.ts";
 import { channelOf } from "./channels.ts";
 import { formatReport } from "./report.ts";
-import { collectSamples, type Target } from "./samples.ts";
+import { observedCosts, type Target } from "./samples.ts";
 import { type Calibration, calibrationPath, deleteStoredData, readCalibration } from "./store.ts";
 
 const TOOL = "subagent_usage";
@@ -127,14 +127,19 @@ async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
 	const root = rootSession(session).sessionManager;
 	const sessionDir = root.getSessionDir();
 	const dirs = [sessionDir, ...(await worktreeSessionDirs(root.getCwd(), sessionDir))];
+	if (!consented()) {
+		return text("subagent_usage was disabled. Only a human can enable it with /subagent-usage on; do not retry.", true);
+	}
+	const [scan, reports] = await Promise.all([scanTranscripts(), session.fetchUsageReports()]);
+	if (scan.kind === "failed")
+		return text(`subagent_usage: transcript scan failed (${scan.reason}). Report this to the user; do not retry.`, true);
 	const now = Date.now();
-	const [scan, reports] = await Promise.all([collectSamples(dirs, targets, now), session.fetchUsageReports()]);
 	const history = session.modelRegistry.authStorage.usage.history({ sinceMs: now - QUOTA_WINDOW_MS });
 	const report = formatReport({
 		now,
 		calibration,
 		bindings,
-		costs: scan.costs,
+		costs: observedCosts(scan.dispatches, dirs, targets, now),
 		reports: reports ?? [],
 		history,
 	});

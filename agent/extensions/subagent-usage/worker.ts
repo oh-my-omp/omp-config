@@ -3,7 +3,7 @@
 // per subagent transcript. Pure fs/JSON: host packages are not importable from a worker.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { DispatchRecord, ScanRequest, ScanResult } from "./records.ts";
+import type { DispatchRecord, ScannedDispatch, ScanRequest, ScanResult } from "./records.ts";
 
 declare const self: Worker;
 
@@ -219,16 +219,19 @@ function scan(request: ScanRequest): ScanResult {
 			// Unreadable transcript: left out of this run and retried next time.
 		}
 	}
-	writeCache(request.cachePath, { version: CACHE_VERSION, files });
+	// A rescan that read nothing new and lost no file leaves the cache as it was.
+	if (parsed > 0 || Object.keys(previous).length !== Object.keys(files).length) {
+		writeCache(request.cachePath, { version: CACHE_VERSION, files });
+	}
 	const spend: Record<string, Record<string, number>> = {};
-	const dispatches: DispatchRecord[] = [];
-	for (const aggregate of Object.values(files)) {
+	const dispatches: ScannedDispatch[] = [];
+	for (const [file, aggregate] of Object.entries(files)) {
 		for (const [model, hour, usd] of aggregate.spend) {
 			const series = spend[model] ?? {};
 			series[String(hour)] = (series[String(hour)] ?? 0) + usd;
 			spend[model] = series;
 		}
-		if (aggregate.dispatch) dispatches.push(aggregate.dispatch);
+		if (aggregate.dispatch) dispatches.push({ ...aggregate.dispatch, file });
 	}
 	return { kind: "done", spend, dispatches, files: transcripts.length, parsed };
 }
