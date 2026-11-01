@@ -32,7 +32,7 @@ const calibrationSchema = z.object({
 	quota: z.object({
 		generatedAt: z.number(),
 		sinceMs: z.number(),
-		/** `provider|accountKey|limitId|windowId` -> constant. */
+		/** `provider|accountHash|limitId|windowId` (quota.ts limitKey) -> constant. */
 		constants: z.record(z.string(), quotaConstantSchema),
 		/** Same key -> why no constant could be derived. */
 		missing: z.record(z.string(), z.string()),

@@ -1,4 +1,5 @@
 // Remaining provider quota for one model, priced per account with this machine's calibrated constants.
+import { createHash } from "node:crypto";
 import {
 	type CredentialRankingContext,
 	type CredentialRankingStrategy,
@@ -35,9 +36,13 @@ function scopedUsageLimits(strategy: CredentialRankingStrategy, report: UsageRep
 }
 // @upstream-end
 
-/** Calibration key of one account's limit. */
+/**
+ * Calibration key of one account's limit. The usage-history account key can carry an email and `|`, so it
+ * enters the key as a short hash: the stored file names no account and the key splits unambiguously.
+ */
 export function limitKey(provider: string, accountKey: string, limit: UsageLimit): string {
-	return `${provider}|${accountKey}|${limit.id}|${limit.window?.id ?? ""}`;
+	const account = createHash("sha256").update(accountKey).digest("hex").slice(0, 16);
+	return `${provider}|${account}|${limit.id}|${limit.window?.id ?? ""}`;
 }
 
 /**
