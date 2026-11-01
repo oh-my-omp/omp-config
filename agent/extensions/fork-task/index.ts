@@ -79,6 +79,7 @@ import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discove
 import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
+import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { applyReplica, captureReplica, observeRequests, type Replica } from "./replica.ts";
@@ -243,17 +244,6 @@ function sanitizeName(value: string | undefined): string | undefined {
 		.replace(/[^A-Za-z0-9_-]+/g, "")
 		.slice(0, 40);
 	return sanitized || undefined;
-}
-
-function findCallerSession(ctx: ExtensionContext): AgentSession | undefined {
-	const file = ctx.sessionManager.getSessionFile();
-	for (const ref of AgentRegistry.global().list()) {
-		const session = ref.session;
-		if (!session) continue;
-		if (session.sessionManager === ctx.sessionManager) return session;
-		if (file && session.sessionManager.getSessionFile() === file) return session;
-	}
-	return undefined;
 }
 
 /**
@@ -517,7 +507,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 	const cloned = new WeakSet<AgentSession>();
 
 	pi.on("before_agent_start", (_event, ctx) => {
-		const session = findCallerSession(ctx);
+		const session = callerSession(ctx);
 		if (!session) return;
 		try {
 			observeRequests(session);
@@ -565,7 +555,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 		async execute(toolCallId, rawParams, signal, onUpdate, ctx) {
 			const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true });
 			const params = paramsSchema.parse(rawParams);
-			const parent = findCallerSession(ctx);
+			const parent = callerSession(ctx);
 			if (!parent) return fail("fork_task: could not resolve the calling session in the agent registry.");
 			const taskTool = parent.getToolByName("task");
 			if (!taskTool) return fail("fork_task: the `task` tool is unavailable in this session (recursion depth or settings).");
