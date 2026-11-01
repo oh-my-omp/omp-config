@@ -9,9 +9,9 @@
 //      minus `task.disabledAgents`) and resolves each one's model selection with
 //      `resolveAgentModelPatterns`, keeping only the FIRST pattern: later
 //      comma-separated fallbacks never enter any number;
-//   2. reads finished subagent transcripts of this directory's session bucket
-//      (the main session's own directory, or `sessionDirForCwd` from a
-//      subagent, whose session directory is its parent's artifact folder) plus
+//   2. reads finished subagent transcripts of the project's session bucket
+//      (the session directory and cwd of the top-level session the caller
+//      descends from, found through AgentRegistry parent links) plus
 //      its git and agent-managed worktrees (`worktreeSessionDirs`), newest first
 //      until each agent holds its newest 20 dispatches that ran wholly on that
 //      first model with no fallback (samples.ts);
@@ -30,7 +30,8 @@ import * as os from "node:os";
 import type { Api, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { type AgentDefinition, type AgentSession, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { resolveAgentModelPatterns, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import { sessionDirForCwd, worktreeSessionDirs } from "@oh-my-pi/pi-coding-agent/session/session-paths";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { worktreeSessionDirs } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { callerSession } from "../_shared/caller-session.ts";
@@ -185,6 +186,24 @@ function row(binding: Binding, scan: SampleScan, reports: readonly UsageReport[]
 	}
 }
 
+/**
+ * The top-level session `session` descends from. Its session directory and cwd name the project
+ * bucket: a subagent's own directory is its parent's artifact folder, and an isolated one runs in
+ * a copy of the checkout whose git metadata does not lead back to the project.
+ */
+function rootSession(session: AgentSession): AgentSession {
+	const registry = AgentRegistry.global();
+	let ref = registry.list().find((candidate) => candidate.session === session);
+	const visited = new Set<string>();
+	while (ref?.parentId !== undefined && !visited.has(ref.id)) {
+		visited.add(ref.id);
+		const parent = registry.get(ref.parentId);
+		if (!parent?.session) break;
+		ref = parent;
+	}
+	return ref?.session ?? session;
+}
+
 async function report(ctx: ExtensionContext, signal: AbortSignal | undefined): Promise<ToolResult> {
 	const session = callerSession(ctx);
 	if (!session)
@@ -193,8 +212,9 @@ async function report(ctx: ExtensionContext, signal: AbortSignal | undefined): P
 			isError: true,
 		};
 	const cwd = ctx.sessionManager.getCwd();
-	// A subagent's session directory is its parent's artifact folder, not a project bucket.
-	const sessionDir = ctx.agent.kind === "main" ? ctx.sessionManager.getSessionDir() : sessionDirForCwd(cwd);
+	const root = rootSession(session).sessionManager;
+	const projectCwd = root.getCwd();
+	const sessionDir = root.getSessionDir();
 	await session.modelRegistry.awaitBackgroundRefresh();
 	const bindings = (await availableAgents(session, cwd)).map((agent) => bindAgent(session, agent));
 	const targets: Target[] = bindings.flatMap((binding) =>
@@ -203,7 +223,7 @@ async function report(ctx: ExtensionContext, signal: AbortSignal | undefined): P
 			: [],
 	);
 	const now = Date.now();
-	const dirs = [sessionDir, ...(await worktreeSessionDirs(cwd, sessionDir))];
+	const dirs = [sessionDir, ...(await worktreeSessionDirs(projectCwd, sessionDir))];
 	const [scan, reports] = await Promise.all([collectSamples(dirs, targets, now), session.fetchUsageReports(signal)]);
 	const lines = [
 		`Subagent dispatch budget at ${new Date(now).toISOString()}.`,
