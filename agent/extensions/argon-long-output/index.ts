@@ -27,12 +27,15 @@
 // the patched row. Abort (Esc, dispose) still cancels the request at once: the
 // abort path does not depend on the watchdogs.
 //
-// WHERE. `session_start` and `before_agent_start` patch the session model and
-// every available registry row; `context`, which runs before every model call
-// (turns, subagent turns, auto-retry continuations), patches the session model.
-// Gap: compaction picks its model from the registry, and a row the host
-// rebuilds after the last `before_agent_start` (a models.yml reload or a
-// context-window refit mid-turn) keeps the 300 s default until the next prompt.
+// WHERE. Every sweep patches the session model and every available registry
+// row. It runs on `session_start`, `before_agent_start`, `context` (before
+// every model call: turns, subagent turns, auto-retry continuations) and
+// `auto_compaction_start` (before automatic compaction picks its model from the
+// session model or the registry). Gap: a row the host builds after the last
+// sweep keeps the 300 s default until the next one, e.g. a models.yml reload
+// between turns followed by a manual `/compact` that falls back past the
+// session model, or a context-window refit (OMP gives the argon rows no window
+// tiers, so it does not refit them).
 //
 // PROMPT. `before_agent_start`, in the main session and in every subagent, each
 // matched against its own model, appends `ARGON_PROMPT.md` (beside this
@@ -40,7 +43,7 @@
 // payload and final reply within 8,000 characters by writing a skeleton first
 // and filling it one section per `edit`.
 //
-// Registers session_start, before_agent_start and context; no tools or
+// Registers session_start, before_agent_start, context and auto_compaction_start; no tools or
 // commands; writes no files. Failure policy: a missing or unreadable
 // ARGON_PROMPT.md warns once per reason and appends nothing; any other error is
 // logged and the prompt or request proceeds unchanged. Nothing throws into omp.
@@ -78,7 +81,8 @@ function patchModel(model: Model<Api> | undefined): void {
 	if (model !== undefined && isArgon(model)) applyTimeoutDefault(model);
 }
 
-function patchRegistry(ctx: ExtensionContext): void {
+/** Patch the session model and every available registry row; see WHERE above. */
+function sweep(ctx: ExtensionContext): void {
 	patchModel(ctx.model);
 	for (const model of ctx.modelRegistry.getAvailable("all")) patchModel(model);
 }
@@ -98,25 +102,20 @@ export default function argonLongOutput(pi: ExtensionAPI): void {
 	/** Last prompt-file failure already logged, so a broken file warns once per reason. */
 	let warnedReason: string | null = null;
 
-	pi.on("session_start", (_event, ctx) => {
+	const sweepHook = (_event: unknown, ctx: ExtensionContext): void => {
 		try {
-			patchRegistry(ctx);
+			sweep(ctx);
 		} catch (error) {
 			pi.logger.warn("argon-long-output: cannot apply timeout defaults", { error: errorText(error) });
 		}
-	});
-
-	pi.on("context", (_event, ctx) => {
-		try {
-			patchModel(ctx.model);
-		} catch (error) {
-			pi.logger.warn("argon-long-output: cannot apply timeout defaults", { error: errorText(error) });
-		}
-	});
+	};
+	pi.on("session_start", sweepHook);
+	pi.on("context", sweepHook);
+	pi.on("auto_compaction_start", sweepHook);
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		try {
-			patchRegistry(ctx);
+			sweep(ctx);
 			const model = ctx.model;
 			if (model === undefined || !isArgon(model)) return;
 			const prompt = await readPrompt();
