@@ -15,6 +15,7 @@
 | [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 把被覆盖工具的说明换成常用调用说明加 `Topics` 索引；详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
 | [system-prompt-replace](#system-prompt-replace) | 主会话 + 子代理（仅完整模式） | 在所有按路径加载的扩展最后运行，对渲染出的 system prompt 做措辞级修改。 |
 | [append-system-model](#append-system-model) | 主会话 + 子代理 | 按当前会话的 `model` 或 `provider` 正则匹配 `APPEND_SYSTEM_MODEL.md`，追加模型专属提示词块。 |
+| [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时追加仓库下发的 `ARGON_PROMPT.md`：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
 | [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection) | 主会话 + 子代理 | 配置的工具参数命中后才加载专题，每条规则在真实未压缩上下文中注入一次；追加 developer 上下文，而不是扩大常驻工具说明。 |
 
 ### system-prompt-replace

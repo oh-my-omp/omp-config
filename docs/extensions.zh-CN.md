@@ -32,6 +32,7 @@
 | 24 | `session-urls` | [session-urls](#session-urls) | 进程全局（`session://` scheme） | 是 | 读取会话文件、recap 记录与 prompt 历史；无配置 | 长程状态与压缩（必选基底 `compaction-baseline`） | 无需配置：进程全局注册只读 `session://` 路由 |
 | 25 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无 | 执行与宿主安全（必选基底 `safe-deletion`） | 无需配置：常驻拦截 `bash`/`eval` 删除操作并注册字面路径 `delete` 工具 |
 | 26 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | `omomp.yml#subagent-usage`（本机授权）；校准数据在 `<agentDir>/subagent-usage/` | 子代理与顾问（可选） | 默认关闭；人工执行 `/subagent-usage on` 即同意读取本机会话与用量历史，并据此校准 |
+| 27 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | 同目录的 `ARGON_PROMPT.md`（仓库） | 供应商与生命周期（条件必选 `antigravity-compat`） | 无需配置：只对 `google-gemini-cli` 上的 `gemini-4-argon` 关闭流看门狗（显式设置的 env/settings/`models.yml` 超时仍优先）；改长输出规则时编辑 `ARGON_PROMPT.md` |
 
 ---
 
@@ -265,6 +266,17 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（`@oh-my-pi/pi-catalog/wire/gemini-headers`）中已有的 wire id 替换调用方的 `maxTokens`；表抓包之后新增的 id（如 `gemini-4-argon-*`）不在其中，导致 compaction 的 512 token 摘要请求原样发出，额度被 thinking 耗尽并报错 `thought-only response without final output`。
 
 在根会话 `session_start`（最多等待 20 秒，`before_agent_start` 等待同一次加载）时，扩展用当前会话凭据和本机已存的全部 Antigravity 账号调用 `POST <baseUrl>/v1internal:fetchAvailableModels`，合并非 internal、非 disabled 且 `maxOutputTokens` 为正整数的条目，原地更新 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（只新增或覆盖，不删除条目）。若所有账号均获取失败，则保留原表内容，记日志并弹一次主 UI 警告，下次根会话启动时重试。
+
+### argon-long-output
+
+源码：`agent/extensions/argon-long-output/`。主会话与子代理、完整与轻量模式都加载；无配置。
+
+Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-argon` 生成长 `write` 时，流在 thinking 摘要之后一直静默。OMP 的看门狗把这段静默判为卡死：300 s 后包装层报 `Provider stream stalled while waiting for the next event` 中止（首事件之前则报 `Cloud Code Assist stream timed out while waiting for the first event`），每次重试都重新生成同一调用，又撞上同一上限。本扩展只作用于 `api` 为 `google-gemini-cli`、id 匹配 `^gemini-4-argon` 的模型，与 provider 无关：
+
+- **超时**：三个看门狗（包装层 idle、provider 首事件、provider pre-response）的预算按 调用方 option > settings `providers.streamIdleTimeoutSeconds` / `providers.streamFirstEventTimeoutSeconds` > 环境变量 `PI_STREAM_IDLE_TIMEOUT_MS` / `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` > `model.compat.stream{Idle,FirstEvent}TimeoutMs` > 300000 取值，0 表示关闭该看门狗。扩展只填匹配模型行的 compat 层：宿主已解析出的值保留；否则取 `models.yml` 的 `compat` 值（OMP 的 Google compat 解析只把它留在 `compatConfig`，由扩展搬过去）；都没有时取 `0`。因此显式 option、settings 与环境变量仍优先，其他模型保持 300 s 默认值。静默中的请求仍可用 Esc 或 session dispose 立即终止。
+- **生效位置**：每次扫描修补会话模型和注册表中所有可用模型行（模型行在进程内共享，子代理与 compaction 候选也随之生效）。扫描在 `session_start`、`before_agent_start`、`context`（每次模型调用前）和 `session.compacting` 运行。OMP 在每条 LLM compaction 路径（手动 `/compact`、自动、预取）发出摘要请求之前都会发出 `session.compacting`。compaction 从会话模型和注册表行中选模型，所以上一回合之后因 `models.yml` 重载而重建的模型行，会在发出请求之前被修补。处理函数不返回任何内容，不改变 compaction 本身。上下文窗口重拟合会构建扫描看不到的新行，但 OMP 没有给 argon 模型行设窗口档位，不会对它们重拟合。
+- **提示词**：argon 会话（主会话与每个子代理，各按自己的模型匹配）在 `before_agent_start` 时追加 `ARGON_PROMPT.md`（扩展同目录，仓库下发，每条 prompt 重读）：单次 `write` 内容、单次 `edit` 正文、单条最终回复都不超过 8,000 字符；更长的交付物先 `write` 只含标题的骨架，再逐节 `edit` 填充；修改已有大文件时只 `edit` 改动的节。文件缺失或不可读时按原因只警告一次，不追加。
+- **超大单次调用**：仍一次生成超过后端输出上限的调用时，沿用 OMP 现有处理（`MAX_TOKENS` → `length`；截断的函数调用 → `MALFORMED_FUNCTION_CALL` → `error`，不执行）。
 
 ### tool-topics
 
