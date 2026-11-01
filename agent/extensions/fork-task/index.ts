@@ -216,7 +216,9 @@ const FORK_AGENT = "fork:self";
  * Replicas by child session file. Child sessions rebind this module's factory
  * in the same process, so the parent's write is visible to the child. Entries
  * live until the parent session shuts down, so a revived child keeps its
- * replicated contract.
+ * replicated contract. A replica holds plain request data and at most a
+ * borrowed `ask` tool, never the source session, so it keeps no parked
+ * session alive.
  */
 const replicas = new Map<string, Replica>();
 
@@ -585,6 +587,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 					const captured = captureReplica(source.session, {
 						shake: item.shake === true,
 						inheritReasoning: role.kind === "none" && item.effort === undefined,
+						caller: parent,
 					});
 					if (captured.kind === "unavailable") throw new Error(`cannot replicate the source's request: ${captured.reason}`);
 					await source.session.sessionManager.flush();

@@ -1,11 +1,16 @@
 import type { AgentTool, StreamFn } from "@oh-my-pi/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import type { Context, Model, SimpleStreamOptions, Tool } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 
-/** The last request at the common Context boundary, after all SDK context transforms. */
+/**
+ * The last request at the common Context boundary, after all SDK context
+ * transforms. Plain data only: the agent loop hands providers spread copies of
+ * the live AgentTools, whose execute closures and session fields would keep a
+ * disposed session reachable for as long as the snapshot lives.
+ */
 type RequestSnapshot = {
 	readonly model: Model;
-	readonly context: Context;
+	readonly context: Pick<Context, "systemPrompt" | "messages" | "tools">;
 	readonly options: Pick<
 		SimpleStreamOptions,
 		"reasoning" | "disableReasoning" | "serviceTier" | "temperature" | "maxTokens" | "cacheRetention" | "sessionId" | "promptCacheKey"
@@ -15,20 +20,44 @@ type RequestSnapshot = {
 const requests = new WeakMap<AgentSession, RequestSnapshot>();
 const observed = new WeakSet<AgentSession>();
 
+/** The provider-facing fields of a tool (pi-ai `Tool`), without the AgentTool runtime it was spread from. */
+function wireTool(tool: Tool): Tool {
+	const { name, description, parameters, strict, deferLoading, customFormat, customWireName, native, examples } = tool;
+	return {
+		name,
+		description,
+		parameters,
+		...(strict !== undefined ? { strict } : {}),
+		...(deferLoading !== undefined ? { deferLoading } : {}),
+		...(customFormat !== undefined ? { customFormat } : {}),
+		...(customWireName !== undefined ? { customWireName } : {}),
+		...(native !== undefined ? { native } : {}),
+		...(examples !== undefined ? { examples } : {}),
+	};
+}
+
 /**
  * Capture the actual provider-neutral input, not a separately rendered prompt.
  * Contexts are per-call values; retain only the latest one, without duplicating
  * the transcript. Child wrappers capture their replicated input too, so a fork
- * of a fork has the same source of truth.
+ * of a fork has the same source of truth. The snapshot ends with the session:
+ * disposal (teardown or idle park) drops it.
  */
 export function observeRequests(session: AgentSession): void {
 	if (observed.has(session)) return;
 	observed.add(session);
+	session.addDisposer(() => {
+		requests.delete(session);
+	});
 	const stream = session.agent.streamFn;
 	session.agent.streamFn = (model, context, options) => {
 		requests.set(session, {
 			model,
-			context,
+			context: {
+				systemPrompt: context.systemPrompt,
+				messages: context.messages,
+				tools: context.tools?.map(wireTool),
+			},
 			options: {
 				reasoning: options?.reasoning,
 				disableReasoning: options?.disableReasoning,
@@ -44,11 +73,17 @@ export function observeRequests(session: AgentSession): void {
 	};
 }
 
-/** What a fork child replicates from its source's latest request. */
+/**
+ * What a fork child replicates from its source's latest request. Lives as long
+ * as the child stays revivable, so it holds plain data and no source session:
+ * tool names instead of the source's AgentTools.
+ */
 export type Replica = {
 	readonly request: RequestSnapshot;
 	readonly systemPrompt: readonly string[];
-	readonly tools: readonly AgentTool[];
+	readonly toolNames: readonly string[];
+	/** The `ask` tool a headless child borrows when it has none of its own: the caller's, else the source's. */
+	readonly ask: AgentTool | undefined;
 	/** The source's model and thinking level as a spawn selector. */
 	readonly sourceModel: string;
 	readonly replayPrefix: boolean;
@@ -60,17 +95,20 @@ type CaptureResult = { readonly kind: "ready"; readonly replica: Replica } | { r
 
 export function captureReplica(
 	session: AgentSession,
-	options: { readonly shake: boolean; readonly inheritReasoning: boolean },
+	options: { readonly shake: boolean; readonly inheritReasoning: boolean; readonly caller: AgentSession },
 ): CaptureResult {
 	const request = requests.get(session);
 	if (!request) return { kind: "unavailable", reason: "it has not sent a model request in this OMP process since fork capture loaded" };
 	const level = session.thinkingLevel;
+	const toolNames = session.agent.state.tools.map((tool) => tool.name);
 	return {
 		kind: "ready",
 		replica: {
 			request,
 			systemPrompt: [...session.systemPrompt],
-			tools: [...session.agent.state.tools],
+			toolNames,
+			// The caller outlives the replica, so its `ask` pins no extra session; a `from` source's own is the fallback.
+			ask: toolNames.includes("ask") ? (options.caller.getToolByName("ask") ?? session.getToolByName("ask")) : undefined,
 			sourceModel: `${request.model.provider}/${request.model.id}${level ? `:${level}` : ""}`,
 			replayPrefix: !options.shake,
 			inheritReasoning: options.inheritReasoning,
@@ -120,15 +158,15 @@ function replicateContext(source: Context, current: Context, replayPrefix: boole
 /** Install once per live generation; disposal releases the per-call hook. */
 export function applyReplica(session: AgentSession, replica: Replica): void {
 	const own = new Map(session.agent.state.tools.map((tool) => [tool.name, tool]));
-	const names = new Set(replica.tools.map((tool) => tool.name));
-	const tools = replica.tools.map((tool) => {
-		const local = own.get(tool.name) ?? session.getToolByName(tool.name);
+	const names = new Set(replica.toolNames);
+	const tools = replica.toolNames.map((name) => {
+		const local = own.get(name) ?? session.getToolByName(name);
 		if (local) return local;
 		// AskTool's real implementation uses the supplied execution context. In
 		// a headless child it takes its existing headless handoff path; never
 		// fabricate a same-schema tool that always returns an error.
-		if (tool.name === "ask") return tool;
-		throw new Error(`fork_task: cannot clone source tool \`${tool.name}\` into this child`);
+		if (name === "ask" && replica.ask) return replica.ask;
+		throw new Error(`fork_task: cannot clone source tool \`${name}\` into this child`);
 	});
 	// Only completion extends the source's capability surface. Do not expose
 	// other tools admitted by the unrestricted internal agent definition.
