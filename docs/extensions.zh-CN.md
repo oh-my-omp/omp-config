@@ -31,7 +31,7 @@
 | 23 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`；依赖 `tool-topics`） | 延后：保持仓库默认只读触发规则；有特殊需求可在 `<cwd>/.omp/omomp.yml` 覆盖 |
 | 24 | `session-urls` | [session-urls](#session-urls) | 进程全局（`session://` scheme） | 是 | 读取会话文件、recap 记录与 prompt 历史；无配置 | 长程状态与压缩（必选基底 `compaction-baseline`） | 无需配置：进程全局注册只读 `session://` 路由 |
 | 25 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无 | 执行与宿主安全（必选基底 `safe-deletion`） | 无需配置：常驻拦截 `bash`/`eval` 删除操作并注册字面路径 `delete` 工具 |
-| 26 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 内置校准数据 `calibration.ts`；无配置 | 子代理与顾问（可选） | 无需配置：每次调用读取子代理会话与实时用量报告；内置常量描述的是校准机器上的账号 |
+| 26 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | `omomp.yml#subagent-usage`（本机授权）；校准数据在 `<agentDir>/subagent-usage/` | 子代理与顾问（可选） | 默认关闭；人工执行 `/subagent-usage on` 即同意读取本机会话与用量历史，并据此校准 |
 | 27 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | 同目录的 `ARGON_PROMPT.md`（仓库） | 供应商与生命周期（条件必选 `antigravity-compat`） | 无需配置：只对 `google-gemini-cli` 上的 `gemini-4-argon` 关闭流看门狗（显式设置的 env/settings/`models.yml` 超时仍优先）；改长输出规则时编辑 `ARGON_PROMPT.md` |
 
 ---
@@ -73,13 +73,17 @@
 
 ### subagent-usage
 
-源码：`agent/extensions/subagent-usage/`。在主会话与子会话、完整与轻量模式下注册只读工具 `subagent_usage`（无参数），是人类侧 `/usage` 在 AI 侧的对应物。对 `task` 工具能派发的每个子代理定义（`discoverAgents` 加会话内 agent，去掉 `task.disabledAgents`）返回一行：绑定的首位模型、估算的每次派发 USD 及其依据、按 USD 计的供应商剩余额度、估算的剩余可派发次数，以及每个账号起约束作用的额度窗口与重置时间。
+源码：`agent/extensions/subagent-usage/`。人类侧 `/usage` 在 AI 侧的对应物：只读工具 `subagent_usage`（无参数；主会话与子会话、完整与轻量模式）估算每个可用子代理在其首位绑定模型的供应商额度耗尽前还能派发几次。仓库不带任何校准数据；每台机器只在人工授权后，用自己的会话与用量历史校准。
 
-- **只看首位模型**：绑定按 `task` 执行器的方式解析（`resolveAgentModelPatterns`，再只用第一个模式调 `resolveModelOverride`）。逗号之后的回退模型不进入任何计算；首位模型不在模型注册表中时如实报告，不顺延到回退模型。
-- **观测单价**：汇总项目会话桶里的全部子代理会话文件——会话桶取调用方所属顶层会话的会话目录（沿 `AgentRegistry` 的 parent 链向上找，所以子代理不论是否隔离，都与其主会话汇总同一批会话）——以及该顶层会话的 git worktree 和 agent 管理的 worktree（`worktreeSessionDirs`），从新到旧读取，直到每个 agent 都取满最新 20 次合格派发；每个文件只读到 `session_init` 那一行为止。一次派发计入样本的条件：`session_init` 写明该 agent（及绑定显式指定的思考强度），所有 assistant 消息都运行在首位模型上，没有 `model_change` 记录回退，并且写过 `session_exit` 或已 30 分钟未修改（崩溃或被放弃的派发同样消耗了额度）。其单价是首位模型所属供应商上 assistant 与 `model_usage` 条目的 `usage.cost.total` 之和。有 $n \ge 1$ 次这样的派发时，估算值取对数正态均值 $\exp(\overline{\ln c} + \sigma^2/2)$，其中内置离散度 $\sigma = 0.897$（有派发成本为 0 时改用算术平均）。
-- **兜底单价**（$n = 0$）：依次取内置的 agent + 模型 + 思考强度平均单价、模型 + 思考强度平均单价、全局平均单价。
-- **额度**：取 `AgentSession.fetchUsageReports` 的报告，即人类侧 `/usage` 的数据源。对每个账号，用供应商的排序策略保留适用于该模型的额度（plan gate、`scopeLimitsForReserve` 或 `scopeLimits`），去掉重置时间已过的窗口，再用以 `provider|limitId|windowId` 为键的内置“每 100% 对应 USD”常量为每个额度的剩余比例定价。每个账号取其中最小的值，账号之间相加，因为 OMP 会把每次请求路由到仍有余量的账号。次数为 ⌊额度 USD / 每次派发 USD⌋；没有报告的供应商、缺少常量的额度（会列出）和零价模型不给次数，改为说明原因。结果是当前快照：不计窗口重置后的恢复，同一供应商上的各 agent 共用其额度。
-- **内置常量**（`calibration.ts`）：根据本机会话存储和 `omp usage --history` 一次性生成，文件头写明方法与日期；工具运行时从不重新扫描全局历史。每次派发单价是合格派发的平均值（样本至少 10 次的组）。每个额度的 USD 常量是该额度经供应商策略适用的模型在本机的花费，除以各账号已用比例增量之和，只计入持有该额度的每个账号都有同一重置周期内快照对、且该供应商其他账号空闲的小时，再取该比值与每周比值 25 分位数中的较小者。这些数值描述的是校准机器的账号、套餐与模型定价。
+- **授权**：agent 目录下 `omomp.yml#subagent-usage` 的 `{ enabled: true }`（项目 `.omp/omomp.*` 不能授权；属于 `LOCAL_OMOMP_SECTIONS`），只由人工命令 `/subagent-usage on|off|status|recalibrate|reset` 写入。`on` 即同意读取本机会话记录与用量历史，并在后台开始首次校准。未授权时什么都不读，工具保持未激活；每次校准开始前、写入结果前以及每次工具调用都会重新检查授权。`off` 停止正在进行的扫描，保留数据但不再使用；`reset` 删除数据；`status` 只读已存数据的元信息。全程不调用任何模型，校准是确定性代码。
+- **校准**：一个 Bun Worker 读取会话根目录下的全部会话文件，每行只看前 256 字节决定是否需要，只解码需要的条目，并维护按文件大小与修改时间索引的逐文件聚合缓存（`<agentDir>/cache/subagent-usage/transcripts.json`），之后只读新增或改动的文件。本机首次全量扫描 28,237 个会话文件耗时 59 秒，内存峰值 262 MB；有缓存时重扫耗时 0.6 秒。随后主线程原子写入 `<agentDir>/subagent-usage/calibration.json`：
+  - **单次派发均值**，在 `on` 与 `recalibrate` 时计算：本机已结束派发按 agent + 模型 + 思考强度、以及按模型 + 思考强度分组的平均 USD（至少 3 次；合格派发须完全运行在其 `session_init` 解析出的模型上、没有回退记录，并写过 `session_exit` 或已 30 分钟未修改），以及 ln 成本的合并离散度 $\sigma$。
+  - **额度换算常量**，取最近 21 天，超过一天后在工具调用内重算，因此套餐或额度变化会随窗口滚动淘汰：按账号与额度窗口计算（键由供应商、usage history 账号键的无盐 SHA-256 前 16 位十六进制、额度 id 与窗口 id 组成；文件里没有原始账号键、邮箱或凭据，但这个指纹是稳定的，且账号键可能含邮箱，因此可被猜出），用该额度经供应商策略适用的模型在本机的花费，除以该额度已用比例的增量，只计入该账号这个额度有同一重置周期内快照对、且该供应商其他账号空闲的小时；取该比值与每日比值 25 分位数（变动至少 5% 的天，至少 3 天）中的较小者。历史不足的额度记录原因，不给常量。同一账号换套餐不会被立即识别：新旧套餐的天数同在窗口内时较小者占优，所以升级后最长 21 天内数字偏低，降级后几天内即降到新水平。
+- **不跟踪的渠道**不进入任何均值、估算或定价（扫描按文件聚合，会读到所有会话文件，但会丢弃这些渠道的条目）：omp 没有用量报告的供应商、models.yml 自定义了传输的供应商（`baseUrl`、凭据、`api`、headers、auth、discovery），以及 models.yml 定义的模型或覆盖了 headers 的模型。只改元数据的覆盖（如上下文窗口、价格）不影响跟踪。
+- **只看首位模型**：绑定按 `task` 执行器的方式解析（`resolveAgentModelPatterns`，再只用第一个模式调 `resolveModelOverride`）。逗号之后的回退模型不进入任何计算；首位模型不在模型注册表中时报告为不跟踪。
+- **单次派发估算**：取该 agent 在首位模型上、会话文件在最近 21 天内有改动的全部合格派发（合格规则与单次派发均值相同），范围是项目会话。项目会话指调用方所属顶层会话的会话目录（沿 `AgentRegistry` 的 parent 链向上找，所以子代理不论是否隔离，都与其主会话汇总同一批会话），加上它的 git worktree 和 agent 管理的 worktree（`worktreeSessionDirs`）。每次调用工具都经逐文件缓存重扫，只读上次扫描后改动过的会话文件。有 $n \ge 1$ 次时取对数正态均值 $\exp(\overline{\ln c} + \sigma^2/2)$，$\sigma$ 用本机值（本机没有 $\sigma$ 或有派发成本为 0 时改用算术平均）；窗口内一次都没有时依次取本机该 agent 在该模型上的均值、该模型的均值；再没有则不给估算。
+- **额度**：取 `AgentSession.fetchUsageReports` 的报告，即人类侧 `/usage` 的数据源。每份实时报告按账号 id、邮箱或抓取时间匹配到 usage history 的账号。对每个账号，用供应商排序策略保留适用于该模型的额度（plan gate、`scopeLimitsForReserve` 或 `scopeLimits`），去掉重置时间已过的窗口，用该账号的常量为剩余比例定价；账号取其中最小值，只要有一个适用额度缺常量，该账号就不计入并列出原因。账号之间相加，因为 OMP 会把每次请求路由到仍有余量的账号；部分账号未定价时标为下限。
+- **输出**：先列规则（同一 pool 内的次数互为替代、不可相加；不计重置后的恢复；只看首位模型；PENDING、NOT TRACKED、NO ESTIMATE 表示没有数字，绝不表示无限），再按供应商分 `POOL <provider>` 段列出共享额度的 agent，每行给出次数、单次派发 USD 及其来源与可信度、剩余额度、最紧的窗口与重置时间；最后列 PENDING（有额度但暂时无法定价）与 NOT TRACKED。
 
 ---
 

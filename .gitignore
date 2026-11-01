@@ -11,6 +11,7 @@ agent/sessions/
 agent/terminal-sessions/
 agent/blobs/
 agent/cache/
+agent/subagent-usage/
 plugins/node_modules/
 plugins/.cache/
 node_modules/
