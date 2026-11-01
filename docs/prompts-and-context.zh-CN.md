@@ -102,7 +102,7 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 
 源码：`agent/extensions/model-compaction/`。
 
-OMP 原生的 `compaction.modelThresholds` 只支持精确 `provider/id` 或 `*` 前缀。该扩展在主会话每次 `before_agent_start` 时读取 agent 目录 `omomp.*` 中的本机 `model-compaction` 段（不读项目 `.omp/` 副本）：
+OMP 原生的 `compaction.modelThresholds` 只支持精确 `provider/id` 或 `*` 前缀。该扩展在主会话每次 `before_agent_start` 时依次读取项目（`<cwd>/.omp/`，随会话当前目录变化）与 agent 目录（本机）`omomp.*` 中的 `model-compaction` 段，取第一份有效副本整段使用，两份不合并：
 
 ```yaml
 model-compaction:
@@ -116,7 +116,7 @@ model-compaction:
 
 每条规则至少填 `model` 或 `provider` 的 JavaScript 正则（匹配全部模型写 `"model": ".*"`）。对 `ctx.models.list()` 中的每个模型，按文件顺序取第一条命中的规则，把 `"<provider>/<id>": "f<thresholdTokens>"` 写入主会话的运行时设置层（不改磁盘上的 `config.yml`；`/model` 切换、重试回退以及读取主会话设置的子代理都会按各自模型使用对应阈值）。
 
-由于原生 `f<N>` 条目可能改变模型的上下文窗口档位（standard vs extended），凡是会让某个模型切换当前窗口档位的规则都会对该模型跳过并记一次 warning。其他来源已写入的运行时条目会被保留，并在无规则命中或 `session_shutdown` 时恢复；若运行期间有其他代码修改了这张映射表，扩展会记一次 warning 并停止更新。
+由于原生 `f<N>` 条目可能改变模型的上下文窗口档位（standard vs extended），凡是会让某个模型切换当前窗口档位的规则都会对该模型跳过并记一次 warning。项目副本在该项目中整段取代本机规则，仍需要的本机规则要在项目副本里重写一遍；项目副本写 `rules: []` 即在该项目关闭本机规则。无法读取、有歧义或无效的副本会被跳过并记 warning，改用下一个位置：项目副本无效时回落到本机副本，没有任何有效副本时不应用规则。其他来源已写入的运行时条目会被保留，并在无规则命中或 `session_shutdown` 时恢复；若运行期间有其他代码修改了这张映射表，扩展会记一次 warning 并停止更新。
 
 ### ctx
 

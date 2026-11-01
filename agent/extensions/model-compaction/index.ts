@@ -7,8 +7,10 @@
 // This extension lets ordered regex rules choose a fixed compaction trigger and
 // hands the result to the native map; OMP itself still decides and compacts.
 //
-// FILE. The `model-compaction` section of omomp.* in the agent directory (machine-
-// local; no project copy is read):
+// FILE. The `model-compaction` section of omomp.*, read from the project
+// (`<cwd>/.omp/omomp.*`) and then the agent directory (machine-local); the first
+// valid copy is used whole, never merged with the other, so a project copy with
+// `rules: []` turns the machine rules off for that project. Example:
 //
 //   model-compaction:
 //     rules:
@@ -44,22 +46,24 @@
 // tier a model currently runs with is refused for that model with a warning;
 // this extension never changes a context window.
 //
-// TIMING. Main session `before_agent_start`: the file is re-read every prompt,
-// so edits apply from the next main prompt (subagents follow the main session's
-// latest write). Subagent sessions write nothing.
+// TIMING. Main session `before_agent_start`: both locations are re-read every
+// prompt against the session's current cwd, so edits and worktree moves apply
+// from the next main prompt (subagents follow the main session's latest write).
+// Subagent sessions write nothing.
 //
 // OWNERSHIP. The extension writes the runtime layer of
 // `compaction.modelThresholds` only. Before its first write it keeps the
 // runtime record already there; it writes that record plus its own entries and
-// restores it when no entry remains (no file, invalid file, no match) and on
+// restores it when no entry remains (no valid copy, no match) and on
 // `session_shutdown`. When it finds the runtime record changed by another
 // writer, it warns once and stops managing it for the session.
 //
-// FAILURE POLICY. A missing file means no rules, silently. An unreadable or
-// invalid file means no rules for that prompt (the whole file is rejected) plus
-// a warning; warnings repeat only when they change or a clean read intervened.
-// Warnings go to the log and, with a UI, a notification. The prompt is never
-// blocked.
+// FAILURE POLICY. No copy anywhere means no rules, silently. An unreadable,
+// ambiguous or invalid copy is skipped whole with a warning and the next
+// location is used (an invalid project copy falls back to the machine copy;
+// with none valid, no rules apply for that prompt). Warnings repeat only when
+// they change or a clean read intervened. Warnings go to the log and, with a
+// UI, a notification. The prompt is never blocked.
 // ============================================================================
 
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -81,7 +85,11 @@ interface Rule {
 	readonly thresholdTokens: number;
 }
 
-type Rules = { readonly kind: "rules"; readonly rules: readonly Rule[] } | { readonly kind: "invalid"; readonly reason: string };
+/** Rules from the first valid copy (none when no copy is valid), plus why other copies were skipped. */
+interface LoadedRules {
+	readonly rules: readonly Rule[];
+	readonly problems: readonly string[];
+}
 
 /** Native `compaction.modelThresholds` entry values: token base, `"f<N>"`/`"<P>%"` string, or `null` (clears an inherited entry). */
 type ThresholdEntry = number | string | null;
@@ -138,15 +146,14 @@ function toRule(rule: z.infer<typeof ruleSchema>): Rule {
 	return { constraints: [first, ...rest], thresholdTokens: rule.thresholdTokens };
 }
 
-function loadRules(): Rules {
-	const loaded = loadOmompSection(omompSection, null);
+function loadRules(cwd: string): LoadedRules {
+	const loaded = loadOmompSection(omompSection, cwd);
+	const skipped = loaded.skipped.map((problem) => `${problem.path}: ${problem.reason}`);
 	switch (loaded.kind) {
 		case "found":
-			return { kind: "rules", rules: loaded.value.rules.map(toRule) };
-		case "none": {
-			const [problem] = loaded.skipped;
-			return problem === undefined ? { kind: "rules", rules: [] } : { kind: "invalid", reason: `${problem.path}: ${problem.reason}` };
-		}
+			return { rules: loaded.value.rules.map(toRule), problems: skipped.map((problem) => `${problem}; using ${loaded.path}`) };
+		case "none":
+			return { rules: [], problems: skipped.map((problem) => `${problem}; no rules applied`) };
 		default: {
 			const unreachable: never = loaded;
 			return unreachable;
@@ -297,23 +304,10 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 		if (ctx.agent.kind !== "main") return;
 		try {
 			const settings = sessionSettings(ctx);
-			const rules = loadRules();
-			switch (rules.kind) {
-				case "invalid":
-					report(ctx, [`${rules.reason}; no rules applied`]);
-					apply(ctx, settings, {});
-					return;
-				case "rules": {
-					const expansion = expand(ctx, settings, rules.rules);
-					report(ctx, expansion.refusals);
-					apply(ctx, settings, expansion.entries);
-					return;
-				}
-				default: {
-					const unreachable: never = rules;
-					return unreachable;
-				}
-			}
+			const loaded = loadRules(ctx.cwd);
+			const expansion = expand(ctx, settings, loaded.rules);
+			report(ctx, [...loaded.problems, ...expansion.refusals]);
+			apply(ctx, settings, expansion.entries);
 		} catch (error) {
 			pi.logger.warn("model-compaction: cannot apply compaction thresholds", { error: errorText(error) });
 		}

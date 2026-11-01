@@ -102,7 +102,7 @@ Source: `agent/extensions/fork-task/`. Registers `fork_task` (`context` + `tasks
 
 Source: `agent/extensions/model-compaction/`.
 
-OMP's `compaction.modelThresholds` only matches exact `provider/id` keys or `*` prefixes. On every main-session `before_agent_start`, this extension reads the machine-local `model-compaction` section of `omomp.*` in the agent directory (project `.omp/` copies are ignored):
+OMP's `compaction.modelThresholds` only matches exact `provider/id` keys or `*` prefixes. On every main-session `before_agent_start`, this extension reads the `model-compaction` section of `omomp.*` from the project (`<cwd>/.omp/`, following the session's current directory) and then from the agent directory (machine-local); the first valid copy is used whole and never merged with the other:
 
 ```yaml
 model-compaction:
@@ -116,7 +116,7 @@ model-compaction:
 
 Each rule sets `model`, `provider`, or both as JavaScript regexes (use `"model": ".*"` to match all models). For each model in `ctx.models.list()`, the first matching rule writes `"<provider>/<id>": "f<thresholdTokens>"` into the main session's runtime settings layer (`config.yml` on disk is not modified; `/model` switches, retry fallbacks, and subagents reading the main session's settings pick up their model's threshold).
 
-Because a native `f<N>` threshold can switch a model between its standard and extended context window, any rule whose `thresholdTokens` would change a model's current context-window tier is skipped for that model with a warning. Existing runtime entries from other sources are preserved and restored when no rules match or at `session_shutdown`; if another writer modifies the runtime map during the session, the extension warns once and stops updating it.
+Because a native `f<N>` threshold can switch a model between its standard and extended context window, any rule whose `thresholdTokens` would change a model's current context-window tier is skipped for that model with a warning. A project copy replaces the machine rules for that project, so it repeats every machine rule it still wants, and `rules: []` there turns the machine rules off. An unreadable, ambiguous or invalid copy is skipped with a warning and the next location is used: an invalid project copy falls back to the machine copy, and with no valid copy no rules apply. Existing runtime entries from other sources are preserved and restored when no rules match or at `session_shutdown`; if another writer modifies the runtime map during the session, the extension warns once and stops updating it.
 
 ### ctx
 
