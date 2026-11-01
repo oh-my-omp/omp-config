@@ -315,7 +315,7 @@ interface StructuredItem {
  * Sections of `omomp.yml` that belong to the machine: the repo never writes
  * them and they are never synced back. A section the machine lacks stays absent.
  */
-export const LOCAL_OMOMP_SECTIONS: readonly string[] = ["doc-polish", "model-compaction", "omp-config-autoupdate"];
+export const LOCAL_OMOMP_SECTIONS: readonly string[] = ["doc-polish", "model-compaction", "omp-config-autoupdate", "subagent-usage"];
 
 /** `omomp.yml` paths seeded from the repo while the host lacks them: language, input and hardware preferences. */
 export const SEED_OMOMP_FIELDS: readonly string[] = [

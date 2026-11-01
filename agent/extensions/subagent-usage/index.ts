@@ -1,258 +1,312 @@
 // ============================================================================
 // subagent-usage — the agent-side `/usage`: `subagent_usage` estimates how many
-// more dispatches each available subagent definition can make before its first
-// model's provider quota runs out.
+// more dispatches each available subagent can make before the provider quota
+// of its first bound model runs out. Off until a human enables it.
 //
-// Registers the read-only tool `subagent_usage` in main and sub sessions; no
-// hooks, commands or config. Per call it:
-//   1. discovers agents like the task tool (`discoverAgents` + session agents,
-//      minus `task.disabledAgents`) and resolves each one's model selection with
-//      `resolveAgentModelPatterns`, keeping only the FIRST pattern: later
-//      comma-separated fallbacks never enter any number;
-//   2. reads finished subagent transcripts of the project's session bucket
-//      (the session directory and cwd of the top-level session the caller
-//      descends from, found through AgentRegistry parent links) plus
-//      its git and agent-managed worktrees (`worktreeSessionDirs`), newest first
-//      until each agent holds its newest 20 dispatches that ran wholly on that
-//      first model with no fallback (samples.ts);
-//   3. estimates USD per dispatch: with n >= 1 observed dispatches, the
-//      lognormal mean exp(mean(ln cost) + sigma^2/2) with the hardcoded spread
-//      sigma; with none, the hardcoded per-dispatch USD for agent+model+thinking,
-//      else model+thinking, else the global mean (calibration.ts);
-//   4. prices the remaining provider quota (`AgentSession.fetchUsageReports`,
-//      the human `/usage` source) per account with the hardcoded USD-per-limit
-//      constants, the smallest applicable limit per account, summed over
-//      accounts (quota.ts), and divides.
-// Reads session JSONL files and live usage reports; writes nothing.
-// Failures are returned to the agent as tool errors.
+// Consent: machine-local `omomp.yml#subagent-usage` `{ enabled: true }`, read
+// from the agent directory only and written only by the human command
+// `/subagent-usage on|off|status|recalibrate|reset`. Enabling is consent to
+// read this machine's session transcripts and usage history; without it the
+// extension reads neither and the tool stays inactive. Consent is re-checked
+// before every calibration, before committing its result and in every tool
+// call. No model is ever called: calibration is deterministic code.
+//
+// Calibration (calibrate.ts, worker.ts): a Bun Worker reads every transcript
+// under the sessions root once and keeps a per-file aggregate cache
+// (<agentDir>/cache/subagent-usage/); the main thread derives, from this
+// machine's data only, per-dispatch averages (on `on` and `recalibrate`) and
+// per-account USD-per-quota-limit constants over the trailing 21 days
+// (refreshed when older than a day, inside the tool call), and writes
+// <agentDir>/subagent-usage/calibration.json atomically. `off` stops a running
+// scan and keeps the data; `reset` deletes it.
+//
+// Per call the tool discovers agents like the task tool, keeps only each
+// agent's FIRST bound model, skips untracked channels (no omp usage provider,
+// or a models.yml transport/model; channels.ts), reads the newest 20 eligible
+// dispatches of the project's sessions and worktrees (samples.ts), prices each
+// account's live quota with its constant (quota.ts) and prints pools grouped
+// by provider (report.ts).
+//
+// Registers tool `subagent_usage` (defaultInactive; activated on
+// session_start/switch while enabled) and command `/subagent-usage` in main
+// and sub sessions. Failures are tool errors or UI warnings, never thrown into omp.
 // ============================================================================
-import * as os from "node:os";
-import type { Api, Model, UsageReport } from "@oh-my-pi/pi-ai";
-import { type AgentDefinition, type AgentSession, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
-import { resolveAgentModelPatterns, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { type AgentSession, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { worktreeSessionDirs } from "@oh-my-pi/pi-coding-agent/session/session-paths";
-import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { CALIBRATED_AT, DISPATCH_USD_BY_AGENT, DISPATCH_USD_BY_MODEL, GLOBAL_DISPATCH_USD, LOG_COST_SIGMA } from "./calibration.ts";
-import { type Quota, quotaFor } from "./quota.ts";
-import { collectSamples, MAX_SAMPLES_PER_AGENT, type SampleScan, type Target } from "./samples.ts";
+import { defineOmompSection, loadOmompSection, writeOmompSection } from "../_shared/omomp.ts";
+import { availableAgents, bindAgent, rootSession } from "./agents.ts";
+import { type CalibrationOutcome, calibrate, QUOTA_MAX_AGE_MS, QUOTA_WINDOW_MS, stopCalibration } from "./calibrate.ts";
+import { channelOf } from "./channels.ts";
+import { formatReport } from "./report.ts";
+import { collectSamples, type Target } from "./samples.ts";
+import { type Calibration, calibrationPath, deleteStoredData, readCalibration } from "./store.ts";
 
 const TOOL = "subagent_usage";
+const COMMAND = "subagent-usage";
 const DESCRIPTION = [
-	"Estimate how many more dispatches each available subagent can make before the provider quota of its first bound model runs out (the agent-side /usage).",
-	"Per agent: first model of its binding (fallback models are ignored), USD per dispatch (observed from finished dispatches in this directory and its worktrees, or the built-in fallback), remaining quota priced in USD, the estimated count and the binding quota window.",
-	"Counts read the current quota snapshot: refills at window resets are not counted, and agents on one provider share its quota.",
+	"How many more times each available subagent can be dispatched before the provider quota of its first bound model runs out (the agent-side /usage).",
+	"Output groups agents into POOLs that share one quota: counts inside a pool are alternatives, never add them. PENDING, NOT TRACKED and NO ESTIMATE mean no number, not unlimited.",
 ].join("\n");
 
 const params = z.object({});
-const THINKING_LEVELS: ReadonlySet<string> = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
-type Binding =
-	| {
-			readonly kind: "resolved";
-			readonly agent: string;
-			readonly pattern: string;
-			readonly model: Model<Api>;
-			readonly thinking: string | undefined;
-	  }
-	| { readonly kind: "unresolved"; readonly agent: string; readonly pattern: string | undefined };
-
-type Estimate =
-	| { readonly kind: "observed"; readonly usd: number; readonly n: number }
-	| { readonly kind: "fallback"; readonly usd: number; readonly basis: "agent" | "model" | "global" };
+const consentSection = defineOmompSection(import.meta.dir, z.object({ enabled: z.boolean() }).strict());
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: true };
 
-async function availableAgents(session: AgentSession, cwd: string): Promise<AgentDefinition[]> {
-	const disabled = new Set(cfgTaskDisabledAgents.get(session.settings));
-	const { agents } = await discoverAgents(cwd, os.homedir(), session.effectiveExtensionRoots);
-	const seen = new Set<string>();
-	const out: AgentDefinition[] = [];
-	// The task tool resolves a name to its first definition; later duplicates are shadowed.
-	for (const agent of [...agents, ...session.getSessionAgents()]) {
-		if (disabled.has(agent.name) || seen.has(agent.name)) continue;
-		seen.add(agent.name);
-		out.push(agent);
-	}
-	return out;
+/** Agent-directory section only: a project's `.omp/omomp.*` cannot grant consent. Any problem reads as off. */
+function consented(): boolean {
+	const loaded = loadOmompSection(consentSection, null);
+	return loaded.kind === "found" && loaded.value.enabled;
 }
 
-function bindAgent(session: AgentSession, agent: AgentDefinition): Binding {
-	const model = session.model;
-	const thinkingLevel = session.thinkingLevel;
-	const activeModelPattern = model ? `${model.provider}/${model.id}${thinkingLevel ? `:${thinkingLevel}` : ""}` : undefined;
-	const [pattern] = resolveAgentModelPatterns({
-		settingsOverride: cfgTaskAgentModelOverrides.get(session.settings)[agent.name],
-		agentModel: agent.model,
-		settings: session.settings,
-		activeModelPattern,
-	});
-	if (pattern === undefined) return { kind: "unresolved", agent: agent.name, pattern };
-	// The executor resolves each pattern alone against the registry, so the first one resolves the same way here.
-	const parsed = resolveModelOverride([pattern], session.modelRegistry, session.settings);
-	if (!parsed.model) return { kind: "unresolved", agent: agent.name, pattern };
-	const thinking = parsed.explicitThinkingLevel ? parsed.thinkingLevel : agent.thinkingLevel;
-	return {
-		kind: "resolved",
-		agent: agent.name,
-		pattern,
-		model: parsed.model,
-		thinking: thinking !== undefined && THINKING_LEVELS.has(thinking) ? thinking : undefined,
-	};
+async function setToolActive(pi: ExtensionAPI, active: boolean): Promise<void> {
+	const tools = new Set(pi.getActiveTools());
+	if (tools.has(TOOL) === active) return;
+	if (active) tools.add(TOOL);
+	else tools.delete(TOOL);
+	await pi.setActiveTools([...tools]);
 }
 
-function estimate(binding: Extract<Binding, { kind: "resolved" }>, costs: readonly number[]): Estimate {
-	if (costs.length > 0) {
-		// Zero-cost dispatches have no logarithm; their arithmetic mean is the expected cost.
-		const usd = costs.every((cost) => cost > 0)
-			? Math.exp(costs.reduce((sum, cost) => sum + Math.log(cost), 0) / costs.length + LOG_COST_SIGMA ** 2 / 2)
-			: costs.reduce((sum, cost) => sum + cost, 0) / costs.length;
-		return { kind: "observed", usd, n: costs.length };
-	}
-	const modelKey = `${binding.model.provider}/${binding.model.id}|${binding.thinking ?? ""}`;
-	const byAgent = DISPATCH_USD_BY_AGENT[`${binding.agent}|${modelKey}`];
-	if (byAgent !== undefined) return { kind: "fallback", usd: byAgent, basis: "agent" };
-	const byModel = DISPATCH_USD_BY_MODEL[modelKey];
-	if (byModel !== undefined) return { kind: "fallback", usd: byModel, basis: "model" };
-	return { kind: "fallback", usd: GLOBAL_DISPATCH_USD, basis: "global" };
-}
-
-function usd(value: number): string {
-	return value >= 100 ? value.toFixed(0) : value >= 1 ? value.toFixed(2) : value.toFixed(4);
-}
-
-function resetText(resetsAt: number | undefined, now: number): string {
-	if (resetsAt === undefined) return "no reset time";
-	const minutes = Math.max(0, Math.round((resetsAt - now) / 60_000));
-	const days = Math.floor(minutes / 1440);
-	const hours = Math.floor((minutes % 1440) / 60);
-	return `resets in ${days > 0 ? `${days}d ` : ""}${hours}h${String(minutes % 60).padStart(2, "0")}m`;
-}
-
-function basisText(cost: Estimate): string {
-	switch (cost.kind) {
-		case "observed":
-			return `observed n=${cost.n}`;
-		case "fallback":
-			return `fallback (${cost.basis})`;
+/** Calibration fresh enough to use, computing it first when missing, unreadable or older than a day. */
+async function freshCalibration(session: AgentSession): Promise<CalibrationOutcome> {
+	const stored = readCalibration();
+	switch (stored.kind) {
+		case "ready":
+			if (Date.now() - stored.calibration.quota.generatedAt < QUOTA_MAX_AGE_MS) {
+				return { kind: "ready", calibration: stored.calibration, files: 0, parsed: 0 };
+			}
+			return calibrate(session, "quota", consented);
+		case "none":
+		case "invalid":
+			return calibrate(session, "full", consented);
 		default: {
-			const never: never = cost;
+			const never: never = stored;
 			return never;
 		}
 	}
 }
 
-/** Quota-left cell, estimated-count cell and binding-limit cell for one resolved agent. */
-function quotaCells(quota: Quota, cost: Estimate, provider: string, now: number): [string, string, string] {
-	switch (quota.kind) {
-		case "unreported":
-			return ["—", `n/a: no ${provider} quota report`, "—"];
-		case "uncalibrated":
-			return ["—", "n/a: no USD calibration", quota.limits.join(", ")];
-		case "calibrated": {
-			const left = `${usd(quota.usd)} (${quota.accounts} account${quota.accounts === 1 ? "" : "s"})`;
-			const count = cost.usd > 0 ? String(Math.floor(quota.usd / cost.usd)) : "n/a: zero-priced model";
-			const bindings = quota.bindings
-				.map((binding) => `${binding.label} ${(binding.remainingFraction * 100).toFixed(0)}% left, ${resetText(binding.resetsAt, now)}`)
-				.join("; ");
-			const skipped = quota.uncalibrated.length > 0 ? ` (no calibration: ${quota.uncalibrated.join(", ")})` : "";
-			return [left, count, `${bindings}${skipped}`];
-		}
-		default: {
-			const never: never = quota;
-			return never;
-		}
-	}
+function text(value: string, isError?: true): ToolResult {
+	return isError ? { content: [{ type: "text", text: value }], isError } : { content: [{ type: "text", text: value }] };
 }
 
-function row(binding: Binding, scan: SampleScan, reports: readonly UsageReport[], now: number): string {
-	switch (binding.kind) {
-		case "unresolved":
-			return `| ${binding.agent} | ${binding.pattern ?? "(none)"} | — | — | — | n/a: first model not in the model registry (fallback models are not considered) | — |`;
-		case "resolved": {
-			const cost = estimate(binding, scan.costs.get(binding.agent) ?? []);
-			const quota = quotaFor(reports, binding.model.provider, binding.model.id, now);
-			const [left, count, limit] = quotaCells(quota, cost, binding.model.provider, now);
-			return `| ${binding.agent} | ${binding.pattern} | ${usd(cost.usd)} | ${basisText(cost)} | ${left} | ${count} | ${limit} |`;
-		}
-		default: {
-			const never: never = binding;
-			return never;
-		}
+async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
+	if (!consented()) {
+		return text("subagent_usage is disabled on this machine. Only a human can enable it with /subagent-usage on; do not retry.", true);
 	}
-}
-
-/**
- * The top-level session `session` descends from. Its session directory and cwd name the project
- * bucket: a subagent's own directory is its parent's artifact folder, and an isolated one runs in
- * a copy of the checkout whose git metadata does not lead back to the project.
- */
-function rootSession(session: AgentSession): AgentSession {
-	const registry = AgentRegistry.global();
-	let ref = registry.list().find((candidate) => candidate.session === session);
-	const visited = new Set<string>();
-	while (ref?.parentId !== undefined && !visited.has(ref.id)) {
-		visited.add(ref.id);
-		const parent = registry.get(ref.parentId);
-		if (!parent?.session) break;
-		ref = parent;
-	}
-	return ref?.session ?? session;
-}
-
-async function report(ctx: ExtensionContext, signal: AbortSignal | undefined): Promise<ToolResult> {
 	const session = callerSession(ctx);
-	if (!session)
-		return {
-			content: [{ type: "text", text: "subagent_usage: could not resolve the calling session in the agent registry." }],
-			isError: true,
-		};
-	const cwd = ctx.sessionManager.getCwd();
-	const root = rootSession(session).sessionManager;
-	const projectCwd = root.getCwd();
-	const sessionDir = root.getSessionDir();
+	if (!session) return text("subagent_usage: could not resolve the calling session in the agent registry.", true);
+	const outcome = await freshCalibration(session);
+	let calibration: Calibration;
+	switch (outcome.kind) {
+		case "ready":
+			calibration = outcome.calibration;
+			break;
+		case "declined":
+			return text("subagent_usage was disabled while calibrating. Only a human can enable it with /subagent-usage on; do not retry.", true);
+		case "failed":
+			return text(`subagent_usage: calibration failed (${outcome.reason}). Report this to the user; do not retry.`, true);
+		default: {
+			const never: never = outcome;
+			return never;
+		}
+	}
 	await session.modelRegistry.awaitBackgroundRefresh();
-	const bindings = (await availableAgents(session, cwd)).map((agent) => bindAgent(session, agent));
-	const targets: Target[] = bindings.flatMap((binding) =>
-		binding.kind === "resolved"
+	const bindings = (await availableAgents(session, ctx.sessionManager.getCwd())).map((agent) => {
+		const binding = bindAgent(session, agent);
+		return { binding, channel: binding.kind === "resolved" ? channelOf(session, binding.model) : undefined };
+	});
+	const targets: Target[] = bindings.flatMap(({ binding, channel }) =>
+		binding.kind === "resolved" && channel?.kind === "tracked"
 			? [{ agent: binding.agent, provider: binding.model.provider, modelId: binding.model.id, thinking: binding.thinking }]
 			: [],
 	);
+	const root = rootSession(session).sessionManager;
+	const sessionDir = root.getSessionDir();
+	const dirs = [sessionDir, ...(await worktreeSessionDirs(root.getCwd(), sessionDir))];
 	const now = Date.now();
-	const dirs = [sessionDir, ...(await worktreeSessionDirs(projectCwd, sessionDir))];
-	const [scan, reports] = await Promise.all([collectSamples(dirs, targets, now), session.fetchUsageReports(signal)]);
-	const lines = [
-		`Subagent dispatch budget at ${new Date(now).toISOString()}.`,
-		`Observed dispatches: the newest ${MAX_SAMPLES_PER_AGENT} per agent that ran wholly on its first model, pooled over every session in ${dirs.length} session dir(s) (this directory and its worktrees); ${scan.inspected} transcript(s) inspected.`,
-		`Fallback USD per dispatch and USD per quota window: built-in constants calibrated ${CALIBRATED_AT}.`,
-		"Each count assumes the provider's whole remaining quota goes to that agent; agents on one provider share it, and refills at window resets are not counted.",
-		...(reports === null ? ["Usage reporting is not configured for this session: no quota data."] : []),
-		"",
-		"| agent | first model | USD/dispatch | basis | quota left (USD) | est. dispatches | binding limit per account |",
-		"|---|---|---|---|---|---|---|",
-		...bindings.map((binding) => row(binding, scan, reports ?? [], now)),
-	];
-	return { content: [{ type: "text", text: lines.join("\n") }] };
+	const [scan, reports] = await Promise.all([collectSamples(dirs, targets, now), session.fetchUsageReports()]);
+	const history = session.modelRegistry.authStorage.usage.history({ sinceMs: now - QUOTA_WINDOW_MS });
+	const report = formatReport({
+		now,
+		calibration,
+		bindings,
+		costs: scan.costs,
+		reports: reports ?? [],
+		history,
+	});
+	return text(report);
+}
+
+function outcomeMessage(outcome: CalibrationOutcome): { readonly message: string; readonly level: "info" | "warning" } {
+	switch (outcome.kind) {
+		case "ready": {
+			const constants = Object.keys(outcome.calibration.quota.constants).length;
+			const missing = Object.keys(outcome.calibration.quota.missing).length;
+			return {
+				message: tr(
+					`subagent-usage: calibrated from ${outcome.files} transcripts (${outcome.parsed} read this time); ${constants} quota limits priced, ${missing} still pending.`,
+					`subagent-usage：已用 ${outcome.files} 个会话文件完成校准（本次读取 ${outcome.parsed} 个）；${constants} 个额度窗口可换算，${missing} 个暂缺数据。`,
+				),
+				level: "info",
+			};
+		}
+		case "declined":
+			return {
+				message: tr(
+					"subagent-usage: disabled during calibration; nothing was written.",
+					"subagent-usage：校准期间已关闭，未写入任何数据。",
+				),
+				level: "warning",
+			};
+		case "failed":
+			return {
+				message: tr(`subagent-usage: calibration failed: ${outcome.reason}`, `subagent-usage：校准失败：${outcome.reason}`),
+				level: "warning",
+			};
+		default: {
+			const never: never = outcome;
+			return never;
+		}
+	}
+}
+
+/** Runs a calibration in the background and reports its end in the UI; the command returns at once. */
+function calibrateInBackground(pi: ExtensionAPI, ctx: ExtensionCommandContext, session: AgentSession): void {
+	ctx.ui.notify(
+		tr(
+			"subagent-usage: calibrating from this machine's sessions and usage history in the background…",
+			"subagent-usage：正在后台用本机会话与用量历史校准…",
+		),
+		"info",
+	);
+	void calibrate(session, "full", consented).then(
+		(outcome) => {
+			const { message, level } = outcomeMessage(outcome);
+			ctx.ui.notify(message, level);
+		},
+		(error: unknown) => pi.logger.warn("subagent-usage: calibration failed", { error: errorText(error) }),
+	);
+}
+
+function showStatus(ctx: ExtensionCommandContext): void {
+	const stored = readCalibration();
+	const state = consented() ? tr("enabled", "已开启") : tr("disabled", "已关闭");
+	let detail: string;
+	switch (stored.kind) {
+		case "none":
+			detail = tr("no calibration on this machine", "本机尚无校准数据");
+			break;
+		case "invalid":
+			detail = tr(`calibration unreadable (${stored.reason})`, `校准数据无法读取（${stored.reason}）`);
+			break;
+		case "ready": {
+			const { dispatch, quota } = stored.calibration;
+			detail = tr(
+				`per-dispatch averages ${new Date(dispatch.generatedAt).toISOString()}, quota ${new Date(quota.generatedAt).toISOString()}: ${Object.keys(quota.constants).length} limits priced, ${Object.keys(quota.missing).length} pending`,
+				`单次派发均值 ${new Date(dispatch.generatedAt).toISOString()}，额度换算 ${new Date(quota.generatedAt).toISOString()}：${Object.keys(quota.constants).length} 个窗口可换算，${Object.keys(quota.missing).length} 个暂缺`,
+			);
+			break;
+		}
+		default: {
+			const never: never = stored;
+			detail = never;
+		}
+	}
+	ctx.ui.notify(`subagent-usage: ${state}; ${detail} (${calibrationPath()})`, "info");
+}
+
+async function handleCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
+	const action = args.trim().toLowerCase() || "status";
+	switch (action) {
+		case "on": {
+			writeOmompSection(consentSection.id, { enabled: true });
+			await setToolActive(pi, true);
+			const session = callerSession(ctx);
+			if (session) calibrateInBackground(pi, ctx, session);
+			return;
+		}
+		case "off":
+			writeOmompSection(consentSection.id, { enabled: false });
+			stopCalibration();
+			await setToolActive(pi, false);
+			ctx.ui.notify(
+				tr(
+					"subagent-usage: disabled; nothing more is read. Existing calibration is kept and unused; /subagent-usage reset deletes it.",
+					"subagent-usage：已关闭，不再读取任何数据。已有校准数据保留但不使用；/subagent-usage reset 可删除。",
+				),
+				"info",
+			);
+			return;
+		case "recalibrate": {
+			if (!consented()) {
+				ctx.ui.notify(
+					tr("subagent-usage: disabled; run /subagent-usage on first.", "subagent-usage：未开启，请先执行 /subagent-usage on。"),
+					"warning",
+				);
+				return;
+			}
+			const session = callerSession(ctx);
+			if (session) calibrateInBackground(pi, ctx, session);
+			return;
+		}
+		case "reset":
+			stopCalibration();
+			deleteStoredData();
+			ctx.ui.notify(tr("subagent-usage: calibration and scan cache deleted.", "subagent-usage：已删除校准数据与扫描缓存。"), "info");
+			return;
+		case "status":
+			showStatus(ctx);
+			return;
+		default:
+			ctx.ui.notify(
+				tr("Usage: /subagent-usage [status|on|off|recalibrate|reset]", "用法：/subagent-usage [status|on|off|recalibrate|reset]"),
+				"warning",
+			);
+	}
 }
 
 export default function subagentUsage(pi: ExtensionAPI): void {
+	const activate = async (): Promise<void> => {
+		try {
+			await setToolActive(pi, consented());
+		} catch (error) {
+			pi.logger.warn("subagent-usage: tool activation failed", { error: errorText(error) });
+		}
+	};
+	pi.on("session_start", activate);
+	pi.on("session_switch", activate);
 	pi.registerTool({
 		name: TOOL,
 		label: tr("Subagent Usage", "子代理用量"),
 		description: DESCRIPTION,
 		approval: "read",
 		loadMode: "essential",
+		defaultInactive: true,
 		parameters: params,
-		async execute(_toolCallId, _rawParams, signal, _onUpdate, ctx) {
+		async execute(_toolCallId, _rawParams, _signal, _onUpdate, ctx) {
 			try {
-				return await report(ctx, signal);
+				return await runTool(ctx);
 			} catch (error) {
 				pi.logger.warn("subagent-usage: tool failed", { error: errorText(error) });
-				return { content: [{ type: "text", text: `subagent_usage failed: ${errorText(error)}` }], isError: true };
+				return text(`subagent_usage failed: ${errorText(error)}`, true);
+			}
+		},
+	});
+	pi.registerCommand(COMMAND, {
+		description: tr(
+			"Agent-side /usage for subagents: /subagent-usage [status|on|off|recalibrate|reset]. `on` consents to reading this machine's sessions and usage history.",
+			"子代理的 AI 侧 /usage：/subagent-usage [status|on|off|recalibrate|reset]。`on` 即同意读取本机会话与用量历史。",
+		),
+		handler: async (args, ctx) => {
+			try {
+				await handleCommand(pi, args, ctx);
+			} catch (error) {
+				pi.logger.warn("subagent-usage: command failed", { error: errorText(error) });
+				ctx.ui.notify(tr(`subagent-usage: ${errorText(error)}`, `subagent-usage：${errorText(error)}`), "warning");
 			}
 		},
 	});
