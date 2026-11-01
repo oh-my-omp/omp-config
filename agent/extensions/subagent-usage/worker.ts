@@ -58,25 +58,68 @@ function listTranscripts(dir: string, out: string[]): void {
 	}
 }
 
-/** Calls `onLine` per line, reading in fixed chunks so a large transcript never becomes one string. */
-function forEachLine(file: string, onLine: (line: string) => void): void {
+/** Bytes of a line inspected before deciding whether it is needed. */
+const HEAD_BYTES = 256;
+const NEWLINE = 0x0a;
+
+/**
+ * Calls `onLine` for each line `isWanted(head)` accepts, judged on its first HEAD_BYTES bytes. A rejected
+ * line is skipped as raw bytes and never decoded: tool results with images or large outputs run to many MB,
+ * and decoding every line of a large session store is what exhausted memory.
+ */
+function forEachWantedLine(file: string, isWanted: (head: string) => boolean, onLine: (line: string) => void): void {
 	const fd = fs.openSync(file, "r");
 	try {
-		const buffer = Buffer.alloc(CHUNK);
-		const decoder = new TextDecoder();
-		let carry = "";
+		const chunk = Buffer.alloc(CHUNK);
+		let parts: Buffer[] = [];
+		let length = 0;
+		let wanted: boolean | undefined;
+		const endLine = (): void => {
+			if (wanted === undefined && length > 0) wanted = isWanted(Buffer.concat(parts, length).toString("utf8"));
+			if (wanted === true) onLine(Buffer.concat(parts, length).toString("utf8"));
+			parts = [];
+			length = 0;
+			wanted = undefined;
+		};
 		for (;;) {
-			const read = fs.readSync(fd, buffer, 0, CHUNK, null);
+			const read = fs.readSync(fd, chunk, 0, CHUNK, null);
 			if (read === 0) break;
-			const lines = (carry + decoder.decode(buffer.subarray(0, read), { stream: true })).split("\n");
-			carry = lines.pop() ?? "";
-			for (const line of lines) onLine(line);
+			const view = chunk.subarray(0, read);
+			for (let start = 0; start < read; ) {
+				const newline = view.indexOf(NEWLINE, start);
+				const end = newline === -1 ? read : newline;
+				if (wanted !== false && end > start) {
+					// Copied: `chunk` is reused for the next read.
+					parts.push(Buffer.from(view.subarray(start, end)));
+					length += end - start;
+					if (wanted === undefined && length >= HEAD_BYTES) {
+						wanted = isWanted(Buffer.concat(parts, length).subarray(0, HEAD_BYTES).toString("utf8"));
+						if (!wanted) {
+							parts = [];
+							length = 0;
+						}
+					}
+				}
+				if (newline === -1) break;
+				endLine();
+				start = newline + 1;
+			}
 		}
-		carry += decoder.decode();
-		if (carry.length > 0) onLine(carry);
+		endLine();
 	} finally {
 		fs.closeSync(fd);
 	}
+}
+
+/** Entry kinds the aggregate needs; assistant messages name their role within the first bytes. */
+function isWantedHead(head: string): boolean {
+	return (
+		(head.startsWith('{"type":"message"') && head.includes('"message":{"role":"assistant"')) ||
+		head.startsWith('{"type":"model_usage"') ||
+		head.startsWith('{"type":"session_init"') ||
+		head.startsWith('{"type":"model_change"') ||
+		head.startsWith('{"type":"custom","customType":"session_exit"')
+	);
 }
 
 function aggregateFile(file: string, size: number, mtimeMs: number): FileAggregate {
@@ -96,9 +139,8 @@ function aggregateFile(file: string, size: number, mtimeMs: number): FileAggrega
 		}
 		if (agent !== undefined) costByProvider[provider] = (costByProvider[provider] ?? 0) + cost;
 	};
-	forEachLine(file, (line) => {
+	forEachWantedLine(file, isWantedHead, (line) => {
 		if (line.startsWith('{"type":"message"')) {
-			if (!line.includes('"role":"assistant"')) return;
 			const entry = parseLine(line);
 			const message = entry?.message;
 			if (!isRecord(message) || message.role !== "assistant") return;
@@ -117,7 +159,7 @@ function aggregateFile(file: string, size: number, mtimeMs: number): FileAggrega
 			if (entry && typeof entry.resolvedModel === "string") resolvedModel = entry.resolvedModel;
 		} else if (line.startsWith('{"type":"model_change"')) {
 			if (parseLine(line)?.resolvedModelIsFallback === true) fallback = true;
-		} else if (line.startsWith('{"type":"custom"') && line.includes('"customType":"session_exit"')) {
+		} else if (line.startsWith('{"type":"custom"')) {
 			exited = true;
 		}
 	});
