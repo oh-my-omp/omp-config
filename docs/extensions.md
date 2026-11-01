@@ -16,7 +16,7 @@
 | 8 | `task-split-check` | [task-split-check](#task-split-check) | Main (`split`) / Main+Sub (`report-limit`) | No | `omomp.yml#task-split-check` (repo) | Subagents & advisors (Full-mode `subagent-gates`) | Customize now (machine-local): bind `modelRoles.smol` (or `@task-split-check`) in `<agentDir>/config.yml` to an available fast model |
 | 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | No | `omomp.yml#task-completion-judge` (repo) | Subagents & advisors (Full-mode `subagent-gates` + `todo-continuity`; calls `omp-todo-more:read`) | Customize now (machine-local): bind `modelRoles.smol` (or `@task-completion-judge`) in `<agentDir>/config.yml` to an available fast model |
 | 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | Main (`pty` lane: Main + Sub) | No | `omomp.yml#tool-policy-nag` + `INTENT-policy.md` (repo) | Runtime drift steering (Full-mode `drift-monitors` + `pty-routing`; the `pty` lane blocks passthrough/terminal/open-ended `bash`/eval calls when `exec_command` is mounted; `heuristic` mode overrides runtime `bashInterceptor.enabled = false`) | Defer thresholds (`afterHits: 3`, `maxNags: 3`) and keep `pty: {}`; for non-Chinese steers, override `form.prompt` in project `.omp/omomp.yml` |
-| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | Main + Sub | No | `WATCHDOG-*.md` (machine-local) | Runtime drift steering (Full-mode `drift-monitors`, Optional) | Defer (machine-local): inactive until `WATCHDOG-*.md` is created via `/watchdog add` |
+| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | Main + Sub (per file `target` and optional `cwd`) | No | `WATCHDOG-*.md` (machine-local) | Runtime drift steering (Full-mode `drift-monitors`, Optional) | Defer (machine-local): inactive until `WATCHDOG-*.md` is created via `/watchdog add` |
 | 12 | `turn-judge` | [turn-judge](#turn-judge) | Main + Sub (per file `target`) | No | `TURN-JUDGE-*.md` (`gpt-talk-only` in repo; others machine-local) | Runtime drift steering (Full-mode `drift-monitors`) | Customize now (machine-local): ensure `modelRoles.judge` or `modelRoles.tiny` resolves, or bind `@turn-judge` to a chat model; defer `TURN-JUDGE-gpt-talk-only.md` threshold (`0.8`) |
 | 13 | `lang-nag` | [lang-nag](#lang-nag) | Main | No | `omomp.yml#lang-nag` (repo default, seeded once, then machine-local) | Runtime drift steering (Full-mode `drift-monitors`) | Diagnose now: uses `openJudge` (`@lang-nag`, else `judge`; then `tiny`); bind `@lang-nag` to a chat model when the `judge` model misjudges the reply language; set the language in `<agentDir>/omomp.yml#lang-nag` (kept by updates) or per project in `<cwd>/.omp/omomp.yml` |
 | 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | Process-wide (from main) | Yes | `omomp.yml#child-memory-warning` (repo default, seeded once, then machine-local) | Execution & host safety (Conditional `macos-memory`: Darwin only) | Defer: keep `thresholdGiB: 4`; change it in `<agentDir>/omomp.yml` (kept by updates) or per project in `<cwd>/.omp/omomp.yml` for memory-heavy builds |
@@ -140,11 +140,12 @@ tool-policy-nag:
 
 Source: `agent/extensions/watchdog-agent/`.
 
-Runs periodic reviews configured by `WATCHDOG-<label>.md` files in `~/.omp/agent/extensions/watchdog-agent/` and `<dir>/WATCHDOG-*.md` or `<dir>/.omp/WATCHDOG-*.md` from the live session `cwd` up to its git root (machine-local, not synced). Linked worktrees use their own root; after `/move`, discovery uses the destination on the next prompt or `/watchdog` command.
+Runs periodic reviews configured by `WATCHDOG-<label>.md` files in `~/.omp/agent/extensions/watchdog-agent/` and `<dir>/WATCHDOG-*.md` or `<dir>/.omp/WATCHDOG-*.md` from the live session `cwd` up to its git root (machine-local, not synced). Linked worktrees use their own root; after `/move`, discovery and matching use the destination on the next prompt or `/watchdog` command. A discovered file runs only when its `target` and optional `cwd` both match; omission of `cwd` preserves unrestricted directory matching.
 
 | Frontmatter field | Values and default | Behavior |
 |---|---|---|
 | `target` (required) | `main`, subagent name (e.g. `task:low`), `*`, `subagents`, or comma list | Selects which sessions run this watchdog |
+| `cwd` | Optional nonempty absolute directory path string; quotes allowed; omitted = unrestricted | Normalized with `node:path.resolve` and compared exactly with the live session cwd normalized the same way; ANDed with `target`, even `target: *`. Empty or relative values invalidate the file. No glob, regex, list or subdirectory inheritance |
 | `name`, `enabled` | `name` defaults to file label; `enabled` defaults to `true` | Used by `/watchdog`; duplicate names across discovered files report an error |
 | `delivery` | `aside` (default), `steer`, `nextTurn`, `followUp` | How reminders are injected (`nextTurn` waits for the next user input or subagent `before_agent_start`) |
 | `every`, `scope` | `every` default `30`; `scope` `full` (default) or `window` | Each tool call and each non-empty text reply counts as 1 action; runs at `every` actions and catches up on remaining actions at terminal `agent_end`. `window` reads only messages after the last cursor |
@@ -152,8 +153,21 @@ Runs periodic reviews configured by `WATCHDOG-<label>.md` files in `~/.omp/agent
 | `model`, `tools` | Chat reviewer mode (default) | Runs in an extension-less `taskDepth: 1` in-memory session; `model` tries `@advisor`, `advisor`, `@slow`, then the session model; `tools` defaults to `[read, grep, glob]` (may include `ast_grep, web_search, edit, write, bash, eval`). A first line starting with `PASS`/`OK`/`LGTM`/`NONE` passes; any other response injects `<watchdog name=… severity=…>` |
 | `instructions`, `option.<label>[.prompt\|.delivery]` | JUDGE mode (enabled when $\ge 2$ `option.*` keys are set) | Cannot be combined with `model`/`tools`/`note`; calls `openJudge` to pick a declared lowercase option and injects its `.prompt` (no `.prompt` = pass). Errors or 90 s timeouts do not fall back to chat mode |
 
+To watch only a leader checkout, use a rule such as `WATCHDOG-LeaderScope.md`:
+
+```markdown
+---
+target: main
+cwd: /absolute/path/to/leader-checkout
+---
+Review the latest work against the leader's assigned coordination responsibilities.
+```
+
+A copy discovered in a linked worktree remains listed as `not for this session`, rather than watching that worktree's main session. A session in a subdirectory of the configured cwd does not match either. Worktree supervision remains available by omitting `cwd` or naming that worktree's exact absolute cwd.
+
 - **Cursor state**: stores the last reviewed position in session custom entry `mouriya.omp.watchdog-agent.cursor` and rebuilds it on resume or branch switch.
 - **Commands**: `/watchdog [list]`, `/watchdog on|off <name> [session|global]`, `/watchdog rm <name>`. `/watchdog add <request>` and `/watchdog edit <name> [change]` send an `attribution: "agent"` prompt to the active model that steps through **1. Draft (expected behavior, settings table, full file text, and absolute path; no file write) → 2. Revise → 3. Write after user confirmation**. Any filesystem `write` or `edit` on a `WATCHDOG-*.md` file appends its recognition status to the tool result; resource URI writes such as `out://` do not.
+- **Scope visibility**: `/watchdog list` and watchdog file-write/edit tool results show the cwd restriction (`any` when omitted) and whether the file applies to this session. `/watchdog add` and `/watchdog edit` include `cwd` in the settings reference; file status reports target or cwd exclusion, rather than attributing every exclusion to `target`.
 
 ### turn-judge
 

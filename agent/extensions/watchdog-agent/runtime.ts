@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -191,7 +191,9 @@ function actionsAfter(entries: ReadonlyArray<unknown>, cursor: number): number {
 }
 
 function targetsHere(runtime: Runtime, spec: WatchdogSpec): boolean {
-	return runtime.identity !== null && matchesIdentity(spec, runtime.identity);
+	return (
+		runtime.identity !== null && (spec.cwd === undefined || spec.cwd === resolve(runtime.cwd())) && matchesIdentity(spec, runtime.identity)
+	);
 }
 function effectiveEnabled(runtime: Runtime, spec: WatchdogSpec): boolean {
 	return runtime.overrides.get(spec.filePath) ?? spec.enabled;
@@ -317,7 +319,7 @@ function describe(runtime: Runtime, spec: WatchdogSpec): string {
 			: tr("OFF", "关闭");
 	const session = override === undefined ? "—" : override ? tr("on", "开启") : tr("off", "关闭");
 	const backend = spec.kind === "jev" ? "JUDGE" : `${tr("chat", "聊天")} ${spec.model ?? "@advisor"}`;
-	return `${spec.name}: ${state} · ${tr("global", "全局")} ${spec.enabled ? tr("on", "开启") : tr("off", "关闭")} · ${tr("session", "会话")} ${session} · ${tr("target", "目标")} ${spec.targets.join(",")} · ${tr("every", "每")} ${spec.every} · ${tr("scope", "范围")} ${spec.scope === "full" ? tr("full", "全部") : tr("window", "窗口")} · ${backend}\n  ${spec.filePath}`;
+	return `${spec.name}: ${state} · ${tr("global", "全局")} ${spec.enabled ? tr("on", "开启") : tr("off", "关闭")} · ${tr("session", "会话")} ${session} · ${tr("target", "目标")} ${spec.targets.join(",")} · cwd ${spec.cwd ?? tr("any", "不限")} · ${tr("every", "每")} ${spec.every} · ${tr("scope", "范围")} ${spec.scope === "full" ? tr("full", "全部") : tr("window", "窗口")} · ${backend}\n  ${spec.filePath}`;
 }
 /** Model-facing watchdog description kept in English for tool-result content. */
 function describeForToolResult(runtime: Runtime, spec: WatchdogSpec): string {
@@ -325,7 +327,7 @@ function describeForToolResult(runtime: Runtime, spec: WatchdogSpec): string {
 	const state = !targetsHere(runtime, spec) ? "not for this session" : effectiveEnabled(runtime, spec) ? "ON" : "OFF";
 	const session = override === undefined ? "—" : override ? "on" : "off";
 	const backend = spec.kind === "jev" ? "JUDGE" : `chat ${spec.model ?? "@advisor"}`;
-	return `${spec.name}: ${state} · global ${spec.enabled ? "on" : "off"} · session ${session} · target ${spec.targets.join(",")} · every ${spec.every} · scope ${spec.scope} · ${backend}\n  ${spec.filePath}`;
+	return `${spec.name}: ${state} · global ${spec.enabled ? "on" : "off"} · session ${session} · target ${spec.targets.join(",")} · cwd ${spec.cwd ?? "any"} · every ${spec.every} · scope ${spec.scope} · ${backend}\n  ${spec.filePath}`;
 }
 
 /** Status line a `write`/`edit` result carries for a watchdog file it touched. */
@@ -338,7 +340,7 @@ function fileStatus(runtime: Runtime, path: string): string {
 	}
 	const spec = parsed.spec;
 	const active = !targetsHere(runtime, spec)
-		? "not active in this session (its target excludes it)"
+		? "not active in this session (its target or cwd restriction excludes it)"
 		: effectiveEnabled(runtime, spec)
 			? "active in this session now"
 			: "switched off in this session";
@@ -485,8 +487,8 @@ function toggle(
 				return {
 					level: "error",
 					text: tr(
-						`watchdog "${spec.name}" does not target this session (target ${spec.targets.join(",")}); use \`global\``,
-						`watchdog“${spec.name}”未将本会话作为目标（目标 ${spec.targets.join(",")}）；请使用 \`global\``,
+						`watchdog "${spec.name}" does not target this session (target ${spec.targets.join(",")}, cwd ${spec.cwd ?? "any"}); use \`global\``,
+						`watchdog“${spec.name}”未将本会话作为目标（目标 ${spec.targets.join(",")}，cwd ${spec.cwd ?? "不限"}）；请使用 \`global\``,
 					),
 				};
 			}

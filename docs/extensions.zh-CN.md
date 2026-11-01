@@ -16,7 +16,7 @@
 | 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check`（仓库） | 子代理与顾问（完整模式 `subagent-gates`） | 当场定制（本机）：在 `<agentDir>/config.yml` 将 `modelRoles.smol`（或 `@task-split-check`）绑到本机可用轻量模型 |
 | 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge`（仓库） | 子代理与顾问（完整模式 `subagent-gates` + `todo-continuity`；调用 `omp-todo-more:read`） | 当场定制（本机）：在 `<agentDir>/config.yml` 将 `modelRoles.smol`（或 `@task-completion-judge`）绑到本机可用轻量模型 |
 | 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `omomp.yml#tool-policy-nag` + `INTENT-policy.md`（仓库） | 运行时偏离纠偏（完整模式 `drift-monitors` + `pty-routing`；挂载了 `exec_command` 时，`pty` 通道拦截 passthrough/terminal/open-ended 的 `bash`/eval 调用；`heuristic` 模式在运行期将 `bashInterceptor.enabled` 覆写为 `false`） | 延后调阈值（`afterHits: 3`、`maxNags: 3`），保持 `pty: {}`；非中文环境可在项目 `.omp/omomp.yml` 覆盖 `form.prompt` |
-| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子 | 否 | `WATCHDOG-*.md`（本机） | 运行时偏离纠偏（完整模式 `drift-monitors`，可选） | 延后（本机）：未创建 `WATCHDOG-*.md` 时不运行，有需要时用 `/watchdog add` 创建 |
+| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子（按文件 `target` 和可选 `cwd`） | 否 | `WATCHDOG-*.md`（本机） | 运行时偏离纠偏（完整模式 `drift-monitors`，可选） | 延后（本机）：未创建 `WATCHDOG-*.md` 时不运行，有需要时用 `/watchdog add` 创建 |
 | 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子（按文件 `target`） | 否 | `TURN-JUDGE-*.md`（仓库带 `gpt-talk-only`，其余归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场定制（本机）：确保 `modelRoles.judge` 或 `modelRoles.tiny` 可解析，或把 `@turn-judge` 绑到聊天模型；`TURN-JUDGE-gpt-talk-only.md` 阈值（`0.8`）延后调整 |
 | 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `omomp.yml#lang-nag`（仓库默认值，首次播种后归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场诊断：依赖 `openJudge`（`@lang-nag`，未绑定时用 `judge`；之后 `tiny`）；`judge` 模型判错回复语言时把 `@lang-nag` 绑到聊天模型；在 `<agentDir>/omomp.yml#lang-nag` 设置语言（更新保留），或在 `<cwd>/.omp/omomp.yml` 按项目覆盖 |
 | 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局（由主会话启动） | 是 | `omomp.yml#child-memory-warning`（仓库默认值，首次播种后归本机） | 执行与宿主安全（条件启用 `macos-memory`：仅 macOS） | 延后：保持 `thresholdGiB: 4`；大内存构建可在 `<agentDir>/omomp.yml`（更新保留）或项目 `<cwd>/.omp/omomp.yml` 修改 |
@@ -140,11 +140,12 @@ tool-policy-nag:
 
 源码：`agent/extensions/watchdog-agent/`。
 
-按 `WATCHDOG-<label>.md` 文件定期审阅目标会话（扫描 `~/.omp/agent/extensions/watchdog-agent/` 及会话当前 `cwd` 至 git 根各层的 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`；归本机，不同步）。链接工作树使用自己的根目录；`/move` 后，下一条 prompt 或 `/watchdog` 命令从目标目录重新发现文件。
+按 `WATCHDOG-<label>.md` 文件定期审阅目标会话（扫描 `~/.omp/agent/extensions/watchdog-agent/` 及会话当前 `cwd` 至 git 根各层的 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`；归本机，不同步）。链接工作树使用自己的根目录；`/move` 后，下一条 prompt 或 `/watchdog` 命令从目标目录重新发现并匹配文件。发现文件不等于运行：必须同时匹配 `target` 和可选 `cwd`；省略 `cwd` 时保持不限制目录的原有行为。
 
 | Frontmatter 字段 | 取值与默认值 | 说明 |
 |---|---|---|
 | `target`（必填） | `main`、子代理名（如 `task:low`）、`*`、`subagents` 或逗号列表 | 决定哪些会话运行该 watchdog |
+| `cwd` | 可选的非空绝对目录路径字符串，可加引号；省略表示不限目录 | 用 `node:path.resolve` 规范化后，与同样规范化的会话实时 cwd 精确比较；与 `target` 取 AND，`target: *` 也不例外。空值或相对路径使整个文件无效。不支持 glob、正则、列表或子目录继承 |
 | `name`、`enabled` | `name` 默认取文件名标签；`enabled` 默认 `true` | `/watchdog` 按 `name` 操作；多个文件重名时报错并列出路径 |
 | `delivery` | `aside`（默认）、`steer`、`nextTurn`、`followUp` | 提醒发送方式（`nextTurn` 等待下次用户输入或子代理 `before_agent_start`） |
 | `every`、`scope` | `every` 默认 `30`；`scope` 为 `full`（默认）或 `window` | 每次工具调用和每条非空文字回复各计 1 步；满 `every` 步后台审阅，回合结束（非 `willContinue`）对剩余步数补跑一次。`window` 只读上次游标之后的新消息 |
@@ -152,8 +153,21 @@ tool-policy-nag:
 | `model`、`tools` | 聊天 reviewer 模式（默认） | 在禁加载扩展、`taskDepth: 1` 的内存会话中运行；`model` 未填时依次尝试 `@advisor`、`advisor`、`@slow`、当前会话模型；`tools` 默认 `[read, grep, glob]`（可加 `ast_grep, web_search, edit, write, bash, eval`）。首行以 `PASS`/`OK`/`LGTM`/`NONE` 开头视为通过，否则注入 `<watchdog name=… severity=…>` |
 | `instructions`、`option.<标签>[.prompt\|.delivery]` | JUDGE 模式（声明 $\ge 2$ 个 `option.*` 时启用） | 不能与 `model`/`tools`/`note` 同用；调 `openJudge` 从声明的小写标签选项中选一个，若带 `.prompt` 则注入该文本（无 `.prompt` 视为通过）。报错或 90 秒超时不回退聊天模式 |
 
+只监督领导 checkout 时，可使用如下 `WATCHDOG-LeaderScope.md`：
+
+```markdown
+---
+target: main
+cwd: /absolute/path/to/leader-checkout
+---
+按领导所承担的协调职责审阅最新工作。
+```
+
+同一规则复制到链接工作树后仍可被发现，但列表显示 `不适用于本会话`，不会监督该工作树的主会话。会话 cwd 位于所配置目录的子目录时同样不匹配。合法的工作树监督仍可通过省略 `cwd`，或填写该工作树的精确绝对 cwd 来配置。
+
 - **游标保存**：每次完成审阅后将游标写入会话条目 `mouriya.omp.watchdog-agent.cursor`，恢复会话或切换分支时从分支重建。
 - **管理命令**：`/watchdog [list]`、`/watchdog on|off <name> [session|global]`、`/watchdog rm <name>`。`/watchdog add <需求>` 与 `/watchdog edit <name> [改动]` 不直接写文件，而是向当前模型发送一条 `attribution: "agent"` 消息，按 **1. 起草（给出预期行为、设置表、完整文件内容与绝对路径，不写盘）→ 2. 按反馈修改 → 3. 用户确认后写盘** 三步执行。任何修改 `WATCHDOG-*.md` 的文件系统 `write`/`edit` 工具结果末尾都会附带该文件的识别状态；`out://` 等资源 URI 写入不附带此状态。
+- **范围展示**：`/watchdog list` 和 watchdog 文件写入/编辑的工具结果会展示 cwd 限制（省略时界面显示 `不限`、工具结果显示 `any`）及文件是否适用于本会话。`/watchdog add` 和 `/watchdog edit` 的设置参考包含 `cwd`；文件状态说明会指出由 target 或 cwd 限制排除，不再把所有排除都归因于 `target`。
 
 ### turn-judge
 

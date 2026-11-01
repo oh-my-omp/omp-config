@@ -11,7 +11,8 @@
 // `WATCHDOG.md` / `WATCHDOG.yml`. What it does NOT do is route the *guidance
 // content itself* to a specific target: every advised session receives the
 // whole discovered roster. This extension adds exactly that — a `WATCHDOG-*.md`
-// file declares WHICH agent it watches (`target: main` or a subagent name).
+// file declares WHICH agent it watches (`target: main` or a subagent name),
+// optionally restricted to one exact session cwd. Discovery alone does not activate it.
 // Chat reviewers may choose a model; option-based judgments follow `openJudge`
 // (purpose `watchdog-agent`). Its body only reaches that target. There is no ExtensionAPI hook into
 // the native advisor, so this is a small self-contained reviewer.
@@ -24,6 +25,7 @@
 //                  prompt or /watchdog command, without reloading the extension.
 // Frontmatter (Claude rule.md style, between `---` fences):
 //   target: main            # main | <subagent-name> | * | subagents | CSV list
+//   cwd: /absolute/path/to/leader-checkout        # optional exact cwd; omitted = unrestricted
 //   model:  anthropic/claude-sonnet-4-5:medium   # chat reviewer; else @advisor role
 //   tools:  [read, grep, glob]                   # optional; chat reviewer's tools
 //   instructions: Judge only the latest work.    # optional native question text
@@ -36,6 +38,11 @@
 //   maxPerContext: 6                              # optional per-watchdog cap; default unlimited
 //   every:  30                                    # run after this many watched actions (default 30)
 //   scope:  full                                  # full (whole branch, default) | window (since own last run)
+// `cwd` must be a nonempty absolute directory path string (quotes allowed).
+// Both it and the live session cwd are normalized with node:path.resolve before
+// exact comparison. It ANDs with target, including target: *; no glob, regex,
+// list or subdirectory inheritance. Empty or relative cwd makes the file invalid.
+// A copied rule can still be discovered in a linked worktree without matching it.
 // Body = review priorities for chat; judgment criterion for JUDGE.
 // Option-based watchdogs use `openJudge` (`_shared/judge.ts`, purpose
 // `watchdog-agent`): the `@watchdog-agent` role's chat models when assigned,
@@ -45,8 +52,8 @@
 // explanation, or fallback to the chat reviewer. Labels are lowercased
 // (the frontmatter parser lowercases keys); each value is a single line.
 //
-// RUNTIME. Every discovered watchdog matching the session identity runs
-// independently with its own counter, cursor and cap. The counter
+// RUNTIME. Every discovered watchdog matching the session identity and optional
+// live cwd restriction runs independently with its own counter, cursor and cap. The counter
 // accumulates the watched agent's actions: each assistant tool call and each
 // assistant text reply counts as one. When a watchdog's counter reaches
 // `every`, it runs immediately (mid-run), and its finding is injected as soon as
@@ -67,7 +74,8 @@
 // and the counter from the actions after the cursor.
 //
 // COMMANDS. `/watchdog [list]` lists every discovered file with its global
-// (`enabled`) and session state. `/watchdog on|off <name> [session|global]`
+// (`enabled`), session state and cwd restriction.
+// `/watchdog on|off <name> [session|global]`
 // switches one watchdog: `session` (default) records a session custom entry that
 // shadows the file for this session only and follows the session branch;
 // `global` rewrites the file's `enabled` line and drops this session's override.

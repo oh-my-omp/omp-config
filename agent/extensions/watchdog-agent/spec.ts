@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import { errorText } from "../_shared/errors.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 export const WATCHDOG_FILE_PATTERN = /^WATCHDOG-.+\.md$/i;
@@ -32,6 +32,8 @@ export type Identity = { readonly kind: "main" } | { readonly kind: "sub"; reado
 type WatchdogBase = {
 	readonly name: string;
 	readonly targets: readonly string[];
+	/** Exact normalized session cwd; omitted means no directory restriction. */
+	readonly cwd?: string;
 	/** File-level (global) switch: frontmatter `enabled`, default true. A session override may shadow it. */
 	readonly enabled: boolean;
 	readonly delivery: DeliverAs;
@@ -121,7 +123,7 @@ export function setFrontmatterEnabled(raw: string, enabled: boolean): string | n
 
 type WatchdogParse = { readonly kind: "ok"; readonly spec: WatchdogSpec } | { readonly kind: "invalid"; readonly reason: string };
 
-/** Parse one `WATCHDOG-*.md` (enabled or not); invalid when unreadable, targetless, or a malformed Jev declaration. */
+/** Parse one `WATCHDOG-*.md` (enabled or not); invalid when unreadable, targetless, or declaring malformed cwd/Jev settings. */
 export function parseWatchdogFile(path: string): WatchdogParse {
 	let raw: string;
 	try {
@@ -133,6 +135,10 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 	const enabled = fields.enabled === undefined || /^(true|yes|on|1)$/i.test(unquote(fields.enabled));
 	const targets = fields.target ? toList(fields.target) : [];
 	if (targets.length === 0) return { kind: "invalid", reason: "frontmatter has no `target`" };
+	const cwd = fields.cwd === undefined ? undefined : unquote(fields.cwd);
+	if (cwd !== undefined && (cwd === "" || !isAbsolute(cwd))) {
+		return { kind: "invalid", reason: "frontmatter `cwd` must be a nonempty absolute directory path" };
+	}
 
 	const rawTools = fields.tools ? toList(fields.tools) : [...DEFAULT_TOOLS];
 	const tools = rawTools.map((t) => t.toLowerCase()).filter((t) => GRANTABLE_TOOLS[t] === true);
@@ -145,6 +151,7 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 	const common: WatchdogBase = {
 		name: fields.name ? unquote(fields.name) : fallbackName || "watchdog",
 		targets,
+		cwd: cwd === undefined ? undefined : resolve(cwd),
 		enabled,
 		delivery,
 		maxPerContext,

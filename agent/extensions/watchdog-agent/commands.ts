@@ -113,7 +113,7 @@ const WATCHDOG_INTRO =
 	"A watchdog is a reviewer that runs alongside a watched agent: every few actions it reads that agent's transcript, judges only the latest work against the file's guidance, and injects a short `<watchdog name=… severity=…>` note into the watched session when the work falls short; otherwise it stays silent. Each watchdog is one file `WATCHDOG-<Label>.md`: a frontmatter block between `---` fences (one `key: value` per line, keys case-insensitive, every value on a single line) followed by a markdown body.";
 
 const EXPECTED_BEHAVIOUR =
-	"Expected behaviour, concretely: which session or agent is watched; when a review runs (after how many actions, plus once at the end of each run); what transcript it reads; what it flags and what it deliberately lets pass; one or two example notes it would inject, written as it would write them; how and when a note reaches the watched agent; how many notes per context; which model does the reviewing and that every review costs a model call; and what it cannot see or do.";
+	"Expected behaviour, concretely: which session or agent is watched and whether its cwd is restricted; when a review runs (after how many actions, plus once at the end of each run); what transcript it reads; what it flags and what it deliberately lets pass; one or two example notes it would inject, written as it would write them; how and when a note reaches the watched agent; how many notes per context; which model does the reviewing and that every review costs a model call; and what it cannot see or do.";
 
 const NO_ASK =
 	"Do not use the `ask` tool: every setting has a value or a default, so every draft is complete and the user only names what to change.";
@@ -127,12 +127,13 @@ function settingsReference(draft: DraftContext, exclude: string | null): string 
 	const existing =
 		others.length === 0
 			? "(none)"
-			: others.map((spec) => `- ${spec.name} — target ${spec.targets.join(",")} — ${spec.filePath}`).join("\n");
+			: others.map((spec) => `- ${spec.name} — target ${spec.targets.join(",")} — cwd ${spec.cwd ?? "any"} — ${spec.filePath}`).join("\n");
 	const defaultModel = draft.defaultModel ?? "nothing resolves now, so reviews would be skipped until a model is pinned";
 	return `Settings (frontmatter keys in backticks):
-- Location — default project: \`${draft.projectDir}/WATCHDOG-<Label>.md\`, active in sessions started anywhere inside this project. Global: \`${draft.globalDir}/WATCHDOG-<Label>.md\`, active in every project.
+- Location — default project: \`${draft.projectDir}/WATCHDOG-<Label>.md\`, discovered from sessions anywhere inside this project. Global: \`${draft.globalDir}/WATCHDOG-<Label>.md\`, discovered in every project. Discovery does not bypass \`target\` or \`cwd\` restrictions.
 - Label and \`name\` — default: a short PascalCase label derived from the requirement; \`name\` defaults to the label, so omit the \`name\` line. \`/watchdog on|off|edit|rm\` address it by name, so it must not clash with another watchdog.
 - \`target\` (required) — default \`main\`, the user's top-level session. Also: an agent name such as \`task:mid\` or \`mentor:default\`; \`subagents\` for every subagent; \`*\` for every session; or a comma-separated list.
+- \`cwd\` — default: omit, no directory restriction. When set, use one nonempty absolute directory path string (quotes allowed), normalized with \`node:path.resolve\` and compared exactly with the live session cwd normalized the same way. It must match AND \`target\` must match, even for \`target: *\`. No glob, regex, list or subdirectory inheritance; empty or relative values make the file invalid. To watch only a leader checkout, combine \`target: main\` with \`cwd: /absolute/path/to/leader-checkout\`; a copy discovered in a linked worktree stays inactive there.
 - Backend — default chat reviewer: an extension-free model session with tools reads the transcript and answers PASS or a severity (\`nit\`, \`concern\`, \`blocker\`) with one note of at most ~80 words citing files, symbols or lines. Alternative JUDGE (see below): no tools, picks one of the options the file declares and injects that option's prewritten text.
 - \`model\` (chat only) — default: omit the line, and the reviewer uses the \`@advisor\` role, then \`advisor\`, then \`@slow\`, then the session model; right now that is ${defaultModel}. Pin with \`provider/model\` or \`provider/model:effort\`; a pinned model that does not resolve skips every review rather than falling back.
 - \`tools\` (chat only) — default \`read, grep, glob\`. Allowed: read, grep, glob, ast_grep, web_search, edit, write, bash, eval; edit, write, bash and eval let the reviewer change the workspace, so grant them only on request.
