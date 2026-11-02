@@ -1,5 +1,5 @@
 import type { AgentTool, StreamFn } from "@oh-my-pi/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions, Tool } from "@oh-my-pi/pi-ai";
+import type { Context, Message, Model, SimpleStreamOptions, Tool } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 
 /**
@@ -17,7 +17,15 @@ type RequestSnapshot = {
 	>;
 };
 
-const requests = new WeakMap<AgentSession, RequestSnapshot>();
+/**
+ * A session's latest request and the timestamp of the assistant message it
+ * produced, set once that request's stream completes. The persisted copy of
+ * that assistant message keeps the timestamp, so it marks where the source's
+ * history continues after the request.
+ */
+type ObservedRequest = { readonly request: RequestSnapshot; response: number | undefined };
+
+const requests = new WeakMap<AgentSession, ObservedRequest>();
 const observed = new WeakSet<AgentSession>();
 
 /** The provider-facing fields of a tool (pi-ai `Tool`), without the AgentTool runtime it was spread from. */
@@ -51,27 +59,53 @@ export function observeRequests(session: AgentSession): void {
 	});
 	const stream = session.agent.streamFn;
 	session.agent.streamFn = (model, context, options) => {
-		requests.set(session, {
-			model,
-			context: {
-				systemPrompt: context.systemPrompt,
-				messages: context.messages,
-				tools: context.tools?.map(wireTool),
+		const latest: ObservedRequest = {
+			request: {
+				model,
+				context: {
+					systemPrompt: context.systemPrompt,
+					messages: context.messages,
+					tools: context.tools?.map(wireTool),
+				},
+				options: {
+					reasoning: options?.reasoning,
+					disableReasoning: options?.disableReasoning,
+					serviceTier: options?.serviceTier,
+					temperature: options?.temperature,
+					maxTokens: options?.maxTokens,
+					cacheRetention: options?.cacheRetention,
+					sessionId: options?.sessionId,
+					promptCacheKey: options?.promptCacheKey,
+				},
 			},
-			options: {
-				reasoning: options?.reasoning,
-				disableReasoning: options?.disableReasoning,
-				serviceTier: options?.serviceTier,
-				temperature: options?.temperature,
-				maxTokens: options?.maxTokens,
-				cacheRetention: options?.cacheRetention,
-				sessionId: options?.sessionId,
-				promptCacheKey: options?.promptCacheKey,
-			},
-		});
-		return stream(model, context, options);
+			response: undefined,
+		};
+		requests.set(session, latest);
+		const events = stream(model, context, options);
+		Promise.resolve(events)
+			.then((started) => started.result())
+			.then(
+				(message) => {
+					latest.response = message.timestamp;
+				},
+				() => {
+					// The caller handles a failed stream; it leaves no response to anchor on.
+				},
+			);
+		return events;
 	};
 }
+
+/** The fork notice `stageFork` appends to the child transcript: its entry id and message timestamp. */
+export type ForkNotice = { readonly entryId: string; readonly timestamp: number };
+
+/**
+ * How the child's requests reuse the source's message prefix. `prefix` sends
+ * the source's messages verbatim, followed by the child's own context from
+ * the source's response (when it reached the child) or from the fork notice.
+ * `own` sends the child's context unchanged: explicit shake rewrote it.
+ */
+type Replay = { readonly kind: "prefix"; readonly response: number | undefined; readonly notice: ForkNotice } | { readonly kind: "own" };
 
 /**
  * What a fork child replicates from its source's latest request. Lives as long
@@ -86,64 +120,115 @@ export type Replica = {
 	readonly ask: AgentTool | undefined;
 	/** The source's model and thinking level as a spawn selector. */
 	readonly sourceModel: string;
-	readonly replayPrefix: boolean;
+	readonly replay: Replay;
 	/** Copy the source's reasoning controls when the child runs the source's model. */
 	readonly inheritReasoning: boolean;
 };
 
-type CaptureResult = { readonly kind: "ready"; readonly replica: Replica } | { readonly kind: "unavailable"; readonly reason: string };
+/** A replica before staging: the replay mode needs the staged fork notice. */
+type Capture = Omit<Replica, "replay"> & { readonly response: number | undefined };
+
+type CaptureResult = { readonly kind: "ready"; readonly capture: Capture } | { readonly kind: "unavailable"; readonly reason: string };
 
 export function captureReplica(
 	session: AgentSession,
-	options: { readonly shake: boolean; readonly inheritReasoning: boolean; readonly caller: AgentSession },
+	options: { readonly inheritReasoning: boolean; readonly caller: AgentSession },
 ): CaptureResult {
-	const request = requests.get(session);
-	if (!request) return { kind: "unavailable", reason: "it has not sent a model request in this OMP process since fork capture loaded" };
+	const latest = requests.get(session);
+	if (!latest) return { kind: "unavailable", reason: "it has not sent a model request in this OMP process since fork capture loaded" };
+	const { request } = latest;
 	const level = session.thinkingLevel;
 	const toolNames = session.agent.state.tools.map((tool) => tool.name);
 	return {
 		kind: "ready",
-		replica: {
+		capture: {
 			request,
+			response: latest.response,
 			systemPrompt: [...session.systemPrompt],
 			toolNames,
 			// The caller outlives the replica, so its `ask` pins no extra session; a `from` source's own is the fallback.
 			ask: toolNames.includes("ask") ? (options.caller.getToolByName("ask") ?? session.getToolByName("ask")) : undefined,
 			sourceModel: `${request.model.provider}/${request.model.id}${level ? `:${level}` : ""}`,
-			replayPrefix: !options.shake,
 			inheritReasoning: options.inheritReasoning,
 		},
 	};
 }
 
+type PrefixReplay = Extract<Replay, { kind: "prefix" }>;
+
+type Match = { readonly kind: "one"; readonly index: number } | { readonly kind: "none" } | { readonly kind: "many" };
+
+/** The only message in `messages[0, end)` that `matches` accepts. */
+function findOnly(messages: readonly Message[], end: number, matches: (message: Message) => boolean): Match {
+	let found: Match = { kind: "none" };
+	for (const [index, message] of messages.entries()) {
+		if (index >= end) break;
+		if (!matches(message)) continue;
+		if (found.kind === "one") return { kind: "many" };
+		found = { kind: "one", index };
+	}
+	return found;
+}
+
 /**
- * Replace the inherited prefix through its last original message. SDK-only
- * reminders may have been inserted in either session, so indices are not fork
- * identities. Timestamps and roles survive SessionManager.forkFrom. After
- * compaction removes the anchor, the child owns its new context and no old
- * prefix is reintroduced. Explicit shake also opts out of message replay.
+ * Where the child's own context starts. Everything before it is the child's
+ * rebuild of the inherited transcript; the source's request messages replace
+ * it verbatim and are never compared with it, because the host does not keep a
+ * persisted transcript identical to the live request it was sent from
+ * (unpersisted eval snapshots, restamped custom messages, injector-only
+ * reminders). The source's response, when it reached the child's transcript,
+ * keeps the source's history after that request; otherwise the fork notice
+ * starts the child's part.
  */
-function replicateContext(source: Context, current: Context, replayPrefix: boolean): Context {
-	const last = source.messages.at(-1);
-	let end = -1;
-	if (replayPrefix && last) {
-		for (const [index, message] of current.messages.entries()) {
-			if (message.role !== last.role || message.timestamp !== last.timestamp) continue;
-			if (message.role === "toolResult" && last.role === "toolResult" && message.toolCallId !== last.toolCallId) continue;
-			// Disambiguate same-millisecond messages by the complete preceding
-			// identity sequence. Do not discard a child tail on a guessed match.
-			if (index + 1 < source.messages.length) continue;
-			const start = index + 1 - source.messages.length;
-			const matches = source.messages.every((original, offset) => {
-				const candidate = current.messages[start + offset];
-				return candidate?.role === original.role && candidate.timestamp === original.timestamp;
-			});
-			if (!matches) continue;
-			if (end !== -1) throw new Error("fork_task: inherited message boundary is ambiguous");
-			end = index;
+function childStart(messages: readonly Message[], replay: PrefixReplay): number {
+	const notice = findOnly(
+		messages,
+		messages.length,
+		(message) => message.role === "developer" && message.timestamp === replay.notice.timestamp,
+	);
+	switch (notice.kind) {
+		case "one":
+			break;
+		case "none":
+		case "many":
+			throw new Error(`fork_task: the fork notice is ${notice.kind === "none" ? "missing from" : "ambiguous in"} the child context`);
+		default: {
+			const unreachable: never = notice;
+			return unreachable;
 		}
 	}
-	if (replayPrefix && last && end < 0) throw new Error("fork_task: inherited request prefix no longer matches the child context");
+	const { response } = replay;
+	if (response === undefined) return notice.index;
+	const anchor = findOnly(messages, notice.index, (message) => message.role === "assistant" && message.timestamp === response);
+	return anchor.kind === "one" ? anchor.index : notice.index;
+}
+
+/**
+ * The source prefix applies while the child's branch holds the fork notice
+ * with no compaction after it. Read from the transcript on every call, so a
+ * child revived after it compacted does not resume replay.
+ */
+function replaysPrefix(session: AgentSession, notice: ForkNotice): boolean {
+	const branch = session.sessionManager.getBranchView();
+	const at = branch.findIndex((entry) => entry.id === notice.entryId);
+	return at >= 0 && branch.findLastIndex((entry) => entry.type === "compaction") < at;
+}
+
+function replicatedMessages(session: AgentSession, replay: Replay, source: readonly Message[], current: Message[]): Message[] {
+	switch (replay.kind) {
+		case "own":
+			return current;
+		case "prefix":
+			return replaysPrefix(session, replay.notice) ? [...source, ...current.slice(childStart(current, replay))] : current;
+		default: {
+			const unreachable: never = replay;
+			return unreachable;
+		}
+	}
+}
+
+function replicateContext(session: AgentSession, replica: Replica, current: Context): Context {
+	const source = replica.request.context;
 	const tools = source.tools ?? [];
 	const names = new Set(tools.map((tool) => tool.name));
 	const extra = current.tools?.filter((tool) => !names.has(tool.name)) ?? [];
@@ -151,7 +236,7 @@ function replicateContext(source: Context, current: Context, replayPrefix: boole
 		...current,
 		systemPrompt: source.systemPrompt,
 		tools: extra.length > 0 ? [...tools, ...extra] : source.tools,
-		messages: end >= 0 ? [...source.messages, ...current.messages.slice(end + 1)] : current.messages,
+		messages: replicatedMessages(session, replica.replay, source.messages, current.messages),
 	};
 }
 
@@ -180,13 +265,8 @@ export function applyReplica(session: AgentSession, replica: Replica): void {
 
 	const stream = session.agent.streamFn;
 	const source = replica.request;
-	const initialCompaction = session.sessionManager.getBranchView().findLast((entry) => entry.type === "compaction")?.id;
-	let replayPrefix = replica.replayPrefix;
 	const wrap: StreamFn = (model, context, options) => {
-		if (replayPrefix && session.sessionManager.getBranchView().findLast((entry) => entry.type === "compaction")?.id !== initialCompaction) {
-			replayPrefix = false;
-		}
-		const replicated = replicateContext(source.context, context, replayPrefix);
+		const replicated = replicateContext(session, replica, context);
 		// Request controls belong to the source's model; another model keeps its own.
 		if (model.provider !== source.model.provider || model.id !== source.model.id) {
 			return stream(model, replicated, { ...options, parentSessionId: source.options.sessionId });

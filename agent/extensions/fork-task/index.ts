@@ -82,7 +82,7 @@ import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { applyReplica, captureReplica, observeRequests, type Replica } from "./replica.ts";
+import { applyReplica, captureReplica, type ForkNotice, observeRequests, type Replica } from "./replica.ts";
 import { forkTaskTopics, TOPIC_POINTERS } from "./topics.ts";
 
 const itemSchema = z.object({
@@ -234,6 +234,7 @@ type PendingFork = {
 
 type StagedFork = {
 	readonly staging: string;
+	readonly notice: ForkNotice;
 	readonly shakeSummary?: string;
 };
 
@@ -348,14 +349,17 @@ async function stageFork(
 		});
 		let shakeSummary: string | undefined;
 		let preShakeIds: ReadonlySet<string>;
+		let notice: ForkNotice;
 		try {
 			manager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
-			manager.appendMessage({
+			const timestamp = Date.now();
+			const entryId = manager.appendMessage({
 				role: "developer",
 				content: forkNotice(source, parentCwd, isolated),
 				attribution: "agent",
-				timestamp: Date.now(),
+				timestamp,
 			});
+			notice = { entryId, timestamp };
 			await manager.flush();
 			preShakeIds = new Set(manager.getEntries().map((entry) => entry.id));
 			if (shake) {
@@ -392,7 +396,7 @@ async function stageFork(
 			await manager.close();
 		}
 		await finalizeStaging(staging, { cwd: parentCwd, isolated, preShakeIds });
-		return { staging, shakeSummary };
+		return { staging, notice, shakeSummary };
 	} catch (error) {
 		await fs.rm(stagingDir, { recursive: true, force: true });
 		throw error;
@@ -585,7 +589,6 @@ export default function forkTask(pi: ExtensionAPI): void {
 					const role = await resolveRole(agent);
 					if (role.kind === "error") throw new Error(role.message);
 					const captured = captureReplica(source.session, {
-						shake: item.shake === true,
 						inheritReasoning: role.kind === "none" && item.effort === undefined,
 						caller: parent,
 					});
@@ -594,13 +597,15 @@ export default function forkTask(pi: ExtensionAPI): void {
 					const name = `${sanitizeName(item.name) ?? "Fork"}_${randomUUID().slice(0, 4)}`;
 					// Without a role the fork continues the source in its workspace unless explicitly isolated.
 					const isolated = !planMode && (item.isolated ?? role.kind === "role");
-					const { staging, shakeSummary } = await stageFork(ctx, parent, source, item.shake === true, isolated);
+					const shake = item.shake === true;
+					const { staging, notice, shakeSummary } = await stageFork(ctx, parent, source, shake, isolated);
+					const { response, ...capture } = captured.capture;
 					const entry: PendingFork = {
 						name,
 						artifactsDir,
 						staging,
-						replica: captured.replica,
-						model: role.kind === "role" ? role.model : captured.replica.sourceModel,
+						replica: { ...capture, replay: shake ? { kind: "own" } : { kind: "prefix", response, notice } },
+						model: role.kind === "role" ? role.model : capture.sourceModel,
 					};
 					staged.push(entry);
 					pending.push(entry);
