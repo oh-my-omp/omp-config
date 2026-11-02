@@ -47,7 +47,7 @@ system-prompt-replace:
 | `eval` 工具说明 | 禁止通过 `eval` 读取、列目录或搜索本地文件（统一使用 `read`、`glob`、`grep`）。 |
 | `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `tool://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
 | `xd://` 设备说明 | 说明 `xd://<tool>` 只能通过 `write` 写入 JSON 调用，不存在 `xd__<tool>` 或裸 `<tool>` 函数。 |
-| `APPEND_SYSTEM.md` 的 `# Mandatory decision support`（`model: "^claude-opus-5-5$"`） | 主模型为 `claude-opus-5-5` 时删除该标题及其两段（重大决策询问 `discuss:steady` 与 `discuss:divergent`；长调查前后会商 `mentor:default`）。其他主模型保留该段；子代理本就不接收 `APPEND_SYSTEM.md`。`/model` 切换从下一条 prompt 起生效。 |
+| `APPEND_SYSTEM.md` 的 `# Mandatory decision support`（`model: "^claude-opus-5-5$"`） | 主模型为 `claude-opus-5-5` 时删除该标题及其两段（重大决策询问 `discuss:steady` 与 `discuss:divergent`；长调查前后会商 `mentor:default`）。其他主模型保留该段；子代理本就不接收 `APPEND_SYSTEM.md`。 |
 
 整段工具说明（`read`、`bash`、`task`）不再由本扩展替换：[tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞定位它们，上游改写措辞后仍然生效，且轻量模式也会运行。
 
