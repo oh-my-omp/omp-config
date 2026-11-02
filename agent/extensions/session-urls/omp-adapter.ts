@@ -1,6 +1,7 @@
 // Every OMP-internal module session-urls depends on, in one place. These are
 // host subpaths (no plugin API contract); an OMP upgrade that moves one fails
 // here at load, which the config check reports as an extension error.
+import { type LocalProtocolOptions, resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { resolveSessionLeafId, type SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -18,9 +19,9 @@ export type {
 	SchemeSpec,
 } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
 export { type ShellFsDirEntry, ShellFsFileType } from "@oh-my-pi/pi-natives";
-export type { JsonSelector, SessionInfo };
+export type { JsonSelector, LocalProtocolOptions, SessionInfo };
 
-export { executeJsonQuery, findSessionFiles, getSessionsDir, parseJsonSelector, readSessionInfo, sessionDirForCwd };
+export { executeJsonQuery, findSessionFiles, getSessionsDir, parseJsonSelector, readSessionInfo, resolveLocalUrlToPath, sessionDirForCwd };
 
 export function router(): InternalUrlRouter {
 	return InternalUrlRouter.instance();

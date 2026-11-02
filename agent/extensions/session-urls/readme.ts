@@ -15,7 +15,7 @@ READ A SESSION   (<id> = any unique id prefix; listed paths below use the full i
                                 dispatches and subagent results in full; tool calls one line each
                                 as tool(args) status #<result entry> // intent; markers one line
   session://<id>/events.jsonl[?q=<jq>]   the same events as JSONL (fields: sid agent turn t kind entry
-                                block line url; text | tool args intent status resultEntry
+                                block line url; text | callId tool args intent status resultEntry
                                 resultChars durMs | from to | children | id status duration)
   session://<id>/entry/<entry-id>   one entry in full; for a tool result: its arguments, intent,
                                     timing and the whole result text

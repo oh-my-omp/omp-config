@@ -318,6 +318,7 @@ function eventFields(event: SessionEvent): Record<string, unknown> {
 		case "dispatch": {
 			const call = event.call;
 			const fields: Record<string, unknown> = {
+				callId: call.id,
 				tool: call.tool,
 				args: toJson(call.args),
 				intent: call.intent,

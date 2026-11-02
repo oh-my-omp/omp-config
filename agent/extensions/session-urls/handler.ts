@@ -13,20 +13,17 @@ import {
 	getSessionsDir,
 	type InternalResource,
 	type InternalUrl,
-	latestRecaps,
 	listSessions,
 	type ProtocolHandler,
 	parseJsonSelector,
-	promptMatches,
 	type ResolveContext,
 	readSessionInfo,
 	type SchemeSpec,
-	type SessionInfo,
 	type ShellFsDirEntry,
 	ShellFsFileType,
-	sessionDirForCwd,
 } from "./omp-adapter.ts";
 import { README } from "./readme.ts";
+import { ALL_SESSIONS, metadata, type SessionRow, sessionRows } from "./relations.ts";
 import { eventRecords, renderEntry, renderTimeline } from "./render.ts";
 import {
 	agentFile,
@@ -50,7 +47,6 @@ const JQ_KEYS: Readonly<Record<string, true>> = { q: true, query: true, raw: tru
 const FIND_KEYS: Readonly<Record<string, true>> = { text: true, project: true, max: true };
 const TYPE_KEYS: Readonly<Record<string, true>> = { type: true };
 const TIME_KEYS: Readonly<Record<string, true>> = { since: true, until: true };
-const ALL_SESSIONS = 1_000_000;
 const DEFAULT_FIND = 20;
 
 interface Located {
@@ -162,49 +158,14 @@ function takesType(route: Route): boolean {
 	}
 }
 
-function metadata(infos: readonly SessionInfo[]): Array<Record<string, unknown>> {
-	const recaps = latestRecaps(infos.map((info) => info.id));
-	return infos.map((info) => ({
-		sid: info.id,
-		url: `session://${info.id}`,
-		timeline: `session://${info.id}/timeline`,
-		project: path.basename(path.dirname(info.path)),
-		cwd: info.cwd,
-		title: info.title ?? (info.firstMessage.split("\n", 1)[0] ?? "").slice(0, 200),
-		created: Number.isNaN(info.created.getTime()) ? null : info.created.toISOString(),
-		modified: info.modified.toISOString(),
-		status: info.status ?? null,
-		assistantTurns: info.assistantTurns ?? null,
-		size: info.size,
-		recap: recaps.get(info.id) ?? null,
-		parent: info.parentSessionPath ?? null,
-	}));
-}
-
 /** `find?text=…[&project=.|<bucket>|<path>][&max=N]`: prompt-history FTS plus title/first-prompt/recap words. */
-async function find(url: InternalUrl, cwd: string | undefined): Promise<Array<Record<string, unknown>>> {
+async function find(url: InternalUrl, cwd: string | undefined): Promise<SessionRow[]> {
 	const params = query(url);
 	const needle = params.get("text")?.trim() ?? "";
 	if (needle === "") throw new Error("session://find needs ?text=<words>");
 	const max = Number(params.get("max") ?? DEFAULT_FIND);
 	if (!Number.isInteger(max) || max < 1) throw new Error("session://find ?max= must be a positive integer");
-	const project = params.get("project");
-	let dir: string | undefined;
-	if (project === ".") {
-		if (!cwd) throw new Error("session://find?project=. needs the calling session's working directory");
-		dir = sessionDirForCwd(cwd);
-	} else if (project !== null)
-		dir = project.includes("/") ? sessionDirForCwd(path.resolve(cwd ?? "/", project)) : path.join(getSessionsDir(), project);
-	const records = metadata(await listSessions(dir, ALL_SESSIONS));
-	const fromPrompts = new Set(promptMatches(needle, 500));
-	const words = needle.toLowerCase().split(/\s+/);
-	return records
-		.filter((record) => {
-			if (fromPrompts.has(String(record.sid))) return true;
-			const haystack = `${String(record.title)}\n${String(record.recap ?? "")}`.toLowerCase();
-			return words.every((word) => haystack.includes(word));
-		})
-		.slice(0, max);
+	return sessionRows({ project: params.get("project"), text: needle, since: null, until: null, limit: max }, cwd);
 }
 
 /** Directory entries for a directory route, or null for a leaf. */
