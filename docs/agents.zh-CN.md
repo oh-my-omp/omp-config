@@ -29,7 +29,7 @@
 默认情况下，子代理只看到调用方写在 `task` 和 `context` 里的转述。针对 `mentor:default`、`discuss:steady` 与 `discuss:divergent` 的约定：
 
 1. [`user-prompt-inject`](#user-prompt-inject) 从根主会话提取用户原始输入，插入 `mentor:default`、`discuss:steady` 与 `discuss:divergent` 每次模型请求的开头，让顾问直接对照用户原话核对计划。
-2. 重大决策同时询问 `discuss:steady` 与 `discuss:divergent`；同一话题后续追问通过 `write agent://<id>` 发给原代理，不重复新建。
+2. 重大决策同时询问 `discuss:steady` 与 `discuss:divergent`；同一话题后续追问通过 `write agent://<id>` 发给原代理，不重复新建。主模型为 `claude-opus-5-5` 时，主会话 prompt 不含这条规则和 `mentor:default` 规则（[system-prompt-replace](prompts-and-context.zh-CN.md#system-prompt-replace)）。
 3. `mentor:default` 的 `tools` 为空，咨询方需要把涉及的文件路径、符号、命令和实测输出直接写进消息，而不是只给文件名。
 
 ### user-prompt-inject

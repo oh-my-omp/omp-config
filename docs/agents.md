@@ -29,7 +29,7 @@ Responsibilities, tool limits, and `spawns` lists live in `agent/agents/<name>.m
 By default, a subagent only sees the prompt its caller passes in `task` and `context`. The following settings keep `mentor:default`, `discuss:steady`, and `discuss:divergent` grounded in the user's actual request and the repository's code:
 
 1. [`user-prompt-inject`](#user-prompt-inject) prepends the human user's prompts from the root main session to every model call of `mentor:default`, `discuss:steady`, and `discuss:divergent`.
-2. Consequential decisions consult both `discuss:steady` and `discuss:divergent`; follow-ups on the same topic message the existing agent via `write agent://<id>`.
+2. Consequential decisions consult both `discuss:steady` and `discuss:divergent`; follow-ups on the same topic message the existing agent via `write agent://<id>`. While the main model is `claude-opus-5-5`, the main session's prompt omits this rule and the `mentor:default` rule ([system-prompt-replace](prompts-and-context.md#system-prompt-replace)).
 3. `mentor:default` has `tools: []`, so the calling agent must write out the concrete file paths, symbols, commands, and observed outputs it relies on rather than passing file names for the mentor to open.
 
 ### user-prompt-inject
