@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
+import { describeFilter, type InjectMode, producerMatches, type SessionFilter, targetsSession } from "../_shared/session-filter.ts";
 import {
 	buildAddPrompt,
 	buildEditPrompt,
@@ -18,32 +19,38 @@ import {
 	branchMessages,
 	countActions,
 	defaultReviewerModel,
+	isOwnUserNote,
 	messageTimestamp,
+	producerOf,
 	renderTranscript,
 	runJev,
 	runReviewer,
 	selectMessages,
 } from "./review.ts";
 import {
+	type DeliverAs,
 	discoverWatchdogFiles,
 	hasKey,
-	type Identity,
 	parseWatchdogFile,
 	setFrontmatterEnabled,
 	type Verdict,
+	WATCHDOG_FILTER_KEYS,
 	type WatchdogSpec,
 } from "./spec.ts";
+
+/** A finding waiting for the user's next prompt (`delivery: nextTurn`), already in its inject form. */
+type QueuedNote = { readonly filePath: string; readonly inject: InjectMode; readonly text: string };
 
 /** One record per loaded extension; session boundaries rebuild branch-derived state. */
 type Runtime = {
 	readonly pi: ExtensionAPI;
-	identity: Identity | null;
+	identity: ExtensionContext["agent"] | null;
 	cwd: () => string;
 	roster: WatchdogSpec[];
 	overrides: Map<string, boolean>;
 	states: Map<string, WatchdogState>;
 	branchOf: () => ReadonlyArray<unknown>;
-	nextTurnQueue: string[];
+	nextTurnQueue: QueuedNote[];
 	userTurnArmed: boolean;
 };
 
@@ -61,35 +68,6 @@ export function registerWatchdog(pi: ExtensionAPI): void {
 	};
 	registerCommand(runtime);
 	registerEvents(runtime);
-}
-
-// --- identity + matching ----------------------------------------------------
-
-function resolveIdentity(ctx: ExtensionContext): Identity {
-	switch (ctx.agent.kind) {
-		case "main":
-			return { kind: "main" };
-		case "sub":
-			return { kind: "sub", agent: ctx.agent.name, fileId: ctx.agent.id };
-		default: {
-			const unreachable: never = ctx.agent.kind;
-			return unreachable;
-		}
-	}
-}
-
-function matchesIdentity(spec: WatchdogSpec, sessionIdentity: Identity): boolean {
-	for (const target of spec.targets) {
-		const t = target.toLowerCase();
-		if (t === "*" || t === "all" || t === "any") return true;
-		if (sessionIdentity.kind === "main") {
-			if (t === "main") return true;
-			continue;
-		}
-		if (t === "subagents" || t === "subagent" || t === "sub" || t === "subs") return true;
-		if (t === sessionIdentity.agent.toLowerCase() || t === sessionIdentity.fileId.toLowerCase()) return true;
-	}
-	return false;
 }
 
 // --- extension registration -------------------------------------------------
@@ -155,45 +133,73 @@ function escapeAttr(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/** Custom message type of `nextTurn` deliveries (stored as `custom_message` session entries). */
-const NEXT_TURN_CUSTOM_TYPE = "watchdog";
+/** Custom message type of system-mode notes (stored as `custom_message` session entries, `details: { filePaths }`). */
+const NOTE_CUSTOM_TYPE = "watchdog";
 
-/** Findings of the named watchdog injected on the branch since its last compaction: user messages, and the `watchdog` custom messages `nextTurn` delivers. */
-function deliveredSinceCompaction(entries: ReadonlyArray<unknown>, name: string): number {
-	const marker = `<watchdog name="${escapeAttr(name)}"`;
+/**
+ * Index of user-mode notes: the text a watchdog sent as a user message and the files it came from.
+ * It records the send, not the delivery; a note counts only once an agent-attributed user message
+ * with that text is on the branch.
+ */
+const USER_NOTE_ENTRY_TYPE = "mouriya.omp.watchdog-agent.user-note";
+type UserNoteEntry = { readonly filePaths: readonly string[]; readonly text: string };
+
+function filePathsOf(data: unknown): readonly string[] {
+	if (!hasKey(data, "filePaths") || !Array.isArray(data.filePaths)) return [];
+	return data.filePaths.filter((path): path is string => typeof path === "string");
+}
+
+/** Trimmed user-mode note text → the watchdog files it came from, from the index entries on the branch. */
+function userNoteIndex(entries: ReadonlyArray<unknown>): Map<string, readonly string[]> {
+	const out = new Map<string, readonly string[]>();
+	for (const e of entries) {
+		if (!hasKey(e, "type") || e.type !== "custom" || !hasKey(e, "customType") || e.customType !== USER_NOTE_ENTRY_TYPE) continue;
+		const data = hasKey(e, "data") ? e.data : undefined;
+		if (!hasKey(data, "text") || typeof data.text !== "string") continue;
+		out.set(data.text.trim(), filePathsOf(data));
+	}
+	return out;
+}
+
+/** Watchdog files a branch entry carries a delivered note of: a system-mode custom message, or an indexed user-mode message. */
+function noteFiles(entry: unknown, index: ReadonlyMap<string, readonly string[]>): readonly string[] {
+	if (!hasKey(entry, "type")) return [];
+	if (entry.type === "custom_message" && hasKey(entry, "customType") && entry.customType === NOTE_CUSTOM_TYPE)
+		return filePathsOf(hasKey(entry, "details") ? entry.details : undefined);
+	if (entry.type !== "message" || !hasKey(entry, "message")) return [];
+	const message = entry.message;
+	if (!isOwnUserNote(message, index)) return [];
+	return index.get(textBlocks(hasKey(message, "content") ? message.content : undefined).trim()) ?? [];
+}
+
+/** Notes of the watchdog file delivered on the branch since its last compaction. */
+function deliveredSinceCompaction(entries: ReadonlyArray<unknown>, filePath: string): number {
+	const index = userNoteIndex(entries);
 	let count = 0;
 	for (const e of entries) {
-		if (!hasKey(e, "type")) continue;
-		if (e.type === "compaction") {
-			count = 0;
-			continue;
-		}
-		let content: unknown;
-		if (e.type === "custom_message" && hasKey(e, "customType") && e.customType === NEXT_TURN_CUSTOM_TYPE) {
-			content = hasKey(e, "content") ? e.content : undefined;
-		} else if (e.type === "message" && hasKey(e, "message") && hasKey(e.message, "role") && e.message.role === "user") {
-			content = hasKey(e.message, "content") ? e.message.content : undefined;
-		} else {
-			continue;
-		}
-		count += textBlocks(content).split(marker).length - 1;
+		if (hasKey(e, "type") && e.type === "compaction") count = 0;
+		else if (noteFiles(e, index).includes(filePath)) count += 1;
 	}
 	return count;
 }
 
+/** Watched actions of a message: its actions when the filter's model/provider constraints match its producer, else 0. */
+function watchedActions(filter: SessionFilter, message: unknown): number {
+	const producer = producerOf(message);
+	return producer !== null && producerMatches(filter, producer) ? countActions(message) : 0;
+}
+
 /** Watched actions on the branch stamped after the cursor. */
-function actionsAfter(entries: ReadonlyArray<unknown>, cursor: number): number {
+function actionsAfter(entries: ReadonlyArray<unknown>, cursor: number, filter: SessionFilter): number {
 	let count = 0;
 	for (const m of branchMessages(entries)) {
-		if ((messageTimestamp(m) ?? 0) > cursor) count += countActions(m);
+		if ((messageTimestamp(m) ?? 0) > cursor) count += watchedActions(filter, m);
 	}
 	return count;
 }
 
 function targetsHere(runtime: Runtime, spec: WatchdogSpec): boolean {
-	return (
-		runtime.identity !== null && (spec.cwd === undefined || spec.cwd === resolve(runtime.cwd())) && matchesIdentity(spec, runtime.identity)
-	);
+	return runtime.identity !== null && targetsSession(spec.filter, runtime.identity, runtime.cwd());
 }
 function effectiveEnabled(runtime: Runtime, spec: WatchdogSpec): boolean {
 	return runtime.overrides.get(spec.filePath) ?? spec.enabled;
@@ -222,10 +228,10 @@ function refresh(runtime: Runtime, warn: boolean): void {
 		const cursor = cursors.get(spec.filePath) ?? 0;
 		next.set(spec.filePath, {
 			spec,
-			pending: actionsAfter(branch, cursor),
+			pending: actionsAfter(branch, cursor, spec.filter),
 			cursor,
 			run: { kind: "idle" },
-			sent: deliveredSinceCompaction(branch, spec.name),
+			sent: deliveredSinceCompaction(branch, spec.filePath),
 		});
 	}
 	runtime.states = next;
@@ -233,8 +239,10 @@ function refresh(runtime: Runtime, warn: boolean): void {
 
 function logActive(runtime: Runtime): void {
 	if (!runtime.identity) return;
-	const who = runtime.identity.kind === "main" ? "main" : `subagent "${runtime.identity.agent}"`;
-	const active = [...runtime.states.values()].map((s) => `${s.spec.name}(every=${s.spec.every}, scope=${s.spec.scope})`);
+	const who = runtime.identity.kind === "main" ? "main" : `subagent "${runtime.identity.name}"`;
+	const active = [...runtime.states.values()].map(
+		(s) => `${s.spec.name}(every=${s.spec.every}, scope=${s.spec.scope}, inject=${s.spec.inject})`,
+	);
 	runtime.pi.logger?.info?.(
 		`watchdog: ${active.length} watchdog(s) active for ${who}${active.length > 0 ? ` — ${active.join(", ")}` : ""}`,
 	);
@@ -242,7 +250,7 @@ function logActive(runtime: Runtime): void {
 
 /** Session boundary: identity, overrides and the active set are rebuilt; state is restored from the branch. */
 function load(runtime: Runtime, ctx: ExtensionContext): void {
-	runtime.identity = resolveIdentity(ctx);
+	runtime.identity = ctx.agent;
 	runtime.cwd = () => ctx.sessionManager.getCwd();
 	runtime.branchOf = () => ctx.sessionManager.getBranch();
 	runtime.overrides = overridesFromBranch(runtime.branchOf());
@@ -253,16 +261,56 @@ function load(runtime: Runtime, ctx: ExtensionContext): void {
 	logActive(runtime);
 }
 
+/**
+ * Send notes of one inject form as one message. `system`: a `watchdog` custom message (LLM
+ * `developer` role) that starts a turn when the session is idle. `user`: an agent-attributed
+ * user message, indexed first so the watchdog can recognise it on the branch.
+ */
+function send(runtime: Runtime, inject: InjectMode, notes: readonly QueuedNote[], deliverAs: Exclude<DeliverAs, "nextTurn">): void {
+	const text = notes.map((note) => note.text).join("\n\n");
+	const filePaths = notes.map((note) => note.filePath);
+	switch (inject) {
+		case "system":
+			runtime.pi.sendMessage(
+				{ customType: NOTE_CUSTOM_TYPE, content: text, display: true, attribution: "agent", details: { filePaths } },
+				{ deliverAs, triggerTurn: true },
+			);
+			return;
+		case "user":
+			runtime.pi.appendEntry<UserNoteEntry>(USER_NOTE_ENTRY_TYPE, { filePaths, text: text.trim() });
+			runtime.pi.sendUserMessage(text, { deliverAs, attribution: "agent" });
+			return;
+		default: {
+			const unreachable: never = inject;
+			throw new Error(`unknown inject mode ${String(unreachable)}`);
+		}
+	}
+}
+
+/** A finding in its inject form: tagged for `system`; for `user` the reviewer already wrote it in the user's voice. */
+function noteText(spec: WatchdogSpec, severity: string, note: string): string {
+	switch (spec.inject) {
+		case "system":
+			return `<watchdog name="${escapeAttr(spec.name)}" severity="${escapeAttr(severity)}">\n${note}\n</watchdog>`;
+		case "user":
+			return note.trim();
+		default: {
+			const unreachable: never = spec.inject;
+			return unreachable;
+		}
+	}
+}
+
 function deliver(runtime: Runtime, state: WatchdogState, verdict: Verdict): void {
 	if (verdict.kind !== "advice") return;
 	const spec = state.spec;
 	if (verdict.note.trim() === "" || state.sent >= spec.maxPerContext) return;
-	const text = `<watchdog name="${escapeAttr(spec.name)}" severity="${verdict.severity}">\n${verdict.note}\n</watchdog>`;
-	if (verdict.delivery === "nextTurn") runtime.nextTurnQueue.push(text);
-	else runtime.pi.sendUserMessage(text, { deliverAs: verdict.delivery, attribution: "agent" });
+	const note: QueuedNote = { filePath: spec.filePath, inject: spec.inject, text: noteText(spec, verdict.severity, verdict.note) };
+	if (verdict.delivery === "nextTurn") runtime.nextTurnQueue.push(note);
+	else send(runtime, spec.inject, [note], verdict.delivery);
 	state.sent += 1;
 	runtime.pi.logger?.info?.(
-		`watchdog "${spec.name}": ${verdict.severity} → ${verdict.delivery === "nextTurn" ? "queued for next turn" : "delivered"} (${state.sent}/${Number.isFinite(spec.maxPerContext) ? spec.maxPerContext : "∞"})`,
+		`watchdog "${spec.name}": ${verdict.severity} → ${verdict.delivery === "nextTurn" ? "queued for next turn" : "delivered"} as ${spec.inject} (${state.sent}/${Number.isFinite(spec.maxPerContext) ? spec.maxPerContext : "∞"})`,
 	);
 }
 
@@ -278,10 +326,11 @@ function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, ta
 	const spec = state.spec;
 	state.pending = 0;
 	if (state.sent >= spec.maxPerContext) return;
-	const messages = selectMessages(ctx.sessionManager.getBranch(), spec.scope, state.cursor, tail);
+	const branch = ctx.sessionManager.getBranch();
+	const messages = selectMessages(branch, spec.scope, state.cursor, tail);
 	let reviewed = state.cursor;
 	for (const m of messages) reviewed = Math.max(reviewed, messageTimestamp(m) ?? 0);
-	const transcript = renderTranscript(messages);
+	const transcript = renderTranscript(messages, userNoteIndex(branch));
 	if (transcript.trim() === "") {
 		advanceCursor(runtime, state, reviewed);
 		return;
@@ -319,7 +368,7 @@ function describe(runtime: Runtime, spec: WatchdogSpec): string {
 			: tr("OFF", "关闭");
 	const session = override === undefined ? "—" : override ? tr("on", "开启") : tr("off", "关闭");
 	const backend = spec.kind === "jev" ? "JUDGE" : `${tr("chat", "聊天")} ${spec.model ?? "@advisor"}`;
-	return `${spec.name}: ${state} · ${tr("global", "全局")} ${spec.enabled ? tr("on", "开启") : tr("off", "关闭")} · ${tr("session", "会话")} ${session} · ${tr("target", "目标")} ${spec.targets.join(",")} · cwd ${spec.cwd ?? tr("any", "不限")} · ${tr("every", "每")} ${spec.every} · ${tr("scope", "范围")} ${spec.scope === "full" ? tr("full", "全部") : tr("window", "窗口")} · ${backend}\n  ${spec.filePath}`;
+	return `${spec.name}: ${state} · ${tr("global", "全局")} ${spec.enabled ? tr("on", "开启") : tr("off", "关闭")} · ${tr("session", "会话")} ${session} · ${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, tr("any", "不限"))} · inject ${spec.inject} · ${tr("every", "每")} ${spec.every} · ${tr("scope", "范围")} ${spec.scope === "full" ? tr("full", "全部") : tr("window", "窗口")} · ${backend}\n  ${spec.filePath}`;
 }
 /** Model-facing watchdog description kept in English for tool-result content. */
 function describeForToolResult(runtime: Runtime, spec: WatchdogSpec): string {
@@ -327,7 +376,7 @@ function describeForToolResult(runtime: Runtime, spec: WatchdogSpec): string {
 	const state = !targetsHere(runtime, spec) ? "not for this session" : effectiveEnabled(runtime, spec) ? "ON" : "OFF";
 	const session = override === undefined ? "—" : override ? "on" : "off";
 	const backend = spec.kind === "jev" ? "JUDGE" : `chat ${spec.model ?? "@advisor"}`;
-	return `${spec.name}: ${state} · global ${spec.enabled ? "on" : "off"} · session ${session} · target ${spec.targets.join(",")} · cwd ${spec.cwd ?? "any"} · every ${spec.every} · scope ${spec.scope} · ${backend}\n  ${spec.filePath}`;
+	return `${spec.name}: ${state} · global ${spec.enabled ? "on" : "off"} · session ${session} · ${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, "any")} · inject ${spec.inject} · every ${spec.every} · scope ${spec.scope} · ${backend}\n  ${spec.filePath}`;
 }
 
 /** Status line a `write`/`edit` result carries for a watchdog file it touched. */
@@ -487,8 +536,8 @@ function toggle(
 				return {
 					level: "error",
 					text: tr(
-						`watchdog "${spec.name}" does not target this session (target ${spec.targets.join(",")}, cwd ${spec.cwd ?? "any"}); use \`global\``,
-						`watchdog“${spec.name}”未将本会话作为目标（目标 ${spec.targets.join(",")}，cwd ${spec.cwd ?? "不限"}）；请使用 \`global\``,
+						`watchdog "${spec.name}" does not target this session (${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, "any")}); use \`global\``,
+						`watchdog“${spec.name}”未将本会话作为目标（${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, "不限")}）；请使用 \`global\``,
 					),
 				};
 			}
@@ -744,15 +793,30 @@ function registerEvents(runtime: Runtime): void {
 			runtime.pi.logger.warn(`watchdog ${"input"} handler failed`, { error: errorText(error) });
 		}
 	});
+	// A queued `nextTurn` note reaches the turn the prompt starts from its first model call: a
+	// `system` note as the returned custom message, a `user` note as a steer queued while the
+	// prompt is being prepared (the session already counts as streaming here).
 	runtime.pi.on("before_agent_start", () => {
 		try {
 			refresh(runtime, false);
 			const armed = runtime.userTurnArmed;
 			runtime.userTurnArmed = false;
 			if (runtime.nextTurnQueue.length === 0 || (runtime.identity?.kind === "main" && !armed)) return;
-			const content = runtime.nextTurnQueue.join("\n\n");
+			const queued = runtime.nextTurnQueue;
 			runtime.nextTurnQueue = [];
-			return { message: { customType: NEXT_TURN_CUSTOM_TYPE, content, display: true, attribution: "agent" } };
+			const userNotes = queued.filter((note) => note.inject === "user");
+			if (userNotes.length > 0) send(runtime, "user", userNotes, "steer");
+			const systemNotes = queued.filter((note) => note.inject === "system");
+			if (systemNotes.length === 0) return;
+			return {
+				message: {
+					customType: NOTE_CUSTOM_TYPE,
+					content: systemNotes.map((note) => note.text).join("\n\n"),
+					display: true,
+					attribution: "agent",
+					details: { filePaths: systemNotes.map((note) => note.filePath) },
+				},
+			};
 		} catch (error) {
 			runtime.pi.logger.warn(`watchdog ${"before_agent_start"} handler failed`, { error: errorText(error) });
 		}
@@ -762,9 +826,9 @@ function registerEvents(runtime: Runtime): void {
 		try {
 			// Registration can precede the first session boundary; initialize lazily.
 			if (runtime.identity === null) load(runtime, ctx);
-			const actions = countActions(event.message);
-			if (actions === 0) return;
 			for (const state of runtime.states.values()) {
+				const actions = watchedActions(state.spec.filter, event.message);
+				if (actions === 0) continue;
 				state.pending += actions;
 				if (state.run.kind === "idle" && state.pending >= state.spec.every) start(runtime, state, ctx, event.message);
 			}

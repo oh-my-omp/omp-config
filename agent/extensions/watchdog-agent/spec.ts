@@ -1,10 +1,18 @@
 import { readFileSync } from "node:fs";
-import { basename, isAbsolute, resolve } from "node:path";
+import { basename } from "node:path";
 import { errorText } from "../_shared/errors.ts";
+import {
+	type FilterKeys,
+	type FilterProblem,
+	type InjectMode,
+	parseInjectMode,
+	parseSessionFilter,
+	type SessionFilter,
+} from "../_shared/session-filter.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 export const WATCHDOG_FILE_PATTERN = /^WATCHDOG-.+\.md$/i;
-/** Marks injected advisory user-messages so they are excluded from review + counting. */
-export const ADVISORY_TAG = "<watchdog";
+/** `model` is the chat reviewer's own model, so the watched session's model is matched by `watchModel` / `watchProvider`. */
+export const WATCHDOG_FILTER_KEYS: FilterKeys = { target: "target", cwd: "cwd", model: "watchModel", provider: "watchProvider" };
 const DEFAULT_TOOLS: readonly string[] = ["read", "grep", "glob"];
 /** Reviewer tools we are willing to grant from frontmatter (superset stays read-only by default). */
 const GRANTABLE_TOOLS: Record<string, true> = {
@@ -27,13 +35,12 @@ export type Scope = "full" | "window";
 
 export type DeliverAs = "aside" | "steer" | "nextTurn" | "followUp";
 
-export type Identity = { readonly kind: "main" } | { readonly kind: "sub"; readonly agent: string; readonly fileId: string };
-
 type WatchdogBase = {
 	readonly name: string;
-	readonly targets: readonly string[];
-	/** Exact normalized session cwd; omitted means no directory restriction. */
-	readonly cwd?: string;
+	/** Which sessions and which producing models the watchdog watches. */
+	readonly filter: SessionFilter;
+	/** How findings reach the watched model. */
+	readonly inject: InjectMode;
 	/** File-level (global) switch: frontmatter `enabled`, default true. A session override may shadow it. */
 	readonly enabled: boolean;
 	readonly delivery: DeliverAs;
@@ -123,7 +130,27 @@ export function setFrontmatterEnabled(raw: string, enabled: boolean): string | n
 
 type WatchdogParse = { readonly kind: "ok"; readonly spec: WatchdogSpec } | { readonly kind: "invalid"; readonly reason: string };
 
-/** Parse one `WATCHDOG-*.md` (enabled or not); invalid when unreadable, targetless, or declaring malformed cwd/Jev settings. */
+/** Model-facing (English) wording of a frontmatter problem; it reaches `write`/`edit` tool results. */
+function describeProblem(problem: FilterProblem): string {
+	switch (problem.kind) {
+		case "missing":
+			return `frontmatter has no \`${problem.key}\``;
+		case "empty":
+			return `frontmatter \`${problem.key}\` lists nothing`;
+		case "relative":
+			return `frontmatter \`${problem.key}\` pattern "${problem.pattern}" must be absolute or start with ~/`;
+		case "badRegex":
+			return `frontmatter \`${problem.key}\` is not a valid regex: ${problem.detail}`;
+		case "badInject":
+			return `frontmatter \`${problem.key}\` must be system or user, not "${problem.value}"`;
+		default: {
+			const unreachable: never = problem;
+			return unreachable;
+		}
+	}
+}
+
+/** Parse one `WATCHDOG-*.md` (enabled or not); invalid when unreadable, targetless, or declaring malformed filter, inject or Jev settings. */
 export function parseWatchdogFile(path: string): WatchdogParse {
 	let raw: string;
 	try {
@@ -133,12 +160,10 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 	}
 	const { fields, body } = parseFrontmatter(raw) ?? { fields: {}, body: raw };
 	const enabled = fields.enabled === undefined || /^(true|yes|on|1)$/i.test(unquote(fields.enabled));
-	const targets = fields.target ? toList(fields.target) : [];
-	if (targets.length === 0) return { kind: "invalid", reason: "frontmatter has no `target`" };
-	const cwd = fields.cwd === undefined ? undefined : unquote(fields.cwd);
-	if (cwd !== undefined && (cwd === "" || !isAbsolute(cwd))) {
-		return { kind: "invalid", reason: "frontmatter `cwd` must be a nonempty absolute directory path" };
-	}
+	const filter = parseSessionFilter(fields, WATCHDOG_FILTER_KEYS, { kind: "required" });
+	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
+	const inject = parseInjectMode(fields.inject);
+	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };
 
 	const rawTools = fields.tools ? toList(fields.tools) : [...DEFAULT_TOOLS];
 	const tools = rawTools.map((t) => t.toLowerCase()).filter((t) => GRANTABLE_TOOLS[t] === true);
@@ -150,8 +175,8 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 
 	const common: WatchdogBase = {
 		name: fields.name ? unquote(fields.name) : fallbackName || "watchdog",
-		targets,
-		cwd: cwd === undefined ? undefined : resolve(cwd),
+		filter: filter.value,
+		inject: inject.value,
 		enabled,
 		delivery,
 		maxPerContext,

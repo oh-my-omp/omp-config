@@ -1,54 +1,69 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { producerMatches, targetsSession } from "../agent/extensions/_shared/session-filter.ts";
 import { parseWatchdogFile } from "../agent/extensions/watchdog-agent/spec.ts";
 
 const root = mkdtempSync("/tmp/omp-watchdog-spec-");
 const file = join(root, "WATCHDOG-Scope.md");
-const leaderCwd = resolve("/tmp/watchdog-leader");
+const main: ExtensionContext["agent"] = { kind: "main", id: "Main", name: "main", depth: 0 };
 
 afterAll(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
-function parse(cwdLine: string | null, backend: "chat" | "jev") {
-	const options = backend === "jev" ? "option.pass: Meets guidance\noption.warn: Misses guidance\noption.warn.prompt: Continue work\n" : "";
-	writeFileSync(file, `---\ntarget: main\n${cwdLine === null ? "" : `${cwdLine}\n`}${options}---\nReview the latest work.\n`);
+function parse(lines: readonly string[], backend: "chat" | "jev") {
+	const options =
+		backend === "jev" ? ["option.pass: Meets guidance", "option.warn: Misses guidance", "option.warn.prompt: Continue work"] : [];
+	writeFileSync(file, `---\n${[...lines, ...options].join("\n")}\n---\nReview the latest work.\n`);
 	return parseWatchdogFile(file);
 }
 
 for (const backend of ["chat", "jev"] as const) {
-	describe(`watchdog cwd frontmatter (${backend})`, () => {
-		test("omitting cwd leaves directory matching unrestricted", () => {
-			expect(parse(null, backend)).toMatchObject({ kind: "ok", spec: { kind: backend, targets: ["main"], cwd: undefined } });
+	describe(`watchdog frontmatter (${backend})`, () => {
+		test("target is required", () => {
+			expect(parse([], backend)).toEqual({ kind: "invalid", reason: "frontmatter has no `target`" });
 		});
 
-		test("absolute cwd is normalized without requiring the directory to exist", () => {
-			expect(parse(`cwd: ${leaderCwd}/./child/../`, backend)).toMatchObject({ kind: "ok", spec: { cwd: leaderCwd } });
+		test("inject defaults to system and accepts user", () => {
+			expect(parse(["target: main"], backend)).toMatchObject({ kind: "ok", spec: { inject: "system" } });
+			expect(parse(["target: main", "inject: User"], backend)).toMatchObject({ kind: "ok", spec: { inject: "user" } });
 		});
 
-		for (const quote of ['"', "'"]) {
-			test(`quoted absolute cwd accepts ${quote} quotes and spaces`, () => {
-				const cwd = `${leaderCwd} with spaces`;
-				expect(parse(`cwd: ${quote}${cwd}/./${quote}`, backend)).toMatchObject({ kind: "ok", spec: { cwd } });
+		test("an unknown inject value invalidates the file", () => {
+			expect(parse(["target: main", "inject: developer"], backend)).toEqual({
+				kind: "invalid",
+				reason: 'frontmatter `inject` must be system or user, not "developer"',
 			});
-		}
+		});
 
-		for (const value of ["", "   ", '""', "''", '"   "', "null", "~"]) {
-			test(`explicit empty or null cwd ${JSON.stringify(value)} is invalid, not unrestricted`, () => {
-				expect(parse(`cwd: ${value}`, backend)).toEqual({
-					kind: "invalid",
-					reason: "frontmatter `cwd` must be a nonempty absolute directory path",
-				});
-			});
-		}
+		test("watchModel and watchProvider filter producers; model stays the reviewer's", () => {
+			const parsed = parse(["target: main", "watchModel: ^gpt-", "watchProvider: codex"], backend);
+			if (parsed.kind !== "ok") throw new Error(parsed.reason);
+			const filter = parsed.spec.filter;
+			expect(producerMatches(filter, { model: "gpt-6-luna", provider: "openai-codex" })).toBe(true);
+			expect(producerMatches(filter, { model: "gpt-6-luna", provider: "anthropic" })).toBe(false);
+			expect(producerMatches(filter, { model: "claude-opus-5-5", provider: "openai-codex" })).toBe(false);
+		});
 
-		for (const value of [".", "relative/leader", "../leader", '"relative/leader"', "~/leader", "[]", "[/tmp/leader]"]) {
-			test(`non-absolute cwd ${JSON.stringify(value)} is invalid`, () => {
-				expect(parse(`cwd: ${value}`, backend)).toEqual({
-					kind: "invalid",
-					reason: "frontmatter `cwd` must be a nonempty absolute directory path",
-				});
+		test("an invalid watchModel regex invalidates the file", () => {
+			expect(parse(["target: main", "watchModel: ("], backend)).toMatchObject({ kind: "invalid" });
+		});
+
+		test("cwd globs restrict the watched sessions", () => {
+			const parsed = parse(["target: main", "cwd: /tmp/leader{,/**}, /**/worktrees/*"], backend);
+			if (parsed.kind !== "ok") throw new Error(parsed.reason);
+			const filter = parsed.spec.filter;
+			expect(targetsSession(filter, main, "/tmp/leader")).toBe(true);
+			expect(targetsSession(filter, main, "/tmp/leader/pkg")).toBe(true);
+			expect(targetsSession(filter, main, "/home/u/worktrees/wt-1")).toBe(true);
+			expect(targetsSession(filter, main, "/tmp/other")).toBe(false);
+		});
+
+		for (const value of ["", '""', "[]", ".", "relative/leader", "/tmp/a, ../b"]) {
+			test(`cwd ${JSON.stringify(value)} invalidates the file instead of matching everything`, () => {
+				expect(parse(["target: main", `cwd: ${value}`], backend)).toMatchObject({ kind: "invalid" });
 			});
 		}
 	});

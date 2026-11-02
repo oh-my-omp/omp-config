@@ -5,7 +5,8 @@ import { runHelperPrompt } from "../_shared/helper-session.ts";
 import { openJudge } from "../_shared/judge.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
 import type { Model, ThinkingLevel } from "../_shared/models.ts";
-import { ADVISORY_TAG, type ChatWatchdog, type DeliverAs, hasKey, type JevWatchdog, type Scope, type Verdict } from "./spec.ts";
+import type { InjectMode, Producer } from "../_shared/session-filter.ts";
+import { type ChatWatchdog, type DeliverAs, hasKey, type JevWatchdog, type Scope, type Verdict } from "./spec.ts";
 
 const REVIEW_TIMEOUT_MS = 90_000;
 // --- transcript rendering ---------------------------------------------------
@@ -45,8 +46,26 @@ export function messageTimestamp(message: unknown): number | undefined {
 	return hasKey(message, "timestamp") && typeof message.timestamp === "number" ? message.timestamp : undefined;
 }
 
-/** One message's full rendering, or undefined when it contributes nothing (incl. our own advisories). */
-function renderMessage(m: unknown): string | undefined {
+/** Model and provider of an assistant message; null for any other message. */
+export function producerOf(message: unknown): Producer | null {
+	if (!hasKey(message, "role") || message.role !== "assistant") return null;
+	if (!hasKey(message, "model") || typeof message.model !== "string") return null;
+	if (!hasKey(message, "provider") || typeof message.provider !== "string") return null;
+	return { model: message.model, provider: message.provider };
+}
+
+/**
+ * Whether a branch message is a user-mode note a watchdog sent: an agent-attributed
+ * user message whose trimmed text is among `ownNotes` (the texts recorded at sending).
+ */
+export function isOwnUserNote(message: unknown, ownNotes: Pick<ReadonlySet<string>, "has">): boolean {
+	if (!hasKey(message, "role") || message.role !== "user") return false;
+	if (!hasKey(message, "attribution") || message.attribution !== "agent") return false;
+	return ownNotes.has(textBlocks(hasKey(message, "content") ? message.content : undefined).trim());
+}
+
+/** One message's full rendering, or undefined when it contributes nothing (incl. our own user-mode notes). */
+function renderMessage(m: unknown, ownNotes: Pick<ReadonlySet<string>, "has">): string | undefined {
 	if (!hasKey(m, "role") || typeof m.role !== "string") return undefined;
 	const role = m.role;
 	const content = hasKey(m, "content") ? m.content : undefined;
@@ -58,8 +77,8 @@ function renderMessage(m: unknown): string | undefined {
 		return segs.length > 0 ? segs.join("\n") : undefined;
 	}
 	if (role === "user") {
+		if (isOwnUserNote(m, ownNotes)) return undefined;
 		const text = textBlocks(content).trim();
-		if (text.startsWith(ADVISORY_TAG)) return undefined; // skip our own advisory injections
 		return text ? `USER: ${text}` : undefined;
 	}
 	if (role === "toolResult") {
@@ -95,11 +114,11 @@ export function selectMessages(entries: ReadonlyArray<unknown>, scope: Scope, af
 	return all.filter((m) => (messageTimestamp(m) ?? 0) > after);
 }
 
-/** Full, untruncated rendering of the given messages, oldest first. */
-export function renderTranscript(messages: ReadonlyArray<unknown>): string {
+/** Full, untruncated rendering of the given messages, oldest first. System-mode notes are custom messages, never branch messages, so only user-mode notes need `ownNotes`. */
+export function renderTranscript(messages: ReadonlyArray<unknown>, ownNotes: Pick<ReadonlySet<string>, "has">): string {
 	const parts: string[] = [];
 	for (const m of messages) {
-		const part = renderMessage(m);
+		const part = renderMessage(m, ownNotes);
 		if (part !== undefined) parts.push(part);
 	}
 	return parts.join("\n");
@@ -155,7 +174,24 @@ function resolveReviewer(ctx: ExtensionContext, spec: ChatWatchdog): { model: Mo
 	return model ? { model, thinkingLevel: level ?? "off" } : null;
 }
 
-function buildReviewPrompt(guidance: string, transcript: string): string {
+/** How the note line is written: a reviewer's note, or the user talking to the agent. */
+function noteFormat(inject: InjectMode): string {
+	switch (inject) {
+		case "system":
+			return "<one concise, concrete note, at most ~80 words, citing specific files/symbols/lines>";
+		case "user":
+			return (
+				"<the note, at most ~80 words, written as the human user of this session typing to the primary agent: first person, colloquial and emotionally charged to fit the severity (mildly annoyed for nit, impatient for concern, angry and urgent for blocker), " +
+				"in the language the user writes in the transcript, still citing the specific files/symbols/lines; it is sent as the user's own message, so never mention a watchdog, a reviewer or this review, and use no tags or headings>"
+			);
+		default: {
+			const unreachable: never = inject;
+			return unreachable;
+		}
+	}
+}
+
+function buildReviewPrompt(guidance: string, transcript: string, inject: InjectMode): string {
 	return (
 		`You are a code-review WATCHDOG silently observing another AI coding agent ("the primary agent") as it works in this repository. ` +
 		`You are NOT the primary agent; do not perform its task.\n\n` +
@@ -166,7 +202,7 @@ function buildReviewPrompt(guidance: string, transcript: string): string {
 		`- If nothing is worth flagging, reply with the single word: PASS\n` +
 		`- Otherwise reply with two lines:\n` +
 		`SEVERITY: <nit|concern|blocker>\n` +
-		`<one concise, concrete note, at most ~80 words, citing specific files/symbols/lines>\n\n` +
+		`${noteFormat(inject)}\n\n` +
 		`Do not restate the transcript. Do not add anything else.\n\n` +
 		`TRANSCRIPT:\n"""\n${transcript}\n"""`
 	);
@@ -205,7 +241,7 @@ export async function runReviewer(
 		}`,
 		model: reviewer.model,
 		thinkingLevel: reviewer.thinkingLevel,
-		prompt: buildReviewPrompt(spec.guidance, transcript),
+		prompt: buildReviewPrompt(spec.guidance, transcript, spec.inject),
 		systemPrompt: "default",
 		toolNames: spec.tools,
 		signal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),

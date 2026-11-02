@@ -4,15 +4,17 @@
 // Registers /watchdog plus session/branch/tree/compaction, tool_result, input,
 // before_agent_start, message_end and agent_end hooks; no tools.
 // Reads specs and session branch entries; global toggles/removal
-// update spec files and cursors/overrides append session entries. Main and sub.
+// update spec files; cursors, overrides and user-note index records append
+// session entries. Main and sub.
 //
 // WHY THIS EXISTS. OMP's native advisor already attaches per subagent
 // (`task.agentAdvisor` / agent frontmatter `advisor:`) and discovers
 // `WATCHDOG.md` / `WATCHDOG.yml`. What it does NOT do is route the *guidance
 // content itself* to a specific target: every advised session receives the
 // whole discovered roster. This extension adds exactly that — a `WATCHDOG-*.md`
-// file declares WHICH agent it watches (`target: main` or a subagent name),
-// optionally restricted to one exact session cwd. Discovery alone does not activate it.
+// file declares WHICH sessions it watches (`target`, optional `cwd` globs) and
+// optionally which producing models count (`watchModel` / `watchProvider`).
+// Discovery alone does not activate it.
 // Chat reviewers may choose a model; option-based judgments follow `openJudge`
 // (purpose `watchdog-agent`). Its body only reaches that target. There is no ExtensionAPI hook into
 // the native advisor, so this is a small self-contained reviewer.
@@ -24,8 +26,11 @@
 //                  linked worktree's .git file). A /move takes effect on the next
 //                  prompt or /watchdog command, without reloading the extension.
 // Frontmatter (Claude rule.md style, between `---` fences):
-//   target: main            # main | <subagent-name> | * | subagents | CSV list
-//   cwd: /absolute/path/to/leader-checkout        # optional exact cwd; omitted = unrestricted
+//   target: main            # main | <subagent-name or id> | * | subagents | CSV list (any matches)
+//   cwd: ~/code/app{,/**}, /**/worktrees/*       # optional CSV of globs (any matches); omitted = unrestricted
+//   watchModel: ^gpt-     # optional regex on each assistant message's model id
+//   watchProvider: ^openai-codex$                 # optional regex on its provider
+//   inject: system                                # system (default) | user
 //   model:  anthropic/claude-sonnet-4-5:medium   # chat reviewer; else @advisor role
 //   tools:  [read, grep, glob]                   # optional; chat reviewer's tools
 //   instructions: Judge only the latest work.    # optional native question text
@@ -38,11 +43,15 @@
 //   maxPerContext: 6                              # optional per-watchdog cap; default unlimited
 //   every:  30                                    # run after this many watched actions (default 30)
 //   scope:  full                                  # full (whole branch, default) | window (since own last run)
-// `cwd` must be a nonempty absolute directory path string (quotes allowed).
-// Both it and the live session cwd are normalized with node:path.resolve before
-// exact comparison. It ANDs with target, including target: *; no glob, regex,
-// list or subdirectory inheritance. Empty or relative cwd makes the file invalid.
-// A copied rule can still be discovered in a linked worktree without matching it.
+// `target`, `cwd`, `watchModel` and `watchProvider` follow `_shared/session-filter.ts`:
+// items inside a key are alternatives, keys AND (also with `target: *`). A `cwd`
+// pattern is a Bun glob, absolute or `~/`-prefixed, matched against the
+// normalized live session cwd (`/a/repo` that directory only, `/a/repo/**` its
+// subdirectories only); a relative pattern makes the file invalid, and a copied
+// rule can be discovered in a linked worktree without matching it. The two
+// regexes (unanchored, one per key) test each assistant message's own `model`
+// and `provider`; only actions of matching messages count. An empty or invalid
+// regex, or an `inject` other than system/user, makes the file invalid.
 // Body = review priorities for chat; judgment criterion for JUDGE.
 // Option-based watchdogs use `openJudge` (`_shared/judge.ts`, purpose
 // `watchdog-agent`): the `@watchdog-agent` role's chat models when assigned,
@@ -52,10 +61,11 @@
 // explanation, or fallback to the chat reviewer. Labels are lowercased
 // (the frontmatter parser lowercases keys); each value is a single line.
 //
-// RUNTIME. Every discovered watchdog matching the session identity and optional
-// live cwd restriction runs independently with its own counter, cursor and cap. The counter
-// accumulates the watched agent's actions: each assistant tool call and each
-// assistant text reply counts as one. When a watchdog's counter reaches
+// RUNTIME. Every discovered watchdog matching the session identity and cwd
+// runs independently with its own counter, cursor and cap. The counter
+// accumulates the watched agent's actions: each tool call and each text reply
+// of an assistant message whose producer passes the model filters counts as
+// one, both live and when restored. When a watchdog's counter reaches
 // `every`, it runs immediately (mid-run), and its finding is injected as soon as
 // the review finishes, whatever state the agent is in. When the agent's run
 // settles (`agent_end`, non-continuation) with a nonzero counter below
@@ -65,16 +75,33 @@
 // entry. The transcript is never truncated. Chat reviewers use a
 // tool-capable `createAgentSession`; JUDGE uses `Judge.judge` and only
 // selects one configured option whose prewritten prompt (if any) is injected.
-// Findings go through `sendUserMessage`, bounded per watchdog per context when
-// `maxPerContext` is set; `nextTurn` findings wait for the user's next prompt
-// (a subagent's next turn) and arrive as a custom message. Each compaction
-// starts a new context: the cap count resets, nothing else does. On session
-// load or branch move the cursor is restored from its entries, the cap count
-// from the findings already injected on the branch since the last compaction,
-// and the counter from the actions after the cursor.
+//
+// INJECT. `system`: the finding, tagged `<watchdog name=… severity=…>`, is a
+// `watchdog` custom message (`details.filePaths`), which the LLM receives in
+// the developer role (Anthropic upgrades it to a mid-conversation system
+// message only where the model supports that). `user`: the finding is an
+// agent-attributed user message without a tag; a chat reviewer is told to write
+// it as the human user talking to the agent (colloquial, emotional to fit the
+// severity) in the same call, while JUDGE sends the option's prompt verbatim.
+// Before a user-form note is sent, a `mouriya.omp.watchdog-agent.user-note`
+// entry records its text and files; it is an index, not the delivery: a note
+// counts only once an agent-attributed user message with that text is on the
+// branch. `aside`, `steer` and `followUp` send at once (a system note starts a
+// turn when the session is idle; OMP wraps a user-form steer in its "User
+// interjection" notice); `nextTurn` waits for the user's next prompt (a
+// subagent's next turn) and joins that turn's first model call: system notes as
+// the `before_agent_start` custom message, user notes as a steer queued during
+// prompt preparation. Notes are bounded per watchdog per context when
+// `maxPerContext` is set. Each compaction starts a new context: the cap count
+// resets, nothing else does. On session load or branch move the cursor is
+// restored from its entries, the cap count from the file's notes on the branch
+// since the last compaction (system custom messages and indexed user messages),
+// and the counter from the watched actions after the cursor. Reviews never read
+// the watchdog's own notes: custom messages are not transcript messages, and
+// indexed user messages are skipped.
 //
 // COMMANDS. `/watchdog [list]` lists every discovered file with its global
-// (`enabled`), session state and cwd restriction.
+// (`enabled`), session state, filters and inject form.
 // `/watchdog on|off <name> [session|global]`
 // switches one watchdog: `session` (default) records a session custom entry that
 // shadows the file for this session only and follows the session branch;

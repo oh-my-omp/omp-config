@@ -67,14 +67,24 @@ export type Parsed<T> = { readonly kind: "ok"; readonly value: T } | { readonly 
 /** The producer of an assistant message, as `model` / `provider` constraints see it. */
 export type Producer = { readonly model: string; readonly provider: string };
 
-/** Comma-separated items, without `[ ]` brackets, quotes and empty items. */
+/** Comma-separated items, without `[ ]` brackets, quotes and empty items; a comma inside a glob's `{a,b}` braces stays in its item. */
 function listItems(raw: string): string[] {
 	let value = raw.trim();
 	if (value.startsWith("[") && value.endsWith("]")) value = value.slice(1, -1);
-	return value
-		.split(",")
-		.map((item) => unquote(item))
-		.filter((item) => item !== "");
+	const items: string[] = [];
+	let depth = 0;
+	let start = 0;
+	for (let i = 0; i < value.length; i++) {
+		const char = value[i];
+		if (char === "{") depth += 1;
+		else if (char === "}") depth = Math.max(0, depth - 1);
+		else if (char === "," && depth === 0) {
+			items.push(value.slice(start, i));
+			start = i + 1;
+		}
+	}
+	items.push(value.slice(start));
+	return items.map((item) => unquote(item)).filter((item) => item !== "");
 }
 
 function toTarget(item: string): Target {
