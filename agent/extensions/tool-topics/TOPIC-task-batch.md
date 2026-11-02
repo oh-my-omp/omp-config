@@ -9,5 +9,5 @@ upstream: pi-coding-agent@18.13.2 src/eval/js/tool-bridge.ts, src/extensibility/
 
 - Build `tasks` in an eval cell and dispatch with `await tool.task({context, tasks: items.map(...)})`; send later waves from later cells. Every item still carries `task` and `solutionSpace`; homogeneous items may share one `solutionSpace`.
 - It is this same tool: the same `tool_call` checks (split, report length, isolation) and per-item fields apply. Items no longer launch while the call streams. The call returns once the children are spawned; their results arrive in your conversation, not in the cell.
-- `agent()`/`workpool()` return results to the cell, so a cell can build the next wave from them. They skip this setup's split and isolation checks and take no `solutionSpace`: use them only when the cell itself must consume results.
+- When code must compute on the results (merge, count, transform, build the next wave), use `completion`, `judgeBatch` or `agent(…, { schema })` in the cell instead: `tool://eval/workflow`. Those children skip this setup's split and isolation checks and take no `solutionSpace`.
 - Concurrency and job caps: `tool://task/limits`.
