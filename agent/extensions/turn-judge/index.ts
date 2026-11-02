@@ -1,7 +1,7 @@
 // ============================================================================
 // turn-judge — after every turn of a session a `TURN-JUDGE-*.md` file targets,
 // ask JUDGE (`openJudge`, purpose `turn-judge`) that file's question about the turn, then either
-// report the verdict or type the configured prompt.
+// report the verdict or send the configured prompt.
 // Registers input, session_switch/branch/tree, and message_end hooks; no tools
 // or commands. Reads adjacent/repository specs and session history; writes no
 // files. Runs in main and sub sessions.
@@ -15,34 +15,42 @@
 //   name:    example                     # optional; defaults to the file label
 //   enabled: true                        # optional; only true/yes/on/1 keep it on
 //   target:  main, task:mid              # optional; default main, see SCOPE
+//   cwd:     ~/code/app{,/**}            # optional; globs, see SCOPE
 //   model:   opus                        # optional; regex, see SCOPE
 //   provider: ^anthropic$                # optional; regex, see SCOPE
 //   skipTools: wt, harness_restart       # optional; tool names, see SCOPE
+//   inject:  system                      # optional; system (default) | user, see OUTCOME
 //   maxChars: 30000                      # optional; 时间线 budget, see STATE
 //   option.<label>: <criteria>           # >= 2 options; empty criteria = the label says it all
-//   option.<label>.prompt: <text>        # optional; typed as a user prompt when triggered
+//   option.<label>.prompt: <text>        # optional; sent to the agent when triggered
 //   option.<label>.threshold: 0.7        # required with .prompt, in (0, 1]
 // Labels are any text without `.` or spaces. Body = the question, sent verbatim.
 //
-// SCOPE. `target` takes watchdog-agent's grammar: a comma list (`[a, b]`
-// brackets and quotes accepted, case-insensitive) of `main`, `subagents`
-// (also `subagent`, `sub`, `subs`), `*` (also `all`, `any`), or a subagent's
-// definition name (`task:mid`, `mentor:default`) or registry id. Without the
-// key a file targets `main`; a key that lists nothing makes the file invalid.
-// `model` and `provider` follow append-system-model: JavaScript regexes,
-// unanchored `RegExp.test`, against the judged message's own `model` and
-// `provider` (the model that produced the turn, not `upstreamModel`); an
-// empty value or a bad regex makes the file invalid. `skipTools` is a comma
+// SCOPE. `target`, `cwd`, `model` and `provider` follow
+// `_shared/session-filter.ts` (the grammar watchdog-agent uses); items inside a
+// key are alternatives, keys AND. `target` is a comma list (`[a, b]` brackets
+// and quotes accepted, case-insensitive) of `main`, `subagents` (also
+// `subagent`, `sub`, `subs`), `*` (also `all`, `any`), or a subagent's
+// definition name (`task:mid`, `mentor:default`) or registry id; without the
+// key a file targets `main`. `cwd` is a comma list of Bun globs, each absolute
+// or `~/`-prefixed, matched against the normalized session cwd (`/a/repo`
+// that directory only, `/a/repo/**` its subdirectories only, `/a/repo{,/**}`
+// both); without the key any directory matches. `model` and `provider` are
+// one JavaScript regex each (alternatives with `|`), unanchored
+// `RegExp.test`, against the judged message's own `model` and `provider` (the
+// model that produced the turn, not `upstreamModel`). A key that lists
+// nothing, a relative cwd pattern, an empty or bad regex, or an `inject`
+// other than system/user makes the file invalid. `skipTools` is a comma
 // list of tool names: a turn that called any of them is not judged by the
 // file, e.g. a turn that queued a session move (`wt`, `harness_restart`),
 // which runs only after the turn ends. The turn's calls are those of every
 // assistant message after the previous one that ended with `stopReason:
 // "stop"`, so a turn a prompt (human, turn-judge or harness) starts after a
 // stop counts from zero; calls inside the judged message itself have not run
-// and do not count. A key that lists nothing makes the file invalid. A file
-// judges a turn only when its target covers the session, every regex it sets
+// and do not count. A `skipTools` that lists nothing makes the file invalid. A file
+// judges a turn only when its target and cwd cover the session, every regex it sets
 // matches and no skip tool was called. Files that do not apply cost nothing:
-// no JUDGE request, and no branch walk unless a file passes the target and
+// no JUDGE request, and no branch walk unless a file passes the target, cwd and
 // model checks.
 //
 // TURN. A turn is an assistant message the model ended itself
@@ -63,8 +71,10 @@
 //   用户在ask中回答  what the user chose or typed in an `ask` call, one line per
 //                answered question (`question → answer`); a cancelled,
 //                refused or unanswered ask adds nothing.
-//   提醒          any later user-role prompt that is not a human prompt: a
-//                harness or extension reminder, a turn-judge prompt; only its
+//   提醒          any later user-role prompt that is not a human prompt (a
+//                harness or extension reminder, a user-form turn-judge
+//                prompt) and any custom message of type `watchdog` or
+//                `turn-judge` (system-form notes and prompts); only its
 //                first 400 characters.
 //   模型想        a thinking block's text (GPT and Gemini send a summary of
 //                their reasoning; Claude sends its reasoning). Redacted and
@@ -83,22 +93,31 @@
 // or above its threshold is triggered; otherwise the file's verdict and every
 // option's probability are reported. A turn the prompt itself causes is judged
 // like any other; nothing caps it.
+// `inject` sets how a triggered prompt reaches the agent, verbatim either way:
+// `system` (default) as a `turn-judge` custom message, which the LLM receives
+// in the developer role (Anthropic upgrades it to a mid-conversation system
+// message only where the model supports that); `user` as an agent-attributed
+// user message.
 //   Main session: judgments run in the background. A triggered file's prompt
-//   is sent as a user message (`attribution: "agent"`; idle → starts a turn,
-//   busy → follow-up). Untriggered files share one info notification after
+//   is sent in its inject form (idle → starts a turn, busy → follow-up).
+//   Untriggered files share one info notification after
 //   all of the turn's judgments settle (consecutive UI notifications replace
 //   each other). If the user sends a prompt or moves the session before a
-//   verdict returns, that verdict is reported and nothing is typed.
+//   verdict returns, that verdict is reported and nothing is sent.
 //   Subagent: the message_end handler awaits the judgments, and the task
 //   executor waits for in-flight message_end handlers before it collects the
 //   subagent's result. Everything shares one SUB_DEADLINE_MS budget from the
 //   handler's start, below OMP's 30 s extension-handler cap; a judgment still
 //   running then fails. When files trigger, the deadline has not passed and no
 //   message has entered the branch after the judged one, the handler waits for
-//   the session to go idle, sends the triggered prompts as ONE user message
-//   (file order, blank-line separated, `attribution: "agent"`) that starts a
-//   new turn, and returns once that turn is admitted (the session is busy or a
-//   newer message exists). The subagent's reply to it replaces the judged report
+//   the session to go idle and sends the triggered prompts (file order, blank-
+//   line separated) joined per inject form: user-form prompts as ONE user
+//   message that starts a new turn, with the system-form ones as one custom
+//   message joining it; system-form prompts alone as ONE custom message that
+//   starts the turn and carries a `deliveryId`. It returns once that turn is
+//   admitted (the session is busy, or a newer message — for system-form alone,
+//   the custom message with that `deliveryId` — is on the branch). The
+//   subagent's reply to it replaces the judged report
 //   as the result its parent receives, so a prompt meant for subagents should
 //   ask for the complete revised report; a file that keeps triggering keeps
 //   the subagent from returning. A prompt that misses the deadline or meets a
@@ -126,6 +145,16 @@ import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { openJudge } from "../_shared/judge.ts";
 import { textOf } from "../_shared/messages.ts";
+import {
+	type FilterKeys,
+	type FilterProblem,
+	type InjectMode,
+	parseInjectMode,
+	parseSessionFilter,
+	producerMatches,
+	type SessionFilter,
+	targetsSession,
+} from "../_shared/session-filter.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 
 const FILE_PATTERN = /^TURN-JUDGE-.+\.md$/i;
@@ -138,18 +167,11 @@ const SUB_DEADLINE_MS = 20_000;
 const POLL_MS = 25;
 /** A 提醒 keeps its head only: harness attachments (post-compaction context lists) run to thousands of characters. */
 const REMINDER_MAX_CHARS = 400;
-
-type AgentIdentity = ExtensionContext["agent"];
-
-type Target =
-	| { readonly kind: "all" }
-	| { readonly kind: "main" }
-	| { readonly kind: "subagents" }
-	| { readonly kind: "agent"; readonly name: string };
-
-type MatchField = "model" | "provider";
-
-type ModelConstraint = { readonly field: MatchField; readonly pattern: RegExp };
+const FILTER_KEYS: FilterKeys = { target: "target", cwd: "cwd", model: "model", provider: "provider" };
+/** Custom message type of system-form prompts (`details.deliveryId` on a subagent's). */
+const PROMPT_CUSTOM_TYPE = "turn-judge";
+/** Custom message types that are notes to the judged agent, so the timeline lists them as 提醒: watchdog-agent's system-form notes and this extension's prompts. */
+const REMINDER_CUSTOM_TYPES: ReadonlySet<string> = new Set(["watchdog", PROMPT_CUSTOM_TYPE]);
 
 type Outcome = { readonly kind: "info" } | { readonly kind: "prompt"; readonly prompt: string; readonly threshold: number };
 
@@ -163,8 +185,8 @@ type TurnJudgeSpec = {
 	readonly maxChars: number;
 	/** Tool names whose call in the judged turn skips this file. */
 	readonly skipTools: ReadonlySet<string>;
-	readonly targets: readonly Target[];
-	readonly constraints: readonly ModelConstraint[];
+	readonly filter: SessionFilter;
+	readonly inject: InjectMode;
 };
 
 type SpecParse =
@@ -196,7 +218,7 @@ type Action =
 type Judged =
 	| { readonly kind: "failed"; readonly line: string }
 	| { readonly kind: "info"; readonly line: string }
-	| { readonly kind: "prompt"; readonly line: string; readonly prompt: string };
+	| { readonly kind: "prompt"; readonly line: string; readonly prompt: string; readonly inject: InjectMode };
 
 /** What one main-session judgment leaves for the turn's notification. */
 type Report =
@@ -270,62 +292,30 @@ function parseOptions(fields: Readonly<Record<string, string>>): OptionsParse {
 	return { kind: "ok", options };
 }
 
-/** One `target` item, in watchdog-agent's vocabulary. */
-function toTarget(item: string): Target {
-	switch (item) {
-		case "*":
-		case "all":
-		case "any":
-			return { kind: "all" };
-		case "main":
-			return { kind: "main" };
-		case "subagents":
-		case "subagent":
-		case "sub":
-		case "subs":
-			return { kind: "subagents" };
-		default:
-			return { kind: "agent", name: item };
-	}
-}
-
-type TargetsParse = { readonly kind: "ok"; readonly targets: readonly Target[] } | { readonly kind: "invalid"; readonly reason: string };
-
-/** `target` value → targets; a missing key means `main`. Agent names contain `:`, so items split on commas only. */
-function parseTargets(raw: string | undefined): TargetsParse {
-	if (raw === undefined) return { kind: "ok", targets: [{ kind: "main" }] };
-	let value = raw.trim();
-	if (value.startsWith("[") && value.endsWith("]")) value = value.slice(1, -1);
-	const items = value
-		.split(",")
-		.map((item) => unquote(item).toLowerCase())
-		.filter((item) => item !== "");
-	if (items.length === 0) return { kind: "invalid", reason: tr("target lists nothing", "target 未列出任何目标") };
-	return { kind: "ok", targets: items.map(toTarget) };
-}
-
-type ConstraintsParse =
-	| { readonly kind: "ok"; readonly constraints: readonly ModelConstraint[] }
-	| { readonly kind: "invalid"; readonly reason: string };
-
-function parseConstraints(fields: Readonly<Record<string, string>>): ConstraintsParse {
-	const constraints: ModelConstraint[] = [];
-	for (const field of ["model", "provider"] as const) {
-		const raw = fields[field];
-		if (raw === undefined) continue;
-		const source = unquote(raw);
-		if (source === "") return { kind: "invalid", reason: tr(`${field} must be a non-empty regex`, `${field} 必须是非空正则表达式`) };
-		try {
-			constraints.push({ field, pattern: new RegExp(source) });
-		} catch (error) {
-			const detail = errorText(error);
-			return {
-				kind: "invalid",
-				reason: tr(`${field} is not a valid regex: ${detail}`, `${field} 不是有效正则表达式：${detail}`),
-			};
+/** UI wording of a frontmatter filter or inject problem. */
+function describeProblem(problem: FilterProblem): string {
+	switch (problem.kind) {
+		case "missing":
+			return tr(`${problem.key} is missing`, `缺少 ${problem.key}`);
+		case "empty":
+			return tr(`${problem.key} lists nothing`, `${problem.key} 未列出任何值`);
+		case "relative":
+			return tr(
+				`${problem.key} pattern "${problem.pattern}" must be absolute or start with ~/`,
+				`${problem.key} 模式“${problem.pattern}”必须是绝对路径或以 ~/ 开头`,
+			);
+		case "badRegex":
+			return tr(`${problem.key} is not a valid regex: ${problem.detail}`, `${problem.key} 不是有效正则表达式：${problem.detail}`);
+		case "badInject":
+			return tr(
+				`${problem.key} must be system or user, not "${problem.value}"`,
+				`${problem.key} 只能是 system 或 user，不能是“${problem.value}”`,
+			);
+		default: {
+			const unreachable: never = problem;
+			return unreachable;
 		}
 	}
-	return { kind: "ok", constraints };
 }
 
 type SkipToolsParse = { readonly kind: "ok"; readonly tools: ReadonlySet<string> } | { readonly kind: "invalid"; readonly reason: string };
@@ -360,10 +350,10 @@ function parseSpecFile(path: string): SpecParse {
 		if (!Number.isInteger(maxChars) || maxChars <= 0)
 			return { kind: "invalid", reason: tr("maxChars must be a positive integer", "maxChars 必须是正整数") };
 	}
-	const targets = parseTargets(fields.target);
-	if (targets.kind === "invalid") return targets;
-	const constraints = parseConstraints(fields);
-	if (constraints.kind === "invalid") return constraints;
+	const filter = parseSessionFilter(fields, FILTER_KEYS, { kind: "default", targets: [{ kind: "main" }] });
+	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
+	const inject = parseInjectMode(fields.inject);
+	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };
 	const skipTools = parseSkipTools(fields.skiptools);
 	if (skipTools.kind === "invalid") return skipTools;
 	const options = parseOptions(fields);
@@ -379,36 +369,11 @@ function parseSpecFile(path: string): SpecParse {
 			question,
 			options: options.options,
 			maxChars,
-			targets: targets.targets,
-			constraints: constraints.constraints,
+			filter: filter.value,
+			inject: inject.value,
 			skipTools: skipTools.tools,
 		},
 	};
-}
-
-function targetsSession(targets: readonly Target[], agent: AgentIdentity): boolean {
-	return targets.some((target) => {
-		switch (target.kind) {
-			case "all":
-				return true;
-			case "main":
-				return agent.kind === "main";
-			case "subagents":
-				return agent.kind === "sub";
-			case "agent":
-				return agent.kind === "sub" && (target.name === agent.name.toLowerCase() || target.name === agent.id.toLowerCase());
-			default: {
-				const unreachable: never = target;
-				return unreachable;
-			}
-		}
-	});
-}
-
-function applies(spec: TurnJudgeSpec, agent: AgentIdentity, message: AssistantMessage): boolean {
-	if (!targetsSession(spec.targets, agent)) return false;
-	const values: Record<MatchField, string> = { model: message.model, provider: message.provider };
-	return spec.constraints.every((constraint) => constraint.pattern.test(values[constraint.field]));
 }
 
 // --- reporting ------------------------------------------------------------------
@@ -429,7 +394,7 @@ function applyingSpecs(pi: ExtensionAPI, ctx: ExtensionContext, message: Assista
 		const parsed = parseSpecFile(path);
 		switch (parsed.kind) {
 			case "ok":
-				if (applies(parsed.spec, ctx.agent, message)) specs.push(parsed.spec);
+				if (targetsSession(parsed.spec.filter, ctx.agent, ctx.cwd) && producerMatches(parsed.spec.filter, message)) specs.push(parsed.spec);
 				break;
 			case "disabled":
 				break;
@@ -480,6 +445,11 @@ function assistantEvents(message: AssistantMessage, withText: boolean): Timeline
 	return events;
 }
 
+/** A 提醒 entry, cut to its head. */
+function reminder(text: string): TimelineEntry {
+	return { 类型: "提醒", 内容: text.length > REMINDER_MAX_CHARS ? `${text.slice(0, REMINDER_MAX_CHARS)}…` : text };
+}
+
 /**
  * The timeline from the last human prompt to the judged message (whose
  * thinking closes it; its text is the reply), and the tool names called since
@@ -490,6 +460,13 @@ function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
 	let timeline: TimelineEntry[] = [];
 	let toolCalls: string[] = [];
 	for (const entry of ctx.sessionManager.getBranch()) {
+		if (entry.type === "custom_message") {
+			// System-form notes reach the agent as custom messages; they are reminders like agent-attributed prompts.
+			if (!REMINDER_CUSTOM_TYPES.has(entry.customType) || Date.parse(entry.timestamp) >= judged.timestamp) continue;
+			const text = textOf(entry.content, "\n").trim();
+			if (text !== "") timeline.push(reminder(text));
+			continue;
+		}
 		if (entry.type !== "message") continue;
 		const message = entry.message;
 		if (message.timestamp >= judged.timestamp) break;
@@ -498,7 +475,7 @@ function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
 			if (text === "") continue;
 			const human = message.synthetic !== true && (!main || message.attribution === "user");
 			if (human) timeline = [{ 类型: "用户说", 内容: text }];
-			else timeline.push({ 类型: "提醒", 内容: text.length > REMINDER_MAX_CHARS ? `${text.slice(0, REMINDER_MAX_CHARS)}…` : text });
+			else timeline.push(reminder(text));
 		} else if (message.role === "assistant") {
 			timeline.push(...assistantEvents(message, true));
 			for (const block of message.content) if (block.type === "toolCall") toolCalls.push(block.name);
@@ -604,7 +581,7 @@ async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, context: Before, rep
 		case "info":
 			return { kind: "info", line };
 		case "prompt":
-			return { kind: "prompt", line, prompt: action.prompt };
+			return { kind: "prompt", line, prompt: action.prompt, inject: spec.inject };
 		default: {
 			const unreachable: never = action;
 			return unreachable;
@@ -623,16 +600,37 @@ async function waitUntil(ready: () => boolean, signal: AbortSignal): Promise<boo
 	return true;
 }
 
+/** Whether the system-form prompt of this delivery is on the branch. */
+function hasOwnPrompt(ctx: ExtensionContext, deliveryId: string): boolean {
+	return ctx.sessionManager
+		.getBranch()
+		.some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === PROMPT_CUSTOM_TYPE &&
+				typeof entry.details === "object" &&
+				entry.details !== null &&
+				"deliveryId" in entry.details &&
+				entry.details.deliveryId === deliveryId,
+		);
+}
+
+/** Triggered prompts of one subagent turn, joined per inject form; an empty string has none. */
+type SubPrompts = { readonly system: string; readonly user: string };
+
 /**
- * Start the prompt's turn in an idle subagent and wait until the session has
+ * Start the prompts' turn in an idle subagent and wait until the session has
  * admitted it, so the executor's idle wait covers that turn. Prompt dispatch
  * awaits preprocessing before the session reports busy; returning earlier
- * would let the executor collect the judged report instead.
+ * would let the executor collect the judged report instead. With user-form
+ * prompts, they start the turn and the system-form ones join it (appended while
+ * idle, steered once it runs); with system-form prompts only, their custom
+ * message starts the turn and its `deliveryId` confirms it.
  */
 async function deliverToSubagent(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	prompt: string,
+	prompts: SubPrompts,
 	judgedTimestamp: number,
 	deadline: AbortSignal,
 ): Promise<Delivery> {
@@ -641,8 +639,23 @@ async function deliverToSubagent(
 		return { kind: "unsent", reason: tr("subagent did not become idle in time", "时限内子会话未空闲") };
 	if (hasMessageAfter(ctx, judgedTimestamp))
 		return { kind: "unsent", reason: tr("a new message arrived before the judgment returned", "判断返回前已有新消息") };
-	pi.sendUserMessage(prompt, { attribution: "agent" });
-	const admitted = await waitUntil(() => !ctx.isIdle() || hasMessageAfter(ctx, judgedTimestamp), deadline);
+	let admitted: boolean;
+	if (prompts.user === "") {
+		const deliveryId = crypto.randomUUID();
+		pi.sendMessage(
+			{ customType: PROMPT_CUSTOM_TYPE, content: prompts.system, display: true, attribution: "agent", details: { deliveryId } },
+			{ triggerTurn: true },
+		);
+		admitted = await waitUntil(() => !ctx.isIdle() || hasOwnPrompt(ctx, deliveryId), deadline);
+	} else {
+		if (prompts.system !== "")
+			pi.sendMessage(
+				{ customType: PROMPT_CUSTOM_TYPE, content: prompts.system, display: true, attribution: "agent" },
+				{ deliverAs: "steer" },
+			);
+		pi.sendUserMessage(prompts.user, { attribution: "agent" });
+		admitted = await waitUntil(() => !ctx.isIdle() || hasMessageAfter(ctx, judgedTimestamp), deadline);
+	}
 	return admitted ? { kind: "sent" } : { kind: "unconfirmed" };
 }
 
@@ -662,8 +675,12 @@ async function judgeSubagentTurn(
 	const infos = judged.flatMap((j) => (j.kind === "info" ? [j.line] : []));
 	const triggered = judged.flatMap((j) => (j.kind === "prompt" ? [j] : []));
 	if (triggered.length > 0) {
-		const prompt = triggered.map((t) => t.prompt).join("\n\n");
-		const delivery = await deliverToSubagent(pi, ctx, prompt, message.timestamp, deadline);
+		const joined = (inject: InjectMode): string =>
+			triggered
+				.filter((t) => t.inject === inject)
+				.map((t) => t.prompt)
+				.join("\n\n");
+		const delivery = await deliverToSubagent(pi, ctx, { system: joined("system"), user: joined("user") }, message.timestamp, deadline);
 		const tag = `${ctx.agent.name} (${ctx.agent.id})`;
 		switch (delivery.kind) {
 			case "sent":
@@ -717,8 +734,22 @@ export default function turnJudge(pi: ExtensionAPI): void {
 							`${judged.line}；判断返回前已有新输入，未发送提示`,
 						),
 					};
-				pi.logger.info(`${judged.line} → prompt`);
-				pi.sendUserMessage(judged.prompt, ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "followUp", attribution: "agent" });
+				pi.logger.info(`${judged.line} → prompt (${judged.inject})`);
+				switch (judged.inject) {
+					case "system":
+						pi.sendMessage(
+							{ customType: PROMPT_CUSTOM_TYPE, content: judged.prompt, display: true, attribution: "agent" },
+							ctx.isIdle() ? { triggerTurn: true } : { deliverAs: "followUp", triggerTurn: true },
+						);
+						break;
+					case "user":
+						pi.sendUserMessage(judged.prompt, ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "followUp", attribution: "agent" });
+						break;
+					default: {
+						const unreachable: never = judged.inject;
+						throw new Error(`unknown inject mode ${String(unreachable)}`);
+					}
+				}
 				return { kind: "sent" };
 			default: {
 				const unreachable: never = judged;
