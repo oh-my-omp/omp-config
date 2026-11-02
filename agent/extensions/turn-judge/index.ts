@@ -94,9 +94,10 @@
 // option's probability are reported. A turn the prompt itself causes is judged
 // like any other; nothing caps it.
 // `inject` sets how a triggered prompt reaches the agent, verbatim either way:
-// `system` (default) as a `turn-judge` custom message, which the LLM receives
-// in the developer role (Anthropic upgrades it to a mid-conversation system
-// message only where the model supports that); `user` as an agent-attributed
+// `system` (default) as a `turn-judge` custom message on OMP's harness-notice
+// channel (`developer` where the provider has that role, a mid-conversation
+// system message on Anthropic models that support one, otherwise a user-role
+// message); `user` as an agent-attributed
 // user message.
 //   Main session: judgments run in the background. A triggered file's prompt
 //   is sent in its inject form (idle → starts a turn, busy → follow-up).

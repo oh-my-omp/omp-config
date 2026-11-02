@@ -77,9 +77,10 @@
 // selects one configured option whose prewritten prompt (if any) is injected.
 //
 // INJECT. `system`: the finding, tagged `<watchdog name=… severity=…>`, is a
-// `watchdog` custom message (`details.filePaths`), which the LLM receives in
-// the developer role (Anthropic upgrades it to a mid-conversation system
-// message only where the model supports that). `user`: the finding is an
+// `watchdog` custom message (`details.filePaths`), OMP's harness-notice channel:
+// the LLM receives it as `developer` where the provider has that role, as a
+// mid-conversation system message on Anthropic models that support one, and
+// otherwise as a tagged user-role message. `user`: the finding is an
 // agent-attributed user message without a tag; a chat reviewer is told to write
 // it as the human user talking to the agent (colloquial, emotional to fit the
 // severity) in the same call, while JUDGE sends the option's prompt verbatim.
