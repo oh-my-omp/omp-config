@@ -16,8 +16,8 @@ This configuration is organized around the following design choices:
 |---|---|
 | [Prompts and Context](docs/prompts-and-context.md) | Prompt layering (`SYSTEM_TEMPLATE.md`, `PERSONALITY.md`, `APPEND_SYSTEM.md`, `tool-topics`, `system-prompt-replace`, `append-system-model`, `argon-long-output`, `repo-rules`) and context retention (`fork-task`, `model-compaction`, `ctx`, `Task log`) |
 | [Subagents](docs/agents.md) | The selectable worker/advisor definitions plus internal `fork:self`, model bindings, advisor context, dispatch rules, and worktree isolation |
-| [Local Extensions](docs/extensions.md) | Index of every local extension, dispatch/yield gates (`isolation-nudge`, `task-split-check`, `task-completion-judge`) and the agent-side `/usage` for subagent dispatch budgets (`subagent-usage`), `JUDGE`-backed monitors (`tool-policy-nag`, `watchdog-agent`, `turn-judge`, `lang-nag`), the bash and eval deletion guard and literal-path `delete` tool (`delete-guard`), host/TUI extensions, and the `session://` reader for other sessions with its eval query device `session_query` (`session-urls`) |
-| [Plugins and Runtime Modes](docs/plugins-and-modes.md) | External plugins in `install-plugins.sh` (`omp-todo-more`, `omp-thinking-translator`, etc.) and `omp` vs `omp-light` |
+| [Local Extensions](docs/extensions.md) | Index of every local extension, dispatch/yield gates (`isolation-nudge`, `task-split-check`, `task-completion-judge`) and the agent-side `/usage` for subagent dispatch budgets (`subagent-usage`), `JUDGE`-backed monitors (`tool-policy-nag`, `watchdog-agent`, `turn-judge`, `lang-nag`), the bash and eval deletion guard and literal-path `delete` tool (`delete-guard`), and host/TUI extensions |
+| [Plugins and Runtime Modes](docs/plugins-and-modes.md) | External plugins in `install-plugins.sh` (`omp-todo-more`, `omp-sessions`, `omp-thinking-translator`, etc.) and `omp` vs `omp-light` |
 | [Setup, Sync and Maintenance](docs/operations.md) | Repo ↔ machine ownership rules, `/onboard-omp`, `/update-omp`, `/sync-omp-config`, `omp-config-autoupdate`, `_shared` modules, and upgrade checks |
 | [CI Configuration Check (`ci/README.md`)](ci/README.md) | How `bun ci/check.ts` installs `omp`, applies the config, wires the free model and shadow proxy, and deduplicates diagnostics |
 | [Test Sandbox (`sandbox/README.md`)](sandbox/README.md) | How `bun sandbox/sandbox.ts` builds a throwaway container with this machine's `~/.omp` config, credentials and the working tree, drives real sessions per model, and removes and ledgers each run |
@@ -43,7 +43,7 @@ Shell commands run from the repository root:
 omp                           # full mode
 omp-light                     # light mode (skips the governance extensions in config-light.yml and system-prompt-replace)
 bun run check                 # biome check . && tsc --noEmit
-bun run test                  # bun test ci: session-urls, delete-guard, tool-policy-nag pty and updater three-way apply tests
+bun run test                  # bun test ci: delete-guard, tool-policy-nag pty and updater three-way apply tests
 ./plugin-audit.sh             # compare install-plugins.sh against `omp plugin list`
 bun ci/check.ts               # isolated HOME install + full and light RPC session check
 ```
