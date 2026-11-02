@@ -16,8 +16,8 @@
 | 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check`（仓库） | 子代理与顾问（完整模式 `subagent-gates`） | 当场定制（本机）：在 `<agentDir>/config.yml` 将 `modelRoles.smol`（或 `@task-split-check`）绑到本机可用轻量模型 |
 | 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge`（仓库） | 子代理与顾问（完整模式 `subagent-gates` + `todo-continuity`；调用 `omp-todo-more:read`） | 当场定制（本机）：在 `<agentDir>/config.yml` 将 `modelRoles.smol`（或 `@task-completion-judge`）绑到本机可用轻量模型 |
 | 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `omomp.yml#tool-policy-nag` + `INTENT-policy.md`（仓库） | 运行时偏离纠偏（完整模式 `drift-monitors` + `pty-routing`；挂载了 `exec_command` 时，`pty` 通道拦截 passthrough/terminal/open-ended 的 `bash`/eval 调用；`heuristic` 模式在运行期将 `bashInterceptor.enabled` 覆写为 `false`） | 延后调阈值（`afterHits: 3`、`maxNags: 3`），保持 `pty: {}`；非中文环境可在项目 `.omp/omomp.yml` 覆盖 `form.prompt` |
-| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子（按文件 `target` 和可选 `cwd`） | 否 | `WATCHDOG-*.md`（本机） | 运行时偏离纠偏（完整模式 `drift-monitors`，可选） | 延后（本机）：未创建 `WATCHDOG-*.md` 时不运行，有需要时用 `/watchdog add` 创建 |
-| 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子（按文件 `target`） | 否 | `TURN-JUDGE-*.md`（仓库带 `gpt-talk-only`，其余归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场定制（本机）：确保 `modelRoles.judge` 或 `modelRoles.tiny` 可解析，或把 `@turn-judge` 绑到聊天模型；`TURN-JUDGE-gpt-talk-only.md` 阈值（`0.8`）延后调整 |
+| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子（按文件 `target`、可选 `cwd` 通配与 `watchModel`/`watchProvider`） | 否 | `WATCHDOG-*.md`（本机） | 运行时偏离纠偏（完整模式 `drift-monitors`，可选） | 延后（本机）：未创建 `WATCHDOG-*.md` 时不运行，有需要时用 `/watchdog add` 创建 |
+| 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子（按文件 `target`、可选 `cwd` 通配与 `model`/`provider`） | 否 | `TURN-JUDGE-*.md`（仓库带 `gpt-talk-only`，其余归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场定制（本机）：确保 `modelRoles.judge` 或 `modelRoles.tiny` 可解析，或把 `@turn-judge` 绑到聊天模型；`TURN-JUDGE-gpt-talk-only.md` 阈值（`0.8`）延后调整 |
 | 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `omomp.yml#lang-nag`（仓库默认值，首次播种后归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场诊断：依赖 `openJudge`（`@lang-nag`，未绑定时用 `judge`；之后 `tiny`）；`judge` 模型判错回复语言时把 `@lang-nag` 绑到聊天模型；在 `<agentDir>/omomp.yml#lang-nag` 设置语言（更新保留），或在 `<cwd>/.omp/omomp.yml` 按项目覆盖 |
 | 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局（由主会话启动） | 是 | `omomp.yml#child-memory-warning`（仓库默认值，首次播种后归本机） | 执行与宿主安全（条件启用 `macos-memory`：仅 macOS） | 延后：保持 `thresholdGiB: 4`；大内存构建可在 `<agentDir>/omomp.yml`（更新保留）或项目 `<cwd>/.omp/omomp.yml` 修改 |
 | 15 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `omomp.yml#input-polish`（仓库；`key` 与 `instruction` 首次播种后归本机） | 人机交互与 TUI（可选增强 `polish-tools`） | 按需当场：使用 `@input-polish` / `modelRoles.smol`；终端不支持 `ctrl+enter` 时可在 `<agentDir>/omomp.yml`（更新保留）或 `<cwd>/.omp/omomp.yml` 改配 `alt+enter` 或 `instruction` |
@@ -139,17 +139,21 @@ tool-policy-nag:
 
 源码：`agent/extensions/watchdog-agent/`。
 
-按 `WATCHDOG-<label>.md` 文件定期审阅目标会话（扫描 `~/.omp/agent/extensions/watchdog-agent/` 及会话当前 `cwd` 至 git 根各层的 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`；归本机，不同步）。链接工作树使用自己的根目录；`/move` 后，下一条 prompt 或 `/watchdog` 命令从目标目录重新发现并匹配文件。发现文件不等于运行：必须同时匹配 `target` 和可选 `cwd`；省略 `cwd` 时保持不限制目录的原有行为。
+按 `WATCHDOG-<label>.md` 文件定期审阅目标会话（扫描 `~/.omp/agent/extensions/watchdog-agent/` 及会话当前 `cwd` 至 git 根各层的 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`；归本机，不同步）。链接工作树使用自己的根目录；`/move` 后，下一条 prompt 或 `/watchdog` 命令从目标目录重新发现并匹配文件。发现文件不等于运行：会话必须同时匹配 `target` 和可选 `cwd`；之后由 `watchModel` / `watchProvider` 决定哪些助手消息计入 `every`。
+
+`target`、`cwd` 与两个模型正则使用 `agent/extensions/_shared/session-filter.ts` 中与 `turn-judge` 共用的会话筛选：同一个键内的多个值任一匹配即可，不同键之间取 AND。
 
 | Frontmatter 字段 | 取值与默认值 | 说明 |
 |---|---|---|
-| `target`（必填） | `main`、子代理名（如 `task:low`）、`*`、`subagents` 或逗号列表 | 决定哪些会话运行该 watchdog |
-| `cwd` | 可选的非空绝对目录路径字符串，可加引号；省略表示不限目录 | 用 `node:path.resolve` 规范化后，与同样规范化的会话实时 cwd 精确比较；与 `target` 取 AND，`target: *` 也不例外。空值或相对路径使整个文件无效。不支持 glob、正则、列表或子目录继承 |
+| `target`（必填） | `main`、子代理名（如 `task:low`）或注册 id、`*`、`subagents` 或逗号列表 | 决定哪些会话运行该 watchdog |
+| `cwd` | 可选的 Bun glob 逗号列表，每项为绝对路径或以 `~/` 开头；省略表示不限目录 | 与经 `node:path.resolve` 规范化的会话实时 cwd 匹配：`/a/repo` 只匹配该目录，`/a/repo/**` 只匹配其子目录，`/a/repo{,/**}` 两者都匹配，`/**/worktrees/*` 匹配任一 `worktrees` 目录的直接子目录。与 `target` 取 AND，`target: *` 也不例外。空列表或相对路径模式使整个文件无效 |
+| `watchModel`、`watchProvider` | 可选；各一个 JavaScript 正则（多选用 `\|`），不锚定 | 匹配被监督会话每条助手消息的 `model` 与 `provider`；只有匹配消息的动作计数，实时计数和重载后恢复计数都按此筛选。空值或无效正则使文件无效。`model` 仍是聊天 reviewer 自己的模型 |
+| `inject` | `system`（默认）或 `user` | `system`：带 `<watchdog name=… severity=…>` 标签的提醒作为 `watchdog` 自定义消息（`details.filePaths`）发送，模型以 developer 角色收到（Anthropic 在模型支持时提升为对话中途的 system 消息）。`user`：提醒作为 `attribution: "agent"` 的 user 消息发送，不带标签；聊天 reviewer 在同一次调用里直接以用户口吻对代理说话（第一人称、口语化、按严重程度带情绪），JUDGE 则原样发送所选选项的 `.prompt`。user 形式的 `steer` 会被 OMP 套上 “User interjection” 提示 |
 | `name`、`enabled` | `name` 默认取文件名标签；`enabled` 默认 `true` | `/watchdog` 按 `name` 操作；多个文件重名时报错并列出路径 |
-| `delivery` | `aside`（默认）、`steer`、`nextTurn`、`followUp` | 提醒发送方式（`nextTurn` 等待下次用户输入或子代理 `before_agent_start`） |
-| `every`、`scope` | `every` 默认 `30`；`scope` 为 `full`（默认）或 `window` | 每次工具调用和每条非空文字回复各计 1 步；满 `every` 步后台审阅，回合结束（非 `willContinue`）对剩余步数补跑一次。`window` 只读上次游标之后的新消息 |
+| `delivery` | `aside`（默认）、`steer`、`nextTurn`、`followUp` | 提醒发送方式；system 形式的 `aside`/`steer`/`followUp` 在会话空闲时开启新回合。`nextTurn` 等待下次用户输入或子代理 `before_agent_start`，并进入该回合的第一次模型调用：system 提醒作为钩子返回的自定义消息，user 提醒作为 prompt 准备期间排队的 steer |
+| `every`、`scope` | `every` 默认 `30`；`scope` 为 `full`（默认）或 `window` | 计数助手消息中的每次工具调用和每条非空文字回复各计 1 步；满 `every` 步后台审阅，回合结束（非 `willContinue`）对剩余步数补跑一次。`window` 只读上次游标之后的新消息 |
 | `maxPerContext` | 正整数，默认不限 | 两次 compaction 之间最多注入几条提醒（compaction 重置封顶计数，不重置步数与 `window` 游标） |
-| `model`、`tools` | 聊天 reviewer 模式（默认） | 在禁加载扩展、`taskDepth: 1` 的内存会话中运行；`model` 未填时依次尝试 `@advisor`、`advisor`、`@slow`、当前会话模型；`tools` 默认 `[read, grep, glob]`（可加 `ast_grep, web_search, edit, write, bash, eval`）。首行以 `PASS`/`OK`/`LGTM`/`NONE` 开头视为通过，否则注入 `<watchdog name=… severity=…>` |
+| `model`、`tools` | 聊天 reviewer 模式（默认） | 在禁加载扩展、`taskDepth: 1` 的内存会话中运行；`model` 未填时依次尝试 `@advisor`、`advisor`、`@slow`、当前会话模型；`tools` 默认 `[read, grep, glob]`（可加 `ast_grep, web_search, edit, write, bash, eval`）。首行以 `PASS`/`OK`/`LGTM`/`NONE` 开头视为通过，否则按 `inject` 形式注入 |
 | `instructions`、`option.<标签>[.prompt\|.delivery]` | JUDGE 模式（声明 $\ge 2$ 个 `option.*` 时启用） | 不能与 `model`/`tools`/`note` 同用；调 `openJudge` 从声明的小写标签选项中选一个，若带 `.prompt` 则注入该文本（无 `.prompt` 视为通过）。报错或 90 秒超时不回退聊天模式 |
 
 只监督领导 checkout 时，可使用如下 `WATCHDOG-LeaderScope.md`：
@@ -162,11 +166,12 @@ cwd: /absolute/path/to/leader-checkout
 按领导所承担的协调职责审阅最新工作。
 ```
 
-同一规则复制到链接工作树后仍可被发现，但列表显示 `不适用于本会话`，不会监督该工作树的主会话。会话 cwd 位于所配置目录的子目录时同样不匹配。合法的工作树监督仍可通过省略 `cwd`，或填写该工作树的精确绝对 cwd 来配置。
+同一规则复制到链接工作树后仍可被发现，但列表显示 `不适用于本会话`，不会监督该工作树的主会话；会话 cwd 位于所配置目录的子目录时同样不匹配。需要覆盖子目录时加上 `/absolute/path/to/leader-checkout/**`，需要覆盖工作树时加上 `/**/worktrees/*` 这类模式。
 
 - **游标保存**：每次完成审阅后将游标写入会话条目 `mouriya.omp.watchdog-agent.cursor`，恢复会话或切换分支时从分支重建。
+- **自身提醒**：发送 user 形式的提醒前，先写一条 `mouriya.omp.watchdog-agent.user-note` 条目记录文本与来源文件。该记录只是索引，不代表已送达：重载或切换分支后恢复的封顶计数只统计上次 compaction 之后该文件的 `watchdog` 自定义消息，以及文本与某条记录相同的 `attribution: "agent"` user 消息。审阅时两者都跳过，watchdog 不会审阅自己的提醒。
 - **管理命令**：`/watchdog [list]`、`/watchdog on|off <name> [session|global]`、`/watchdog rm <name>`。`/watchdog add <需求>` 与 `/watchdog edit <name> [改动]` 不直接写文件，而是向当前模型发送一条 `attribution: "agent"` 消息，按 **1. 起草（给出预期行为、设置表、完整文件内容与绝对路径，不写盘）→ 2. 按反馈修改 → 3. 用户确认后写盘** 三步执行。任何修改 `WATCHDOG-*.md` 的文件系统 `write`/`edit` 工具结果末尾都会附带该文件的识别状态；`out://` 等资源 URI 写入不附带此状态。
-- **范围展示**：`/watchdog list` 和 watchdog 文件写入/编辑的工具结果会展示 cwd 限制（省略时界面显示 `不限`、工具结果显示 `any`）及文件是否适用于本会话。`/watchdog add` 和 `/watchdog edit` 的设置参考包含 `cwd`；文件状态说明会指出由 target 或 cwd 限制排除，不再把所有排除都归因于 `target`。
+- **范围展示**：`/watchdog list` 和 watchdog 文件写入/编辑的工具结果会展示 target、cwd 模式（省略时界面显示 `不限`、工具结果显示 `any`）、模型正则与注入形式，以及文件是否适用于本会话。`/watchdog add` 和 `/watchdog edit` 的设置参考包含全部筛选键与 `inject`；文件状态说明会指出由 target 或 cwd 限制排除，不再把所有排除都归因于 `target`。
 
 ### turn-judge
 
@@ -174,10 +179,10 @@ cwd: /absolute/path/to/leader-checkout
 
 扫描扩展目录及 `cwd` 至 git 根各层的 `TURN-JUDGE-<label>.md`。在目标会话每次由模型自己结束回合（`stopReason: "stop"` 且有非空文字；`task.structured` 关闭时含子代理最终报告与 IRC 回复）后，对每个匹配文件发起一次 JUDGE 请求。仓库自带 `TURN-JUDGE-gpt-talk-only.md`，本机自建文件归本机。
 
-- **匹配条件**：`target`（语法同 `watchdog-agent`，默认 `main`）、匹配当前回复自身 `model`/`provider` 的 JavaScript 正则，以及逗号分隔的 `skipTools`（上一轮 `stop` 之后若调用过其中任一工具，本轮跳过）。
-- **配置与输入**：frontmatter 含 `name`、`enabled`（默认 `true`）、`target`、`model`、`provider`、`skipTools`、`maxChars`（默认 `30000`）、`option.<标签>`（至少 2 个，不含 `.` 或空白）、`option.<标签>.prompt` 及对应的必填 `option.<标签>.threshold` $\in (0, 1]$；正文为判定问题。传给 `openJudge` 的输入为 `{ 时间线: [{ 类型, 内容 }], 本轮回复 }`：`时间线` 从分支上最后一条人类输入开始，依次列出 `用户说`、`用户在ask中回答`（用户在 `ask` 里选的或自己写的答案，每个已作答的问题一行 `问题 → 答案`，由 `_shared/ask-answers.ts` 从工具结果读出；取消、被拒或未作答的 ask 不加条目）、`提醒`（每条前 400 字）、`模型想`（不含 redacted 块）、`模型说` 和 `模型调用工具`（`工具名：intent`，不含参数与结果），总长超过 `maxChars` 时从 `用户说` 之后最早的条目整条丢弃。
-- **`TURN-JUDGE-gpt-talk-only.md`**：`target: main`、`model: (^|/)[Gg][Pp][Tt]`、`skipTools: wt, harness_restart`；选项为 `做完在汇报`、`只需文字`、`只说不做`（`threshold: 0.8`），当 GPT 主代理在任务未完成时只输出文字就停下（包括用户在 `ask` 里选定做法后只复述就停），自动发一条 prompt 要求继续用工具执行。用户在 `ask` 中的回答等同用户亲口说的话：用户只要求作出决定时，确认用户在 `ask` 中的决定后只用文字结束是正当的。阈值在 ask 回答进入时间线之前，于 `futureppo-jev/decision-model-preview` 下用 2026-10-10 至 2026-10-25 的 329 个 GPT 主会话回合校准：19 个标注正例命中 6 个，23 个标注反例和 287 个未标注回合 0 误报。
-- **主会话与子代理投递差异**：主会话在后台判定，达到 `.threshold` 的最高概率选项以 `attribution: "agent"` 发送 `.prompt`（返回前若用户已输入或切换了分支则只弹通知），未触发文件合并弹一条 `turn-judge <name>：<标签>（<概率>）` 通知。子代理在 `message_end` 内等待最多 20 秒，空闲后把触发的 prompt 合为一条 `attribution: "agent"` 消息发出，由新回合的回复替换交回父代理的报告（子代理无 UI，结果写 OMP 日志）。
+- **匹配条件**：`target`（默认 `main`）、`cwd`（逗号分隔、绝对路径或以 `~/` 开头的 glob，匹配会话 cwd），以及匹配当前回复自身 `model`/`provider` 的不锚定 JavaScript 正则，使用与 `watchdog-agent` 共用的会话筛选：同一键内多个值任一匹配即可，不同键取 AND。另有逗号分隔的 `skipTools`：上一轮 `stop` 之后若调用过其中任一工具，本轮跳过。
+- **配置与输入**：frontmatter 含 `name`、`enabled`（默认 `true`）、`target`、`cwd`、`model`、`provider`、`skipTools`、`inject`（默认 `system`，或 `user`）、`maxChars`（默认 `30000`）、`option.<标签>`（至少 2 个，不含 `.` 或空白）、`option.<标签>.prompt` 及对应的必填 `option.<标签>.threshold` $\in (0, 1]$；正文为判定问题。传给 `openJudge` 的输入为 `{ 时间线: [{ 类型, 内容 }], 本轮回复 }`：`时间线` 从分支上最后一条人类输入开始，依次列出 `用户说`、`用户在ask中回答`（用户在 `ask` 里选的或自己写的答案，每个已作答的问题一行 `问题 → 答案`，由 `_shared/ask-answers.ts` 从工具结果读出；取消、被拒或未作答的 ask 不加条目）、`提醒`（`attribution: "agent"` 的 user 消息，以及 `watchdog` / `turn-judge` 自定义消息，每条前 400 字）、`模型想`（不含 redacted 块）、`模型说` 和 `模型调用工具`（`工具名：intent`，不含参数与结果），总长超过 `maxChars` 时从 `用户说` 之后最早的条目整条丢弃。
+- **`TURN-JUDGE-gpt-talk-only.md`**：`target: main`、`model: (^|/)[Gg][Pp][Tt]`、`skipTools: wt, harness_restart`、`inject: user`；选项为 `做完在汇报`、`只需文字`、`只说不做`（`threshold: 0.8`），当 GPT 主代理在任务未完成时只输出文字就停下（包括用户在 `ask` 里选定做法后只复述就停），自动发一条 user 消息要求继续用工具执行。用户在 `ask` 中的回答等同用户亲口说的话：用户只要求作出决定时，确认用户在 `ask` 中的决定后只用文字结束是正当的。阈值在 ask 回答进入时间线之前，于 `futureppo-jev/decision-model-preview` 下用 2026-10-10 至 2026-10-25 的 329 个 GPT 主会话回合校准：19 个标注正例命中 6 个，23 个标注反例和 287 个未标注回合 0 误报。
+- **主会话与子代理投递差异**：触发的 `.prompt` 按文件的 `inject` 形式原样发送：`system` 为 `turn-judge` 自定义消息（developer 角色），`user` 为 `attribution: "agent"` 的 user 消息。主会话在后台判定，达到 `.threshold` 的最高概率选项发送 `.prompt`（空闲时开启新回合，忙碌时排为 follow-up；返回前若用户已输入或切换了分支则不发送），未触发文件合并弹一条 `turn-judge <name>：<标签>（<概率>）` 通知。子代理在 `message_end` 内等待最多 20 秒，空闲后按注入形式合并发送触发的 prompt：有 user 形式时合为一条 user 消息开启新回合，system 形式的合为一条自定义消息随之进入；只有 system 形式时合为一条自定义消息开启新回合，并用其 `details.deliveryId` 确认。新回合的回复替换交回父代理的报告（子代理无 UI，结果写 OMP 日志）。
 
 ### lang-nag
 
