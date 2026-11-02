@@ -44,6 +44,7 @@ Active rules in `agent/omomp.yml` (file lookup and edits are restricted to `read
 | User-reported errors | Clarifies that not rerunning checks to doubt a user report still leaves reproducing to find the cause and verifying the fix in place. |
 | Compiled-code rule | Fixes the missing verb (`NEVER add avoidable allocation...`). |
 | `eval` tool description | Prohibits reading, listing, or searching local files through `eval` (`read`, `glob`, and `grep` handle file inspection). |
+| `eval` description: batch routing | Replaces "For 2+ independent items, use a named `workpool()`" with a split by situation: code that needs each item's model judgment, extraction or rewrite uses `judgeBatch`, or `completion`/`agent` with a schema per item, and points to `tool://eval/workflow`; subagent work whose results are only read stays on `workpool()`. The `agent`/`workpool` namespace line also names per-item schema results. |
 | `xd://` device header | States that `xd://<tool>` devices are called only by writing JSON to `xd://<tool>`, not as `xd__<tool>` or `<tool>` functions. |
 
 Whole tool descriptions (`read`, `bash`, `task`) are no longer replaced here: [tool-topics](extensions.md#tool-topics) locates them by tool name rather than by wording, so they survive upstream rewording, and it runs in light mode too.

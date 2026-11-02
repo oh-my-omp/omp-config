@@ -36,7 +36,7 @@ system-prompt-replace:
       scope: sub   # 可选：只在子代理会话生效
 ```
 
-`agent/omomp.yml` 当前包含的 5 条替换规则（其中文件检索与编辑固定使用 `read` + hashline `edit` 并禁止在 `eval` 中查文件，以要求模型在读取目标行邻近上下文后再做修改，避免在缺少编译器与测试保护的脚本、配置或命令行操作中脱离上下文直接修改）：
+`agent/omomp.yml` 当前包含的替换规则（其中文件检索与编辑固定使用 `read` + hashline `edit` 并禁止在 `eval` 中查文件，以要求模型在读取目标行邻近上下文后再做修改，避免在缺少编译器与测试保护的脚本、配置或命令行操作中脱离上下文直接修改）：
 
 | 目标 | 修改内容 |
 |---|---|
@@ -44,6 +44,7 @@ system-prompt-replace:
 | 用户报错处理规则 | 补充说明“不重跑检查去质疑用户报错”不影响为定位原因而复现和修复后验证。 |
 | 编译代码规则 | 补上原句缺失的动词 `add`（`NEVER add avoidable allocation...`）。 |
 | `eval` 工具说明 | 禁止通过 `eval` 读取、列目录或搜索本地文件（统一使用 `read`、`glob`、`grep`）。 |
+| `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `tool://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
 | `xd://` 设备说明 | 说明 `xd://<tool>` 只能通过 `write` 写入 JSON 调用，不存在 `xd__<tool>` 或裸 `<tool>` 函数。 |
 
 整段工具说明（`read`、`bash`、`task`）不再由本扩展替换：[tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞定位它们，上游改写措辞后仍然生效，且轻量模式也会运行。
