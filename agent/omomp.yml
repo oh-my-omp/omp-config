@@ -111,3 +111,6 @@ system-prompt-replace:
       replace: "Code holding a list where each item needs a model's judgment, extraction or rewrite: `judgeBatch`, or `completion(…, { schema })` / `agent(…, { schema })` per item, merged by code (`tool://eval/workflow`). Independent subagent work whose results you only read: a named `workpool()`; results auto-deliver."
     - literal: "- `agent`, `workpool`: background subagents, DAG waves → `xd://eval/agents`"
       replace: "- `agent`, `workpool`: per-item subagents with schema results, worker pools, DAG waves → `xd://eval/agents`"
+    - regex: "\\n*# Mandatory decision support\\n\\n[^\\n]+\\n\\n[^\\n]+"
+      replace: ""
+      model: "^claude-opus-5-5$"
