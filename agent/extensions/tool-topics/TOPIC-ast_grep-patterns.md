@@ -2,7 +2,7 @@
 tool: ast_grep
 name: patterns
 title: Writing a pattern
-when: before writing `pat`, or when a pattern matched nothing or reported parse issues
+when: before writing `pat`, or when a pattern matched nothing, matched fewer sites than `grep`, or reported parse issues
 upstream: pi-coding-agent@18.15.0 src/prompts/tools/ast-grep.md, omp://tools/ast-grep.md § Notes
 ---
 # Writing a pattern
@@ -11,6 +11,7 @@ upstream: pi-coding-agent@18.15.0 src/prompts/tools/ast-grep.md, omp://tools/ast
 - Metavariables: `$NAME` one node, bound; `$_` one node, unbound; `$$$NAME` zero or more, bound; `$$$` zero or more, unbound. `$$NAME` is invalid. Names are UPPERCASE and stand for a whole node: `prefix$VAR` fails.
 - The same metavariable twice must match identical code: `$A == $A` matches `x == x`, not `x == y`.
 - Each match lists its bindings on a `meta:` line.
+- A member chain in `pat` is matched whole from its leftmost name: `pi.logger.warn($A)` does not match `monitor.pi.logger.warn(x)` or `this.pi.logger.warn(x)`, while text search finds them as substrings. To accept any receiver, make it a metavariable: `$R.logger.warn($A)` matches all three and binds `R`.
 - TS: tolerate annotations — `async function $NAME($$$ARGS): $_ { $$$BODY }`.
 - C++ expression-statement calls need a trailing `;`: `ns::doThing($ARG);`, `$CALLEE($ARG);`.
 - Declaration forms are distinct — `function foo`, method `foo()`, `const foo = () => {}`; search each form before concluding absence.
