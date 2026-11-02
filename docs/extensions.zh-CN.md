@@ -32,6 +32,7 @@
 | 24 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无 | 执行与宿主安全（必选基底 `safe-deletion`） | 无需配置：常驻拦截 `bash`/`eval` 删除操作并注册字面路径 `delete` 工具 |
 | 25 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | `omomp.yml#subagent-usage`（本机授权）；校准数据在 `<agentDir>/subagent-usage/` | 子代理与顾问（可选） | 默认关闭；人工执行 `/subagent-usage on` 即同意读取本机会话与用量历史，并据此校准 |
 | 26 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | 同目录的 `ARGON_PROMPT.md`（仓库） | 供应商与生命周期（条件必选 `antigravity-compat`） | 无需配置：只对 `google-gemini-cli` 上的 `gemini-4-argon` 关闭流看门狗（显式设置的 env/settings/`models.yml` 超时仍优先）；改长输出规则时编辑 `ARGON_PROMPT.md` |
+| 27 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局（加载时改表）+ 主 + 子（`session_start`） | 是 | 无配置文件 | 原生引擎底座（必选基底 `engine-baseline`） | 无需配置：让内置 `ast_grep` / `ast_edit` 作为顶层函数工具出现，而不是 `xd://` 设备；停用后重启才生效 |
 
 ---
 
@@ -296,6 +297,17 @@ Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-
 - **提示词**：argon 会话（主会话与每个子代理，各按自己的模型匹配）在 `before_agent_start` 时追加 `ARGON_PROMPT.md`（扩展同目录，仓库下发，每条 prompt 重读）：单次 `write` 内容、单次 `edit` 正文、单条最终回复都不超过 8,000 字符；更长的交付物先 `write` 只含标题的骨架，再逐节 `edit` 填充；修改已有大文件时只 `edit` 改动的节。文件缺失或不可读时按原因只警告一次，不追加。
 - **超大单次调用**：仍一次生成超过后端输出上限的调用时，沿用 OMP 现有处理（`MAX_TOKENS` → `length`；截断的函数调用 → `MALFORMED_FUNCTION_CALL` → `error`，不执行）。
 
+### ast-top-level
+
+源码：`agent/extensions/ast-top-level/`。主会话与子代理、完整与轻量模式都加载；无配置。
+
+`tools.xdev` 开启时，OMP 把 `loadMode` 为 `discoverable` 的已启用工具都挂到 `xd://` 下：它的 schema 不进请求的工具列表，模型要向 `xd://<tool>` 写 JSON 才能调用。内置 `ast_grep` 与 `ast_edit` 都是 discoverable，OMP 也没有让单个工具留在顶层的设置；唯一的豁免是 OMP 进程全局的 `XDEV_KEEP_TOP_LEVEL` 表（`todo`、`yield`、`ask`、`grep`、`web_search`），每次分区都经 `isMountableUnderXdev` 查询它：
+
+- **加载**：把 `ast_grep` 与 `ast_edit` 加进该表（`@oh-my-pi/pi-coding-agent/tools/xdev`），并检查 OMP 已把它们留在顶层。此后每次分区（构建会话、`setActiveTools`、设置重载、MCP 刷新、plan 模式、晚注册的工具、子代理会话）都把两者作为函数工具发送。工具实例与设置开关（`astGrep.enabled`、`astEdit.enabled`）仍归 OMP；`ast_edit` 仍只生成预览，预览经 `xd://resolve` 应用、经 `xd://reject` 放弃。
+- **晚绑定**：OMP 可能在会话已完成工具分区后才绑定本扩展（首帧前无需注册任何东西的扩展会被延后加载）。OMP 会把 `session_start` 补发给晚绑定的扩展；此时含这两个工具之一的会话按自身当前工具集重新应用一次，依据该表重新分区。
+- **生命周期**：该表进程全局且不会还原；停用扩展后重启才生效。
+- **失败处理**：导出被改名时扩展加载失败。表拒绝写入或 OMP 不再查询该表时，加载时记 warning，每次主会话启动弹一次警告；两个工具保持为设备。
+
 ### tool-topics
 
 源码：`agent/extensions/tool-topics/`（`tool://` handler 在其 `registry.ts`；哪些专题由谁提供见[工具专题](operations.zh-CN.md#工具专题)）。
@@ -303,7 +315,7 @@ Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-
 渐进式工具说明。被覆盖的工具在 system prompt 里的说明只保留常用调用说明，末尾附 `Topics` 索引；详细调用说明是按需读取的专题 `tool://<tool>/<topic>`（支持行选择器；`read tool://<tool>` 列出该工具的专题及读取条件；对 `tool://` 执行 `grep`/`find` 可检索全部专题）。`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题；[tool-topic-injection](#tool-topic-injection) 另在只读工具调用后补送专题。
 
 - **文件**：`TOPIC-<tool>-<name>.md` 带严格 YAML 头（`tool`、`name`、`title`、`when`、`upstream`）和 Markdown 正文；`SURFACE-<tool>.md`（头为 `tool`、`upstream`）整段替换该工具的说明。专题写调用说明——参数、语法、取值、前置条件、结果、出错后的改法——不写实现细节。`when` 是索引显示的一行（“before …”“when …”）。`upstream` 记录核对时依据的 OMP 版本与来源。
-- **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；设备 `ast_grep`、`ast_edit` 也有表层文件，只写哪类代码工作该交给它们而不是 `grep` 或 `edit`，以及路径要写成代码 glob（裸目录会把 Markdown 文件也带进来，其段落会匹配代码 pattern 并被改写）；设备说明不超过插件设备显示的 200 字符，pattern 语法移到各自的 `patterns` 专题。有专题的工具：read、bash（含等待外部条件）、edit（hashline 模式）、eval、grep、find、task、write、ask，设备 ast_grep、ast_edit、debug、github、checkpoint。简单工具 `wait`、`glob`、`web_search`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。本仓库扩展或插件注册的工具（`fork_task`、`exec_command`、`playbook_*` 等）不在这里覆盖：它们以 `xd://<tool>/<topic>` 自己提供专题，并在自己的说明里列出。
+- **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；`ast_grep`、`ast_edit`（经 [ast-top-level](#ast-top-level) 留在顶层）也有表层文件，只写哪类代码工作该交给它们而不是 `grep` 或 `edit`，以及路径要写成代码 glob（裸目录会把 Markdown 文件也带进来，其段落会匹配代码 pattern 并被改写）；pattern 语法在各自的 `patterns` 专题。有专题的工具：read、bash（含等待外部条件）、edit（hashline 模式）、eval、grep、find、task、write、ask、ast_grep、ast_edit，设备 debug、github、checkpoint。简单工具 `wait`、`glob`、`web_search`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。本仓库扩展或插件注册的工具（`fork_task`、`exec_command`、`playbook_*` 等）不在这里覆盖：它们以 `xd://<tool>/<topic>` 自己提供专题，并在自己的说明里列出。
 - **生命周期**：扩展加载时读取一次文件，把专题以 `tool://` 挂到 router 上，并替换之前加载（子代理、隔离子代理）留下的 handler；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引，每行一个专题及其完整 `tool://` URL。没有 `read` 的会话保留原生说明。
 - **失败处理**：解析失败的文件跳过并记 warning。找不到工具格式或 `{{native:…}}` 段时，该工具保留原生说明，记 warning，主会话按工具与原因各提示一次。OMP 或其他 handler 已占用 `tool://` 时，所有工具都不显示索引。
 
