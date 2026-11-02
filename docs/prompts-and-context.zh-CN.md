@@ -80,7 +80,7 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 
 ### fork-task
 
-源码：`agent/extensions/fork-task/`。注册 `fork_task` 工具（顶层 `context` 加不含 `solutionSpace` 的 `tasks[]`，需开启 `async.enabled: true`）。它的前置条件、不支持的字段、来源报错，以及在 eval 单元中按模板批量派发，写在专题 `xd://fork_task/limits` 中，由工具自己的 `docTopics()`（`topics.ts`）提供，并列在其说明末尾。
+源码：`agent/extensions/fork-task/`。注册 `fork_task` 工具（顶层 `context` 加不含 `solutionSpace` 的 `tasks[]`，需开启 `async.enabled: true`）。它的前置条件、不支持的字段和来源报错写在专题 `xd://fork_task/limits` 中，在 eval 单元中按模板批量分叉写在专题 `xd://fork_task/batch` 中；两者都由工具自己的 `docTopics()`（`topics.ts`）提供，并列在其说明末尾。
 
 `fork_task` 保留原生 Agent Hub、结果投递、`agent://`/`history://`、后续消息与隔离工作区合并。每个子代理都复刻源的最近一次模型请求（调用方的，或 `from` 指定的活跃代理的），同一源的多个分叉共享供应商缓存前缀；任何任务项都不改写 system prompt。`agent` 只决定模型与角色：
 
