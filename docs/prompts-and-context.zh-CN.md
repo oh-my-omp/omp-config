@@ -8,7 +8,7 @@
 
 | 文件 / 扩展 | 作用域 | 内容与职责 |
 |---|---|---|
-| `agent/SYSTEM_TEMPLATE.md` | 主会话 + 子代理 | 基于 OMP 内置 `packages/coding-agent/src/prompts/system/system-prompt.md` 维护的 Handlebars 模板（纯文本 `SYSTEM.md` 不解析 Handlebars 表达式）。负责工作流规范、渲染当前工具/技能/规则列表，并通过 `{{#if subagent}}` 将第 4 步切换为主会话 `Verify` 或子代理 `Hand-off`。不重复打印单个工具的使用说明。 |
+| `agent/SYSTEM_TEMPLATE.md` | 主会话 + 子代理 | 基于 OMP 内置 `packages/coding-agent/src/prompts/system/system-prompt.md` 维护的 Handlebars 模板（纯文本 `SYSTEM.md` 不解析 Handlebars 表达式）。负责工作流规范、渲染当前工具/技能/规则列表，并通过 `{{#if subagent}}` 将第 4 步切换为主会话 `Verify` 或子代理 `Hand-off`。不重复打印单个工具的调用说明。唯一的工具路由段是 `# Code by Syntax Shape`，每一行只在会话有对应工具时渲染（`{{#has tools "ast_grep"}}`、`{{#has tools "ast_edit"}}`）：按参数找调用、找声明、import 或多行结构交给 `ast_grep` 而不是 `grep` 正则；同一处结构改动出现在多个位置时交给 `ast_edit` 而不是反复调用 `edit`。它放在模板里，是因为模型在读到任何设备说明之前就已决定用哪个工具。 |
 | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充 `# Personality` 下的 `{{personality}}`。前半部分保留 OMP `personality: default` 原文（`Evidence-first terse engineer`）；后半部分定义 `# Writing` 分析与研究写作规范：结论、数字或机制直接开篇，一句话写清时间、主体、动作、规模与来源，多项对象或指标合并进一张表且不在正文逐行复述，删去过程自述、重复解释、叠加免责声明与文末总结。 |
 | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加四条主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）；重大决策同时询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理 | 加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件，并处理所有规则来源的 `paths` 按路径触发。 |

@@ -97,6 +97,12 @@ SHOULD resolve prerequisites, parallelize independent calls. Retry empty/partial
 {{#if secretsEnabled}}- `$$HASH$$`, `$$HASH:CASE$$`, `$$NAME_HASH:CASE$$` output tokens: opaque strings.{{/if}}
 {{#has tools "read"}}- A tool description ending in `Topics` (in the prompt, or in the full docs `xd://<tool>` returns for a device) lists call instructions kept out of the prompt, one line per topic with its exact URL. Before a call that matches a topic's condition, read that URL; read only the topics your call needs. A topic may also arrive after a call to a read-only tool; apply it to the next call.{{/has}}
 
+{{#ifAny (includes tools "ast_grep") (includes tools "ast_edit")}}
+# Code by Syntax Shape
+{{#has tools "ast_grep"}}- Finding calls with their arguments, declarations, imports or multi-line constructs: `{{toolRefs.ast_grep}}`, not `grep` regex.{{/has}}
+{{#has tools "ast_edit"}}- The same structural change at several sites: `{{toolRefs.ast_edit}}`, not repeated `edit` calls.{{/has}}
+{{/ifAny}}
+
 {{#if autoQaEnabled}}
 {{#has tools "write"}}
 <critical>
