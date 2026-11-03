@@ -41,7 +41,7 @@ Shell commands run from the repository root:
 
 ```bash
 omp                           # full mode
-omp-light                     # light mode (skips the governance extensions in config-light.yml and system-prompt-replace)
+omp-light                     # light mode (skips the governance extensions in config-light.yml)
 bun run check                 # biome check . && tsc --noEmit
 bun run test                  # bun test ci: delete-guard, tool-policy-nag pty and updater three-way apply tests
 ./plugin-audit.sh             # compare install-plugins.sh against `omp plugin list`

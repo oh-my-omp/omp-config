@@ -13,43 +13,47 @@ Any non-minimal harness ships predefined text across its base template, built-in
 | `agent/APPEND_SYSTEM.md` (`APPEND_SYSTEM_LIGHT.md` in light mode, empty) | Main session only | Adds defaults for the main agent: explicit user instructions override default rules; the final reply must use complete sentences with explicit subjects, identify objects on first mention, attach `path:line` or observed output to conclusions, and avoid analogies; do not skip reads or truncate outputs to save tokens (read design docs and related files in full before editing). |
 | [repo-rules](#repo-rules) | Main + Subagents | Loads rules from `.claude/rules`, `.agents/rules`, `.pi/rules`, and `~/.claude/rules`, and handles `paths` frontmatter across all rule sources. |
 | [tool-topics](extensions.md#tool-topics) | Main + Subagents (full and light) | Replaces covered tool descriptions with common call instructions plus a `Topics` index; detailed call instructions are read on demand as `tool://<tool>/<topic>`, and `SYSTEM_TEMPLATE.md` requires reading the matching topic before such a call. |
-| [system-prompt-replace](#system-prompt-replace) | Main + Subagents (full mode only) | Runs last among path-loaded extensions and makes wording-level edits to the rendered system prompt. |
+| [system-prompt-replace](#system-prompt-replace) | Per rule (default every session; full and light mode) | Runs last among path-loaded extensions and makes wording-level edits to the rendered system prompt from `REPLACE-SYSTEM-*.yml` rule files; each rule can be global or limited to sessions, cwd, models, providers or modes, and `exclude.*` says when not to apply it. |
 | [append-system-model](#append-system-model) | Per fragment (default main session) | Appends `APPEND-SYSTEM-*.md` fragments whose frontmatter conditions (session, cwd, model, provider, full/light mode, and `exclude.*` for when not to inject) match. The repo ships `APPEND-SYSTEM-decision-support.md`: in the full-mode main session, consult `discuss:steady` and `discuss:divergent` on consequential decisions and `mentor:default` before and after long investigations, except while the main model is `claude-opus-5-5`. |
 | [argon-long-output](extensions.md#argon-long-output) | Main + Subagents (each matched on its own model) | Appends the repo's `ARGON_PROMPT.md` when the model is `gemini-4-argon` on `google-gemini-cli`: each `write`/`edit` payload and final reply stays within 8,000 characters by writing a skeleton first and filling it one section per `edit`. |
 | [tool-topic-injection](extensions.md#tool-topic-injection) | Main + Subagents | Loads a topic only after a configured tool argument matches, once per rule in the actual uncompacted context; it adds developer context rather than growing the static tool description. |
 
 ### system-prompt-replace
 
-Source: `agent/extensions-last/system-prompt-replace/`. Listed as the final entry of `extensions` in `agent/config.yml`.
+Source: `agent/extensions-last/system-prompt-replace/`. Listed as the final entry of `extensions` in `agent/config.yml` and in `agent/config-light.yml`. Its header comment is the reference for keys and matching.
 
-`before_agent_start` handlers run in load order: native discovery (`~/.omp/agent/extensions/` and `settings.json` modules) → hooks → plugins → `-e` paths → `config.yml` `extensions` → OMP inline extensions. Keeping this extension in `extensions-last/` outside `extensions/` and at the end of `config.yml` `extensions` makes it run after every other path-loaded extension (see [`agent/extensions-last/README.md`](../agent/extensions-last/README.md)).
+`before_agent_start` handlers run in load order: native discovery (`~/.omp/agent/extensions/` and `settings.json` modules) → hooks → plugins → `-e` paths → `config.yml` `extensions` → OMP inline extensions. Keeping this extension in `extensions-last/` outside `extensions/` and at the end of the `extensions` list makes it run after every other path-loaded extension in both modes (see [`agent/extensions-last/README.md`](../agent/extensions-last/README.md)).
 
-On every `before_agent_start`, the extension reads the `system-prompt-replace` section of the agent directory's `omomp.*` (project `.omp/` copies are ignored). `config.yml` sets `inlineToolDescriptors: "on"` so tool descriptions are rendered into the system prompt before replacement:
+On every `before_agent_start` (main session and each subagent, each matched against itself), the extension reads every `REPLACE-SYSTEM-<label>.yml` beside it (repo-shipped and machine-local files share that directory) and in each directory from the session cwd up to the git root, plus that directory's `.omp/`. `config.yml` sets `inlineToolDescriptors: "on"` so tool descriptions are rendered into the system prompt before replacement. A file is one YAML sequence of rules:
 
 ```yaml
-system-prompt-replace:
-  replacements:
-    - literal: "exact original text"
-      replace: "replacement text"
-    - regex: "JavaScript regex source"
-      replace: "replacement text, $1 and $& supported"
-      scope: sub   # optional: subagent sessions only
+- literal: "exact original text"
+  replace: "replacement text"
+- regex: "JavaScript regex source"
+  replace: "replacement text, $1 and $& supported"
+  target: subagents          # optional conditions, string values
+  model: "^claude-opus"
+  exclude.target: "mentor:default"
 ```
 
-Active rules in `agent/omomp.yml` (file lookup and edits are restricted to `read` + hashline `edit` and prohibited in `eval` so the model reads surrounding context before modifying target lines, avoiding blind edits in scripts, configs, and CLI operations that lack compiler or test coverage):
+A rule without condition keys applies to every session. The condition keys are those of [append-system-model](#append-system-model) (`target`, `cwd`, `model`, `provider`, `mode` and the same keys under `exclude.`), with the same matching; only the default target differs (every session here, `main` there). Files apply in discovery order and rules in file order, each to the output of the previous one. An unknown key or bad value skips that file with one warning per reason; the other files still apply.
+
+Active rules in the shipped `REPLACE-SYSTEM-default.yml`, each limited to `mode: full` because they ran only in full mode before (file lookup and edits are restricted to `read` + hashline `edit` and prohibited in `eval` so the model reads surrounding context before modifying target lines, avoiding blind edits in scripts, configs, and CLI operations that lack compiler or test coverage):
 
 | Target | Change |
 |---|---|
-| Subagent Todo instruction (`scope: sub`) | Removes `"No TODO tracking, no progress updates."` from the native child prompt so it does not conflict with worker Todo or `fork_task` verification. The task-side sentences (tier choice, explicit `agent`, concurrent writers, the removed "skip build/lint/tests" line) now live in [tool-topics](extensions.md#tool-topics)' `SURFACE-task.md`. |
+| Subagent Todo instruction (`target: subagents`) | Removes `"No TODO tracking, no progress updates."` from the native child prompt so it does not conflict with worker Todo or `fork_task` verification. The task-side sentences (tier choice, explicit `agent`, concurrent writers, the removed "skip build/lint/tests" line) now live in [tool-topics](extensions.md#tool-topics)' `SURFACE-task.md`. |
 | User-reported errors | Clarifies that not rerunning checks to doubt a user report still leaves reproducing to find the cause and verifying the fix in place. |
 | Compiled-code rule | Fixes the missing verb (`NEVER add avoidable allocation...`). |
 | `eval` tool description | Prohibits reading, listing, or searching local files through `eval` (`read`, `glob`, and `grep` handle file inspection). |
 | `eval` description: batch routing | Replaces "For 2+ independent items, use a named `workpool()`" with a split by situation: code that needs each item's model judgment, extraction or rewrite uses `judgeBatch`, or `completion`/`agent` with a schema per item, and points to `tool://eval/workflow`; subagent work whose results are only read stays on `workpool()`. The `agent`/`workpool` namespace line also names per-item schema results. |
 | `xd://` device header | States that `xd://<tool>` devices are called only by writing JSON to `xd://<tool>`, not as `xd__<tool>` or `<tool>` functions. |
 
-Whole tool descriptions (`read`, `bash`, `task`) are no longer replaced here: [tool-topics](extensions.md#tool-topics) locates them by tool name rather than by wording, so they survive upstream rewording, and it runs in light mode too.
+Whole tool descriptions (`read`, `bash`, `task`) are no longer replaced here: [tool-topics](extensions.md#tool-topics) locates them by tool name rather than by wording, so they survive upstream rewording.
 
-When a rule's target is missing from the main session's system prompt (for example after an OMP upgrade changes built-in wording), the extension logs and shows one warning per rule per process without blocking the prompt. Subagent prompts are not checked for missing targets because they omit tools such as `task`; `scope: sub` rules are skipped in the main session.
+When a rule that applies to the main session finds no target (for example after an OMP upgrade changes built-in wording), the extension logs and shows one warning per rule per process without blocking the prompt. Subagent prompts are not checked for missing targets because they omit tools such as `task`; a rule whose conditions do not match the session is skipped without a check.
+
+The old `system-prompt-replace` section of `omomp.yml` is converted by the updater into `REPLACE-SYSTEM-default.yml` and removed (see [File Ownership and Sync Rules](operations.md#file-ownership-and-sync-rules)).
 
 ### append-system-model
 

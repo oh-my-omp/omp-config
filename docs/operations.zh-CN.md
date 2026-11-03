@@ -21,7 +21,7 @@ flowchart LR
 |---|---|---|---|---|
 | `agent/SYSTEM_TEMPLATE.md`、`APPEND_SYSTEM.md`、`PERSONALITY.md`、`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`agents/*` | 仓库；保留本机修改 | 三方合并：本机未改的文件用临时文件 + `rename` 覆盖（保留 symlink），改过的保留修改并合并上游的其他改动，重叠的改动报告冲突；源中已删除的文件，本机未改则删除，改过则报告冲突 | 只读 `cmp` 比对，有差异则复制回仓库 | `agents/*` 下次派发生效；其余下次启动生效 |
 | `agent/extensions/<name>/*.ts`、`extensions/_shared/*.ts`、`extensions-last/<name>/*.ts`、`omp-light.ts` | 仓库（代码以仓库为准） | 即使本机改过也覆盖，改过的文件列入 `overwritten`；基准（尚无基准时为 `auto` 的上一个提交）有而源中已删除的文件会被删除（`extensions-last/README*.md` 只留仓库） | 逐个 `.ts` 比对并写回仓库 | 下次启动 OMP |
-| `PROMPT-INJECT-*.md`、`TURN-JUDGE-*.md`、`INTENT-*.md`、`extensions/append-system-model/APPEND-SYSTEM-*.md` | 仓库自带归仓库；本机自建归本机 | 仓库自带文件按上面文本文件的规则三方合并；不改动或删除同目录下本机自建的文件 | 只收回仓库已跟踪的同名文件 | 下次派发 / 下一轮 / 下次调用 / 下一条 prompt |
+| `PROMPT-INJECT-*.md`、`TURN-JUDGE-*.md`、`INTENT-*.md`、`extensions/append-system-model/APPEND-SYSTEM-*.md`、`extensions-last/system-prompt-replace/REPLACE-SYSTEM-*.yml` | 仓库自带归仓库；本机自建归本机 | 仓库自带文件按上面文本文件的规则三方合并；不改动或删除同目录下本机自建的文件 | 只收回仓库已跟踪的同名文件 | 下次派发 / 下一轮 / 下次调用 / 下一条 prompt |
 | `extensions/tool-topics/TOPIC-*.md`、`SURFACE-*.md` | 仓库自带归仓库；本机自建归本机 | 仓库自带文件按上面文本文件的规则三方合并 | 只收回仓库已跟踪的同名文件 | 下次启动 OMP |
 | `extensions/argon-long-output/ARGON_PROMPT.md` | 仓库；保留本机修改 | 按上面文本文件的规则三方合并 | 与本机 `cmp` 比对，有改动时写回仓库 | 下一条 prompt |
 | `WATCHDOG-*.md` | 本机 | 不写入也不删除（仅在旧平铺目录迁移时从根目录移入扩展目录） | 不收回仓库 | 写入即重读 |
@@ -114,8 +114,9 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 | `helper-session.ts` | `runHelperPrompt`：在无工具、无扩展、`taskDepth: 1` 的内存辅助会话中执行单次请求，返回结果联合类型而不抛异常 |
 | `caller-session.ts` | `callerSession(ctx)`：按 session manager 或会话文件在 `AgentRegistry` 中找到 `ExtensionContext` 所服务的实时 `AgentSession`；`fork-task` 与 `subagent-usage` 使用 |
 | `judge.ts` | `openJudge`：`@<purpose>` 角色已绑定时由其聊天模型作答，否则构建 OMP 的 judge 角色链（`resolveJudge`）；两条路径失败或未配时都回退到 `omomp.yml#judge.fallbackRole` 的聊天模型（`TextJudge`） |
-| `spec-files.ts` | `discoverSpecFiles`、`parseFrontmatter`、`unquote`：扫描并解析扩展目录及 `cwd` 至 git 根各层（含 `.omp/`）的 `*-<label>.md` 文件 |
-| `session-filter.ts` | `parseSessionFilter`、`parseInjectMode`、`targetsSession`、`producerMatches`、`describeFilter`、`SessionFilter`、`InjectMode`、`FilterProblem`：解析规格文件的 `target` 列表、`cwd` glob 列表、产出模型正则与 `inject` 形式，解析问题以数据返回、由调用方措辞；`watchdog-agent` 与 `turn-judge` 使用 |
+| `spec-files.ts` | `discoverSpecFiles`、`parseFrontmatter`、`unquote`：按文件名模式（如 `*-<label>.md`）扫描扩展目录及 `cwd` 至 git 根各层（含 `.omp/`）的文件，并解析 `---` frontmatter |
+| `session-filter.ts` | `parseSessionFilter`、`parseInjectMode`、`targetsSession`、`producerMatches`、`describeFilter`、`SessionFilter`、`InjectMode`、`FilterProblem`：解析规格文件的 `target` 列表、`cwd` glob 列表、产出模型正则与 `inject` 形式，解析问题以数据返回、由调用方措辞；`watchdog-agent`、`turn-judge` 与 `prompt-conditions.ts` 使用 |
+| `prompt-conditions.ts` | `parseSessionConditions`、`conditionsApply`、`CONDITION_KEYS`、`SessionConditions`、`ConditionProblem`：`append-system-model` 片段与 `system-prompt-replace` 规则共用的注入与 `exclude.*` 条件（`target`、`cwd`、`model`、`provider`、`mode`），按会话、当前模型与 `OMOMP_MODE` 匹配；默认 target 与问题措辞由各调用方决定 |
 | `context-delivery.ts` | `createContextDelivery(pi)`：`repo-rules` 和专题注入共用的真实上下文标记判重；内存只保存同 turn 待交付标记 |
 | `tool-topic-injection.ts` | `installToolTopicInjection`、`ToolTopicInjectionRule`、`toolTopicInjectionRulesSchema`：通用的工具参数正则匹配与可信专题投递 |
 | `tool-calls.ts` | `watchedCallOf`、`WatchedCall`：从宿主 `tool_call` 事件读出 shell 命令（`bash`、`bash_bg` 及其 `xd://` 设备写入）或 eval 代码；忽略插件调用；`tool-policy-nag` 与 `delete-guard` 使用 |
@@ -155,6 +156,6 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 - **升级 OMP 之后**：
   1. 在真实 TUI 会话中验证依赖 OMP 内部实现（`AgentRegistry`、子会话文件路径、钩子顺序、运行时设置层、`InteractiveMode` 原型、内置斜杠命令分发器、为 `xd://` 写入补发的嵌套 `tool_call`）的功能：[`fork-task`](prompts-and-context.zh-CN.md#fork-task)、[`omp-todo-more`](plugins-and-modes.zh-CN.md#todo-more)（含 `todo`、`ctx`、task log 与 compact 后注入）、[`user-prompt-inject`](agents.zh-CN.md#user-prompt-inject)、[`turn-judge`](extensions.zh-CN.md#turn-judge)、[`task-completion-judge`](extensions.zh-CN.md#task-completion-judge)、[`model-compaction`](prompts-and-context.zh-CN.md#model-compaction)、[`wt-tool`](extensions.zh-CN.md#wt-tool)、[`harness-restart`](extensions.zh-CN.md#harness-restart)、[`subagent-usage`](extensions.zh-CN.md#subagent-usage)（子代理会话的 `session_init.agent`/`resolvedModel` 字段、worktree 会话目录、供应商用量策略、`authStorage.usage.history`、`ModelsConfigFile` 与它的 Worker；在已开启的机器上执行 `/subagent-usage recalibrate` 并调用一次工具）、[`argon-long-output`](extensions.zh-CN.md#argon-long-output)（`pi-ai` 中 `register-builtins.ts` 与 `google-gemini-cli.ts` 的看门狗超时优先级，以及 OMP 的 Google compat 解析丢弃 `models.yml` 流超时的行为）、[`ast-top-level`](extensions.zh-CN.md#ast-top-level)（`src/tools/xdev.ts` 的 `XDEV_KEEP_TOP_LEVEL` 与 `isMountableUnderXdev`；system prompt 把 `ast_grep`、`ast_edit` 列为函数，不在 `# xd:// Tool Devices` 下）与 [`delete-guard`](extensions.zh-CN.md#delete-guard)（`bash` 里的 `rm` 与 `write xd://bash` 里的 `rm` 都被拦截）。
   2. 对比 `agent/SYSTEM_TEMPLATE.md` 与 OMP 内置的 `packages/coding-agent/src/prompts/system/system-prompt.md`，以及 `agent/PERSONALITY.md` 前半部分与 OMP `personality: default` 预设。
-  3. 若启动时弹出 `system-prompt-replace: … found no target` 警告，按上游最新工具说明更新 `agent/omomp.yml` 的 `system-prompt-replace` 段。
+  3. 若启动时弹出 `system-prompt-replace: … found no target` 警告，按上游最新工具说明更新 `agent/extensions-last/system-prompt-replace/REPLACE-SYSTEM-default.yml`。
   4. 复查 `agent/extensions/tool-topics/`：出现 `tool-topics: <tool> keeps its native description` 警告，说明 OMP 改了工具说明的渲染格式或 `{{native:…}}` 引用的标题。随后逐个工具，把它的 `SURFACE-*` / `TOPIC-*` 文件与头部 `upstream` 列出的来源（`src/prompts/tools/` 下的工具提示词、工具 schema 与 `omp://tools/<tool>.md`）对照，修正有变化的参数、取值与行为，并更新 `upstream` 里的版本。
 - **中英文同步**：`README.md` / `README.zh-CN.md` 及每对 `docs/<topic>.md` / `docs/<topic>.zh-CN.md` 保持相同的章节、表格行与标题锚点。

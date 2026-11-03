@@ -2,9 +2,9 @@
 
 English | [简体中文](README.zh-CN.md)
 
-The extensions here must run after every other path-loaded extension, so they are not placed in `extensions/`; instead `config.yml`'s `extensions` loads them by path, as the last entry of the list. Each extension is one directory with `<name>/index.ts` as its entry and its config as a section of the omomp file (`omomp.yml`) named after the directory; `config.yml` holds the full path of `index.ts` (a file path rather than the directory, so it loads as it did when flat, and `disabledExtensions` cannot filter it by name). Shared code is imported from `../../extensions/_shared/`.
+The extensions here must run after every other path-loaded extension, so they are not placed in `extensions/`; instead `config.yml`'s `extensions` loads them by path, as the last entry of the list. Each extension is one directory with `<name>/index.ts` as its entry; its configuration is a section of the omomp file (`omomp.yml`) named after the directory or files beside `index.ts` (`system-prompt-replace` reads `REPLACE-SYSTEM-*.yml`). `config.yml` holds the full path of `index.ts` (a file path rather than the directory, so it loads as it did when flat, and `disabledExtensions` cannot filter it by name). Shared code is imported from `../../extensions/_shared/`.
 
-`system-prompt-replace/` makes wording-level edits to the rendered prompt, including sentences inside `toolInventory` and `xdevDocs` tool descriptions; it does not replace the Handlebars template or the separately transmitted tool schemas, and whole tool descriptions belong to the `tool-topics` extension, which runs earlier. For prompt-layer ownership and the current rules, see [system-prompt-replace](../../docs/prompts-and-context.md#system-prompt-replace).
+`system-prompt-replace/` makes wording-level edits to the rendered prompt, including sentences inside `toolInventory` and `xdevDocs` tool descriptions, from its `REPLACE-SYSTEM-*.yml` rule files; it does not replace the Handlebars template or the separately transmitted tool schemas, and whole tool descriptions belong to the `tool-topics` extension, which runs earlier. For prompt-layer ownership and the rule format, see [system-prompt-replace](../../docs/prompts-and-context.md#system-prompt-replace).
 
 ## Load order
 
@@ -21,6 +21,6 @@ Step 6 still runs after the extensions here; autoresearch rewrites the system pr
 
 There is no ordering inside `extensions/`: the order is whatever the native glob walk returns, not directory-name order. A directory from here placed in `extensions/` would load in step 1, and the `config.yml` entry pointing at the same path would be dropped as a duplicate.
 
-In light mode, `config-light.yml` overrides `extensions` with an empty list, excluding the extensions here; `omp-light` then passes the entries of the machine's `config.yml` that are not under `extensions-last/` (such as `~/.claude`) back with `-e`.
+In light mode, `config-light.yml` replaces `extensions` with its own list, which keeps `system-prompt-replace` as the last entry; `omp-light` then passes the entries of the machine's `config.yml` that are not under `extensions-last/` (such as `~/.claude`) back with `-e`, a lane that loads before `config.yml` `extensions`.
 
-This file and `README.zh-CN.md` are never loaded and never synced: the repo → machine updater (automatic update at startup and `/update-omp`) and `/sync-omp-config` sync only the `*.ts` and shipped templates in extension directories and the structured `omomp.yml`, whose `system-prompt-replace` section is repo-owned.
+This file and `README.zh-CN.md` are never loaded and never synced: the repo → machine updater (automatic update at startup and `/update-omp`) and `/sync-omp-config` sync only the `*.ts` and shipped templates (such as `REPLACE-SYSTEM-*.yml`) in extension directories and the structured `omomp.yml`.

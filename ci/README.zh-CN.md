@@ -132,7 +132,7 @@ flowchart TB
 
 ## 覆盖边界
 
-检查覆盖：仓库配置能被更新器应用（结构化文件可解析、插件可安装）；完整模式和轻量模式下全部本地扩展与插件能加载；一次真实 prompt 期间 `session_start`、`before_agent_start`、`context` 等钩子不报错；system-prompt-replace 规则全部找到目标；配置引用的模型在影子模型下可解析。
+检查覆盖：仓库配置能被更新器应用（结构化文件可解析、插件可安装）；完整模式和轻量模式下全部本地扩展与插件能加载；一次真实 prompt 期间 `session_start`、`before_agent_start`、`context` 等钩子不报错；适用于该会话（每种模式下它的主会话与模型）的 system-prompt-replace 规则全部找到目标，限定子代理或其他模型的规则不在覆盖范围；配置引用的模型在影子模型下可解析。
 
 检查不覆盖：
 

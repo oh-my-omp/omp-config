@@ -6,7 +6,7 @@
 
 | 序号 | 扩展目录 | 所在章节 | 作用域 | 轻量模式 | 配置来源（`omomp.yml` 段或同目录文件） | 控制面与行为闭包 | 可定制项与定制时机 |
 |---|---|---|---|---|---|---|---|
-| 1 | `system-prompt-replace` | [提示词与上下文](prompts-and-context.zh-CN.md#system-prompt-replace) | 主 + 子 | 否 | `omomp.yml#system-prompt-replace`（仓库） | 提示词与知识注入（`todo-continuity` / 完整模式包；与 `omp-todo-more` 及 `inlineToolDescriptors` 耦合） | 延后：保持仓库替换项，仅在 OMP 上游改动工具说明措辞时更新 |
+| 1 | `system-prompt-replace` | [提示词与上下文](prompts-and-context.zh-CN.md#system-prompt-replace) | 按规则（默认主 + 子） | 是 | `REPLACE-SYSTEM-*.yml`（仓库自带 `REPLACE-SYSTEM-default.yml`；其余为本机或项目文件） | 提示词与知识注入（`todo-continuity`；与 `omp-todo-more` 及 `inlineToolDescriptors` 耦合） | 延后：保留仓库规则；需要全局、按模型或按 agent 的替换时新建本机或项目 `REPLACE-SYSTEM-*.yml`；OMP 上游改动工具说明措辞时更新仓库文件 |
 | 2 | `append-system-model` | [提示词与上下文](prompts-and-context.zh-CN.md#append-system-model) | 主 + 子 | 是 | `APPEND-SYSTEM-*.md`（仓库自带 `APPEND-SYSTEM-decision-support.md`；其余为本机或项目文件） | 提示词与知识注入（`advisor-governance` 的决策支持片段在此下发） | 延后：保留仓库片段；某个场景需要条件规则时新建本机或项目 `APPEND-SYSTEM-*.md` |
 | 3 | `repo-rules` | [提示词与上下文](prompts-and-context.zh-CN.md#repo-rules) | 主 + 子 | 是 | 扫描 `.claude/rules`、`.agents/rules`、`.pi/rules`、`~/.claude/rules` 及原生规则的 `paths` | 提示词与知识注入（必选基底 `prompt-topics`） | 无需配置：自动扫描 `.claude/rules`、`.agents/rules`、`.pi/rules`、`~/.claude/rules` 与 `paths` 规则 |
 | 4 | `fork-task` | [提示词与上下文](prompts-and-context.zh-CN.md#fork-task) | 主 + 子 | 否 | 无配置文件 | 长程上下文与子代理（完整模式 `subagent-gates`；与 `fork:self` 耦合） | 无需配置：复用当前会话模型或目标 `agent` 模型绑定 |

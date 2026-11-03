@@ -41,7 +41,7 @@
 
 ```bash
 omp                           # 完整模式
-omp-light                     # 轻量模式（跳过 config-light.yml 列出的治理扩展与 system-prompt-replace）
+omp-light                     # 轻量模式（跳过 config-light.yml 列出的治理扩展）
 bun run check                 # biome check . && tsc --noEmit
 bun run test                  # bun test ci：delete-guard、tool-policy-nag pty 与更新器三方应用测试
 ./plugin-audit.sh             # 只读比对 install-plugins.sh 与 `omp plugin list`
