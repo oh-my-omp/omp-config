@@ -34,9 +34,9 @@
 //     install gets the repo default), then belong to the machine;
 //   - MACHINE_LIST_FIELDS keep the host's own entries ahead of the repo's;
 //   - every other repo path is managed (see CUSTOMIZATIONS).
-// Shipped APPEND-SYSTEM-*.md fragments beside append-system-model are managed
-// templates, like PROMPT-INJECT-*.md and TURN-JUDGE-*.md; additional host
-// fragments stay machine-owned. Fragment edits take effect on the next prompt.
+// Shipped APPEND-SYSTEM-*.md, PROMPT-INJECT-*.md, TURN-JUDGE-*.md and
+// REPLACE-SYSTEM-*.yml/.yaml rule files are managed templates; additional host
+// files stay machine-owned. Template edits take effect on the next prompt.
 // Untouched by every rule: keys and files the repo never had, app-managed
 // files (`// @orca-managed-pi-extension` first line, or the Otty marker
 // anywhere; see OTTY_MARKER), runtime state. A symlinked target is written
@@ -80,10 +80,14 @@
 //     contest tool://read with the tool-topics extension that now owns it.
 //     An app-managed one is reported as an error instead.
 //   - An omomp section a machine lacks is imported from its old standalone JSON
-//     file (OMOMP_LEGACY_SECTIONS: extensions/<name>/<name>.json, the flat
-//     extensions/<name>.json, the root system-prompt-replace.json and the
-//     autoswitch's root copy), then the old file is deleted. A section the
+//     file (OMOMP_LEGACY_SECTIONS), then the old file is deleted. A section the
 //     machine already has leaves the old file in place with a note.
+//   - The former system-prompt-replace section (or its standalone JSON) becomes
+//     extensions-last/system-prompt-replace/REPLACE-SYSTEM-default.yml, through
+//     the normal managed-template merge. Successful conversion removes only
+//     that omomp.yml section and the legacy JSON. Occupied destinations, invalid
+//     data, ambiguous layouts and other omomp formats stay in place with a note;
+//     the default template is not installed while such a migration is blocked.
 //   - DATA_MOVES split the host's old APPEND_SYSTEM_MODEL.md (at the agent
 //     root or beside append-system-model) into APPEND-SYSTEM-model-NN.md files
 //     in block order, with target: * preserving main/subagent scope. Every
@@ -154,6 +158,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BASE_DIR, type BaseChange, BaseRecord, RepoHistory, type StructuredRecord } from "./base.ts";
 import { parseLegacyModelFragments } from "./legacy-model-fragments.ts";
+import { convertLegacySystemReplacements, removeLegacyReplacementSection } from "./legacy-system-replacements.ts";
 import {
 	type ConflictReason,
 	canonical,
@@ -351,10 +356,6 @@ const OMOMP_LEGACY_SECTIONS: readonly LegacySection[] = [
 		section: "task-completion-judge",
 		rels: ["agent/extensions/task-completion-judge/task-completion-judge.json", "agent/extensions/task-completion-judge.json"],
 	},
-	{
-		section: "system-prompt-replace",
-		rels: ["agent/extensions-last/system-prompt-replace/system-prompt-replace.json", "agent/system-prompt-replace.json"],
-	},
 	{ section: "doc-polish", rels: ["agent/extensions/doc-polish/doc-polish.json", "agent/extensions/doc-polish.json"] },
 	{ section: "model-compaction", rels: ["agent/extensions/model-compaction/model-compaction.json"] },
 	{
@@ -368,7 +369,7 @@ const STRUCTURED: readonly StructuredItem[] = [
 	{
 		rel: "agent/omomp.yml",
 		format: "yaml",
-		rules: { local: LOCAL_OMOMP_SECTIONS, seed: SEED_OMOMP_FIELDS, machineLists: [], retired: {} },
+		rules: { local: [...LOCAL_OMOMP_SECTIONS, "system-prompt-replace"], seed: SEED_OMOMP_FIELDS, machineLists: [], retired: {} },
 		legacySections: OMOMP_LEGACY_SECTIONS,
 	},
 	{
@@ -391,6 +392,7 @@ function managedPlain(rel: string): boolean {
 		/^agent\/agents\/.+$/.test(rel) ||
 		/^agent\/(extensions|extensions-last)\/[^/]+\/[^/]+\.ts$/.test(rel) ||
 		/^agent\/extensions\/append-system-model\/APPEND-SYSTEM-[^/]+\.md$/.test(rel) ||
+		/^agent\/extensions-last\/system-prompt-replace\/REPLACE-SYSTEM-[^/]+\.ya?ml$/.test(rel) ||
 		/^agent\/extensions\/user-prompt-inject\/PROMPT-INJECT-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions\/turn-judge\/TURN-JUDGE-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions\/tool-policy-nag\/INTENT-[^/]+\.md$/.test(rel) ||
@@ -581,6 +583,14 @@ type Op =
 			readonly fragments: readonly { readonly target: string; readonly content: string }[];
 	  }
 	| { readonly kind: "delete"; readonly rel: string; readonly target: string; readonly base?: BaseChange }
+	| {
+			readonly kind: "migrate-replacements";
+			readonly rel: string;
+			readonly target: string;
+			readonly writes: readonly Extract<Op, { kind: "write" }>[];
+			readonly deletes: readonly string[];
+			readonly changes: readonly BaseChange[];
+	  }
 	| { readonly kind: "base"; readonly rel: string; readonly change: BaseChange };
 
 interface PlanContext {
@@ -591,6 +601,92 @@ interface PlanContext {
 	readonly todoRequired: boolean;
 	/** No repo content ever reached this agent dir; see freshMachine. */
 	readonly freshMachine: boolean;
+	readonly replacementMigration: ReplacementMigration;
+}
+
+const REPLACEMENT_RULES_REL = "agent/extensions-last/system-prompt-replace/REPLACE-SYSTEM-default.yml";
+const LEGACY_REPLACEMENT_RELS = [
+	"agent/extensions-last/system-prompt-replace/system-prompt-replace.json",
+	"agent/system-prompt-replace.json",
+] as const;
+
+type ReplacementMigration =
+	| { readonly kind: "none" }
+	| { readonly kind: "blocked"; readonly skipOmomp: boolean }
+	| {
+			readonly kind: "ready";
+			readonly rules: string;
+			readonly omomp: string | undefined;
+			readonly legacy: readonly string[];
+	  };
+
+function planReplacementMigration(opts: ApplyOptions, report: ApplyReport): ReplacementMigration {
+	const files = ["omomp.yml", "omomp.yaml", "omomp.json", "omomp.toml"].filter((rel) => lexists(join(opts.agentDir, rel)));
+	const legacy = LEGACY_REPLACEMENT_RELS.filter((rel) => lexists(targetOf(rel, opts.agentDir)));
+	const blocked = (reason: string, skipOmomp = false): ReplacementMigration => {
+		report.notes.push(`system-prompt-replace migration left in place: ${reason}; move the section to REPLACE-SYSTEM-*.yml by hand`);
+		return { kind: "blocked", skipOmomp };
+	};
+	if (files.length > 1 || (files.length === 1 && files[0] !== "omomp.yml"))
+		return blocked(`unsupported or ambiguous omomp files: ${files.map((rel) => join(opts.agentDir, rel)).join(", ")}`, true);
+	let root: Mapping | undefined;
+	let text: string | undefined;
+	if (files.length === 1) {
+		try {
+			text = readFileSync(join(opts.agentDir, "omomp.yml"), "utf8");
+			root = parseStructured(text, "yaml");
+		} catch (error) {
+			return blocked(`${join(opts.agentDir, "omomp.yml")}: ${errorText(error)}`, true);
+		}
+	}
+	const hasSection = root !== undefined && Object.hasOwn(root, "system-prompt-replace");
+	if (!hasSection && legacy.length === 0) return { kind: "none" };
+	const destination = targetOf(REPLACEMENT_RULES_REL, opts.agentDir);
+	if (lexists(destination)) return blocked(`${destination} already exists`);
+	if (files.some((rel) => isAppManaged(join(opts.agentDir, rel)))) return blocked(`${join(opts.agentDir, "omomp.yml")} is app-managed`, true);
+	let value: unknown = root?.["system-prompt-replace"];
+	if (!hasSection) {
+		if (legacy.length !== 1) return blocked(`multiple legacy JSON files: ${legacy.join(", ")}`);
+		try {
+			value = JSON.parse(readFileSync(targetOf(legacy[0]!, opts.agentDir), "utf8"));
+		} catch (error) {
+			return blocked(`${legacy[0]}: ${errorText(error)}`);
+		}
+	}
+	const converted = convertLegacySystemReplacements(value);
+	if (converted.kind === "invalid") return blocked(converted.reason);
+	let omomp: string | undefined;
+	if (hasSection && root !== undefined && text !== undefined) {
+		const removed = removeLegacyReplacementSection(text, root);
+		if (removed.kind === "invalid") return blocked(removed.reason, true);
+		omomp = removed.text;
+	}
+	return { kind: "ready", rules: converted.text, omomp, legacy };
+}
+
+/** One destination write, followed by section/legacy cleanup, with bases accepted only after all succeed. */
+function groupReplacementMigration(opts: ApplyOptions, migration: ReplacementMigration, planned: readonly Op[]): Op[] {
+	if (migration.kind !== "ready") return [...planned];
+	const rels = new Set([REPLACEMENT_RULES_REL, "agent/omomp.yml"]);
+	const writes: Extract<Op, { kind: "write" }>[] = [];
+	const changes: BaseChange[] = [];
+	const rest: Op[] = [];
+	for (const op of planned) {
+		if (rels.has(op.rel) && op.kind === "write") writes.push(op);
+		else if (rels.has(op.rel) && op.kind === "base") changes.push(op.change);
+		else rest.push(op);
+	}
+	if (migration.omomp !== undefined && !writes.some((write) => write.rel === "agent/omomp.yml"))
+		writes.push({ kind: "write", rel: "agent/omomp.yml", target: join(opts.agentDir, "omomp.yml"), content: migration.omomp });
+	// planPlain always emits the final destination write before the structured cleanup.
+	return [{
+		kind: "migrate-replacements",
+		rel: REPLACEMENT_RULES_REL,
+		target: targetOf(REPLACEMENT_RULES_REL, opts.agentDir),
+		writes,
+		deletes: migration.legacy.map((rel) => targetOf(rel, opts.agentDir)),
+		changes,
+	}, ...rest];
 }
 
 /**
@@ -668,14 +764,14 @@ function mergeText(host: Uint8Array, base: Uint8Array, repo: Uint8Array): TextMe
  * dropped it. `dropped`: its content at the previous commit, standing in for a
  * base this machine never recorded.
  */
-function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, dropped?: Buffer): Op[] {
+function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, dropped?: Buffer, projectedHost?: Buffer): Op[] {
 	const { opts, report } = ctx;
 	const target = targetOf(rel, opts.agentDir);
 	if (lexists(target) && isAppManaged(target)) {
 		report.skipped.push({ path: target, reason: "app-managed" });
 		return [];
 	}
-	const host = existsSync(target) ? readFileSync(target) : undefined;
+	const host = projectedHost ?? (existsSync(target) ? readFileSync(target) : undefined);
 	const recorded = ctx.base.plain(rel);
 	const base = recorded.kind === "none" && dropped !== undefined ? { kind: "known" as const, content: dropped } : recorded;
 	const code = rel.endsWith(".ts");
@@ -723,10 +819,23 @@ function planPlain(ctx: PlanContext): Op[] {
 		(rel) => !(ctx.todoRequired && TODO_RETIREMENTS.includes(rel.slice("agent/".length))),
 	);
 	const ops: Op[] = [];
-	for (const rel of shipped) ops.push(...planPlainItem(ctx, rel, readFileSync(join(opts.source, rel))));
+	for (const rel of shipped) {
+		const migration = ctx.replacementMigration;
+		if (rel === REPLACEMENT_RULES_REL && migration.kind === "blocked") continue;
+		const projected = rel === REPLACEMENT_RULES_REL && migration.kind === "ready" ? Buffer.from(migration.rules) : undefined;
+		const planned = planPlainItem(ctx, rel, readFileSync(join(opts.source, rel)), undefined, projected);
+		if (projected !== undefined && !planned.some((op) => op.kind === "write")) {
+			const base = planned.find((op) => op.kind === "base");
+			ops.push({ kind: "write", rel, target: targetOf(rel, opts.agentDir), content: projected, base: base?.change });
+		} else ops.push(...planned);
+	}
+	// A working snapshot can omit the shipped template; conversion still preserves host rules.
+	if (ctx.replacementMigration.kind === "ready" && !shipped.includes(REPLACEMENT_RULES_REL))
+		ops.push({ kind: "write", rel: REPLACEMENT_RULES_REL, target: targetOf(REPLACEMENT_RULES_REL, opts.agentDir), content: ctx.replacementMigration.rules });
 	const known = new Set(shipped);
 	for (const rel of ctx.base.plainRels()) {
 		if (known.has(rel)) continue;
+		if (rel === REPLACEMENT_RULES_REL && ctx.replacementMigration.kind === "blocked") continue;
 		known.add(rel);
 		// A rel no longer managed stays the host's, and retired leaves have their own planner: only the record goes.
 		if (!managedPlain(rel) || retiring(ctx, rel)) ops.push({ kind: "base", rel, change: { kind: "plain-drop", rel } });
@@ -782,6 +891,9 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 	const { opts, report } = ctx;
 	const ops: Op[] = [];
 	for (const { item, text, repo } of sources) {
+		const migration = ctx.replacementMigration;
+		if (item.rel === "agent/omomp.yml" && migration.kind === "blocked" && migration.skipOmomp) continue;
+		const projectedText = item.rel === "agent/omomp.yml" && migration.kind === "ready" ? migration.omomp : undefined;
 		const target = targetOf(item.rel, opts.agentDir);
 		let host: Mapping | undefined;
 		if (existsSync(target)) {
@@ -790,7 +902,7 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 				continue;
 			}
 			try {
-				host = parseStructured(readFileSync(target, "utf8"), item.format);
+				host = parseStructured(projectedText === undefined ? readFileSync(target, "utf8") : projectedText || "{}", item.format);
 			} catch (error) {
 				// Replacing it would drop the host's own values; leave it and retry next start.
 				report.errors.push(`${target}: host copy unparsable (${errorText(error)}); left untouched`);
@@ -831,12 +943,15 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 		const record: StructuredRecord = { value: merged.base, unknown: merged.unknown };
 		const change: BaseChange | undefined =
 			recorded !== undefined && Bun.deepEquals(recorded, record, true) ? undefined : { kind: "structured", rel: item.rel, record };
-		if (consumed.length === 0 && host !== undefined && Bun.deepEquals(host, merged.host, true)) {
+		if (projectedText === undefined && consumed.length === 0 && host !== undefined && Bun.deepEquals(host, merged.host, true)) {
 			if (change !== undefined) ops.push({ kind: "base", rel: item.rel, change });
 			continue;
 		}
 		// Keep the repo's own formatting whenever the result is exactly the repo file.
-		const content = Bun.deepEquals(merged.host, repo, true) ? text : serialize(merged.host, item.format);
+		const content =
+			projectedText !== undefined && Bun.deepEquals(host, merged.host, true)
+				? projectedText
+				: Bun.deepEquals(merged.host, repo, true) ? text : serialize(merged.host, item.format);
 		ops.push({ kind: "write", rel: item.rel, target, content, base: change });
 		for (const rel of consumed) ops.push({ kind: "delete", rel, target: targetOf(rel, opts.agentDir) });
 	}
@@ -1327,7 +1442,8 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		todoRequired = declared.includes(TODO_PLUGIN_URL);
 		base = BaseRecord.load(opts.agentDir);
 		const history = new RepoHistory(opts.source, !opts.check);
-		const ctx: PlanContext = { opts, report, base, history, todoRequired, freshMachine: freshMachine(opts.agentDir, base) };
+		const replacementMigration = planReplacementMigration(opts, report);
+		const ctx: PlanContext = { opts, report, base, history, todoRequired, freshMachine: freshMachine(opts.agentDir, base), replacementMigration };
 		const planned = [
 			...planRelocations(opts, report),
 			...planPlain(ctx),
@@ -1336,8 +1452,8 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		];
 		report.notes.push(...history.notes);
 		// Moves first, managed writes next, deletions after them, base records last; Todo retirement requires all preceding operations to succeed.
-		const rank: Record<Op["kind"], number> = { move: 0, split: 0, write: 1, delete: 2, base: 3 };
-		ops = planned.toSorted((a, b) => rank[a.kind] - rank[b.kind]);
+		const rank: Record<Op["kind"], number> = { move: 0, split: 0, "migrate-replacements": 0, write: 1, delete: 2, base: 3 };
+		ops = groupReplacementMigration(opts, replacementMigration, planned).toSorted((a, b) => rank[a.kind] - rank[b.kind]);
 	} catch (error) {
 		report.errors.push(errorText(error));
 		return report;
@@ -1399,6 +1515,18 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 				if (current.kind === "blocked") throw new Error(current.message);
 			}
 			switch (op.kind) {
+				case "migrate-replacements":
+					for (const write of op.writes) {
+						if (!opts.check) atomicWrite(write.target, write.content);
+						report.written.push(write.target);
+					}
+					for (const target of op.deletes) {
+						if (!opts.check) unlinkSync(target);
+						report.deleted.push(target);
+					}
+					for (const write of op.writes) if (write.base !== undefined) accepted.push(write.base);
+					accepted.push(...op.changes);
+					break;
 				case "move":
 					if (!opts.check) {
 						mkdirSync(dirname(op.target), { recursive: true });
@@ -1464,6 +1592,7 @@ export function scanConflicts(source: string, agentDir: string): ConflictScan {
 			history: new RepoHistory(source, false),
 			todoRequired,
 			freshMachine: freshMachine(agentDir, base),
+			replacementMigration: planReplacementMigration(opts, report),
 		};
 		planPlain(ctx);
 		planStructured(ctx, sources);

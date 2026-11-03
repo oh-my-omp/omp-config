@@ -94,20 +94,3 @@ tool-topic-injection:
       parameter: path
       pattern: '(^|;)!|://|\.(zip|jar|whl|tar|tgz|gz|zst):'
       topic: tool://grep/scopes
-system-prompt-replace:
-  replacements:
-    - regex: "No TODO tracking, no progress updates\\."
-      replace: ""
-      scope: sub
-    - literal: "User-reported errors, failures, observations are ground truth; NEVER rerun checks to confirm them."
-      replace: "User-reported errors, failures, observations are ground truth; NEVER rerun checks to doubt them. Reproducing to locate the cause and confirming the fix still apply."
-    - literal: "Compiled code: NEVER avoidable allocation, copying, computation."
-      replace: "Compiled code: NEVER add avoidable allocation, copying, computation."
-    - literal: "On error, retry only the failed step; earlier steps may have taken effect."
-      replace: "On error, retry only the failed step; earlier steps may have taken effect.\n// Refuse to investigate files through `eval`: reading content (`open`, `Path.read_text`, `Bun.file`, `readFileSync`, the prelude `read()`), listing or finding files (`os.listdir`, `os.walk`, `glob.glob`, `readdirSync`), and searching text (regex over file content, `subprocess` running `cat`/`ls`/`find`/`grep`/`rg`) belong to `read`, `glob` and `grep`. A quick look, many files at once, or fewer tool calls are not exceptions. `eval` starts only where the work needs language semantics on data already in hand: computation, transforms, structured parsing, library calls."
-    - regex: "Write JSON args as `content` to `xd://<tool>` via `([^`]+)`\\."
-      replace: "Write JSON args as `content` to `xd://<tool>` via `$1`. Devices are not functions: no `xd__<tool>`, `xd_<tool>`, or bare `<tool>` function exists, so never call one; the only call is `$1` with `path` set to `xd://<tool>`."
-    - literal: "For 2+ independent items, use a named `workpool()`; results auto-deliver."
-      replace: "Code holding a list where each item needs a model's judgment, extraction or rewrite: `judgeBatch`, or `completion(…, { schema })` / `agent(…, { schema })` per item, merged by code (`tool://eval/workflow`). Independent subagent work whose results you only read: a named `workpool()`; results auto-deliver."
-    - literal: "- `agent`, `workpool`: background subagents, DAG waves → `xd://eval/agents`"
-      replace: "- `agent`, `workpool`: per-item subagents with schema results, worker pools, DAG waves → `xd://eval/agents`"
