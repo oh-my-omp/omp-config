@@ -643,7 +643,8 @@ function planReplacementMigration(opts: ApplyOptions, report: ApplyReport): Repl
 	if (!hasSection && legacy.length === 0) return { kind: "none" };
 	const destination = targetOf(REPLACEMENT_RULES_REL, opts.agentDir);
 	if (lexists(destination)) return blocked(`${destination} already exists`);
-	if (files.some((rel) => isAppManaged(join(opts.agentDir, rel)))) return blocked(`${join(opts.agentDir, "omomp.yml")} is app-managed`, true);
+	if (files.some((rel) => isAppManaged(join(opts.agentDir, rel))))
+		return blocked(`${join(opts.agentDir, "omomp.yml")} is app-managed`, true);
 	let value: unknown = root?.["system-prompt-replace"];
 	if (!hasSection) {
 		if (legacy.length !== 1) return blocked(`multiple legacy JSON files: ${legacy.join(", ")}`);
@@ -679,14 +680,17 @@ function groupReplacementMigration(opts: ApplyOptions, migration: ReplacementMig
 	if (migration.omomp !== undefined && !writes.some((write) => write.rel === "agent/omomp.yml"))
 		writes.push({ kind: "write", rel: "agent/omomp.yml", target: join(opts.agentDir, "omomp.yml"), content: migration.omomp });
 	// planPlain always emits the final destination write before the structured cleanup.
-	return [{
-		kind: "migrate-replacements",
-		rel: REPLACEMENT_RULES_REL,
-		target: targetOf(REPLACEMENT_RULES_REL, opts.agentDir),
-		writes,
-		deletes: migration.legacy.map((rel) => targetOf(rel, opts.agentDir)),
-		changes,
-	}, ...rest];
+	return [
+		{
+			kind: "migrate-replacements",
+			rel: REPLACEMENT_RULES_REL,
+			target: targetOf(REPLACEMENT_RULES_REL, opts.agentDir),
+			writes,
+			deletes: migration.legacy.map((rel) => targetOf(rel, opts.agentDir)),
+			changes,
+		},
+		...rest,
+	];
 }
 
 /**
@@ -831,7 +835,12 @@ function planPlain(ctx: PlanContext): Op[] {
 	}
 	// A working snapshot can omit the shipped template; conversion still preserves host rules.
 	if (ctx.replacementMigration.kind === "ready" && !shipped.includes(REPLACEMENT_RULES_REL))
-		ops.push({ kind: "write", rel: REPLACEMENT_RULES_REL, target: targetOf(REPLACEMENT_RULES_REL, opts.agentDir), content: ctx.replacementMigration.rules });
+		ops.push({
+			kind: "write",
+			rel: REPLACEMENT_RULES_REL,
+			target: targetOf(REPLACEMENT_RULES_REL, opts.agentDir),
+			content: ctx.replacementMigration.rules,
+		});
 	const known = new Set(shipped);
 	for (const rel of ctx.base.plainRels()) {
 		if (known.has(rel)) continue;
@@ -951,7 +960,9 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 		const content =
 			projectedText !== undefined && Bun.deepEquals(host, merged.host, true)
 				? projectedText
-				: Bun.deepEquals(merged.host, repo, true) ? text : serialize(merged.host, item.format);
+				: Bun.deepEquals(merged.host, repo, true)
+					? text
+					: serialize(merged.host, item.format);
 		ops.push({ kind: "write", rel: item.rel, target, content, base: change });
 		for (const rel of consumed) ops.push({ kind: "delete", rel, target: targetOf(rel, opts.agentDir) });
 	}
@@ -1443,7 +1454,15 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		base = BaseRecord.load(opts.agentDir);
 		const history = new RepoHistory(opts.source, !opts.check);
 		const replacementMigration = planReplacementMigration(opts, report);
-		const ctx: PlanContext = { opts, report, base, history, todoRequired, freshMachine: freshMachine(opts.agentDir, base), replacementMigration };
+		const ctx: PlanContext = {
+			opts,
+			report,
+			base,
+			history,
+			todoRequired,
+			freshMachine: freshMachine(opts.agentDir, base),
+			replacementMigration,
+		};
 		const planned = [
 			...planRelocations(opts, report),
 			...planPlain(ctx),

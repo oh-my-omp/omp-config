@@ -9,7 +9,10 @@ function scalar(value: string): string {
 	if (value.includes("\n")) {
 		const suffix = value.endsWith("\n\n") ? "+" : value.endsWith("\n") ? "" : "-";
 		const body = value.endsWith("\n") ? value.slice(0, -1) : value;
-		const block = `|2${suffix}\n${body.split("\n").map((line) => `    ${line}`).join("\n")}\n`;
+		const block = `|2${suffix}\n${body
+			.split("\n")
+			.map((line) => `    ${line}`)
+			.join("\n")}\n`;
 		try {
 			if (Bun.deepEquals(Bun.YAML.parse(`  value: ${block}`), { value })) return block;
 		} catch {
@@ -42,7 +45,16 @@ export function convertLegacySystemReplacements(value: unknown): Conversion {
 		const match: Match = Object.hasOwn(input, "literal") ? { literal: pattern } : { regex: pattern };
 		rules.push({ ...match, replace: input.replace, ...(input.scope === "sub" ? { target: "subagents" as const } : {}), mode: "full" });
 	}
-	const text = rules.length === 0 ? "[]\n" : rules.map((rule) => Object.entries(rule).map(([key, entry], index) => `${index === 0 ? "- " : "  "}${key}: ${scalar(entry)}`).join("")).join("");
+	const text =
+		rules.length === 0
+			? "[]\n"
+			: rules
+					.map((rule) =>
+						Object.entries(rule)
+							.map(([key, entry], index) => `${index === 0 ? "- " : "  "}${key}: ${scalar(entry)}`)
+							.join(""),
+					)
+					.join("");
 	try {
 		if (!Bun.deepEquals(Bun.YAML.parse(text), rules)) return { kind: "invalid", reason: "serialized rules do not round-trip" };
 	} catch {
@@ -53,7 +65,7 @@ export function convertLegacySystemReplacements(value: unknown): Conversion {
 
 export function removeLegacyReplacementSection(text: string, root: Readonly<Record<string, unknown>>): Conversion {
 	const lines = text.split(/(?<=\n)/);
-	const starts = lines.flatMap((line, index) => /^system-prompt-replace:[ \t]*(?:#.*)?\r?\n?$/.test(line) ? [index] : []);
+	const starts = lines.flatMap((line, index) => (/^system-prompt-replace:[ \t]*(?:#.*)?\r?\n?$/.test(line) ? [index] : []));
 	if (starts.length !== 1) return { kind: "invalid", reason: "section is not one direct top-level YAML block" };
 	const start = starts[0]!;
 	let end = start + 1;
