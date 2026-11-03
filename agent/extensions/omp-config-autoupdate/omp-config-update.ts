@@ -627,18 +627,29 @@ function planReplacementMigration(opts: ApplyOptions, report: ApplyReport): Repl
 		report.notes.push(`system-prompt-replace migration left in place: ${reason}; move the section to REPLACE-SYSTEM-*.yml by hand`);
 		return { kind: "blocked", skipOmomp };
 	};
-	if (files.length > 1 || (files.length === 1 && files[0] !== "omomp.yml"))
-		return blocked(`unsupported or ambiguous omomp files: ${files.map((rel) => join(opts.agentDir, rel)).join(", ")}`, true);
 	let root: Mapping | undefined;
 	let text: string | undefined;
-	if (files.length === 1) {
+	let containsSection = false;
+	for (const rel of files) {
 		try {
-			text = readFileSync(join(opts.agentDir, "omomp.yml"), "utf8");
-			root = parseStructured(text, "yaml");
+			const content = readFileSync(join(opts.agentDir, rel), "utf8");
+			const parsed: unknown = rel.endsWith(".json")
+				? JSON.parse(content)
+				: rel.endsWith(".toml")
+					? Bun.TOML.parse(content)
+					: Bun.YAML.parse(content);
+			if (!isMapping(parsed)) throw new Error("root is not a mapping");
+			containsSection ||= Object.hasOwn(parsed, "system-prompt-replace");
+			if (rel === "omomp.yml") {
+				text = content;
+				root = parsed;
+			}
 		} catch (error) {
-			return blocked(`${join(opts.agentDir, "omomp.yml")}: ${errorText(error)}`, true);
+			return blocked(`${join(opts.agentDir, rel)}: ${errorText(error)}`, true);
 		}
 	}
+	if (containsSection && (files.length > 1 || files[0] !== "omomp.yml"))
+		return blocked(`unsupported or ambiguous omomp files: ${files.map((rel) => join(opts.agentDir, rel)).join(", ")}`, true);
 	const hasSection = root !== undefined && Object.hasOwn(root, "system-prompt-replace");
 	if (!hasSection && legacy.length === 0) return { kind: "none" };
 	const destination = targetOf(REPLACEMENT_RULES_REL, opts.agentDir);

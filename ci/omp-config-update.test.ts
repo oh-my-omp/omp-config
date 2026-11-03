@@ -617,7 +617,7 @@ describe("legacy system replacement rule files", () => {
 	const shipped = readFileSync(join(repoRoot, repoRuleRel), "utf8");
 	const prefix = "# Host formatting stays intact.\nhost-only:\n  exact: 'keep these quotes' # and this comment\n";
 	const suffix = "# Next section comment.\nother-host:\n  enabled: true\n";
-	const oldOmomp = (value: unknown): string => `${prefix}${Bun.YAML.stringify({ "system-prompt-replace": value }, null, 2)}${suffix}`;
+	const oldOmomp = (value: unknown): string => `${prefix}system-prompt-replace:\n  ${JSON.stringify(value)}\n${suffix}`;
 	const converted = (value: unknown): string => {
 		const result = convertLegacySystemReplacements(value);
 		if (result.kind !== "ok") throw new Error(result.reason);
@@ -821,13 +821,42 @@ describe("legacy system replacement rule files", () => {
 		test(`${filename} requires manual migration and is never rewritten`, async () => {
 			const src = migrationSource();
 			const agentDir = temp("omp-replacement-format-");
-			const text = filename.endsWith(".json") ? JSON.stringify({ "system-prompt-replace": section }) : oldOmomp(section);
+			const text = filename.endsWith(".json")
+				? JSON.stringify({ "system-prompt-replace": section })
+				: filename.endsWith(".toml")
+					? "[system-prompt-replace]\nreplacements = []\n"
+					: oldOmomp(section);
 			writeTree(agentDir, { [filename]: text });
 			const report = await apply(src.dir, agentDir);
 			expect(report.errors).toEqual([]);
 			expect(report.notes).toContain(note(`unsupported or ambiguous omomp files: ${join(agentDir, filename)}`));
 			expect(host(agentDir, filename)).toBe(text);
 			expect(existsSync(join(agentDir, "omomp.yml"))).toBe(false);
+			expect(existsSync(join(agentDir, ruleRel))).toBe(false);
+		});
+
+		test(`${filename} without legacy replacements does not block the shipped default`, async () => {
+			const src = migrationSource();
+			const agentDir = temp("omp-replacement-unrelated-");
+			const text = filename.endsWith(".json") ? '{"other":true}\n' : filename.endsWith(".toml") ? "other = true\n" : "other: true\n";
+			writeTree(agentDir, { [filename]: text });
+			const report = await apply(src.dir, agentDir);
+			expect(report.errors).toEqual([]);
+			expect(report.notes.filter((entry) => entry.startsWith("system-prompt-replace migration"))).toEqual([]);
+			expect(host(agentDir, filename)).toBe(text);
+			expect(host(agentDir, ruleRel)).toBe(shipped);
+		});
+
+		test(`unparsable ${filename} is never rewritten or accompanied by a default`, async () => {
+			const src = migrationSource();
+			const agentDir = temp("omp-replacement-unparsable-");
+			writeTree(agentDir, { [filename]: "[[[" });
+			const report = await apply(src.dir, agentDir);
+			expect(report.errors).toEqual([]);
+			expect(
+				report.notes.some((entry) => entry.startsWith(`system-prompt-replace migration left in place: ${join(agentDir, filename)}:`)),
+			).toBe(true);
+			expect(host(agentDir, filename)).toBe("[[[");
 			expect(existsSync(join(agentDir, ruleRel))).toBe(false);
 		});
 	}
@@ -843,6 +872,44 @@ describe("legacy system replacement rule files", () => {
 			note(`unsupported or ambiguous omomp files: ${join(agentDir, "omomp.yml")}, ${join(agentDir, "omomp.yaml")}`),
 		);
 		expect(snapshot(agentDir)).toEqual(before);
+	});
+
+	test("multiple unrelated omomp files do not block the shipped default", async () => {
+		const src = migrationSource();
+		const agentDir = temp("omp-replacement-unrelated-many-");
+		writeTree(agentDir, { "omomp.yml": "other: true\n", "omomp.yaml": "another: true\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.notes.filter((entry) => entry.startsWith("system-prompt-replace migration"))).toEqual([]);
+		expect(host(agentDir, ruleRel)).toBe(shipped);
+	});
+
+	test("malformed standalone JSON is left in place with a note", async () => {
+		const src = migrationSource();
+		const agentDir = temp("omp-replacement-bad-json-");
+		writeTree(agentDir, { "system-prompt-replace.json": "not JSON\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(
+			report.notes.some((entry) => entry.startsWith("system-prompt-replace migration left in place: agent/system-prompt-replace.json:")),
+		).toBe(true);
+		expect(host(agentDir, "system-prompt-replace.json")).toBe("not JSON\n");
+		expect(existsSync(join(agentDir, ruleRel))).toBe(false);
+	});
+
+	test("check on a customized section without a base projects one file conflict and creates nothing", async () => {
+		const src = migrationSource();
+		const agentDir = temp("omp-replacement-custom-check-");
+		writeTree(agentDir, { "omomp.yml": oldOmomp({ replacements: modifiedRules }) });
+		const before = snapshot(agentDir);
+		const report = await apply(src.dir, agentDir, true);
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts.map((conflict) => [conflict.kind, conflict.rel, conflict.reason])).toEqual([
+			["file", repoRuleRel, "unknown-base"],
+		]);
+		expect(report.written).toEqual([join(agentDir, ruleRel), join(agentDir, "omomp.yml")]);
+		expect(snapshot(agentDir)).toEqual(before);
+		expect(existsSync(join(agentDir, ".omp-config-base"))).toBe(false);
 	});
 
 	test("CLI --check plans conversion and cleanup without writing files, directories or base records", () => {
@@ -865,7 +932,7 @@ describe("legacy system replacement rule files", () => {
 	test("section-only omomp remains a valid empty mapping after conversion", async () => {
 		const src = migrationSource();
 		const agentDir = temp("omp-replacement-empty-");
-		writeTree(agentDir, { "omomp.yml": Bun.YAML.stringify({ "system-prompt-replace": section }) });
+		writeTree(agentDir, { "omomp.yml": `system-prompt-replace:\n  ${JSON.stringify(section)}\n` });
 		expect((await apply(src.dir, agentDir)).errors).toEqual([]);
 		expect(host(agentDir, "omomp.yml")).toBe("{}\n");
 		expect((await apply(src.dir, agentDir)).notes).not.toContain(note("section must contain only a replacements array"));
