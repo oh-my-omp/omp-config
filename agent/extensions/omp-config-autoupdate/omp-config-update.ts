@@ -34,6 +34,9 @@
 //     install gets the repo default), then belong to the machine;
 //   - MACHINE_LIST_FIELDS keep the host's own entries ahead of the repo's;
 //   - every other repo path is managed (see CUSTOMIZATIONS).
+// Shipped APPEND-SYSTEM-*.md fragments beside append-system-model are managed
+// templates, like PROMPT-INJECT-*.md and TURN-JUDGE-*.md; additional host
+// fragments stay machine-owned. Fragment edits take effect on the next prompt.
 // Untouched by every rule: keys and files the repo never had, app-managed
 // files (`// @orca-managed-pi-extension` first line, or the Otty marker
 // anywhere; see OTTY_MARKER), runtime state. A symlinked target is written
@@ -81,11 +84,15 @@
 //     extensions/<name>.json, the root system-prompt-replace.json and the
 //     autoswitch's root copy), then the old file is deleted. A section the
 //     machine already has leaves the old file in place with a note.
-//   - DATA_MOVES carry agent-root data into its extension directory: a
-//     host-owned file is renamed there when the new path is free (else left,
-//     with a note); a repo template (shipped now, or by the previous commit)
-//     is deleted, as the source writes or dropped it. Symlinks are never
-//     moved, only noted.
+//   - DATA_MOVES split the host's old APPEND_SYSTEM_MODEL.md (at the agent
+//     root or beside append-system-model) into APPEND-SYSTEM-model-NN.md files
+//     in block order, with target: * preserving main/subagent scope. Every
+//     block and destination is checked before writing; malformed inputs or
+//     occupied destinations leave the old file in place with a note.
+//     Other data moves carry agent-root data into its extension directory:
+//     host files move only to free paths; repo templates (shipped now or by
+//     the previous commit) are deleted as the source writes or dropped them.
+//     Symlinks are never moved, only noted.
 //   - Retired config.yml list entries (RETIRED_LIST_ENTRIES) are dropped.
 //
 // SAFETY. Parse and plan all source/host inputs and retirement ownership before
@@ -146,6 +153,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BASE_DIR, type BaseChange, BaseRecord, RepoHistory, type StructuredRecord } from "./base.ts";
+import { parseLegacyModelFragments } from "./legacy-model-fragments.ts";
 import {
 	type ConflictReason,
 	canonical,
@@ -279,17 +287,22 @@ const SUPERSEDED: readonly { readonly from: string; readonly by: string }[] = [
 ];
 
 /**
- * Agent-root data that now lives in its extension directory (agent-dir
- * relative). `host` files are the machine's; `template` files are the repo's
+ * Data from earlier layouts (agent-dir relative). `host` files are the
+ * machine's; `template` files are the repo's
  * when the source ships the new path or the previous commit shipped the old
  * one, and the machine's otherwise. A `pattern` matches names at the agent root.
  */
 type DataMove =
-	| { readonly kind: "file"; readonly owner: "host"; readonly from: string; readonly to: string }
+	| { readonly kind: "split-model"; readonly owner: "host"; readonly from: readonly string[]; readonly toDir: string }
 	| { readonly kind: "pattern"; readonly owner: "host" | "template"; readonly pattern: RegExp; readonly toDir: string };
 
 const DATA_MOVES: readonly DataMove[] = [
-	{ kind: "file", owner: "host", from: "APPEND_SYSTEM_MODEL.md", to: "extensions/append-system-model/APPEND_SYSTEM_MODEL.md" },
+	{
+		kind: "split-model",
+		owner: "host",
+		from: ["APPEND_SYSTEM_MODEL.md", "extensions/append-system-model/APPEND_SYSTEM_MODEL.md"],
+		toDir: "extensions/append-system-model",
+	},
 	{ kind: "pattern", owner: "template", pattern: /^PROMPT-INJECT-.+\.md$/i, toDir: "extensions/user-prompt-inject" },
 	{ kind: "pattern", owner: "template", pattern: /^TURN-JUDGE-.+\.md$/i, toDir: "extensions/turn-judge" },
 	{ kind: "pattern", owner: "host", pattern: /^WATCHDOG-.+\.md$/i, toDir: "extensions/watchdog-agent" },
@@ -377,6 +390,7 @@ function managedPlain(rel: string): boolean {
 		/^agent\/(config-light\.yml|omp-light\.ts)$/.test(rel) ||
 		/^agent\/agents\/.+$/.test(rel) ||
 		/^agent\/(extensions|extensions-last)\/[^/]+\/[^/]+\.ts$/.test(rel) ||
+		/^agent\/extensions\/append-system-model\/APPEND-SYSTEM-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions\/user-prompt-inject\/PROMPT-INJECT-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions\/turn-judge\/TURN-JUDGE-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions\/tool-policy-nag\/INTENT-[^/]+\.md$/.test(rel) ||
@@ -418,7 +432,7 @@ export type Conflict =
 
 export interface ApplyReport {
 	readonly written: string[];
-	/** RELOCATIONS: host files moved to their new path. */
+	/** RELOCATIONS: host files moved or split into their new paths. */
 	readonly moved: { from: string; to: string }[];
 	readonly deleted: string[];
 	readonly skipped: { path: string; reason: string }[];
@@ -560,6 +574,12 @@ type Op =
 			readonly base?: BaseChange;
 	  }
 	| { readonly kind: "move"; readonly rel: string; readonly from: string; readonly target: string }
+	| {
+			readonly kind: "split";
+			readonly rel: string;
+			readonly target: string;
+			readonly fragments: readonly { readonly target: string; readonly content: string }[];
+	  }
 	| { readonly kind: "delete"; readonly rel: string; readonly target: string; readonly base?: BaseChange }
 	| { readonly kind: "base"; readonly rel: string; readonly change: BaseChange };
 
@@ -886,6 +906,62 @@ function previouslyShipped(opts: ApplyOptions, rel: string): boolean {
 	return opts.previousCommit !== undefined && git(opts.source, ["cat-file", "-e", `${opts.previousCommit}:${rel}`]).ok;
 }
 
+function planLegacyModelSplits(opts: ApplyOptions, report: ApplyReport, from: readonly string[], toDir: string): Op[] {
+	const candidates: { rel: string; target: string; fragments: { target: string; content: string }[] }[] = [];
+	for (const rel of from) {
+		const source = join(opts.agentDir, rel);
+		if (!lexists(source)) continue;
+		if (isAppManaged(source)) {
+			report.skipped.push({ path: source, reason: "app-managed" });
+			continue;
+		}
+		if (lstatSync(source).isSymbolicLink()) {
+			report.notes.push(
+				`${source} is a symlink and was not moved; split it into ${join(opts.agentDir, toDir)}/APPEND-SYSTEM-model-NN.md yourself`,
+			);
+			continue;
+		}
+		const parsed = parseLegacyModelFragments(readFileSync(source, "utf8"));
+		if (parsed.kind === "invalid") {
+			report.notes.push(`${source} left in place: cannot split APPEND_SYSTEM_MODEL.md: ${parsed.reason}`);
+			continue;
+		}
+		candidates.push({
+			rel: `agent/${rel}`,
+			target: source,
+			fragments: parsed.fragments.map((content, index) => ({
+				target: join(opts.agentDir, toDir, `APPEND-SYSTEM-model-${String(index + 1).padStart(2, "0")}.md`),
+				content,
+			})),
+		});
+	}
+	const ops: Op[] = [];
+	for (const candidate of candidates) {
+		const collision = candidate.fragments.find(({ target }) => lexists(target));
+		if (collision) {
+			report.notes.push(`${candidate.target} left in place: ${collision.target} already exists`);
+			continue;
+		}
+		const overlap = candidates.find(
+			(other) =>
+				other !== candidate && other.fragments.some(({ target }) => candidate.fragments.some((fragment) => fragment.target === target)),
+		);
+		if (overlap) {
+			report.notes.push(`${candidate.target} left in place: numbered fragment targets overlap with ${overlap.target}`);
+			continue;
+		}
+		const shipped = candidate.fragments.find((_, index) =>
+			lexists(join(opts.source, "agent", toDir, `APPEND-SYSTEM-model-${String(index + 1).padStart(2, "0")}.md`)),
+		);
+		if (shipped) {
+			report.notes.push(`${candidate.target} left in place: ${shipped.target} is a managed source file`);
+			continue;
+		}
+		ops.push({ kind: "split", ...candidate });
+	}
+	return ops;
+}
+
 /** SUPERSEDED and DATA_MOVES as ops (see RELOCATIONS in the header). */
 function planRelocations(opts: ApplyOptions, report: ApplyReport): Op[] {
 	const ops: Op[] = [];
@@ -901,8 +977,8 @@ function planRelocations(opts: ApplyOptions, report: ApplyReport): Op[] {
 	const moves: { from: string; to: string; owner: "host" | "template" }[] = [];
 	for (const entry of DATA_MOVES) {
 		switch (entry.kind) {
-			case "file":
-				moves.push({ from: entry.from, to: entry.to, owner: entry.owner });
+			case "split-model":
+				ops.push(...planLegacyModelSplits(opts, report, entry.from, entry.toDir));
 				break;
 			case "pattern": {
 				let names: string[];
@@ -1260,7 +1336,7 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		];
 		report.notes.push(...history.notes);
 		// Moves first, managed writes next, deletions after them, base records last; Todo retirement requires all preceding operations to succeed.
-		const rank: Record<Op["kind"], number> = { move: 0, write: 1, delete: 2, base: 3 };
+		const rank: Record<Op["kind"], number> = { move: 0, split: 0, write: 1, delete: 2, base: 3 };
 		ops = planned.toSorted((a, b) => rank[a.kind] - rank[b.kind]);
 	} catch (error) {
 		report.errors.push(errorText(error));
@@ -1329,6 +1405,14 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 						renameSync(op.from, op.target);
 					}
 					report.moved.push({ from: op.from, to: op.target });
+					break;
+				case "split":
+					if (!opts.check) {
+						for (const fragment of op.fragments) atomicWrite(fragment.target, fragment.content);
+						unlinkSync(op.target);
+					}
+					for (const fragment of op.fragments) report.moved.push({ from: op.target, to: fragment.target });
+					if (op.fragments.length === 0) report.deleted.push(op.target);
 					break;
 				case "write":
 					if (!opts.check) atomicWrite(op.target, op.content);
