@@ -2,7 +2,7 @@
 import { isMapping } from "./merge.ts";
 
 type Match = { readonly literal: string } | { readonly regex: string };
-type Rule = Match & { readonly replace: string; readonly target?: "subagents"; readonly mode: "full" };
+type Rule = Match & { readonly replace: string; readonly target?: "subagents"; readonly model?: string; readonly mode: "full" };
 type Conversion = { readonly kind: "ok"; readonly text: string } | { readonly kind: "invalid"; readonly reason: string };
 
 function scalar(value: string): string {
@@ -29,12 +29,21 @@ export function convertLegacySystemReplacements(value: unknown): Conversion {
 	for (const [index, input] of value.replacements.entries()) {
 		const invalid = (reason: string): Conversion => ({ kind: "invalid", reason: `replacement ${index + 1}: ${reason}` });
 		if (!isMapping(input)) return invalid("rule must be a mapping");
-		if (Object.keys(input).some((key) => !["literal", "regex", "replace", "scope"].includes(key))) return invalid("unknown rule key");
+		if (Object.keys(input).some((key) => !["literal", "regex", "replace", "scope", "model"].includes(key)))
+			return invalid("unknown rule key");
 		if (Object.hasOwn(input, "literal") === Object.hasOwn(input, "regex")) return invalid("set exactly one of literal or regex");
 		const pattern = Object.hasOwn(input, "literal") ? input.literal : input.regex;
 		if (typeof pattern !== "string" || pattern.length === 0) return invalid("pattern must be a non-empty string");
 		if (typeof input.replace !== "string") return invalid("replace must be a string");
 		if (input.scope !== undefined && input.scope !== "all" && input.scope !== "sub") return invalid("scope must be all or sub");
+		if (input.model !== undefined) {
+			if (typeof input.model !== "string") return invalid("model must be a string");
+			try {
+				new RegExp(input.model);
+			} catch {
+				return invalid("model regex is invalid");
+			}
+		}
 		if (Object.hasOwn(input, "regex")) {
 			try {
 				new RegExp(pattern);
@@ -43,7 +52,13 @@ export function convertLegacySystemReplacements(value: unknown): Conversion {
 			}
 		}
 		const match: Match = Object.hasOwn(input, "literal") ? { literal: pattern } : { regex: pattern };
-		rules.push({ ...match, replace: input.replace, ...(input.scope === "sub" ? { target: "subagents" as const } : {}), mode: "full" });
+		rules.push({
+			...match,
+			replace: input.replace,
+			...(input.scope === "sub" ? { target: "subagents" as const } : {}),
+			...(input.model !== undefined ? { model: input.model } : {}),
+			mode: "full",
+		});
 	}
 	const text =
 		rules.length === 0

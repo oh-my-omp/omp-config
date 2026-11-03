@@ -82,12 +82,15 @@
 //   - An omomp section a machine lacks is imported from its old standalone JSON
 //     file (OMOMP_LEGACY_SECTIONS), then the old file is deleted. A section the
 //     machine already has leaves the old file in place with a note.
-//   - The former system-prompt-replace section (or its standalone JSON) becomes
-//     extensions-last/system-prompt-replace/REPLACE-SYSTEM-default.yml, through
-//     the normal managed-template merge. Successful conversion removes only
-//     that omomp.yml section and the legacy JSON. Occupied destinations, invalid
-//     data, ambiguous layouts and other omomp formats stay in place with a note;
-//     the default template is not installed while such a migration is blocked.
+//   - The former system-prompt-replace section (or its standalone JSON) is
+//     removed when it matches this machine's accepted structured base, or a
+//     committed repo version if no base exists. The shipped REPLACE-SYSTEM
+//     default then installs as a normal managed template. Only customized host
+//     rules are converted into the destination's normal managed-template merge.
+//     Successful migration removes only that omomp.yml section and legacy JSON.
+//     Occupied destinations, invalid custom data, ambiguous layouts and other
+//     omomp formats stay in place with a note; the default template is not
+//     installed while such a migration is blocked.
 //   - DATA_MOVES split the host's old APPEND_SYSTEM_MODEL.md (at the agent
 //     root or beside append-system-model) into APPEND-SYSTEM-model-NN.md files
 //     in block order, with target: * preserving main/subagent scope. Every
@@ -615,12 +618,25 @@ type ReplacementMigration =
 	| { readonly kind: "blocked"; readonly skipOmomp: boolean }
 	| {
 			readonly kind: "ready";
-			readonly rules: string;
+			readonly rules: string | undefined;
 			readonly omomp: string | undefined;
 			readonly legacy: readonly string[];
 	  };
 
-function planReplacementMigration(opts: ApplyOptions, report: ApplyReport): ReplacementMigration {
+function unmodifiedReplacementSection(
+	base: BaseRecord,
+	history: RepoHistory,
+	item: Pick<StructuredItem, "rel" | "format">,
+	path: Path,
+	value: unknown,
+): boolean {
+	const recorded = base.structuredOf(item.rel);
+	if (recorded !== undefined)
+		return !recorded.unknown.some((unknown) => related(unknown, path)) && Bun.deepEquals(value, valueAt(recorded.value, path), true);
+	return structuredHistory(history, item).some((version) => Bun.deepEquals(value, valueAt(version, path), true));
+}
+
+function planReplacementMigration(opts: ApplyOptions, report: ApplyReport, base: BaseRecord, history: RepoHistory): ReplacementMigration {
 	const files = ["omomp.yml", "omomp.yaml", "omomp.json", "omomp.toml"].filter((rel) => lexists(join(opts.agentDir, rel)));
 	const legacy = LEGACY_REPLACEMENT_RELS.filter((rel) => lexists(targetOf(rel, opts.agentDir)));
 	const blocked = (reason: string, skipOmomp = false): ReplacementMigration => {
@@ -665,15 +681,21 @@ function planReplacementMigration(opts: ApplyOptions, report: ApplyReport): Repl
 			return blocked(`${legacy[0]}: ${errorText(error)}`);
 		}
 	}
-	const converted = convertLegacySystemReplacements(value);
-	if (converted.kind === "invalid") return blocked(converted.reason);
+	const item = hasSection ? { rel: "agent/omomp.yml", format: "yaml" as const } : { rel: legacy[0]!, format: "json" as const };
+	const path = hasSection ? ["system-prompt-replace"] : [];
+	let rules: string | undefined;
+	if (!unmodifiedReplacementSection(base, history, item, path, value)) {
+		const converted = convertLegacySystemReplacements(value);
+		if (converted.kind === "invalid") return blocked(converted.reason);
+		rules = converted.text;
+	}
 	let omomp: string | undefined;
 	if (hasSection && root !== undefined && text !== undefined) {
 		const removed = removeLegacyReplacementSection(text, root);
 		if (removed.kind === "invalid") return blocked(removed.reason, true);
 		omomp = removed.text;
 	}
-	return { kind: "ready", rules: converted.text, omomp, legacy };
+	return { kind: "ready", rules, omomp, legacy };
 }
 
 /** One destination write, followed by section/legacy cleanup, with bases accepted only after all succeed. */
@@ -837,7 +859,10 @@ function planPlain(ctx: PlanContext): Op[] {
 	for (const rel of shipped) {
 		const migration = ctx.replacementMigration;
 		if (rel === REPLACEMENT_RULES_REL && migration.kind === "blocked") continue;
-		const projected = rel === REPLACEMENT_RULES_REL && migration.kind === "ready" ? Buffer.from(migration.rules) : undefined;
+		const projected =
+			rel === REPLACEMENT_RULES_REL && migration.kind === "ready" && migration.rules !== undefined
+				? Buffer.from(migration.rules)
+				: undefined;
 		const planned = planPlainItem(ctx, rel, readFileSync(join(opts.source, rel)), undefined, projected);
 		if (projected !== undefined && !planned.some((op) => op.kind === "write")) {
 			const base = planned.find((op) => op.kind === "base");
@@ -845,7 +870,7 @@ function planPlain(ctx: PlanContext): Op[] {
 		} else ops.push(...planned);
 	}
 	// A working snapshot can omit the shipped template; conversion still preserves host rules.
-	if (ctx.replacementMigration.kind === "ready" && !shipped.includes(REPLACEMENT_RULES_REL))
+	if (ctx.replacementMigration.kind === "ready" && ctx.replacementMigration.rules !== undefined && !shipped.includes(REPLACEMENT_RULES_REL))
 		ops.push({
 			kind: "write",
 			rel: REPLACEMENT_RULES_REL,
@@ -895,9 +920,9 @@ function parseSources(opts: ApplyOptions, report: ApplyReport): StructuredSource
 }
 
 /** Every committed version of a structured file that still parses: the history a missing base is matched against. */
-function structuredHistory(ctx: PlanContext, item: StructuredItem): Mapping[] {
+function structuredHistory(history: RepoHistory, item: Pick<StructuredItem, "rel" | "format">): Mapping[] {
 	const versions: Mapping[] = [];
-	for (const text of ctx.history.versions(item.rel)) {
+	for (const text of history.versions(item.rel)) {
 		try {
 			versions.push(parseStructured(text, item.format));
 		} catch {
@@ -954,7 +979,7 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 				? { kind: "recorded", value: recorded.value, unknown: recorded.unknown }
 				: host === undefined || ctx.freshMachine
 					? { kind: "empty" }
-					: { kind: "history", versions: structuredHistory(ctx, item) };
+					: { kind: "history", versions: structuredHistory(ctx.history, item) };
 		const merged = mergeStructured(host, repo, source, item.rules);
 		for (const { path, reason } of merged.conflicts) {
 			const id = `${item.rel}#${pointer(path)}@${digest(canonical(valueAt(repo, path)))}`;
@@ -1464,7 +1489,7 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		todoRequired = declared.includes(TODO_PLUGIN_URL);
 		base = BaseRecord.load(opts.agentDir);
 		const history = new RepoHistory(opts.source, !opts.check);
-		const replacementMigration = planReplacementMigration(opts, report);
+		const replacementMigration = planReplacementMigration(opts, report, base, history);
 		const ctx: PlanContext = {
 			opts,
 			report,
@@ -1615,14 +1640,15 @@ export function scanConflicts(source: string, agentDir: string): ConflictScan {
 		const sources = parseSources(opts, report);
 		const todoRequired = declaredPlugins(source).required.includes(TODO_PLUGIN_URL);
 		const base = BaseRecord.load(agentDir);
+		const history = new RepoHistory(source, false);
 		const ctx: PlanContext = {
 			opts,
 			report,
 			base,
-			history: new RepoHistory(source, false),
+			history,
 			todoRequired,
 			freshMachine: freshMachine(agentDir, base),
-			replacementMigration: planReplacementMigration(opts, report),
+			replacementMigration: planReplacementMigration(opts, report, base, history),
 		};
 		planPlain(ctx);
 		planStructured(ctx, sources);

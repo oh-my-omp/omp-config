@@ -614,6 +614,13 @@ describe("legacy system replacement rule files", () => {
 	const section = originalRoot["system-prompt-replace"];
 	if (!Array.isArray(section.replacements)) throw new Error("missing replacement fixtures");
 	const originalRules: unknown[] = section.replacements;
+	const modelEra = spawnSync("git", ["show", "8df685b:agent/omomp.yml"], { cwd: repoRoot, encoding: "utf8" });
+	if (modelEra.status !== 0) throw new Error(modelEra.stderr);
+	const modelEraRoot: unknown = Bun.YAML.parse(modelEra.stdout);
+	if (!isMapping(modelEraRoot) || !isMapping(modelEraRoot["system-prompt-replace"])) throw new Error("missing model-era fixture");
+	const modelEraSection = modelEraRoot["system-prompt-replace"];
+	if (!Array.isArray(modelEraSection.replacements)) throw new Error("missing model-era rules");
+	const modelEraRules: unknown[] = modelEraSection.replacements;
 	const shipped = readFileSync(join(repoRoot, repoRuleRel), "utf8");
 	const prefix = "# Host formatting stays intact.\nhost-only:\n  exact: 'keep these quotes' # and this comment\n";
 	const suffix = "# Next section comment.\nother-host:\n  enabled: true\n";
@@ -629,7 +636,7 @@ describe("legacy system replacement rule files", () => {
 		src.commit({ "agent/omomp.yml": "{}\n", [repoRuleRel]: shipped });
 		return src;
 	};
-	const migrationHost = (value: unknown): string => {
+	const migrationHost = (value: unknown, accepted: unknown = section, unknown: string[][] = []): string => {
 		const agentDir = temp("omp-replacement-migration-");
 		writeTree(agentDir, {
 			"omomp.yml": oldOmomp(value),
@@ -638,8 +645,8 @@ describe("legacy system replacement rule files", () => {
 				unknownPlain: [],
 				structured: {
 					"agent/omomp.yml": {
-						value: { "system-prompt-replace": section },
-						unknown: [["system-prompt-replace", "replacements"]],
+						value: { "system-prompt-replace": accepted },
+						unknown,
 					},
 				},
 			}),
@@ -706,6 +713,8 @@ describe("legacy system replacement rule files", () => {
 			{ replacements: [{ regex: "(", replace: "" }] },
 			{ replacements: [{ literal: "x", replace: 1 }] },
 			{ replacements: [{ literal: "x", replace: "", scope: "other" }] },
+			{ replacements: [{ literal: "x", replace: "", model: 1 }] },
+			{ replacements: [{ literal: "x", replace: "", model: "(" }] },
 			{ replacements: [{ literal: "x", replace: "", unknown: true }] },
 		])
 			expect(convertLegacySystemReplacements(value).kind).toBe("invalid");
@@ -732,6 +741,130 @@ describe("legacy system replacement rule files", () => {
 		expect(again.written).toEqual([]);
 		expect(again.deleted).toEqual([]);
 		expect(snapshot(agentDir)).toEqual(before);
+	});
+
+	for (const authority of ["recorded base", "committed history"] as const) {
+		test(`unmodified 8df685b-era section follows ${authority} to the shipped default without conversion and stays idempotent`, async () => {
+			const src = migrationSource();
+			src.commit({ "agent/omomp.yml": modelEra.stdout });
+			src.commit({ "agent/omomp.yml": "{}\n" });
+			const agentDir =
+				authority === "recorded base" ? migrationHost(modelEraSection, modelEraSection) : temp("omp-replacement-historical-");
+			if (authority === "committed history") writeTree(agentDir, { "omomp.yml": oldOmomp(modelEraSection) });
+			expect(converted(modelEraSection)).not.toBe(shipped);
+			const env = { ...process.env, HOME: temp("omp-replacement-cli-home-") };
+			const command = [UPDATER, "apply", "--source", src.dir, "--agent-dir", agentDir, "--no-plugins"];
+			const result = spawnSync("bun", [...command, "--json"], { encoding: "utf8", env });
+			expect(result.status).toBe(0);
+			expect(result.stderr).toBe("");
+			const report: unknown = JSON.parse(result.stdout);
+			expect(report).toEqual({
+				written: [join(agentDir, ruleRel), join(agentDir, "omomp.yml")],
+				moved: [],
+				deleted: [],
+				skipped: [],
+				errors: [],
+				notes: ["agent/config.yml: not in source, host copy left alone"],
+				pluginsInstalled: [],
+				pluginsUpgraded: [],
+				pluginsMissing: [],
+				pluginChanges: [],
+				conflicts: [],
+				overwritten: [],
+				restartNeeded: false,
+			});
+			expect(host(agentDir, ruleRel)).toBe(shipped);
+			expect(host(agentDir, "omomp.yml")).toBe(prefix + suffix);
+			const before = snapshot(agentDir);
+			const again = await apply(src.dir, agentDir);
+			expect(again.errors).toEqual([]);
+			expect(again.conflicts).toEqual([]);
+			expect(again.written).toEqual([]);
+			expect(again.deleted).toEqual([]);
+			expect(snapshot(agentDir)).toEqual(before);
+			const cliAgain = spawnSync("bun", command, { encoding: "utf8", env });
+			expect(cliAgain.status).toBe(0);
+			expect(cliAgain.stdout).toBe("note: agent/config.yml: not in source, host copy left alone\nno file changes\n");
+			expect(snapshot(agentDir)).toEqual(before);
+		});
+	}
+
+	test("recorded base takes precedence over matching committed history", async () => {
+		const src = migrationSource();
+		src.commit({ "agent/omomp.yml": modelEra.stdout });
+		src.commit({ "agent/omomp.yml": "{}\n" });
+		const agentDir = migrationHost(modelEraSection);
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts.map((conflict) => [conflict.kind, conflict.rel, conflict.reason])).toEqual([
+			["file", repoRuleRel, "unknown-base"],
+		]);
+		expect(host(agentDir, ruleRel)).toBe(converted(modelEraSection));
+		expect(host(agentDir, "omomp.yml")).toBe(prefix + suffix);
+	});
+
+	test("unknown paths under a recorded section do not authorize discarding host rules", async () => {
+		const src = migrationSource();
+		const agentDir = migrationHost(modelEraSection, modelEraSection, [["system-prompt-replace", "replacements"]]);
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts.map((conflict) => [conflict.kind, conflict.rel, conflict.reason])).toEqual([
+			["file", repoRuleRel, "unknown-base"],
+		]);
+		expect(host(agentDir, ruleRel)).toBe(converted(modelEraSection));
+	});
+
+	test("accepted obsolete rule data is removed without converter validation", async () => {
+		const src = migrationSource();
+		const accepted = { replacements: [{ obsolete: true }] };
+		const agentDir = migrationHost(accepted, accepted);
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts).toEqual([]);
+		expect(host(agentDir, ruleRel)).toBe(shipped);
+		expect(host(agentDir, "omomp.yml")).toBe(prefix + suffix);
+	});
+
+	test("customized model-conditioned section emits its model condition and preserves host order", async () => {
+		const src = migrationSource();
+		const customRules = [{ literal: "HOST first", replace: "custom" }, ...modelEraRules];
+		const customSection = { replacements: customRules };
+		const agentDir = migrationHost(customSection, modelEraSection);
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts.map((conflict) => [conflict.kind, conflict.rel, conflict.reason])).toEqual([
+			["file", repoRuleRel, "unknown-base"],
+		]);
+		const text = host(agentDir, ruleRel);
+		expect(text).toBe(converted(customSection));
+		expect(text).toContain('  model: "^claude-opus-5-5$"\n');
+		const parsed: unknown = Bun.YAML.parse(text);
+		expect(Array.isArray(parsed) && parsed[0]).toEqual({ literal: "HOST first", replace: "custom", mode: "full" });
+		expect(Array.isArray(parsed) && parsed.at(-1)).toEqual({
+			regex: "\\n*# Mandatory decision support\\n\\n[^\\n]+\\n\\n[^\\n]+",
+			replace: "",
+			model: "^claude-opus-5-5$",
+			mode: "full",
+		});
+		expect(host(agentDir, "omomp.yml")).toBe(prefix + suffix);
+		const before = snapshot(agentDir);
+		const again = await apply(src.dir, agentDir);
+		expect(again.errors).toEqual([]);
+		expect(again.conflicts).toEqual(report.conflicts);
+		expect(again.written).toEqual([]);
+		expect(snapshot(agentDir)).toEqual(before);
+	});
+
+	test("invalid customized model regex leaves its section and destination untouched", async () => {
+		const src = migrationSource();
+		const customSection = { replacements: [{ literal: "x", replace: "", model: "(" }] };
+		const agentDir = migrationHost(customSection);
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.notes).toContain(note("replacement 1: model regex is invalid"));
+		expect(host(agentDir, "omomp.yml")).toBe(oldOmomp(customSection));
+		expect(existsSync(join(agentDir, ruleRel))).toBe(false);
+		expect(report.written).toEqual([]);
 	});
 
 	const modifiedRules = originalRules.map((rule, index) =>
@@ -777,6 +910,31 @@ describe("legacy system replacement rule files", () => {
 			expect(Bun.YAML.parse(host(agentDir, "omomp.yml"))).toEqual({});
 			expect(report.deleted).toEqual([join(agentDir, legacy)]);
 		});
+
+		for (const authority of ["recorded base", "committed history"] as const) {
+			test(`standalone ${legacy} accepted by ${authority} installs current shipped rules instead of obsolete defaults`, async () => {
+				const src = migrationSource();
+				const agentDir = temp("omp-replacement-json-accepted-");
+				writeTree(agentDir, { [legacy]: JSON.stringify(modelEraSection) });
+				if (authority === "recorded base")
+					writeTree(agentDir, {
+						".omp-config-base/state.json": JSON.stringify({
+							version: 1,
+							unknownPlain: [],
+							structured: { [`agent/${legacy}`]: { value: modelEraSection, unknown: [] } },
+						}),
+					});
+				else {
+					src.commit({ [`agent/${legacy}`]: JSON.stringify(modelEraSection) });
+					src.commit({ [`agent/${legacy}`]: null });
+				}
+				const report = await apply(src.dir, agentDir);
+				expect(report.errors).toEqual([]);
+				expect(report.conflicts).toEqual([]);
+				expect(report.deleted).toEqual([join(agentDir, legacy)]);
+				expect(host(agentDir, ruleRel)).toBe(shipped);
+			});
+		}
 	}
 
 	test("occupied destination leaves both authorities and legacy JSON untouched with a note", async () => {
