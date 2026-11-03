@@ -69,7 +69,7 @@ exclude.model: ^claude-opus-5-5$
 …
 ```
 
-注入条件键 `target`（默认 `main`；也可写 `subagents`、`*` 或代理名）、`cwd`、`model`、`provider` 与 `mode`（`full`、`light`）沿用 `turn-judge` 与 `watchdog-agent` 的语法：同一键内多项为“或”，不同键为“且”。`exclude.target`、`exclude.cwd`、`exclude.model`、`exclude.provider` 与 `exclude.mode` 描述何时不注入：片段设置的 `exclude.*` 键全部命中时跳过；未写 `exclude.target` 时排除覆盖所有会话。`model` 与 `provider` 是匹配会话当前模型 id 与 provider 的正则。`omp-light` 以 `OMOMP_MODE=light` 启动 omp，其余情况为 `full`。`enabled: false` 关闭该文件。未知键、正文为空或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
+注入条件键 `target`（默认 `main`；也可写 `subagents`、`*` 或代理名）、`cwd`、`model` 与 `provider` 沿用 `turn-judge` 与 `watchdog-agent` 的语法；`mode` 列出 `full` 和/或 `light`。同一键内多项为“或”，不同键为“且”。`exclude.target`、`exclude.cwd`、`exclude.model`、`exclude.provider` 与 `exclude.mode` 描述何时不注入：片段设置的 `exclude.*` 键全部命中时跳过；未写 `exclude.target` 时排除覆盖所有会话。`model` 与 `provider` 是匹配会话当前模型 id 与 provider 的正则。`omp-light` 以 `OMOMP_MODE=light` 启动 omp，其余情况为 `full`。`enabled: false` 关闭该文件。未知键、正文为空或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
 
 旧的单文件格式 `APPEND_SYSTEM_MODEL.md` 由更新器按块拆成 `APPEND-SYSTEM-model-NN.md`，每个文件带 `target: *`，保持原来对主会话和子代理都生效的范围（见[文件归属与同步规则](operations.zh-CN.md#文件归属与同步规则)）。
 
