@@ -10,11 +10,11 @@
 |---|---|---|
 | `agent/SYSTEM_TEMPLATE.md` | 主会话 + 子代理 | 基于 OMP 内置 `packages/coding-agent/src/prompts/system/system-prompt.md` 维护的 Handlebars 模板（纯文本 `SYSTEM.md` 不解析 Handlebars 表达式）。负责工作流规范、渲染当前工具/技能/规则列表，并通过 `{{#if subagent}}` 将第 4 步切换为主会话 `Verify` 或子代理 `Hand-off`。不重复打印单个工具的调用说明。唯一的工具路由段是 `# Code by Syntax Shape`，每一行只在会话有对应工具时渲染（`{{#has tools "ast_grep"}}`、`{{#has tools "ast_edit"}}`）：按参数找调用、找声明、import 或多行结构交给 `ast_grep` 而不是 `grep` 正则；同一处结构改动出现在多个位置时交给 `ast_edit` 而不是反复调用 `edit`。它放在模板里，是因为模型在读到任何设备说明之前就已决定用哪个工具。 |
 | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充 `# Personality` 下的 `{{personality}}`。前半部分保留 OMP `personality: default` 原文（`Evidence-first terse engineer`）；后半部分定义 `# Writing` 分析与研究写作规范：结论、数字或机制直接开篇，一句话写清时间、主体、动作、规模与来源，多项对象或指标合并进一张表且不在正文逐行复述，删去过程自述、重复解释、叠加免责声明与文末总结。 |
-| `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加四条主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）；重大决策同时询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`。主模型为 `claude-opus-5-5` 时，最后一条由 [system-prompt-replace](#system-prompt-replace) 的规则删除。 |
+| `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理 | 加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件，并处理所有规则来源的 `paths` 按路径触发。 |
 | [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 把被覆盖工具的说明换成常用调用说明加 `Topics` 索引；详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
 | [system-prompt-replace](#system-prompt-replace) | 主会话 + 子代理（仅完整模式） | 在所有按路径加载的扩展最后运行，对渲染出的 system prompt 做措辞级修改。 |
-| [append-system-model](#append-system-model) | 主会话 + 子代理 | 按当前会话的 `model` 或 `provider` 正则匹配 `APPEND_SYSTEM_MODEL.md`，追加模型专属提示词块。 |
+| [append-system-model](#append-system-model) | 按片段（默认仅主会话） | 追加 frontmatter 条件（会话、cwd、模型、provider、完整/轻量模式，以及表示何时不注入的 `exclude.*`）命中的 `APPEND-SYSTEM-*.md` 片段。仓库自带 `APPEND-SYSTEM-decision-support.md`：完整模式的主会话中，重大决策询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`；主模型为 `claude-opus-5-5` 时不注入。 |
 | [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时追加仓库下发的 `ARGON_PROMPT.md`：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
 | [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection) | 主会话 + 子代理 | 配置的工具参数命中后才加载专题，每条规则在真实未压缩上下文中注入一次；追加 developer 上下文，而不是扩大常驻工具说明。 |
 
@@ -34,7 +34,6 @@ system-prompt-replace:
     - regex: "JavaScript 正则源码"
       replace: "替换文字，可用 $1、$&"
       scope: sub   # 可选：只在子代理会话生效
-      model: "^claude-opus-5-5$"   # 可选：只在会话当前模型 id 匹配该正则时生效
 ```
 
 `agent/omomp.yml` 当前包含的替换规则（其中文件检索与编辑固定使用 `read` + hashline `edit` 并禁止在 `eval` 中查文件，以要求模型在读取目标行邻近上下文后再做修改，避免在缺少编译器与测试保护的脚本、配置或命令行操作中脱离上下文直接修改）：
@@ -47,19 +46,32 @@ system-prompt-replace:
 | `eval` 工具说明 | 禁止通过 `eval` 读取、列目录或搜索本地文件（统一使用 `read`、`glob`、`grep`）。 |
 | `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `tool://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
 | `xd://` 设备说明 | 说明 `xd://<tool>` 只能通过 `write` 写入 JSON 调用，不存在 `xd__<tool>` 或裸 `<tool>` 函数。 |
-| `APPEND_SYSTEM.md` 的 `# Mandatory decision support`（`model: "^claude-opus-5-5$"`） | 主模型为 `claude-opus-5-5` 时删除该标题及其两段（重大决策询问 `discuss:steady` 与 `discuss:divergent`；长调查前后会商 `mentor:default`）。其他主模型保留该段；子代理本就不接收 `APPEND_SYSTEM.md`。 |
 
 整段工具说明（`read`、`bash`、`task`）不再由本扩展替换：[tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞定位它们，上游改写措辞后仍然生效，且轻量模式也会运行。
 
-当某条规则在主会话 system prompt 中找不到匹配文本时（例如升级 OMP 后上游改了内置措辞），每个进程对每条规则记一次日志并弹一次 UI 警告（headless 模式写 stderr），不阻塞请求。子代理的 system prompt 本就不含 `task` 等工具，不做缺失检查；`scope: sub` 的规则在主会话中跳过；带 `model` 的规则在会话当前模型 id 不匹配时跳过，也不做缺失检查。
+当某条规则在主会话 system prompt 中找不到匹配文本时（例如升级 OMP 后上游改了内置措辞），每个进程对每条规则记一次日志并弹一次 UI 警告（headless 模式写 stderr），不阻塞请求。子代理的 system prompt 本就不含 `task` 等工具，不做缺失检查；`scope: sub` 的规则在主会话中跳过。
 
 ### append-system-model
 
-源码：`agent/extensions/append-system-model/`。
+源码：`agent/extensions/append-system-model/`，键与匹配规则以其文件头注释为准。
 
-每次 `before_agent_start` 时读取 `~/.omp/agent/extensions/append-system-model/APPEND_SYSTEM_MODEL.md`，主会话与每个子代理各自按自身当前模型匹配。该文件属于本机，仓库不提供；修改文件或通过 `/model` 切换模型后，从下一条 prompt 起生效。
+每次 `before_agent_start` 时（主会话与每个子代理各按自身匹配），扩展读取同目录下的全部 `APPEND-SYSTEM-<label>.md`（仓库自带与本机自建文件放在同一目录），以及从会话 cwd 到 git 根每层目录及其 `.omp/` 中的同名模式文件。所有命中的片段都会追加，不按名称覆盖；命中的正文按发现顺序拼成一个额外块，追加在 system prompt 末尾。文件每条 prompt 重读，新增或修改片段、`/model` 切换都从下一条 prompt 起生效，无需重启；子代理被 IRC 唤醒的轮次不运行该钩子。
 
-文件由 `---` 分隔的块组成：每个块以 YAML 头声明 `model`（匹配模型 id，如 `claude-opus-5-5`）和/或 `provider`（匹配 provider id，如 `^anthropic$`）的 JavaScript 正则，后面接正文直到下一个 `---` 行（正文内部如需分隔线用 `***`）。所有命中的块按文件顺序拼接后追加到 system prompt 末尾；文件不存在时跳过，格式错误时按行号记一次 warning。
+片段由 `---` 包围的 frontmatter 与其后的提示词正文组成：
+
+```markdown
+---
+target: main
+mode: full
+exclude.model: ^claude-opus-5-5$
+---
+# Mandatory decision support
+…
+```
+
+注入条件键 `target`（默认 `main`；也可写 `subagents`、`*` 或代理名）、`cwd`、`model`、`provider` 与 `mode`（`full`、`light`）沿用 `turn-judge` 与 `watchdog-agent` 的语法：同一键内多项为“或”，不同键为“且”。`exclude.target`、`exclude.cwd`、`exclude.model`、`exclude.provider` 与 `exclude.mode` 描述何时不注入：片段设置的 `exclude.*` 键全部命中时跳过；未写 `exclude.target` 时排除覆盖所有会话。`model` 与 `provider` 是匹配会话当前模型 id 与 provider 的正则。`omp-light` 以 `OMOMP_MODE=light` 启动 omp，其余情况为 `full`。`enabled: false` 关闭该文件。未知键、正文为空或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
+
+旧的单文件格式 `APPEND_SYSTEM_MODEL.md` 由更新器按块拆成 `APPEND-SYSTEM-model-NN.md`，每个文件带 `target: *`，保持原来对主会话和子代理都生效的范围（见[文件归属与同步规则](operations.zh-CN.md#文件归属与同步规则)）。
 
 ### repo-rules
 
@@ -92,8 +104,8 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 | 省略 `agent` | 源的模型、thinking 等级与请求参数 | `context` + `task` | 共享（`isolated: false`） | 从源开出另一条执行分支，复用已有缓存前缀 |
 | 显式填写 `agent` | 该 agent 在 `task.agentModelOverrides` 中的绑定，否则取定义里的 `model` | `<role agent="…">` 包裹的定义正文 + `context` + `task` | 隔离（`isolated: true`） | 让另一个角色接着源的工作做，通常换更便宜的模型 |
 
-- **前缀复刻**：`replica.ts` 在每个会话的 `Agent.streamFn` 捕获实际 `Context`，位置在 SDK 的提醒、图片、上下文变换之后、供应商序列化之前。子代理原样发送这份 system/工具定义前缀和源请求的消息，后面接子代理自己的上下文：从源对该请求的回复开始；子代理复制来的 transcript 里没有这条回复时，从 fork notice 开始。子代理按继承 transcript 重建出的上下文不与源请求比对，因为宿主不保证落盘 transcript 与发出时的内存请求一致。运行源的模型时还复用 thinking/service-tier/temperature/max-token 参数和 prompt-cache key，换成其他模型则用该模型自己的参数。共享 `context`、角色和任务接在继承历史后，作为子代理的 user 消息。所有子代理都以内部 `fork:self` 派发，工具调用由子会话自己的实现执行，存在的 `yield` 追加在源工具之后。子代理以 `fork:self` 运行源的工具面，所以指定 agent 的工具限制、派发策略、按 agent 配置的 service-tier、压缩阈值与账号池，以及按 agent 名生效的钩子（如 [`task-completion-judge`](extensions.zh-CN.md#task-completion-judge)）都不生效。实现只有一条供应商无关的路径，不分别改写 Anthropic/OpenAI payload。子会话的对话和传输身份保持独立；原生 `ask` 仍遵守 headless 限制。
-- **缓存与生命周期边界**：模型相同、请求参数兼容是必要条件；是否命中仍由供应商的缓存策略、路由和 TTL 决定。改 `effort` 不影响复刻的前缀。不支持追加工具保留缓存的供应商可能因新增 `yield` 而 miss。请求快照保存在创建它的 OMP 进程中，支持同进程 idle/park/revive。会话自己的快照在该会话 dispose（关闭或 idle park）时释放，分叉子代理的复刻请求保留到父会话关闭。两者只保存纯请求数据（消息、工具 schema），至多再加一个借给 headless 子代理的 `ask` 工具，所以 park 后的会话不会因它们留在内存中。进程重启或父会话关闭后丢失快照的子代理会在请求供应商前失败，应创建新分叉。子会话分支在 fork notice 之后出现压缩后，子代理改发自己的上下文，revive 之后也是如此；在此之前 fork notice 缺失或不唯一则报错，不猜测拼接位置。
+- **前缀复刻**：`replica.ts` 在每个会话的 `Agent.streamFn` 捕获实际 `Context`，位置在 SDK 的提醒、图片、上下文变换之后、供应商序列化之前。子代理复用这份 system/工具定义前缀和分叉点以前的源消息；运行源的模型时还复用 thinking/service-tier/temperature/max-token 参数和 prompt-cache key，换成其他模型则用该模型自己的参数。共享 `context`、角色和任务接在继承历史后，作为子代理的 user 消息。所有子代理都以内部 `fork:self` 派发，工具调用由子会话自己的实现执行，存在的 `yield` 追加在源工具之后。子代理以 `fork:self` 运行源的工具面，所以指定 agent 的工具限制、派发策略、按 agent 配置的 service-tier、压缩阈值与账号池，以及按 agent 名生效的钩子（如 [`task-completion-judge`](extensions.zh-CN.md#task-completion-judge)）都不生效。实现只有一条供应商无关的路径，不分别改写 Anthropic/OpenAI payload。子会话的对话和传输身份保持独立；原生 `ask` 仍遵守 headless 限制。
+- **缓存与生命周期边界**：模型相同、请求参数兼容是必要条件；是否命中仍由供应商的缓存策略、路由和 TTL 决定。改 `effort` 不影响复刻的前缀。不支持追加工具保留缓存的供应商可能因新增 `yield` 而 miss。请求快照保存在创建它的 OMP 进程中，支持同进程 idle/park/revive。会话自己的快照在该会话 dispose（关闭或 idle park）时释放，分叉子代理的复刻请求保留到父会话关闭。两者只保存纯请求数据（消息、工具 schema），至多再加一个借给 headless 子代理的 `ask` 工具，所以 park 后的会话不会因它们留在内存中。进程重启或父会话关闭后丢失快照的子代理会在请求供应商前失败，应创建新分叉。压缩改变子会话上下文后，包装器停止替换继承消息；未压缩时锚点缺失或不唯一则报错，不猜测拼接位置。
 - **工作区覆盖**：`isolated` 覆盖默认值。并发写入必须显式选择 `isolated: true`；plan mode 强制共享、只读子代理；隔离子代理完成后不能继续唤醒。
 - **Shake 必须显式选择**：`shake` 默认为 false，任何任务项都不检查继承 token 数或来源成本。显式 `shake: true` 对副本执行 `session.shake("elide")`，保留最近约 4,000 token 及 `skill://`、`local://PLAN.md` 读取，把更早的文本工具结果、$\ge 400$ token 的代码块和顶层小写 XML 块替换成共享 artifact 中的恢复引用。开启 shake 的分叉明确不再回放原始消息前缀。
 - **拒绝的任务项**：`tools` 不是 fork 字段，子代理只暴露源的工具。未知 agent、`task.disabledAgents` 中的 agent 或 `fork:self` 本身在派发前报错。

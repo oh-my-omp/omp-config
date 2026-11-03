@@ -35,12 +35,9 @@
 // replaces every occurrence verbatim (no `$` handling). A regex is compiled
 // with the `g` flag and uses String.prototype.replace substitution patterns.
 // Optional `scope: sub` applies a rule only in subagent sessions (text only
-// subagent prompts carry); the default `all` applies everywhere. Optional
-// `model` is a JavaScript regex (unanchored, `RegExp.test`) against the
-// session's current model id (`claude-opus-5-5`); a rule with `model` applies
-// only while it matches, and a non-matching rule is skipped, not reported as
-// missing. Rules apply in file order, each to the output of the previous one,
-// across every system-prompt block.
+// subagent prompts carry); the default `all` applies everywhere. Rules apply
+// in file order, each to the output of the previous one, across every
+// system-prompt block.
 //
 // TIMING. Every `before_agent_start`, in the main session and in every
 // subagent. The file is re-read per prompt, so edits apply from the next
@@ -79,8 +76,6 @@ interface Rule {
 	readonly matcher: Matcher;
 	readonly replace: string;
 	readonly scope: Scope;
-	/** Applies the rule only while the session's current model id matches; `null` applies it to every model. */
-	readonly model: RegExp | null;
 }
 
 type Parsed = { readonly kind: "ok"; readonly rules: readonly Rule[] } | { readonly kind: "invalid"; readonly reason: string };
@@ -97,25 +92,13 @@ function parseRule(value: unknown, index: number): RuleParse {
 		return { kind: "invalid", reason: `${at} is not an object` };
 	}
 	const record = object.data;
-	const unknownKey = Object.keys(record).find(
-		(key) => key !== "literal" && key !== "regex" && key !== "replace" && key !== "scope" && key !== "model",
-	);
+	const unknownKey = Object.keys(record).find((key) => key !== "literal" && key !== "regex" && key !== "replace" && key !== "scope");
 	if (unknownKey !== undefined) return { kind: "invalid", reason: `${at}: unknown key \`${unknownKey}\`` };
 	const replacement = replacementSchema.safeParse(record.replace);
 	if (!replacement.success) return { kind: "invalid", reason: `${at}: \`replace\` must be a string` };
 	const scoped = scopeSchema.safeParse(record.scope ?? "all");
 	if (!scoped.success) return { kind: "invalid", reason: `${at}: \`scope\` must be "all" or "sub"` };
 	const scope = scoped.data;
-	let model: RegExp | null = null;
-	if (record.model !== undefined) {
-		const source = matcherSchema.safeParse(record.model);
-		if (!source.success) return { kind: "invalid", reason: `${at}: \`model\` must be a non-empty regex string` };
-		try {
-			model = new RegExp(source.data);
-		} catch (error) {
-			return { kind: "invalid", reason: `${at}: invalid \`model\` regex: ${errorText(error)}` };
-		}
-	}
 	const { literal, regex } = record;
 	if ((literal === undefined) === (regex === undefined)) {
 		return { kind: "invalid", reason: `${at}: set exactly one of \`literal\` and \`regex\`` };
@@ -132,7 +115,6 @@ function parseRule(value: unknown, index: number): RuleParse {
 				matcher: { kind: "literal", text: text.data },
 				replace: replacement.data,
 				scope,
-				model,
 			},
 		};
 	}
@@ -148,7 +130,7 @@ function parseRule(value: unknown, index: number): RuleParse {
 	}
 	return {
 		kind: "ok",
-		rule: { label: `${at} regex /${expression.data}/`, matcher: { kind: "regex", pattern }, replace: replacement.data, scope, model },
+		rule: { label: `${at} regex /${expression.data}/`, matcher: { kind: "regex", pattern }, replace: replacement.data, scope },
 	};
 }
 
@@ -195,7 +177,6 @@ export default function systemPromptReplace(pi: ExtensionAPI): void {
 			let changed = false;
 			for (const rule of parsed.rules) {
 				if (rule.scope === "sub" && ctx.agent.kind === "main") continue;
-				if (rule.model !== null && (ctx.model === undefined || !rule.model.test(ctx.model.id))) continue;
 				let hits = 0;
 				const matcher = rule.matcher;
 				blocks = blocks.map((block) => {

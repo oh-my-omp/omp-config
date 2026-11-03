@@ -54,7 +54,7 @@ function childExitCode(code: number | null, signal: ChildSignal | null): number 
 async function runOmp(ompPath: string, args: string[]): Promise<number> {
 	let child: ChildProcess;
 	try {
-		child = spawn(ompPath, args, { shell: false, stdio: "inherit" });
+		child = spawn(ompPath, args, { shell: false, stdio: "inherit", env: { ...process.env, OMOMP_MODE: "light" } });
 	} catch {
 		console.error(`omp-light: unable to launch omp: ${ompPath}`);
 		return 126;

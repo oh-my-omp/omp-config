@@ -46,6 +46,7 @@
 | 配置项 | `omp`（完整模式） | `omp-light`（轻量模式） |
 |---|---|---|
 | 追加系统提示词 | `agent/APPEND_SYSTEM.md` | `agent/APPEND_SYSTEM_LIGHT.md`（空文件） |
+| 环境变量 `OMOMP_MODE` | 未设置（视为 `full`） | `light`；[`append-system-model`](prompts-and-context.zh-CN.md#append-system-model) 片段用 `mode` / `exclude.mode` 按它选择，因此仓库自带的决策支持片段（`mode: full`）不注入 |
 | `task.eager` | `preferred` | `default` |
 | `disabledExtensions` | 无 | 禁用以下本地扩展：`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
 | `config.yml` 的 `extensions` 路径列表 | 加载 `extensions-last/system-prompt-replace` | `config-light.yml` 将 `extensions` 设为空列表以跳过 `extensions-last/system-prompt-replace`（`disabledExtensions` 只按模块名过滤，不能过滤文件路径）；`omp-light.ts` 读取本机 `config.yml`，把不含 `/extensions-last/` 的本机条目（如 `~/.claude`）通过 `-e` 传回 |

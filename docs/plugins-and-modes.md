@@ -46,6 +46,7 @@ Set up translation using the [omp-thinking-translator README](https://github.com
 | Setting | `omp` (full mode) | `omp-light` (light mode) |
 |---|---|---|
 | Appended system prompt | `agent/APPEND_SYSTEM.md` | `agent/APPEND_SYSTEM_LIGHT.md` (empty) |
+| `OMOMP_MODE` environment variable | Unset (`full`) | `light`; [`append-system-model`](prompts-and-context.md#append-system-model) fragments select on it with `mode` / `exclude.mode`, so the shipped decision-support fragment (`mode: full`) is not injected |
 | `task.eager` | `preferred` | `default` |
 | `disabledExtensions` | None | Disables these extensions: `doc-polish`, `fork-task`, `isolation-nudge`, `lang-nag`, `task-completion-judge`, `task-split-check`, `tool-policy-nag`, `turn-judge`, `user-prompt-inject`, `watchdog-agent` |
 | `config.yml` `extensions` path list | Loads `extensions-last/system-prompt-replace` | `config-light.yml` overrides `extensions: []` to skip `extensions-last/system-prompt-replace` (`disabledExtensions` only filters by module name, not file paths); `omp-light.ts` reads the machine's `config.yml` and passes any non-`/extensions-last/` entries (such as `~/.claude`) back via `-e` |

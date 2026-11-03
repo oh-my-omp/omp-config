@@ -132,7 +132,7 @@ flowchart TB
 
 ## Coverage boundary
 
-The check covers: the repository config can be applied by the updater (structured files parse, plugins install); every local extension and plugin loads in full and light mode; hooks such as `session_start`, `before_agent_start` and `context` raise no errors during one real prompt; every system-prompt-replace rule that applies to the check's model finds its target (a rule with `model` that does not match that model is not checked); and the models the config references resolve under shadow models.
+The check covers: the repository config can be applied by the updater (structured files parse, plugins install); every local extension and plugin loads in full and light mode; hooks such as `session_start`, `before_agent_start` and `context` raise no errors during one real prompt; every system-prompt-replace rule finds its target; and the models the config references resolve under shadow models.
 
 The check does not cover:
 

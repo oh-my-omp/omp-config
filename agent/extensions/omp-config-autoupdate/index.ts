@@ -20,7 +20,7 @@
 // adapts each one with the user. `/omp-config-autoupdate conflicts
 // notify|agent` sets the preference.
 //
-// per-spawn files (APPEND_SYSTEM_MODEL.md, ARGON_PROMPT.md, the system-prompt-replace
+// per-spawn files (APPEND-SYSTEM-*.md, ARGON_PROMPT.md, the system-prompt-replace
 // section, TURN-JUDGE-*.md, PROMPT-INJECT-*.md, agents/) and live-reloaded config.yml apply at once;
 // APPEND_SYSTEM.md, extensions (this one included) and plugins apply on the
 // next start, which the update widget says.
