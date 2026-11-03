@@ -1,4 +1,5 @@
-extensions: []
+extensions:
+  - ~/.omp/agent/extensions-last/system-prompt-replace/index.ts
 disabledExtensions:
   - extension-module:doc-polish
   - extension-module:fork-task

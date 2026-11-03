@@ -28,15 +28,13 @@
 //   exclude.mode:     light
 // Any other key makes the file invalid.
 //
-// MATCHING. `target`, `cwd`, `model` and `provider` follow
-// `_shared/session-filter.ts`: items inside a key are alternatives, keys AND.
-// `mode` is a comma list of `full` and `light`: `omp-light` starts omp with
-// `OMOMP_MODE=light`, and any other value or none is `full`. A fragment is
-// injected when its inclusion keys match the session and its `exclude.*` keys,
-// if it sets any, do not all match. Without `exclude.target` the exclusion
-// covers every session. `model` / `provider` are tested against the session's
-// current model (`ctx.model.id`, `ctx.model.provider`); with no current model
-// a model or provider constraint never matches, on either side.
+// MATCHING. `_shared/prompt-conditions.ts` (shared with system-prompt-replace):
+// items inside a key are alternatives, keys AND; `mode` lists `full` and/or
+// `light` (`omp-light` sets `OMOMP_MODE=light`). A fragment is injected when
+// its inclusion keys match the session and its `exclude.*` keys, if it sets
+// any, do not all match. Without `exclude.target` the exclusion covers every
+// session. With no current model a model or provider constraint never
+// matches, on either side. Without `target` a fragment targets `main`.
 //
 // TIMING. `before_agent_start`, in the main session and in every subagent, each
 // matched against its own identity, cwd and model. Files are re-read per
@@ -58,44 +56,20 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import {
-	type FilterKeys,
-	type FilterProblem,
-	parseSessionFilter,
-	producerMatches,
-	type SessionFilter,
-	type TargetDefault,
-	targetsSession,
-} from "../_shared/session-filter.ts";
+	CONDITION_KEYS,
+	type ConditionProblem,
+	conditionsApply,
+	parseSessionConditions,
+	type SessionConditions,
+} from "../_shared/prompt-conditions.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 
 const FILE_PATTERN = /^APPEND-SYSTEM-.+\.md$/i;
 
-type Mode = "full" | "light";
-
-type SideKeys = FilterKeys & { readonly mode: string };
-
-const INCLUDE_KEYS: SideKeys = { target: "target", cwd: "cwd", model: "model", provider: "provider", mode: "mode" };
-const EXCLUDE_KEYS: SideKeys = {
-	target: "exclude.target",
-	cwd: "exclude.cwd",
-	model: "exclude.model",
-	provider: "exclude.provider",
-	mode: "exclude.mode",
-};
-const ALLOWED_KEYS: ReadonlySet<string> = new Set(["enabled", ...Object.values(INCLUDE_KEYS), ...Object.values(EXCLUDE_KEYS)]);
-
-/** One side of a fragment's condition; `modes` null means any mode. */
-interface Conditions {
-	readonly filter: SessionFilter;
-	readonly modes: readonly Mode[] | null;
-}
-
-/** `none`: the file sets no `exclude.*` key, so nothing excludes it. */
-type Exclusion = { readonly kind: "none" } | { readonly kind: "conditions"; readonly conditions: Conditions };
+const ALLOWED_KEYS: ReadonlySet<string> = new Set(["enabled", ...CONDITION_KEYS]);
 
 interface Fragment {
-	readonly include: Conditions;
-	readonly exclusion: Exclusion;
+	readonly conditions: SessionConditions;
 	readonly body: string;
 }
 
@@ -104,12 +78,10 @@ type FragmentParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-type ConditionsParse = { readonly kind: "ok"; readonly conditions: Conditions } | { readonly kind: "invalid"; readonly reason: string };
-
 /** `path\0reason` of invalid files already reported, so a broken file warns once per process. */
 const warnedFiles = new Set<string>();
 
-function describeProblem(problem: FilterProblem): string {
+function describeProblem(problem: ConditionProblem): string {
 	switch (problem.kind) {
 		case "missing":
 			return tr(`${problem.key} is missing`, `缺少 ${problem.key}`);
@@ -122,6 +94,11 @@ function describeProblem(problem: FilterProblem): string {
 			);
 		case "badRegex":
 			return tr(`${problem.key} is not a valid regex: ${problem.detail}`, `${problem.key} 不是有效正则表达式：${problem.detail}`);
+		case "badMode":
+			return tr(
+				`${problem.key} must list full and/or light, not "${problem.value}"`,
+				`${problem.key} 只能列出 full 和/或 light，不能是“${problem.value}”`,
+			);
 		case "badInject":
 			return tr(`${problem.key} is not accepted here`, `此处不接受 ${problem.key}`);
 		default: {
@@ -129,37 +106,6 @@ function describeProblem(problem: FilterProblem): string {
 			return unreachable;
 		}
 	}
-}
-
-function parseModes(
-	raw: string | undefined,
-	key: string,
-): { readonly kind: "ok"; readonly modes: readonly Mode[] | null } | { readonly kind: "invalid"; readonly reason: string } {
-	if (raw === undefined) return { kind: "ok", modes: null };
-	const modes: Mode[] = [];
-	for (const item of unquote(raw).split(",")) {
-		const value = unquote(item).toLowerCase();
-		switch (value) {
-			case "full":
-			case "light":
-				modes.push(value);
-				break;
-			default:
-				return {
-					kind: "invalid",
-					reason: tr(`${key} must list full and/or light, not "${value}"`, `${key} 只能列出 full 和/或 light，不能是“${value}”`),
-				};
-		}
-	}
-	return { kind: "ok", modes };
-}
-
-function parseConditions(fields: Readonly<Record<string, string>>, keys: SideKeys, fallback: TargetDefault): ConditionsParse {
-	const filter = parseSessionFilter(fields, keys, fallback);
-	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
-	const modes = parseModes(fields[keys.mode], keys.mode);
-	if (modes.kind === "invalid") return modes;
-	return { kind: "ok", conditions: { filter: filter.value, modes: modes.modes } };
 }
 
 function parseFragment(path: string): FragmentParse {
@@ -178,40 +124,9 @@ function parseFragment(path: string): FragmentParse {
 	if (fields.enabled !== undefined && !/^(true|yes|on|1)$/i.test(unquote(fields.enabled))) return { kind: "disabled" };
 	const text = body.trim();
 	if (text === "") return { kind: "invalid", reason: tr("empty body", "正文为空") };
-	const include = parseConditions(fields, INCLUDE_KEYS, { kind: "default", targets: [{ kind: "main" }] });
-	if (include.kind === "invalid") return include;
-	let exclusion: Exclusion = { kind: "none" };
-	if (Object.values(EXCLUDE_KEYS).some((key) => fields[key] !== undefined)) {
-		const exclude = parseConditions(fields, EXCLUDE_KEYS, { kind: "default", targets: [{ kind: "all" }] });
-		if (exclude.kind === "invalid") return exclude;
-		exclusion = { kind: "conditions", conditions: exclude.conditions };
-	}
-	return { kind: "ok", fragment: { include: include.conditions, exclusion, body: text } };
-}
-
-/** Whether the session's identity, cwd, current model and mode satisfy every key the side sets. */
-function sessionMatches(conditions: Conditions, ctx: ExtensionContext, mode: Mode): boolean {
-	if (conditions.modes !== null && !conditions.modes.includes(mode)) return false;
-	const { filter } = conditions;
-	if (!targetsSession(filter, ctx.agent, ctx.cwd)) return false;
-	if (filter.models.length === 0) return true;
-	const model = ctx.model;
-	if (model === undefined) return false;
-	return producerMatches(filter, { model: model.id, provider: model.provider });
-}
-
-function applies(fragment: Fragment, ctx: ExtensionContext, mode: Mode): boolean {
-	if (!sessionMatches(fragment.include, ctx, mode)) return false;
-	switch (fragment.exclusion.kind) {
-		case "none":
-			return true;
-		case "conditions":
-			return !sessionMatches(fragment.exclusion.conditions, ctx, mode);
-		default: {
-			const unreachable: never = fragment.exclusion;
-			return unreachable;
-		}
-	}
+	const conditions = parseSessionConditions(fields, { kind: "default", targets: [{ kind: "main" }] });
+	if (conditions.kind === "invalid") return { kind: "invalid", reason: describeProblem(conditions.problem) };
+	return { kind: "ok", fragment: { conditions: conditions.value, body: text } };
 }
 
 function warn(pi: ExtensionAPI, ctx: ExtensionContext, path: string, reason: string): void {
@@ -227,13 +142,12 @@ function warn(pi: ExtensionAPI, ctx: ExtensionContext, path: string, reason: str
 export default function appendSystemModel(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", (event, ctx) => {
 		try {
-			const mode: Mode = process.env.OMOMP_MODE === "light" ? "light" : "full";
 			const bodies: string[] = [];
 			for (const path of discoverSpecFiles(FILE_PATTERN, import.meta.dir, ctx.cwd)) {
 				const parsed = parseFragment(path);
 				switch (parsed.kind) {
 					case "ok":
-						if (applies(parsed.fragment, ctx, mode)) bodies.push(parsed.fragment.body);
+						if (conditionsApply(parsed.fragment.conditions, ctx)) bodies.push(parsed.fragment.body);
 						break;
 					case "disabled":
 						break;
