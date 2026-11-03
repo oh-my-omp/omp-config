@@ -8,9 +8,7 @@ interface Constraint {
 	readonly source: string;
 }
 
-type Header =
-	| { readonly kind: "ok"; readonly constraints: readonly Constraint[] }
-	| { readonly kind: "invalid"; readonly reason: string };
+type Header = { readonly kind: "ok"; readonly constraints: readonly Constraint[] } | { readonly kind: "invalid"; readonly reason: string };
 
 type ParsedFragments =
 	| { readonly kind: "ok"; readonly fragments: readonly string[] }

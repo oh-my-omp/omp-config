@@ -6,9 +6,10 @@
 // first-run config.yml writes every managed key, and --check writes nothing.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { parseFrontmatter, unquote } from "../agent/extensions/_shared/spec-files.ts";
 import { type ApplyReport, applySnapshot } from "../agent/extensions/omp-config-autoupdate/omp-config-update.ts";
 
 const UPDATER = join(import.meta.dir, "../agent/extensions/omp-config-autoupdate/omp-config-update.ts");
@@ -336,4 +337,263 @@ describe("machines without a base", () => {
 		expect(existsSync(join(agentDir, "agents/x.md"))).toBe(false);
 		expect(existsSync(join(agentDir, ".omp-config-base"))).toBe(false);
 	});
+});
+
+describe("legacy model appendix fragments", () => {
+	const missingSourceNotes = [
+		"agent/omomp.yml: not in source, host copy left alone",
+		"agent/config.yml: not in source, host copy left alone",
+	];
+	const extensionDir = "extensions/append-system-model";
+	const legacyLocations = ["APPEND_SYSTEM_MODEL.md", `${extensionDir}/APPEND_SYSTEM_MODEL.md`];
+	const first = `${extensionDir}/APPEND-SYSTEM-model-01.md`;
+	const second = `${extensionDir}/APPEND-SYSTEM-model-02.md`;
+	const old = [
+		"---",
+		String.raw`model: '^gpt-\d+\."x"/$'`,
+		"---",
+		"  Model-only body.  ",
+		"",
+		"---",
+		'model: "(opus|o3)"',
+		"provider: ^anthropic$",
+		"---",
+		"Both constraints.",
+		"Second line.",
+		"",
+	].join("\n");
+	const expected = [
+		["---", "target: *", String.raw`model: "^gpt-\d+\."x"/$"`, "---", "Model-only body.", ""].join("\n"),
+		["---", "target: *", 'model: "(opus|o3)"', 'provider: "^anthropic$"', "---", "Both constraints.", "Second line.", ""].join("\n"),
+	];
+
+	for (const legacy of legacyLocations) {
+		test(`splits two legacy blocks at ${legacy}, preserving regex strings, scope and order`, async () => {
+			const src = source();
+			src.commit({ "agent/.keep": "" });
+			const agentDir = temp("omp-model-split-");
+			writeTree(agentDir, { [legacy]: old });
+			const report = await apply(src.dir, agentDir);
+			expect(report.errors).toEqual([]);
+			expect(report.notes).toEqual([...missingSourceNotes]);
+			expect(report.moved).toEqual([
+				{ from: join(agentDir, legacy), to: join(agentDir, first) },
+				{ from: join(agentDir, legacy), to: join(agentDir, second) },
+			]);
+			expect(report.restartNeeded).toBe(false);
+			expect(existsSync(join(agentDir, legacy))).toBe(false);
+			expect(host(agentDir, first)).toBe(expected[0]!);
+			expect(host(agentDir, second)).toBe(expected[1]!);
+			for (const [index, rel] of [first, second].entries()) {
+				const parsed = parseFrontmatter(host(agentDir, rel));
+				expect(parsed).not.toBeNull();
+				expect(unquote(parsed!.fields.target!)).toBe("*");
+				expect(unquote(parsed!.fields.model!)).toBe(index === 0 ? String.raw`^gpt-\d+\."x"/$` : "(opus|o3)");
+				if (index === 1) expect(unquote(parsed!.fields.provider!)).toBe("^anthropic$");
+				else expect(parsed!.fields.provider).toBeUndefined();
+			}
+			const again = await apply(src.dir, agentDir);
+			expect(again.errors).toEqual([]);
+			expect(again.moved).toEqual([]);
+			expect(again.written).toEqual([]);
+			expect(again.deleted).toEqual([]);
+			expect(host(agentDir, first)).toBe(expected[0]!);
+			expect(host(agentDir, second)).toBe(expected[1]!);
+		});
+
+		test(`CLI --check plans the split at ${legacy} without writing files or directories`, () => {
+			const src = source();
+			src.commit({ "agent/.keep": "" });
+			const agentDir = temp("omp-model-check-");
+			writeTree(agentDir, { [legacy]: old });
+			const before = readdirSync(agentDir, { recursive: true }).sort();
+			const result = spawnSync("bun", [UPDATER, "apply", "--source", src.dir, "--agent-dir", agentDir, "--no-plugins", "--check"], {
+				encoding: "utf8",
+				env: { ...process.env, HOME: temp("omp-home-") },
+			});
+			expect(result.status).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(result.stdout).toBe(
+				`would move: ${join(agentDir, legacy)} -> ${join(agentDir, first)}\n` +
+					`would move: ${join(agentDir, legacy)} -> ${join(agentDir, second)}\n` +
+					missingSourceNotes.map((note) => `note: ${note}\n`).join(""),
+			);
+			expect(readdirSync(agentDir, { recursive: true }).sort()).toEqual(before);
+			expect(host(agentDir, legacy)).toBe(old);
+			expect(existsSync(join(agentDir, first))).toBe(false);
+			expect(existsSync(join(agentDir, second))).toBe(false);
+			expect(existsSync(join(agentDir, ".omp-config-base"))).toBe(false);
+		});
+
+		test(`an occupied second fragment keeps all legacy blocks at ${legacy}`, async () => {
+			const src = source();
+			src.commit({ "agent/.keep": "" });
+			const agentDir = temp("omp-model-collision-");
+			writeTree(agentDir, { [legacy]: old, [second]: "host-owned fragment\n" });
+			for (const check of [true, false]) {
+				const report = await apply(src.dir, agentDir, check);
+				expect(report.errors).toEqual([]);
+				expect(report.moved).toEqual([]);
+				expect(report.notes).toEqual([
+					...missingSourceNotes,
+					`${join(agentDir, legacy)} left in place: ${join(agentDir, second)} already exists`,
+				]);
+				expect(host(agentDir, legacy)).toBe(old);
+				expect(existsSync(join(agentDir, first))).toBe(false);
+				expect(host(agentDir, second)).toBe("host-owned fragment\n");
+			}
+		});
+
+		test(`a malformed later block leaves the whole legacy file at ${legacy}`, async () => {
+			const src = source();
+			src.commit({ "agent/.keep": "" });
+			const agentDir = temp("omp-model-invalid-");
+			const malformed = old.replace('model: "(opus|o3)"', "unknown: opus");
+			writeTree(agentDir, { [legacy]: malformed });
+			for (const check of [true, false]) {
+				const report = await apply(src.dir, agentDir, check);
+				expect(report.errors).toEqual([]);
+				expect(report.moved).toEqual([]);
+				expect(report.notes).toEqual([
+					...missingSourceNotes,
+					`${join(agentDir, legacy)} left in place: cannot split APPEND_SYSTEM_MODEL.md: line 6: unknown header key \`unknown\` (allowed: model, provider)`,
+				]);
+				expect(host(agentDir, legacy)).toBe(malformed);
+				expect(existsSync(join(agentDir, first))).toBe(false);
+				expect(existsSync(join(agentDir, second))).toBe(false);
+			}
+		});
+	}
+
+	test("shipped APPEND-SYSTEM templates are managed without a restart; host fragments stay untouched", async () => {
+		const src = source();
+		const template = `${extensionDir}/APPEND-SYSTEM-decision-support.md`;
+		const shipped = '---\ntarget: *\nmodel: "gpt"\n---\nRepo instructions.\n';
+		src.commit({ [`agent/${template}`]: shipped });
+		const agentDir = temp("omp-model-managed-");
+		writeTree(agentDir, { [first]: expected[0]! });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.written).toEqual([join(agentDir, template)]);
+		expect(report.restartNeeded).toBe(false);
+		expect(host(agentDir, template)).toBe(shipped);
+		expect(host(agentDir, first)).toBe(expected[0]!);
+		src.commit({ [`agent/${template}`]: `${shipped}Updated.\n` });
+		const updated = await apply(src.dir, agentDir);
+		expect(updated.errors).toEqual([]);
+		expect(updated.written).toEqual([join(agentDir, template)]);
+		expect(updated.restartNeeded).toBe(false);
+		expect(host(agentDir, template)).toBe(`${shipped}Updated.\n`);
+		expect(host(agentDir, first)).toBe(expected[0]!);
+	});
+
+	test("both legacy locations keep their files when numbered destinations overlap", async () => {
+		const src = source();
+		src.commit({ "agent/.keep": "" });
+		const agentDir = temp("omp-model-overlap-");
+		writeTree(agentDir, Object.fromEntries(legacyLocations.map((legacy) => [legacy, old])));
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.moved).toEqual([]);
+		expect(report.notes).toEqual([
+			...missingSourceNotes,
+			`${join(agentDir, legacyLocations[0]!)} left in place: numbered fragment targets overlap with ${join(agentDir, legacyLocations[1]!)}`,
+			`${join(agentDir, legacyLocations[1]!)} left in place: numbered fragment targets overlap with ${join(agentDir, legacyLocations[0]!)}`,
+		]);
+		for (const legacy of legacyLocations) expect(host(agentDir, legacy)).toBe(old);
+		expect(existsSync(join(agentDir, first))).toBe(false);
+		expect(existsSync(join(agentDir, second))).toBe(false);
+	});
+
+	test("a numbered fragment shipped by the source is not overwritten by host migration", async () => {
+		const src = source();
+		src.commit({ [`agent/${second}`]: "source fragment\n" });
+		const agentDir = temp("omp-model-source-collision-");
+		writeTree(agentDir, { APPEND_SYSTEM_MODEL: "unrelated\n", "APPEND_SYSTEM_MODEL.md": old });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.moved).toEqual([]);
+		expect(report.notes).toEqual([
+			...missingSourceNotes,
+			`${join(agentDir, "APPEND_SYSTEM_MODEL.md")} left in place: ${join(agentDir, second)} is a managed source file`,
+		]);
+		expect(host(agentDir, "APPEND_SYSTEM_MODEL.md")).toBe(old);
+		expect(existsSync(join(agentDir, first))).toBe(false);
+		expect(host(agentDir, second)).toBe("source fragment\n");
+	});
+
+	test("legacy symlinks are noted and app-managed legacy files are skipped", async () => {
+		const src = source();
+		src.commit({ "agent/.keep": "" });
+		const agentDir = temp("omp-model-links-");
+		writeTree(agentDir, { "backing.md": old });
+		symlinkSync(join(agentDir, "backing.md"), join(agentDir, "APPEND_SYSTEM_MODEL.md"));
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.moved).toEqual([]);
+		expect(report.notes).toEqual([
+			...missingSourceNotes,
+			`${join(agentDir, "APPEND_SYSTEM_MODEL.md")} is a symlink and was not moved; split it into ${join(agentDir, extensionDir)}/APPEND-SYSTEM-model-NN.md yourself`,
+		]);
+		expect(lstatSync(join(agentDir, "APPEND_SYSTEM_MODEL.md")).isSymbolicLink()).toBe(true);
+		expect(host(agentDir, "backing.md")).toBe(old);
+		expect(existsSync(join(agentDir, first))).toBe(false);
+		const managedDir = temp("omp-model-app-managed-");
+		const managed = `// @orca-managed-pi-extension\n${old}`;
+		writeTree(managedDir, { "APPEND_SYSTEM_MODEL.md": managed });
+		const skipped = await apply(src.dir, managedDir);
+		expect(skipped.errors).toEqual([]);
+		expect(skipped.skipped).toEqual([{ path: join(managedDir, "APPEND_SYSTEM_MODEL.md"), reason: "app-managed" }]);
+		expect(host(managedDir, "APPEND_SYSTEM_MODEL.md")).toBe(managed);
+	});
+
+	test("BOM, CRLF and provider-only YAML blocks preserve their decoded regex", async () => {
+		const src = source();
+		src.commit({ "agent/.keep": "" });
+		const agentDir = temp("omp-model-yaml-");
+		writeTree(agentDir, { "APPEND_SYSTEM_MODEL.md": '\uFEFF\r\n--- \t\r\nprovider: "^anthropic\\\\d+$"\r\n---\r\nProvider only.\r\n' });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.notes).toEqual([...missingSourceNotes]);
+		expect(host(agentDir, first)).toBe('---\ntarget: *\nprovider: "^anthropic\\d+$"\n---\nProvider only.\n');
+		const parsed = parseFrontmatter(host(agentDir, first));
+		expect(unquote(parsed!.fields.provider!)).toBe(String.raw`^anthropic\d+$`);
+		expect(parsed!.fields.model).toBeUndefined();
+	});
+
+	const invalidFiles = [
+		{ text: "preamble\n---\nmodel: gpt\n---\nbody\n", reason: "line 1: content before the first `---` header" },
+		{
+			text: "---\nmodel: gpt\n",
+			reason: "line 1: `---` opens a header that is never closed (a body cannot contain a bare `---` line)",
+		},
+		{ text: "---\n{}\n---\nbody\n", reason: "line 1: header must set `model` and/or `provider`" },
+		{ text: "---\nmodel: 42\n---\nbody\n", reason: "line 1: `model` must be a non-empty regex string" },
+		{ text: "---\nmodel: gpt\n---\n \n", reason: "line 1: block has an empty body" },
+		{
+			text: '---\nmodel: " gpt "\n---\nbody\n',
+			reason: "line 1: `model` cannot be preserved in single-line fragment frontmatter",
+		},
+		{
+			text: '---\nmodel: "gpt\\nnext"\n---\nbody\n',
+			reason: "line 1: `model` cannot be preserved in single-line fragment frontmatter",
+		},
+	];
+	for (const { text, reason } of invalidFiles) {
+		test(`invalid legacy input is left untouched: ${reason}`, async () => {
+			const src = source();
+			src.commit({ "agent/.keep": "" });
+			const agentDir = temp("omp-model-invalid-input-");
+			writeTree(agentDir, { "APPEND_SYSTEM_MODEL.md": text });
+			const report = await apply(src.dir, agentDir);
+			expect(report.errors).toEqual([]);
+			expect(report.moved).toEqual([]);
+			expect(report.notes).toEqual([
+				...missingSourceNotes,
+				`${join(agentDir, "APPEND_SYSTEM_MODEL.md")} left in place: cannot split APPEND_SYSTEM_MODEL.md: ${reason}`,
+			]);
+			expect(host(agentDir, "APPEND_SYSTEM_MODEL.md")).toBe(text);
+			expect(existsSync(join(agentDir, first))).toBe(false);
+		});
+	}
 });
