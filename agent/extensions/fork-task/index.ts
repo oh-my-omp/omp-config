@@ -6,8 +6,9 @@
 // session_shutdown hooks in main and sub sessions. Reads the source agent's
 // persisted session; writes temporary JSONL under the OS temp directory and
 // moves it into the caller's artifact store.
-// Staging failures are tool errors; spawn preparation failures block the child
-// and warn, while shutdown cleanup failures warn without rejecting the hook.
+// Execution failures warn and return tool errors; user aborts reject for host
+// cancellation accounting. Spawn preparation failures block the child and warn,
+// while shutdown cleanup failures warn without rejecting the hook.
 //
 // Every item replicates its source's actual model request: the caller's, or
 // that of the live agent `from` names. replica.ts captures each session's
@@ -560,92 +561,102 @@ export default function forkTask(pi: ExtensionAPI): void {
 		docTopics: forkTaskTopics,
 		async execute(toolCallId, rawParams, signal, onUpdate, ctx) {
 			const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true });
-			const params = paramsSchema.parse(rawParams);
-			const parent = callerSession(ctx);
-			if (!parent) return fail("fork_task: could not resolve the calling session in the agent registry.");
-			const taskTool = parent.getToolByName("task");
-			if (!taskTool) return fail("fork_task: the `task` tool is unavailable in this session (recursion depth or settings).");
-			// Only async dispatch pre-allocates the child id before the spawn hook;
-			// sync dispatch reports the bare label, which misses nested id prefixes.
-			if (!parent.asyncJobManager || cfgAsyncEnabled.get(parent.settings) !== true) {
-				return fail("fork_task: requires background jobs (`async.enabled: true`).");
-			}
-			await parent.sessionManager.ensureOnDisk();
-			await parent.sessionManager.flush();
-			const parentFile = parent.sessionManager.getSessionFile();
-			if (!parentFile) return fail("fork_task: forking needs a persisted session.");
-			const artifactsDir = parentFile.slice(0, -".jsonl".length);
-			const planMode = parent.getPlanModeState()?.enabled === true;
-
 			const staged: PendingFork[] = [];
-			const notes: string[] = [];
-			const tasks: TaskItem[] = [];
-			const resolveRole = roleResolver(parent);
 			try {
-				for (const [index, item] of params.tasks.entries()) {
-					const source = await resolveSource(item.from, parent, parentFile);
-					if (source.kind === "error") throw new Error(source.message);
-					const agent = item.agent?.trim() || undefined;
-					const role = await resolveRole(agent);
-					if (role.kind === "error") throw new Error(role.message);
-					const captured = captureReplica(source.session, {
-						inheritReasoning: role.kind === "none" && item.effort === undefined,
-						caller: parent,
-					});
-					if (captured.kind === "unavailable") throw new Error(`cannot replicate the source's request: ${captured.reason}`);
-					await source.session.sessionManager.flush();
-					const name = `${sanitizeName(item.name) ?? "Fork"}_${randomUUID().slice(0, 4)}`;
-					// Without a role the fork continues the source in its workspace unless explicitly isolated.
-					const isolated = !planMode && (item.isolated ?? role.kind === "role");
-					const shake = item.shake === true;
-					const { staging, notice, shakeSummary } = await stageFork(ctx, parent, source, shake, isolated);
-					const { response, ...capture } = captured.capture;
-					const entry: PendingFork = {
-						name,
-						artifactsDir,
-						staging,
-						replica: { ...capture, replay: shake ? { kind: "own" } : { kind: "prefix", response, notice } },
-						model: role.kind === "role" ? role.model : capture.sourceModel,
-					};
-					staged.push(entry);
-					pending.push(entry);
-					if (shakeSummary) notes.push(`${name}: ${shakeSummary}`);
-					tasks[index] = {
-						name,
-						// The replicated system prompt is the source's: role, shared context and assignment form the new user message.
-						task: [role.kind === "role" ? role.block : "", params.context.trim(), item.task].filter((part) => part.length > 0).join("\n\n"),
-						agent: FORK_AGENT,
-						...(planMode ? {} : { isolated }),
-						...(item.effort !== undefined ? { effort: item.effort } : {}),
-						...(item.outputSchema !== undefined ? { outputSchema: item.outputSchema } : {}),
-						...(item.schemaMode !== undefined ? { schemaMode: item.schemaMode } : {}),
-					};
+				const params = paramsSchema.parse(rawParams);
+				const parent = callerSession(ctx);
+				if (!parent) return fail("fork_task: could not resolve the calling session in the agent registry.");
+				const taskTool = parent.getToolByName("task");
+				if (!taskTool) return fail("fork_task: the `task` tool is unavailable in this session (recursion depth or settings).");
+				// Only async dispatch pre-allocates the child id before the spawn hook;
+				// sync dispatch reports the bare label, which misses nested id prefixes.
+				if (!parent.asyncJobManager || cfgAsyncEnabled.get(parent.settings) !== true) {
+					return fail("fork_task: requires background jobs (`async.enabled: true`).");
 				}
+				await parent.sessionManager.ensureOnDisk();
+				await parent.sessionManager.flush();
+				const parentFile = parent.sessionManager.getSessionFile();
+				if (!parentFile) return fail("fork_task: forking needs a persisted session.");
+				const artifactsDir = parentFile.slice(0, -".jsonl".length);
+				const planMode = parent.getPlanModeState()?.enabled === true;
+
+				const notes: string[] = [];
+				const tasks: TaskItem[] = [];
+				const resolveRole = roleResolver(parent);
+				try {
+					for (const [index, item] of params.tasks.entries()) {
+						const source = await resolveSource(item.from, parent, parentFile);
+						if (source.kind === "error") throw new Error(source.message);
+						const agent = item.agent?.trim() || undefined;
+						const role = await resolveRole(agent);
+						if (role.kind === "error") throw new Error(role.message);
+						const captured = captureReplica(source.session, {
+							inheritReasoning: role.kind === "none" && item.effort === undefined,
+							caller: parent,
+						});
+						if (captured.kind === "unavailable") throw new Error(`cannot replicate the source's request: ${captured.reason}`);
+						await source.session.sessionManager.flush();
+						const name = `${sanitizeName(item.name) ?? "Fork"}_${randomUUID().slice(0, 4)}`;
+						// Without a role the fork continues the source in its workspace unless explicitly isolated.
+						const isolated = !planMode && (item.isolated ?? role.kind === "role");
+						const shake = item.shake === true;
+						const { staging, notice, shakeSummary } = await stageFork(ctx, parent, source, shake, isolated);
+						const { response, ...capture } = captured.capture;
+						const entry: PendingFork = {
+							name,
+							artifactsDir,
+							staging,
+							replica: { ...capture, replay: shake ? { kind: "own" } : { kind: "prefix", response, notice } },
+							model: role.kind === "role" ? role.model : capture.sourceModel,
+						};
+						staged.push(entry);
+						pending.push(entry);
+						if (shakeSummary) notes.push(`${name}: ${shakeSummary}`);
+						tasks[index] = {
+							name,
+							// The replicated system prompt is the source's: role, shared context and assignment form the new user message.
+							task: [role.kind === "role" ? role.block : "", params.context.trim(), item.task]
+								.filter((part) => part.length > 0)
+								.join("\n\n"),
+							agent: FORK_AGENT,
+							...(planMode ? {} : { isolated }),
+							...(item.effort !== undefined ? { effort: item.effort } : {}),
+							...(item.outputSchema !== undefined ? { outputSchema: item.outputSchema } : {}),
+							...(item.schemaMode !== undefined ? { schemaMode: item.schemaMode } : {}),
+						};
+					}
+				} catch (error) {
+					if (signal?.aborted) throw error;
+					throw new Error(`staging the conversation fork failed: ${errorText(error)}`, { cause: error });
+				}
+
+				// The native task tool requires `context`; it lands only in the child's base prompt, which replication never sends.
+				const result = await taskTool.execute(toolCallId, { context: params.context, tasks }, signal, onUpdate);
+
+				// Items the task tool never scheduled (validation errors) leave nothing staged.
+				const parsed = progressSchema.safeParse(result.details);
+				const scheduled = new Set(parsed.success ? parsed.data.progress.map((p) => p.index) : []);
+				for (const [index, entry] of staged.entries()) {
+					if (!scheduled.has(index)) await discard(entry);
+				}
+
+				if (notes.length === 0) return result;
+				return {
+					...result,
+					content: [...result.content, { type: "text" as const, text: `\n[fork_task] ${notes.join("; ")}` }],
+				};
 			} catch (error) {
-				for (const entry of staged) await discard(entry);
-				return fail(`fork_task: staging the conversation fork failed: ${errorText(error)}`);
+				for (const entry of staged) {
+					try {
+						await discard(entry);
+					} catch (cleanupError) {
+						pi.logger.warn("fork_task: cleaning up the staged conversation failed", { error: errorText(cleanupError) });
+					}
+				}
+				if (signal?.aborted) throw error;
+				pi.logger.warn("fork_task: executing the conversation fork failed", { error: errorText(error) });
+				return fail(`fork_task: ${errorText(error)}`);
 			}
-
-			// The native task tool requires `context`; it lands only in the child's base prompt, which replication never sends.
-			const result = await taskTool
-				.execute(toolCallId, { context: params.context, tasks }, signal, onUpdate)
-				.catch(async (error: unknown) => {
-					for (const entry of staged) await discard(entry);
-					throw error;
-				});
-
-			// Items the task tool never scheduled (validation errors) leave nothing staged.
-			const parsed = progressSchema.safeParse(result.details);
-			const scheduled = new Set(parsed.success ? parsed.data.progress.map((p) => p.index) : []);
-			for (const [index, entry] of staged.entries()) {
-				if (!scheduled.has(index)) await discard(entry);
-			}
-
-			if (notes.length === 0) return result;
-			return {
-				...result,
-				content: [...result.content, { type: "text" as const, text: `\n[fork_task] ${notes.join("; ")}` }],
-			};
 		},
 	};
 	pi.registerTool(tool);
