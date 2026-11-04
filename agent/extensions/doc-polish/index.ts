@@ -767,13 +767,14 @@ export default function docPolish(pi: ExtensionAPI): void {
 					details: { results, reviewPaths: results.map((r) => r.review), reference: true },
 				};
 			} catch (err) {
+				pi.logger.warn("doc-polish tool failed", { error: errorText(err) });
 				if (err instanceof DocPolishModelError) {
 					return { content: [{ type: "text", text: err.message }], details: { modelError: true }, isError: true };
 				}
 				if (err instanceof DocPolishRuntimeError) {
 					return { content: [{ type: "text", text: err.message }], details: { runtimeError: true }, isError: true };
 				}
-				throw err;
+				return { content: [{ type: "text", text: errorText(err) }], details: { runtimeError: true }, isError: true };
 			}
 		},
 	});
