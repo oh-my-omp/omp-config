@@ -29,7 +29,7 @@
 在仓库根目录启动 `omp` 后运行的斜杠命令：
 
 ```text
-/onboard-omp [check|<plane>]                 # 先理解 omomp 为什么这样定制，按实际问题深入，再做本机适配与安装
+/onboard-omp [check|<plane>]                 # 理解 omomp 全部配置、扩展和插件的用途与定制理由，再做本机适配与安装
 /update-omp [check]                          # 仓库工作区 -> ~/.omp/agent、omp-light 与插件；保留本机定制并当场适配冲突
 /sync-omp-config [check]                     # 本机受管改动 -> 仓库（按字段比对修改、校验、提交并推送）
 /omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]
