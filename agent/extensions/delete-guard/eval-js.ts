@@ -1,9 +1,9 @@
-import type { Node } from "@babel/types";
 import {
 	isBunFile,
 	type JsCell,
 	type JsLaunch,
 	jsLaunchOf,
+	type Node,
 	parseJs,
 	propertyName,
 	receiverModule,
