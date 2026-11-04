@@ -656,6 +656,10 @@ describe("legacy system replacement rule files", () => {
 	if (!Array.isArray(modelEraSection.replacements)) throw new Error("missing model-era rules");
 	const modelEraRules: unknown[] = modelEraSection.replacements;
 	const shipped = readFileSync(join(repoRoot, repoRuleRel), "utf8");
+	/** The rule file the migration commit shipped, which the legacy section converts to; later commits evolve `shipped`. */
+	const migrationEra = spawnSync("git", ["show", `2428f5f:${repoRuleRel}`], { cwd: repoRoot, encoding: "utf8" });
+	if (migrationEra.status !== 0) throw new Error(migrationEra.stderr);
+	const migratedRules = migrationEra.stdout;
 	const prefix = "# Host formatting stays intact.\nhost-only:\n  exact: 'keep these quotes' # and this comment\n";
 	const suffix = "# Next section comment.\nother-host:\n  enabled: true\n";
 	const oldOmomp = (value: unknown): string => `${prefix}system-prompt-replace:\n  ${JSON.stringify(value)}\n${suffix}`;
@@ -667,7 +671,8 @@ describe("legacy system replacement rule files", () => {
 	const migrationSource = () => {
 		const src = source();
 		src.commit({ "agent/omomp.yml": beforeMigration.stdout });
-		src.commit({ "agent/omomp.yml": "{}\n", [repoRuleRel]: shipped });
+		src.commit({ "agent/omomp.yml": "{}\n", [repoRuleRel]: migratedRules });
+		src.commit({ [repoRuleRel]: shipped });
 		return src;
 	};
 	const migrationHost = (value: unknown, accepted: unknown = section, unknown: string[][] = []): string => {
@@ -696,8 +701,8 @@ describe("legacy system replacement rule files", () => {
 	const note = (reason: string): string =>
 		`system-prompt-replace migration left in place: ${reason}; move the section to REPLACE-SYSTEM-*.yml by hand`;
 
-	test("starting HEAD section converts byte-for-byte to the shipped default rule file", () => {
-		expect(converted(section)).toBe(shipped);
+	test("starting HEAD section converts byte-for-byte to the rule file the migration shipped", () => {
+		expect(converted(section)).toBe(migratedRules);
 		const current: unknown = Bun.YAML.parse(readFileSync(join(repoRoot, "agent/omomp.yml"), "utf8"));
 		expect(isMapping(current) && Object.hasOwn(current, "system-prompt-replace")).toBe(false);
 	});

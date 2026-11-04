@@ -22,24 +22,27 @@
 //   model:            ^gpt-
 //   provider:         ^openai
 //   mode:             full
+//   delegation:       eager
 //   exclude.target:   task:mid
 //   exclude.cwd:      ~/scratch/**
 //   exclude.model:    ^claude-opus-5-5$
 //   exclude.provider: ^anthropic$
 //   exclude.mode:     light
+//   exclude.delegation: restrained, gated
 // `enabled` keeps the file on only for true/yes/on/1; `target` defaults to
 // main; `cwd` lists absolute or ~/ globs; `model` / `provider` are regexes on
-// the model and provider ids; `mode` lists full and/or light; each `exclude.*`
-// key has the grammar of its inclusion key. Any other key makes the file
-// invalid.
+// the model and provider ids; `mode` lists full and/or light; `delegation`
+// lists OMP's delegation-bias tiers (eager, restrained, gated) of the current
+// model; each `exclude.*` key has the grammar of its inclusion key. Any other
+// key makes the file invalid.
 //
 // MATCHING. `_shared/prompt-conditions.ts` (shared with system-prompt-replace):
 // items inside a key are alternatives, keys AND; `mode` lists `full` and/or
 // `light` (`omp-light` sets `OMOMP_MODE=light`). A fragment is injected when
 // its inclusion keys match the session and its `exclude.*` keys, if it sets
 // any, do not all match. Without `exclude.target` the exclusion covers every
-// session. With no current model a model or provider constraint never
-// matches, on either side. Without `target` a fragment targets `main`.
+// session. With no current model a model, provider or delegation constraint
+// never matches, on either side. Without `target` a fragment targets `main`.
 //
 // TIMING. `before_agent_start`, in the main session and in every subagent, each
 // matched against its own identity, cwd and model. Files are re-read per
@@ -57,6 +60,7 @@
 // ============================================================================
 
 import { readFileSync } from "node:fs";
+import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -99,10 +103,10 @@ function describeProblem(problem: ConditionProblem): string {
 			);
 		case "badRegex":
 			return tr(`${problem.key} is not a valid regex: ${problem.detail}`, `${problem.key} 不是有效正则表达式：${problem.detail}`);
-		case "badMode":
+		case "badChoice":
 			return tr(
-				`${problem.key} must list full and/or light, not "${problem.value}"`,
-				`${problem.key} 只能列出 full 和/或 light，不能是“${problem.value}”`,
+				`${problem.key} may list only ${problem.allowed.join(", ")}, not "${problem.value}"`,
+				`${problem.key} 只能列出 ${problem.allowed.join("、")}，不能是“${problem.value}”`,
 			);
 		case "badInject":
 			return tr(`${problem.key} is not accepted here`, `此处不接受 ${problem.key}`);
@@ -148,11 +152,12 @@ export default function appendSystemModel(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", (event, ctx) => {
 		try {
 			const bodies: string[] = [];
+			const delegation = ctx.model === undefined ? undefined : resolveDelegationBias(ctx.model);
 			for (const path of discoverSpecFiles(FILE_PATTERN, import.meta.dir, ctx.cwd)) {
 				const parsed = parseFragment(path);
 				switch (parsed.kind) {
 					case "ok":
-						if (conditionsApply(parsed.fragment.conditions, ctx)) bodies.push(parsed.fragment.body);
+						if (conditionsApply(parsed.fragment.conditions, ctx, delegation)) bodies.push(parsed.fragment.body);
 						break;
 					case "disabled":
 						break;

@@ -34,6 +34,7 @@
 //     replace: "new text, $1 allowed"
 //     target: subagents
 //     model: ^claude-opus
+//     delegation: eager
 //     exclude.target: mentor:default
 //
 // A rule sets exactly one of `literal` / `regex` (non-empty) plus `replace`.
@@ -41,11 +42,14 @@
 // compiled with the `g` flag and uses String.prototype.replace substitution
 // patterns. Optional condition keys, string values, follow
 // `_shared/prompt-conditions.ts` (shared with append-system-model): `target`,
-// `cwd`, `model`, `provider`, `mode` and the same keys under `exclude.`;
-// without `target` a rule applies to every session. A `model` / `provider`
-// string is the regex source exactly as YAML decodes it. Any other key makes
-// the file invalid. Files apply in discovery order and rules in file order, each
-// to the output of the previous one, across every system-prompt block.
+// `cwd`, `model`, `provider`, `mode`, `delegation` and the same keys under
+// `exclude.`; without `target` a rule applies to every session. `delegation`
+// lists OMP's delegation-bias tiers (`eager`, `restrained`, `gated`) of the
+// current model, for text OMP renders only under some tiers. A `model` /
+// `provider` string is the regex source exactly as YAML decodes it. Any other
+// key makes the file invalid. Files apply in discovery order and rules in file
+// order, each to the output of the previous one, across every system-prompt
+// block.
 //
 // TIMING. Every `before_agent_start`, in the main session and in every
 // subagent, each matched against its own identity, cwd, model and mode. Files
@@ -61,6 +65,7 @@
 // ============================================================================
 
 import { readFileSync } from "node:fs";
+import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../../extensions/_shared/errors.ts";
 import { tr } from "../../extensions/_shared/i18n.ts";
@@ -106,10 +111,10 @@ function describeProblem(problem: ConditionProblem): string {
 			);
 		case "badRegex":
 			return tr(`${problem.key} is not a valid regex: ${problem.detail}`, `${problem.key} 不是有效正则表达式：${problem.detail}`);
-		case "badMode":
+		case "badChoice":
 			return tr(
-				`${problem.key} must list full and/or light, not "${problem.value}"`,
-				`${problem.key} 只能列出 full 和/或 light，不能是“${problem.value}”`,
+				`${problem.key} may list only ${problem.allowed.join(", ")}, not "${problem.value}"`,
+				`${problem.key} 只能列出 ${problem.allowed.join("、")}，不能是“${problem.value}”`,
 			);
 		case "badInject":
 			return tr(`${problem.key} is not accepted here`, `此处不接受 ${problem.key}`);
@@ -226,6 +231,7 @@ export default function systemPromptReplace(pi: ExtensionAPI): void {
 		try {
 			let blocks: readonly string[] = event.systemPrompt;
 			let changed = false;
+			const delegation = ctx.model === undefined ? undefined : resolveDelegationBias(ctx.model);
 			for (const path of discoverSpecFiles(FILE_PATTERN, import.meta.dir, ctx.cwd)) {
 				const parsed = parseRuleFile(path);
 				if (parsed.kind === "invalid") {
@@ -239,7 +245,7 @@ export default function systemPromptReplace(pi: ExtensionAPI): void {
 					continue;
 				}
 				for (const rule of parsed.value) {
-					if (!conditionsApply(rule.conditions, ctx)) continue;
+					if (!conditionsApply(rule.conditions, ctx, delegation)) continue;
 					const result = applyRule(blocks, rule);
 					blocks = result.blocks;
 					if (result.hits > 0) changed = true;

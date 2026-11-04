@@ -13,8 +13,8 @@
 | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理 | 加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件，并处理所有规则来源的 `paths` 按路径触发。 |
 | [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 只为 OMP 自己的工具实例添加 surface 与 `Topics` 索引；由插件或扩展注册的工具保留自己的说明与专题，包括以相同名称替换内置工具的情况，例如 `omp-ask-more` 的 `ask`。OMP 工具的详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
-| [system-prompt-replace](#system-prompt-replace) | 按规则（默认所有会话；完整与轻量模式） | 在所有按路径加载的扩展最后运行，按 `REPLACE-SYSTEM-*.yml` 规则文件对渲染出的 system prompt 做措辞级修改；每条规则可以全局生效，也可以限定会话、cwd、模型、provider 或模式，并用 `exclude.*` 写明何时不生效。 |
-| [append-system-model](#append-system-model) | 按片段（默认仅主会话） | 追加 frontmatter 条件（会话、cwd、模型、provider、完整/轻量模式，以及表示何时不注入的 `exclude.*`）命中的 `APPEND-SYSTEM-*.md` 片段。仓库自带 `APPEND-SYSTEM-decision-support.md`：完整模式的主会话中，重大决策询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`；主模型为 `claude-opus-5-5` 时不注入。 |
+| [system-prompt-replace](#system-prompt-replace) | 按规则（默认所有会话；完整与轻量模式） | 在所有按路径加载的扩展最后运行，按 `REPLACE-SYSTEM-*.yml` 规则文件对渲染出的 system prompt 做措辞级修改；每条规则可以全局生效，也可以限定会话、cwd、模型、provider、当前模型的委派倾向（delegation bias）或模式，并用 `exclude.*` 写明何时不生效。 |
+| [append-system-model](#append-system-model) | 按片段（默认仅主会话） | 追加 frontmatter 条件（会话、cwd、模型、provider、当前模型的委派倾向、完整/轻量模式，以及表示何时不注入的 `exclude.*`）命中的 `APPEND-SYSTEM-*.md` 片段。仓库自带 `APPEND-SYSTEM-decision-support.md`：完整模式的主会话中，重大决策询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`；主模型为 `claude-opus-5-5` 时不注入。 |
 | [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时追加仓库下发的 `ARGON_PROMPT.md`：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
 | [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection) | 主会话 + 子代理 | 配置的工具参数命中后才加载专题，每条规则在真实未压缩上下文中注入一次；追加 developer 上下文，而不是扩大常驻工具说明。 |
 
@@ -36,7 +36,7 @@
   exclude.target: "mentor:default"
 ```
 
-不写条件键的规则对所有会话生效。条件键与 [append-system-model](#append-system-model) 相同（`target`、`cwd`、`model`、`provider`、`mode` 以及 `exclude.` 下的同名键），但这里的默认 target 是所有会话，而不是 `main`。在 `REPLACE-SYSTEM-*.yml` 中，`model` 与 `provider` 字符串以 YAML 解码后的原值作为正则源码，包括解码后字符串内部的引号字符，不会再去掉引号。文件按发现顺序生效，文件内规则按顺序生效，每条作用于前一条的结果。未知键或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
+不写条件键的规则对所有会话生效。条件键与 [append-system-model](#append-system-model) 相同（`target`、`cwd`、`model`、`provider`、`mode`、`delegation` 以及 `exclude.` 下的同名键），但这里的默认 target 是所有会话，而不是 `main`。在 `REPLACE-SYSTEM-*.yml` 中，`model` 与 `provider` 字符串以 YAML 解码后的原值作为正则源码，包括解码后字符串内部的引号字符，不会再去掉引号。文件按发现顺序生效，文件内规则按顺序生效，每条作用于前一条的结果。未知键或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
 
 仓库自带的 `REPLACE-SYSTEM-default.yml` 当前包含的替换规则，每条都限定 `mode: full`（其中文件检索与编辑固定使用 `read` + hashline `edit` 并禁止在 `eval` 中查文件，以要求模型在读取目标行邻近上下文后再做修改，避免在缺少编译器与测试保护的脚本、配置或命令行操作中脱离上下文直接修改）：
 
@@ -46,7 +46,7 @@
 | 用户报错处理规则 | 补充说明“不重跑检查去质疑用户报错”不影响为定位原因而复现和修复后验证。 |
 | 编译代码规则 | 补上原句缺失的动词 `add`（`NEVER add avoidable allocation...`）。 |
 | `eval` 工具说明 | 禁止通过 `eval` 读取、列目录或搜索本地文件（统一使用 `read`、`glob`、`grep`）。 |
-| `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `tool://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
+| `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `tool://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。限定 `delegation: eager`，因为 OMP 只在当前模型的委派倾向为 `eager` 时才渲染原句。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
 | `xd://` 设备说明 | 说明 `xd://<tool>` 只能通过 `write` 写入 JSON 调用，不存在 `xd__<tool>` 或裸 `<tool>` 函数。 |
 
 [tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞处理 OMP 自己的工具（`read`、`bash`、`task`）的整段说明，上游改写措辞后仍然生效。
@@ -73,7 +73,7 @@ exclude.model: ^claude-opus-5-5$
 …
 ```
 
-注入条件键 `target`（默认 `main`；也可写 `subagents`、`*` 或代理名）、`cwd`、`model` 与 `provider` 沿用 `turn-judge` 与 `watchdog-agent` 的语法；`mode` 列出 `full` 和/或 `light`。同一键内多项为“或”，不同键为“且”。`exclude.target`、`exclude.cwd`、`exclude.model`、`exclude.provider` 与 `exclude.mode` 描述何时不注入：片段设置的 `exclude.*` 键全部命中时跳过；未写 `exclude.target` 时排除覆盖所有会话。`model` 与 `provider` 是匹配会话当前模型 id 与 provider 的正则。`omp-light` 以 `OMOMP_MODE=light` 启动 omp，其余情况为 `full`。`enabled: false` 关闭该文件。未知键、正文为空或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
+注入条件键 `target`（默认 `main`；也可写 `subagents`、`*` 或代理名）、`cwd`、`model` 与 `provider` 沿用 `turn-judge` 与 `watchdog-agent` 的语法；`mode` 列出 `full` 和/或 `light`；`delegation` 列出 `eager`、`restrained` 和/或 `gated`。同一键内多项为“或”，不同键为“且”。`exclude.target`、`exclude.cwd`、`exclude.model`、`exclude.provider`、`exclude.mode` 与 `exclude.delegation` 描述何时不注入：片段设置的 `exclude.*` 键全部命中时跳过；未写 `exclude.target` 时排除覆盖所有会话。`model` 与 `provider` 是匹配会话当前模型 id 与 provider 的正则；`delegation` 匹配 OMP 为该模型解析出的委派倾向，OMP 正是按这个值决定往提示词里渲染哪套委派措辞。没有当前模型时，`model`、`provider` 与 `delegation` 在注入与排除两侧都不命中。`omp-light` 以 `OMOMP_MODE=light` 启动 omp，其余情况为 `full`。`enabled: false` 关闭该文件。未知键、正文为空或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
 
 `APPEND-SYSTEM-*.md`、`WATCHDOG-*.md` 与 `TURN-JUDGE-*.md` 的 frontmatter 中，模型/provider 正则字段在编译前会去掉包围值的一对引号；这与 `REPLACE-SYSTEM-*.yml` 中已经过 YAML 解码的字符串不同。
 
