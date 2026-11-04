@@ -4,7 +4,7 @@
 
 ## Local Extensions Index
 
-Configuration files expose choices users can adapt to their own work. Shipped rules and values are working examples: they run when loaded and can be edited or replaced through the supported configuration interfaces. The sections below describe scope and loading behavior; [update ownership](operations.md#file-ownership-and-sync-rules) describes how later updates retain or merge local edits.
+Configuration files expose choices users can adapt to their own work. Shipped rules and values are working examples: when loaded and applicable, they govern behavior within their configured scope and can be edited or replaced through the supported configuration interfaces. The sections below describe scope and loading behavior; [update ownership](operations.md#file-ownership-and-sync-rules) describes how later updates retain or merge local edits.
 
 | # | Extension | Section | Scope | Light mode | Config (`omomp.yml` section or sibling file) | User customization |
 |---|---|---|---|---|---|---|
