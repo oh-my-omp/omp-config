@@ -12,7 +12,7 @@ Any non-minimal harness ships predefined text across its base template, built-in
 | `agent/PERSONALITY.md` | Main session only (subagents run with `personality: none`) | Fills `{{personality}}` under `# Personality`. Starts with OMP's `personality: default` text (`Evidence-first terse engineer`), followed by `# Writing` rules for research and analysis prose: open with the finding, number, or mechanism; state time, actor, action, scale, and source in one sentence; group multiple items or metrics into one table without restating rows in prose; omit process narration, repeated explanations, stacked disclaimers, and summary recaps. |
 | `agent/APPEND_SYSTEM.md` (`APPEND_SYSTEM_LIGHT.md` in light mode, empty) | Main session only | Adds defaults for the main agent: explicit user instructions override default rules; the final reply must use complete sentences with explicit subjects, identify objects on first mention, attach `path:line` or observed output to conclusions, and avoid analogies; do not skip reads or truncate outputs to save tokens (read design docs and related files in full before editing). |
 | [repo-rules](#repo-rules) | Main + Subagents | Loads rules from `.claude/rules`, `.agents/rules`, `.pi/rules`, and `~/.claude/rules`, and handles `paths` frontmatter across all rule sources. |
-| [tool-topics](extensions.md#tool-topics) | Main + Subagents (full and light) | Replaces covered tool descriptions with common call instructions plus a `Topics` index; detailed call instructions are read on demand as `tool://<tool>/<topic>`, and `SYSTEM_TEMPLATE.md` requires reading the matching topic before such a call. |
+| [tool-topics](extensions.md#tool-topics) | Main + Subagents (full and light) | Adds surfaces and `Topics` indexes only to OMP's own tool instances; a tool registered by a plugin or extension, including a replacement under the same name such as `omp-ask-more`'s `ask`, keeps its own description and topics. Detailed call instructions for OMP tools are read on demand as `tool://<tool>/<topic>`, and `SYSTEM_TEMPLATE.md` requires reading the matching topic before such a call. |
 | [system-prompt-replace](#system-prompt-replace) | Per rule (default every session; full and light mode) | Runs last among path-loaded extensions and makes wording-level edits to the rendered system prompt from `REPLACE-SYSTEM-*.yml` rule files; each rule can be global or limited to sessions, cwd, models, providers or modes, and `exclude.*` says when not to apply it. |
 | [append-system-model](#append-system-model) | Per fragment (default main session) | Appends `APPEND-SYSTEM-*.md` fragments whose frontmatter conditions (session, cwd, model, provider, full/light mode, and `exclude.*` for when not to inject) match. The repo ships `APPEND-SYSTEM-decision-support.md`: in the full-mode main session, consult `discuss:steady` and `discuss:divergent` on consequential decisions and `mentor:default` before and after long investigations, except while the main model is `claude-opus-5-5`. |
 | [argon-long-output](extensions.md#argon-long-output) | Main + Subagents (each matched on its own model) | Appends the repo's `ARGON_PROMPT.md` when the model is `gemini-4-argon` on `google-gemini-cli`: each `write`/`edit` payload and final reply stays within 8,000 characters by writing a skeleton first and filling it one section per `edit`. |
@@ -36,9 +36,9 @@ On every `before_agent_start` (main session and each subagent, each matched agai
   exclude.target: "mentor:default"
 ```
 
-A rule without condition keys applies to every session. The condition keys are those of [append-system-model](#append-system-model) (`target`, `cwd`, `model`, `provider`, `mode` and the same keys under `exclude.`), with the same matching; only the default target differs (every session here, `main` there). Files apply in discovery order and rules in file order, each to the output of the previous one. An unknown key or bad value skips that file with one warning per reason; the other files still apply.
+A rule without condition keys applies to every session. The condition keys are those of [append-system-model](#append-system-model) (`target`, `cwd`, `model`, `provider`, `mode` and the same keys under `exclude.`). The default target here is every session rather than `main`. In `REPLACE-SYSTEM-*.yml`, `model` and `provider` strings are the regex source exactly as YAML decodes them, including any quote characters within the decoded string; no additional quote-stripping applies. Files apply in discovery order and rules in file order, each to the output of the previous one. An unknown key or bad value skips that file with one warning per reason; the other files still apply.
 
-Active rules in the shipped `REPLACE-SYSTEM-default.yml`, each limited to `mode: full` because they ran only in full mode before (file lookup and edits are restricted to `read` + hashline `edit` and prohibited in `eval` so the model reads surrounding context before modifying target lines, avoiding blind edits in scripts, configs, and CLI operations that lack compiler or test coverage):
+Active rules in the shipped `REPLACE-SYSTEM-default.yml`, each limited to `mode: full` (file lookup and edits are restricted to `read` + hashline `edit` and prohibited in `eval` so the model reads surrounding context before modifying target lines, avoiding blind edits in scripts, configs, and CLI operations that lack compiler or test coverage):
 
 | Target | Change |
 |---|---|
@@ -49,11 +49,11 @@ Active rules in the shipped `REPLACE-SYSTEM-default.yml`, each limited to `mode:
 | `eval` description: batch routing | Replaces "For 2+ independent items, use a named `workpool()`" with a split by situation: code that needs each item's model judgment, extraction or rewrite uses `judgeBatch`, or `completion`/`agent` with a schema per item, and points to `tool://eval/workflow`; subagent work whose results are only read stays on `workpool()`. The `agent`/`workpool` namespace line also names per-item schema results. |
 | `xd://` device header | States that `xd://<tool>` devices are called only by writing JSON to `xd://<tool>`, not as `xd__<tool>` or `<tool>` functions. |
 
-Whole tool descriptions (`read`, `bash`, `task`) are no longer replaced here: [tool-topics](extensions.md#tool-topics) locates them by tool name rather than by wording, so they survive upstream rewording.
+[tool-topics](extensions.md#tool-topics) handles whole descriptions for OMP's own tools (`read`, `bash`, `task`) by tool name rather than wording, so they survive upstream rewording.
 
 When a rule that applies to the main session finds no target (for example after an OMP upgrade changes built-in wording), the extension logs and shows one warning per rule per process without blocking the prompt. Subagent prompts are not checked for missing targets because they omit tools such as `task`; a rule whose conditions do not match the session is skipped without a check.
 
-The old `system-prompt-replace` section of `omomp.yml` is converted by the updater into `REPLACE-SYSTEM-default.yml` and removed (see [File Ownership and Sync Rules](operations.md#file-ownership-and-sync-rules)).
+The updater converts a machine's `system-prompt-replace` section in `omomp.yml` into `REPLACE-SYSTEM-default.yml` and removes the migrated section. App-managed source files are never imported or deleted (see [File Ownership and Sync Rules](operations.md#file-ownership-and-sync-rules)).
 
 ### append-system-model
 
@@ -75,6 +75,8 @@ exclude.model: ^claude-opus-5-5$
 
 Inclusion keys `target` (default `main`; `subagents`, `*` or agent names), `cwd`, `model` and `provider` use the grammar of `turn-judge` and `watchdog-agent`; `mode` lists `full` and/or `light`. Items in one key are alternatives, keys combine with AND. `exclude.target`, `exclude.cwd`, `exclude.model`, `exclude.provider` and `exclude.mode` describe when not to inject: the fragment is skipped when every `exclude.*` key it sets matches, and a missing `exclude.target` covers every session. `model` and `provider` are regexes against the session's current model id and provider. `omp-light` starts omp with `OMOMP_MODE=light`; otherwise the mode is `full`. `enabled: false` turns a file off. An unknown key, empty body or bad value skips that file with one warning per reason; the other files still apply.
 
+For the frontmatter in `APPEND-SYSTEM-*.md`, `WATCHDOG-*.md` and `TURN-JUDGE-*.md`, model/provider regex fields have a surrounding pair of quotes stripped before compilation. This differs from the already-decoded YAML strings in `REPLACE-SYSTEM-*.yml`.
+
 The old single-file format `APPEND_SYSTEM_MODEL.md` is split by the updater into one `APPEND-SYSTEM-model-NN.md` per block with `target: *`, keeping its main-and-subagent scope (see [File Ownership and Sync Rules](operations.md#file-ownership-and-sync-rules)).
 
 ### repo-rules
@@ -95,7 +97,6 @@ OMP scans `.omp/rules`, `.agent(s)/rules`, `.cursor/rules`, `.windsurf/rules`, `
 
 - **Subagent dispatch (`task` vs `fork_task`)**: `task` starts a fresh subagent session with only the text passed in `context` and `task`, keeping intermediate file reads and tool output out of the main session. `fork_task` copies the caller's (or another agent's) conversation transcript as the child's starting history when background context in the current session is too large to restate in `context`.
 - **Compaction order and timing**: `agent/config.yml` sets `compaction.methodOrder` to `[remote, soft, snapcompact, handoff, shake]` and `compaction.asyncEnabled: false`. With `asyncEnabled` on, OMP requests a background summary up to 32k tokens before the threshold, holds that summary until the trigger without regenerating it on Anthropic, and still sends the full uncompacted history on every request in between; turning it off runs compaction at the threshold.
-- **Post-compaction context recovery**: the `omp-todo-more` plugin records state-changing `todo` calls to `task-log/<agent-id>.md` and injects `ctx list` plus the main session's `ctx show` after main-session compaction.
 
 ### fork-task
 
@@ -113,6 +114,7 @@ Source: `agent/extensions/fork-task/`. Registers `fork_task` (`context` + `tasks
 - **Workspace override**: `isolated` overrides the default. Concurrent writers must explicitly choose `isolated: true`; plan mode forces shared read-only children. Isolated children cannot be resumed after completion.
 - **Shake is opt-in**: `shake` defaults to false, and no item checks inherited token count or source cost. Explicit `shake: true` runs `session.shake("elide")` on the copy, keeps the newest ~4,000 tokens plus `skill://` and `local://PLAN.md` reads, and replaces older text tool results, fenced code blocks of $\ge 400$ tokens, and top-level lowercase XML blocks with recovery references in the shared artifact store. Forks using shake deliberately do not replay the original message prefix.
 - **Rejected items**: `tools` is not a fork field, since the child exposes exactly the source's tools. An unknown agent, one listed in `task.disabledAgents`, or `fork:self` itself fails before dispatch.
+- **Execution failures**: the execute boundary catches failures, logs a warning and returns an `isError` tool result after staging cleanup. Only user aborts (`signal.aborted`) are rethrown for host cancellation handling.
 - `from: "<agent-id>"` replicates a running or idle agent instead of the caller: its latest request is captured, then its transcript is flushed and copied. A parked agent has no live request to replicate and fails before dispatch; wake it with `write agent://<id>` first. The child's working directory still derives from the caller's checkout, not an isolated worktree of the `from` agent.
 - Appends `<system-notice cause="fork_task">` to the copied transcript, marking the inherited conversation as background and requiring the forked worker to run relevant build/lint/test checks and runtime verification before yielding.
 - Staging steps: copies the source session into `$TMPDIR/omp-fork-task/<uuid>/` (zeros inherited cost, pairs unfinished tool calls with aborted results, clears the source Todo list, and appends the fork notice), strips `session_init`, `model_change`, `thinking_level_change`, `service_tier_change`, and shake's `session_exit` while re-parenting their child entries, sets the caller's `cwd` for shared runs or blanks `cwd` for isolated runs, and moves the staged file to `<parent session without .jsonl>/<child id>.jsonl` inside `before_subagent_spawn`.
@@ -139,16 +141,6 @@ Because a native `f<N>` threshold can switch a model between its standard and ex
 
 ### ctx
 
-Registered by the [omp-todo-more](plugins-and-modes.md#todo-more) plugin (`src/ctx/inventory.ts`). Reads the current session, subagent registry, transcripts, compaction summaries, `.md`/`.json` sidecars, and task logs without modifying sessions or files:
+The [omp-todo-more](plugins-and-modes.md#todo-more) plugin owns `ctx` and `todo`; `agent/config.yml` disables native `todo`. The updater preflights ownership of the local Todo/ctx files it retires before installing plugins, removes the listed Todo files only after OMP confirms plugin readiness, and removes the listed ctx files only when that ready plugin carries `src/ctx`.
 
-- **`ctx list [<id>] [all=true]`**: prints a depth-first tree with status, one-line summary, and `done/total` task counts (plus `blocked` when a block reason is set). By default shows the main session and `task` / `task:*` subagents, hiding `mentor`, `discuss`, and `trace` while promoting their visible descendants one level up with a hidden count, and collapses non-root subtrees with more than 8 descendants (`ctx list <id>` expands a subtree; `all=true` includes internal contexts except the advisor).
-- **`ctx show <id>`**: prints the handoff summary (latest compaction summary for the current session; adjacent `.md` sidecar or 120-char `.json` sidecar summary for other contexts), the latest `## Goal` recorded in the task log, and a `## Tasks` timeline (`Completed` and `Open`, ordered by the local timestamp of each named task's last accepted operation).
-- **Task-log limits**: counts and timelines are replayed from the append-only task log rather than `TodoTracker`'s in-memory state. `init` and `append` log item counts rather than titles, so tasks never touched by name after creation count toward `ctx list` totals without appearing in `ctx show`; once a task title is completed or removed, later `start`/`block`/`unblock` entries do not reopen it; a task literally titled `all tasks` is parsed as a batch selector.
-
-### Task log
-
-Implemented in `omp-todo-more` (`src/ctx/tasklog.ts`). After every state-changing `todo` or `goal` tool call succeeds, appends the local time, tool name, operation, and target to `<local root>/task-log/<agent-id>.md` (a `todo` call that sets a goal also writes `todo-more set: <goal JSON>`). Read-only calls (`todo view`, `goal get`) and failed calls are not logged.
-
-### After-compact injection
-
-Implemented in `omp-todo-more` (`src/ctx/post-compact-hint.ts`). Listens to main-session `session_compact` and non-aborted `auto_compaction_end` events (debounced to once per 5 seconds; subagents are ignored) and steers a `<post-compact-ctx>` message containing `## List` (`ctx list`) and `## Current session` (`ctx show` for the main session).
+Tool documentation: `xd://ctx` and `xd://todo`.

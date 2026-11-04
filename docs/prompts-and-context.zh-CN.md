@@ -12,7 +12,7 @@
 | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充 `# Personality` 下的 `{{personality}}`。前半部分保留 OMP `personality: default` 原文（`Evidence-first terse engineer`）；后半部分定义 `# Writing` 分析与研究写作规范：结论、数字或机制直接开篇，一句话写清时间、主体、动作、规模与来源，多项对象或指标合并进一张表且不在正文逐行复述，删去过程自述、重复解释、叠加免责声明与文末总结。 |
 | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理 | 加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件，并处理所有规则来源的 `paths` 按路径触发。 |
-| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 把被覆盖工具的说明换成常用调用说明加 `Topics` 索引；详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
+| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 只为 OMP 自己的工具实例添加 surface 与 `Topics` 索引；由插件或扩展注册的工具保留自己的说明与专题，包括以相同名称替换内置工具的情况，例如 `omp-ask-more` 的 `ask`。OMP 工具的详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
 | [system-prompt-replace](#system-prompt-replace) | 按规则（默认所有会话；完整与轻量模式） | 在所有按路径加载的扩展最后运行，按 `REPLACE-SYSTEM-*.yml` 规则文件对渲染出的 system prompt 做措辞级修改；每条规则可以全局生效，也可以限定会话、cwd、模型、provider 或模式，并用 `exclude.*` 写明何时不生效。 |
 | [append-system-model](#append-system-model) | 按片段（默认仅主会话） | 追加 frontmatter 条件（会话、cwd、模型、provider、完整/轻量模式，以及表示何时不注入的 `exclude.*`）命中的 `APPEND-SYSTEM-*.md` 片段。仓库自带 `APPEND-SYSTEM-decision-support.md`：完整模式的主会话中，重大决策询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`；主模型为 `claude-opus-5-5` 时不注入。 |
 | [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时追加仓库下发的 `ARGON_PROMPT.md`：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
@@ -36,9 +36,9 @@
   exclude.target: "mentor:default"
 ```
 
-不写条件键的规则对所有会话生效。条件键与 [append-system-model](#append-system-model) 相同（`target`、`cwd`、`model`、`provider`、`mode` 以及 `exclude.` 下的同名键），匹配方式也相同；只有默认 target 不同（这里是所有会话，那里是 `main`）。文件按发现顺序生效，文件内规则按顺序生效，每条作用于前一条的结果。未知键或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
+不写条件键的规则对所有会话生效。条件键与 [append-system-model](#append-system-model) 相同（`target`、`cwd`、`model`、`provider`、`mode` 以及 `exclude.` 下的同名键），但这里的默认 target 是所有会话，而不是 `main`。在 `REPLACE-SYSTEM-*.yml` 中，`model` 与 `provider` 字符串以 YAML 解码后的原值作为正则源码，包括解码后字符串内部的引号字符，不会再去掉引号。文件按发现顺序生效，文件内规则按顺序生效，每条作用于前一条的结果。未知键或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
 
-仓库自带的 `REPLACE-SYSTEM-default.yml` 当前包含的替换规则，每条都限定 `mode: full`，因为它们以前只在完整模式生效（其中文件检索与编辑固定使用 `read` + hashline `edit` 并禁止在 `eval` 中查文件，以要求模型在读取目标行邻近上下文后再做修改，避免在缺少编译器与测试保护的脚本、配置或命令行操作中脱离上下文直接修改）：
+仓库自带的 `REPLACE-SYSTEM-default.yml` 当前包含的替换规则，每条都限定 `mode: full`（其中文件检索与编辑固定使用 `read` + hashline `edit` 并禁止在 `eval` 中查文件，以要求模型在读取目标行邻近上下文后再做修改，避免在缺少编译器与测试保护的脚本、配置或命令行操作中脱离上下文直接修改）：
 
 | 目标 | 修改内容 |
 |---|---|
@@ -49,11 +49,11 @@
 | `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `tool://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
 | `xd://` 设备说明 | 说明 `xd://<tool>` 只能通过 `write` 写入 JSON 调用，不存在 `xd__<tool>` 或裸 `<tool>` 函数。 |
 
-整段工具说明（`read`、`bash`、`task`）不再由本扩展替换：[tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞定位它们，上游改写措辞后仍然生效。
+[tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞处理 OMP 自己的工具（`read`、`bash`、`task`）的整段说明，上游改写措辞后仍然生效。
 
 当某条适用于主会话的规则找不到匹配文本时（例如升级 OMP 后上游改了内置措辞），每个进程对每条规则记一次日志并弹一次 UI 警告（headless 模式写 stderr），不阻塞请求。子代理的 system prompt 本就不含 `task` 等工具，不做缺失检查；条件不匹配当前会话的规则直接跳过，不做检查。
 
-`omomp.yml` 中旧的 `system-prompt-replace` 段由更新器转换成 `REPLACE-SYSTEM-default.yml` 后删除（见[文件归属与同步规则](operations.zh-CN.md#文件归属与同步规则)）。
+更新器把本机 `omomp.yml` 中的 `system-prompt-replace` 段转换成 `REPLACE-SYSTEM-default.yml`，并删除已迁移的段；app-managed 源文件绝不导入或删除（见[文件归属与同步规则](operations.zh-CN.md#文件归属与同步规则)）。
 
 ### append-system-model
 
@@ -75,6 +75,8 @@ exclude.model: ^claude-opus-5-5$
 
 注入条件键 `target`（默认 `main`；也可写 `subagents`、`*` 或代理名）、`cwd`、`model` 与 `provider` 沿用 `turn-judge` 与 `watchdog-agent` 的语法；`mode` 列出 `full` 和/或 `light`。同一键内多项为“或”，不同键为“且”。`exclude.target`、`exclude.cwd`、`exclude.model`、`exclude.provider` 与 `exclude.mode` 描述何时不注入：片段设置的 `exclude.*` 键全部命中时跳过；未写 `exclude.target` 时排除覆盖所有会话。`model` 与 `provider` 是匹配会话当前模型 id 与 provider 的正则。`omp-light` 以 `OMOMP_MODE=light` 启动 omp，其余情况为 `full`。`enabled: false` 关闭该文件。未知键、正文为空或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
 
+`APPEND-SYSTEM-*.md`、`WATCHDOG-*.md` 与 `TURN-JUDGE-*.md` 的 frontmatter 中，模型/provider 正则字段在编译前会去掉包围值的一对引号；这与 `REPLACE-SYSTEM-*.yml` 中已经过 YAML 解码的字符串不同。
+
 旧的单文件格式 `APPEND_SYSTEM_MODEL.md` 由更新器按块拆成 `APPEND-SYSTEM-model-NN.md`，每个文件带 `target: *`，保持原来对主会话和子代理都生效的范围（见[文件归属与同步规则](operations.zh-CN.md#文件归属与同步规则)）。
 
 ### repo-rules
@@ -95,7 +97,6 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 
 - **`task` 与 `fork_task`**：普通 `task` 新建空白子代理会话，只传入 `context` 与 `task` 文本，子代理的查找过程和工具输出留在其分支内，主会话只收最终 `yield` 结果。当主会话已经读入大量设计文档或经过多轮对话，无法用几句 `context` 交代清楚时，用 `fork_task` 把当前对话历史复制为子代理的起始上下文。
 - **压缩顺序与触发时机**：`agent/config.yml` 将 `compaction.methodOrder` 设为 `[remote, soft, snapcompact, handoff, shake]`，并将 `compaction.asyncEnabled` 设为 `false`。开启 `asyncEnabled` 时，OMP 会在阈值前最多 32k token 提前在后台请求摘要，拿到后一直存到阈值才替换，且 Anthropic 的摘要不会重新生成，这期间每次请求仍发送完整历史；关闭后只在到达阈值时执行压缩。
-- **压缩后的状态恢复**：`omp-todo-more` 插件把每次修改状态的 `todo` 调用追加写入 `task-log/<agent-id>.md`，并在主会话完成压缩后自动注入 `ctx list` 与主会话的 `ctx show`。
 
 ### fork-task
 
@@ -113,6 +114,7 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 - **工作区覆盖**：`isolated` 覆盖默认值。并发写入必须显式选择 `isolated: true`；plan mode 强制共享、只读子代理；隔离子代理完成后不能继续唤醒。
 - **Shake 必须显式选择**：`shake` 默认为 false，任何任务项都不检查继承 token 数或来源成本。显式 `shake: true` 对副本执行 `session.shake("elide")`，保留最近约 4,000 token 及 `skill://`、`local://PLAN.md` 读取，把更早的文本工具结果、$\ge 400$ token 的代码块和顶层小写 XML 块替换成共享 artifact 中的恢复引用。开启 shake 的分叉明确不再回放原始消息前缀。
 - **拒绝的任务项**：`tools` 不是 fork 字段，子代理只暴露源的工具。未知 agent、`task.disabledAgents` 中的 agent 或 `fork:self` 本身在派发前报错。
+- **执行失败**：execute 边界捕获失败，在暂存清理后记录警告并返回 `isError` 工具结果；只有用户中止（`signal.aborted`）会重新抛出，交由宿主处理取消。
 - `from: "<agent-id>"`（解析规则同 `agent://<id>`）复刻运行中或 idle 的代理而非调用方：先捕获它的最近一次请求，再落盘并复制它的对话历史。parked 代理没有可复刻的活跃请求，派发前报错，需先用 `write agent://<id>` 唤醒。子代理的工作目录仍取自调用方的 checkout，而非 `from` 代理自己的隔离 worktree。
 - 复制出的历史末尾会追加 `<system-notice cause="fork_task">`，说明前面的历史仅作背景，并要求子代理在交回结果前完成相关构建、测试与真实运行验证。
 - 暂存步骤：先把源会话复制到 `$TMPDIR/omp-fork-task/<uuid>/`（清零继承费用、为未完成的工具调用补齐中止结果、清空源 Todo、追加 fork notice），移除 `session_init`、`model_change`、`thinking_level_change`、`service_tier_change` 与 shake 产生的 `session_exit` 并将子条目重挂到上一级，共享子代理写入调用方 `cwd`、隔离子代理置空 `cwd`，最后在 `before_subagent_spawn` 中把暂存文件移到 `<父会话文件去掉 .jsonl>/<子代理 id>.jsonl`。
@@ -139,16 +141,6 @@ model-compaction:
 
 ### ctx
 
-由 [omp-todo-more](plugins-and-modes.zh-CN.md#todo-more) 插件注册（`src/ctx/inventory.ts`），只读汇总当前会话、subagent registry、transcript、compaction 摘要、`.md`/`.json` sidecar 与 task log：
+[omp-todo-more](plugins-and-modes.zh-CN.md#todo-more) 插件拥有 `ctx` 与 `todo`；`agent/config.yml` 关闭原生 `todo`。更新器在安装插件前预检待退役本地 Todo/ctx 文件的归属；只有 OMP 确认插件就绪后才删除列出的 Todo 文件，且只有该就绪插件带有 `src/ctx` 时才删除列出的 ctx 文件。
 
-- **`ctx list [<id>] [all=true]`**：按深度优先输出每个上下文的一行状态、单行摘要与 `done/total` 任务数（有阻塞原因时附 `blocked`）。默认只列主会话和 `task` / `task:*` 子代理（隐藏 `mentor`、`discuss`、`trace`，把它们的可见后代上提一级并标注隐藏数量），非根节点后代超过 8 个时折叠为一行（用 `ctx list <id>` 展开；`all=true` 显示除 advisor 外的全部节点）。
-- **`ctx show <id>`**：输出三部分：handoff（当前会话取最新 compaction 摘要，其他上下文优先取相邻 `.md` sidecar 全文，其次 `.json` sidecar 的 120 字摘要）、task log 中最后一条有效的 `## Goal`，以及从 task log 重放出的 `## Tasks` 时间线（分 `Completed` 和 `Open`，按任务最后一次被采纳操作的本地时间排序）。
-- **日志重放限制**：任务数和时间线由追加写入的 task log 重建，而非直接读取内存中的 `TodoTracker`。`init` 和 `append` 只记任务数不记标题，创建后从未按标题单独操作过的任务会算进 `ctx list` 总数，但不会出现在 `ctx show` 时间线里；已标记完成或删除的标题不会被后续 `start`/`block`/`unblock` 重新打开；标题恰好叫 `all tasks` 的项会被当作批量选择器处理。
-
-### Task log
-
-位于 `omp-todo-more` 插件（`src/ctx/tasklog.ts`）。每次改变状态的 `todo` 或原生 `goal` 工具调用成功后，把本地时间、工具名、操作和目标追加写入 `<local root>/task-log/<agent-id>.md`（带 goal 的 `todo` 调用会再写一行 `todo-more set: <goal JSON>`）。只读的 `todo view`、`goal get` 和失败调用不记录。
-
-### compact 后注入
-
-位于 `omp-todo-more` 插件（`src/ctx/post-compact-hint.ts`）。监听主会话的 `session_compact` 与未中止的 `auto_compaction_end` 事件（5 秒内最多触发一次，子代理不触发），在压缩完成后自动以 steer 消息注入 `<post-compact-ctx>`，包含 `## List`（`ctx list`）和主会话的 `## Current session`（`ctx show`）。
+工具文档：`xd://ctx` 与 `xd://todo`。
