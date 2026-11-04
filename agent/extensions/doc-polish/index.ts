@@ -752,8 +752,8 @@ export default function docPolish(pi: ExtensionAPI): void {
 			"document's content is settled and only readability remains — e.g. after finishing a draft and before " +
 			"turning it into the formal document, or when handing a doc off for others to read. It emits a " +
 			"before/after/review file under /tmp/doc-polish and RETURNS its path. Splits the " +
-			"document with a read+write sub-agent, polishes batched paragraphs (<=5000 code points, never " +
-			"truncated) with tool-less sub-agents in parallel, regroups merged paragraphs, then meaning-checks each " +
+			"document with a read+write sub-agent, polishes batched paragraphs (batches up to 5000 code points; a " +
+			"longer paragraph goes alone, never truncated) with tool-less sub-agents in parallel, regroups merged paragraphs, then meaning-checks each " +
 			"group. Models come from the OMP model roles `@doc-polish.split`, `@doc-polish.polish` and " +
 			"`@doc-polish.check` (assigned in `/model`). The '改之后' rewrite is a REFERENCE direction, not an " +
 			"authoritative result: the caller must read the review and decide what, if anything, to adopt.",
