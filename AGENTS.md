@@ -83,8 +83,11 @@ review.
   `getAgentDir()`.
 - **Models:** an extension that picks its own model uses the OMP role
   `@<extension>` through `roleModels`, with an optional `fallbackRole` in its
-  section, and lists the role in `config.yml` `modelTags`. Judgments go through
-  `openJudge`; extensions add no LLM fallback of their own. One-shot calls use
+  section, and lists the role in `config.yml` `modelTags`. Judgments that
+  return only answer probabilities go through `openJudge`; a verdict that must
+  carry a written reason back to the agent (`task-completion-judge`,
+  `task-split-check`) is a completion over `roleModels`. Extensions add no
+  other LLM fallback of their own. One-shot calls use
   `runHelperPrompt`; any other `createAgentSession` passes `taskDepth: 1`, or
   its `dispose()` releases every idle subagent.
 - **Types:** strict, `noUncheckedIndexedAccess`, no `any`. Parse external input
