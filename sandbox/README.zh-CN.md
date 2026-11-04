@@ -28,13 +28,13 @@ bun sandbox/sandbox.ts down RUN                                              # �
 | 容器 `omp-sandbox-<run>` | `oven/bun:latest` linux/arm64（每次运行都拉取，不钉版本），`--init`，`HOME` 与宿主机家目录路径相同，复制来的配置里的绝对路径因此原样有效。另装 `git`、`openssh-client`、`python3`、`zsh`、`jq`、`sqlite3`、`procps`。不发布端口，不挂卷、bind mount 或 docker socket。 |
 | 容器 `omp-sandbox-<run>-target`（`--target`） | `debian:stable-slim`，装 `openssh-server` 与 `python3`。沙箱每次运行在 `$HOME/.ssh` 下新生成 ed25519 密钥，目标机为 `root` 信任它；沙箱内的 `/etc/ssh/ssh_config.d/omp-sandbox-target.conf` 把目标机命名为 `target`：`ssh target …`（ssh 从 passwd 家目录 `/root` 读 `~/.ssh`，不看 `$HOME`）。 |
 
-三者都带标签 `omp-sandbox.run=<run>`，清理时按这个标签查找。
+这些资源都带标签 `omp-sandbox.run=<run>`，清理时按这个标签查找。
 
 内容以 tar 流或经 stdin 管道进入 `docker exec`，宿主机磁盘上不暂存任何含凭据的东西：
 
 - `~/.omp/agent`，不含 `sessions/`、`blobs/`、`terminal-sessions/`、`custom-session-files/`、`predict/`、`cache/`、`history.db*`、锁文件与 `agent.db*`。`~/.omp/logs` 不复制。
 - `agent.db`：对宿主机数据库的只读连接做 SQLite 序列化。序列化在同一个读事务内完成，因此包含尚未 checkpoint 的 WAL 帧。镜像被标成回滚日志库（头部第 18–19 字节），逐字节写入容器，在容器内改回 WAL，再执行 `integrity_check`。随后宿主机读回容器内的副本，在内存里与快照逐表、逐行、逐字段比较，任何差异都让构建失败。只打印表名、行数与「every field equal」，从不打印值或摘要。
-- `~/.omp/plugins`，不含 `node_modules/`（为 macOS 构建）；容器内 `bun install` 按锁文件为 Linux 装同样的版本。
+- `~/.omp/plugins`，包含锁文件，不含 `node_modules/`（为 macOS 构建）；容器内 `bun install` 按锁文件为 Linux 装同样的版本。
 - `~/.claude/rules`、`~/.claude/skills`、`~/.claude/CLAUDE.md`，存在才复制。
 - 工作树放到 `/repo`：已跟踪与未跟踪的文件，含未提交改动，不含被忽略的文件。
 
@@ -60,7 +60,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 
 匹配器是 `{ "tool", "isError"?, "inputPattern"?, "resultIncludes"? }`：`tool` 是一个工具名，或一组工具名（命中任一即可）；`inputPattern` 是作用于调用 JSON 输入的正则表达式，`resultIncludes` 是结果文本中的字面串。驱动只看得到 agent 循环直接执行的调用：`eval` cell 经 `tool.<name>` 桥调用的工具，算作那次 `eval` 调用的输入和结果。驱动只检查场景声明的内容，自己不附加任何含义。[`scenarios/echo-hi.json`](scenarios/echo-hi.json) 是最小示例。
 
-一个场景对一个模型的运行，结果是以下四种之一：
+一个场景对一个模型的运行，会得到以下结果之一：
 
 | 结果 | 条件 |
 |---|---|
@@ -69,11 +69,11 @@ bun sandbox/sandbox.ts down RUN                                              # �
 | `untested` | omp 不认识该模型（`Model "…" not found`），或所有助手回复都在服务商处失败且没有运行任何工具 |
 | `harness-error` | `init` 失败、omp 因其他原因在 ready 帧之前退出、prompt 被拒绝、会话超过 600 秒上限、omp 以非零退出，或 omp 没有报告会话文件 |
 
-证据写到 `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`：`<name>.driver.json`（结果、每次工具调用的输入、`isError` 与结果前 400 字符、终态断言输出、最后一条回复）、`<name>.events.jsonl`（每个 RPC 帧）与 `<name>.session.jsonl`（omp 报告的会话文件）。宿主机对每个模型只复制这三个文件；`agent.db` 与 `models.yml` 不离开容器。事件与会话文件包含模型看到的一切，所以场景不得读取凭据文件。
+证据写到 `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`。通常会生成 `<name>.driver.json` 报告（结果、每次工具调用的输入、`isError` 与结果前 400 字符、终态断言输出，以及最后一条回复的前 1,000 字符）。`<name>.events.jsonl`（每个 RPC 帧）在 RPC 会话启动时创建；只有 omp 报告了存在的会话文件时，才复制为 `<name>.session.jsonl`。若 `init` 失败，只写驱动报告。宿主机对每个模型只复制实际存在的上述证据文件；`agent.db` 与 `models.yml` 不离开容器。事件与会话文件包含模型看到的一切，所以场景不得读取凭据文件。
 
 ## 生命周期与台账
 
-OrbStack 台账是目录 `~/Ext/work/orbstack/`；沙箱运行在其中有自己的文件 `omp-sandbox.md`。`hold` 与 `run` 在创建任何资源之前写入本次运行的一行（状态「进行中」），台账目录不存在时拒绝启动。构建、场景或等待信号都在 `try` 中进行；`finally` 删除本次运行的容器与网络，打印按 `name=omp-sandbox-<run>` 过滤的 `docker ps -a` 与 `docker network ls`，并原地改写同一行：「已完成、已清理」并附删除记录与空的列表结果，或「清理失败」并附残留（命令随后以 1 退出）。`down` 以同样方式改写该行。
+OrbStack 台账是目录 `~/Ext/work/orbstack/`；沙箱运行在其中有自己的文件 `omp-sandbox.md`。`hold` 与 `run` 在创建任何资源之前写入本次运行的一行（状态「进行中」），台账目录不存在时拒绝启动。构建、场景或等待信号都在 `try` 中进行；`finally` 尝试删除本次运行的容器与网络，再用按 `name=omp-sandbox-<run>` 过滤的 `docker ps -a` 与 `docker network ls` 检查残留。随后原地改写同一行：「已完成、已清理」并附删除记录与空的列表结果，或「清理失败」并附残留或 Docker 命令失败详情，包括无法列出资源的情况（命令随后以 1 退出）。`down` 以同样方式改写该行。
 
 被 SIGKILL 的持有进程会让该行停在「进行中」、资源留在原处；`down <run>` 删除它们。
 

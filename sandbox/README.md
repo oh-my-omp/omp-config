@@ -28,13 +28,13 @@ bun sandbox/sandbox.ts down RUN                                              # r
 | Container `omp-sandbox-<run>` | `oven/bun:latest` linux/arm64 (pulled each run, no pinned version), `--init`, `HOME` equal to the host's home path so absolute paths in the copied config stay valid. Extra packages: `git`, `openssh-client`, `python3`, `zsh`, `jq`, `sqlite3`, `procps`. No published port, volume, bind mount or docker socket. |
 | Container `omp-sandbox-<run>-target` (`--target`) | `debian:stable-slim` with `openssh-server` and `python3`. The sandbox generates an ed25519 key per run under `$HOME/.ssh`, the target trusts it for `root`, and `/etc/ssh/ssh_config.d/omp-sandbox-target.conf` in the sandbox names the target `target`: `ssh target …` (ssh reads `~/.ssh` from the passwd home, `/root`, not from `$HOME`). |
 
-All three carry the label `omp-sandbox.run=<run>`; teardown finds them by that label.
+These resources carry the label `omp-sandbox.run=<run>`; teardown finds them by that label.
 
 Contents enter the sandbox as tar streams or stdin pipes into `docker exec`; nothing credential-bearing is staged on the host disk:
 
 - `~/.omp/agent`, without `sessions/`, `blobs/`, `terminal-sessions/`, `custom-session-files/`, `predict/`, `cache/`, `history.db*`, lock files and `agent.db*`. `~/.omp/logs` is not copied.
 - `agent.db`: SQLite's serialization of a read-only connection to the host database. It is taken inside one read transaction, so it includes WAL frames not yet checkpointed. The image is marked as a rollback-journal database (header bytes 18–19), written into the container byte for byte, switched back to WAL there, and checked with `integrity_check`. The host then reads the container's copy back and compares every field of every row of every table with its snapshot in memory; the build fails on any difference. Only table names, row counts and "every field equal" are printed, never values or digests.
-- `~/.omp/plugins`, without `node_modules/` (built for macOS); `bun install` in the container installs the same locked versions for Linux.
+- `~/.omp/plugins`, including its lockfile but without `node_modules/` (built for macOS); `bun install` in the container installs the same locked versions for Linux.
 - `~/.claude/rules`, `~/.claude/skills` and `~/.claude/CLAUDE.md`, those that exist.
 - The working tree at `/repo`: tracked and untracked files, uncommitted changes included, ignored files excluded.
 
@@ -60,7 +60,7 @@ The credential copy is used as it is: nothing is rewritten, refreshed or filtere
 
 A matcher is `{ "tool", "isError"?, "inputPattern"?, "resultIncludes"? }`: `tool` is a tool name or a list of names any of which matches, `inputPattern` is a regular expression over the call's JSON input, `resultIncludes` a literal in its result text. Only calls the agent loop runs are seen: a tool an `eval` cell calls through its `tool.<name>` bridge is part of that `eval` call's input and result. The driver checks what the scenario declares and attaches no meaning of its own. [`scenarios/echo-hi.json`](scenarios/echo-hi.json) is the smallest example.
 
-Each run of a scenario for a model ends in one of four results:
+Each run of a scenario for a model ends with a result:
 
 | Result | When |
 |---|---|
@@ -69,11 +69,11 @@ Each run of a scenario for a model ends in one of four results:
 | `untested` | omp does not know the model (`Model "…" not found`), or every assistant reply failed at the provider and no tool ran |
 | `harness-error` | `init` failed, omp exited before its ready frame for another reason, the prompt was rejected, the session hit the 600 s limit, omp exited nonzero, or omp reported no session file |
 
-Evidence lands in `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/` as `<name>.driver.json` (result, every tool call with its input, `isError` and the first 400 characters of its result, the final-assertion output, the last reply), `<name>.events.jsonl` (every RPC frame) and `<name>.session.jsonl` (the session file omp reported). The host copies exactly these three files per model; `agent.db` and `models.yml` never leave the container. Events and session files contain whatever the model saw, so a scenario must not read credential files.
+Evidence lands in `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`. The normal report is `<name>.driver.json` (result, every tool call with its input, `isError` and the first 400 characters of its result, the final-assertion output, and the first 1,000 characters of the last reply). `<name>.events.jsonl` (every RPC frame) is created when the RPC session starts; `<name>.session.jsonl` is copied only if omp reports a session file that exists. If `init` fails, only the driver report is written. The host copies whichever of these evidence files exist for each model; `agent.db` and `models.yml` never leave the container. Events and session files contain whatever the model saw, so a scenario must not read credential files.
 
 ## Lifecycle and the ledger
 
-The OrbStack ledger is the directory `~/Ext/work/orbstack/`; sandbox runs have their own file there, `omp-sandbox.md`. `hold` and `run` write the run's row (state 进行中) before creating anything and refuse to start when the ledger directory is missing. The build, the scenario or the wait for a signal run inside `try`; the `finally` removes the run's containers and network, prints `docker ps -a` and `docker network ls` filtered by `name=omp-sandbox-<run>`, and rewrites the same row with the result: 已完成、已清理 with the removal and the empty listings, or 清理失败 with what is left (the command then exits 1). `down` rewrites the row the same way.
+The OrbStack ledger is the directory `~/Ext/work/orbstack/`; sandbox runs have their own file there, `omp-sandbox.md`. `hold` and `run` write the run's row (state 进行中) before creating anything and refuse to start when the ledger directory is missing. The build, the scenario or the wait for a signal run inside `try`; the `finally` attempts to remove the run's containers and network and checks for leftovers with `docker ps -a` and `docker network ls` filtered by `name=omp-sandbox-<run>`. It rewrites the same row with the result: 已完成、已清理 with the removal and the empty listings, or 清理失败 with remaining resources or failed Docker command details, including a failure to list resources (the command then exits 1). `down` rewrites the row the same way.
 
 A SIGKILLed holder leaves the row at 进行中 and its resources in place; `down <run>` removes them.
 
