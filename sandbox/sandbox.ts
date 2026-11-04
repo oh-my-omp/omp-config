@@ -167,30 +167,36 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 		await step(`ssh target ${names.target}`, () => setUpTarget(names.container, HOME, names.target, labels, names.network));
 }
 
-/** Removes every resource labelled with the run, then confirms the filtered listings are empty. */
+/** Removes labelled resources and confirms empty listings; command failures return unconfirmed cleanup evidence. */
 async function teardown(names: Names): Promise<{ readonly clean: boolean; readonly evidence: string }> {
-	const filter = `label=${LABEL}=${names.run}`;
-	const containers = (await must(["docker", "ps", "-aq", "--filter", filter])).split("\n").filter((id) => id !== "");
 	const removed: string[] = [];
-	if (containers.length > 0) {
-		const result = await exec(["docker", "rm", "-f", ...containers]);
-		removed.push(`docker rm -f（${containers.length} 个容器，exit ${result.code}）`);
+	try {
+		const filter = `label=${LABEL}=${names.run}`;
+		const containers = (await must(["docker", "ps", "-aq", "--filter", filter])).split("\n").filter((id) => id !== "");
+		if (containers.length > 0) {
+			await must(["docker", "rm", "-f", ...containers]);
+			removed.push(`docker rm -f（${containers.length} 个容器，exit 0）`);
+		}
+		const networks = (await must(["docker", "network", "ls", "-q", "--filter", filter])).split("\n").filter((id) => id !== "");
+		if (networks.length > 0) {
+			await must(["docker", "network", "rm", ...networks]);
+			removed.push(`docker network rm（${networks.length} 个网络，exit 0）`);
+		}
+		const left = (await must(["docker", "ps", "-a", "--filter", `name=${names.container}`, "--format", "{{.Names}}"])).trim();
+		const leftNetworks = (await must(["docker", "network", "ls", "--filter", `name=${names.container}`, "--format", "{{.Name}}"])).trim();
+		console.log(`--- docker ps -a --filter name=${names.container}\n${left}`);
+		console.log(`--- docker network ls --filter name=${names.container}\n${leftNetworks}`);
+		const clean = left === "" && leftNetworks === "";
+		const at = new Date().toISOString();
+		const evidence = clean
+			? `${removed.join("；") || "没有需要删除的资源"}；${at} \`docker ps -a\`、\`docker network ls\` 按 \`name=${names.container}\` 过滤均为空`
+			: `${removed.join("；")}；${at} 仍有残留：${[left, leftNetworks].filter((x) => x !== "").join(", ")}`;
+		return { clean, evidence };
+	} catch (error) {
+		const failure = `${new Date().toISOString()} 清理未确认：${error instanceof Error ? error.message : String(error)}`;
+		console.error(failure);
+		return { clean: false, evidence: [...removed, failure].join("；") };
 	}
-	const networks = (await must(["docker", "network", "ls", "-q", "--filter", filter])).split("\n").filter((id) => id !== "");
-	if (networks.length > 0) {
-		const result = await exec(["docker", "network", "rm", ...networks]);
-		removed.push(`docker network rm（${networks.length} 个网络，exit ${result.code}）`);
-	}
-	const left = (await must(["docker", "ps", "-a", "--filter", `name=${names.container}`, "--format", "{{.Names}}"])).trim();
-	const leftNetworks = (await must(["docker", "network", "ls", "--filter", `name=${names.container}`, "--format", "{{.Name}}"])).trim();
-	console.log(`--- docker ps -a --filter name=${names.container}\n${left}`);
-	console.log(`--- docker network ls --filter name=${names.container}\n${leftNetworks}`);
-	const clean = left === "" && leftNetworks === "";
-	const at = new Date().toISOString();
-	const evidence = clean
-		? `${removed.join("；") || "没有需要删除的资源"}；${at} \`docker ps -a\`、\`docker network ls\` 按 \`name=${names.container}\` 过滤均为空`
-		: `${removed.join("；")}；${at} 仍有残留：${[left, leftNetworks].filter((x) => x !== "").join(", ")}`;
-	return { clean, evidence };
 }
 
 interface ModelResult {
