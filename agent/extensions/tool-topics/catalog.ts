@@ -69,7 +69,14 @@ export function loadCatalog(dir: string): Catalog {
 	for (const file of readdirSync(dir)
 		.filter((name) => FILE.test(name))
 		.sort()) {
-		const entry = parseEntry(file, readFileSync(join(dir, file), "utf8"));
+		let text: string;
+		try {
+			text = readFileSync(join(dir, file), "utf8");
+		} catch (error) {
+			problems.push(`${file}: unreadable (${errorText(error)})`);
+			continue;
+		}
+		const entry = parseEntry(file, text);
 		switch (entry.kind) {
 			case "invalid":
 				problems.push(`${file}: ${entry.reason}`);

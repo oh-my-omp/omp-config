@@ -2,7 +2,8 @@
 // a short surface plus a topic index in each tool's description, with the detailed call
 // instructions served on demand as tool://<tool>/<topic>. Tools a plugin or another extension
 // registers serve their own topics as xd://<tool>/<topic> through `docTopics()` and list them in
-// their own description; this extension neither indexes nor serves them.
+// their own description; this extension neither indexes nor rewrites them, including a plugin
+// tool that replaces a built-in under the same name (OMP reports a filesystem source path for it).
 //
 // FILES. Authored beside this module (repo-managed): `TOPIC-*.md` (header: tool, name, title,
 // when, upstream) and `SURFACE-*.md` (header: tool, upstream). Loaded once at factory time;
@@ -22,7 +23,8 @@
 // when a rendered tool cannot be rewritten (layout change, missing native section), its native
 // description stays and a warning is logged, and shown once in the main session.
 //
-// FAILURE. Bad files are skipped with one warning each. Hooks never throw into omp.
+// FAILURE. A malformed or unreadable file is skipped with one warning each; the rest still load.
+// Hooks never throw into omp.
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -64,10 +66,22 @@ function publish(pi: ExtensionAPI, catalog: Catalog): boolean {
 	}
 }
 
+/** Tools registered from an extension or plugin file: OMP reports a filesystem source path for them, `<origin:name>` otherwise. */
+function fileRegistered(pi: ExtensionAPI): ReadonlySet<string> {
+	return new Set(
+		pi
+			.getAllTools()
+			.filter((tool) => !tool.sourceInfo.path.startsWith("<"))
+			.map((tool) => tool.name),
+	);
+}
+
 function rewritePrompt(pi: ExtensionAPI, ctx: ExtensionContext, blocks: string[], docsList: readonly ToolDocs[], indexed: boolean) {
 	let current = blocks;
 	let changed = false;
+	const foreign = fileRegistered(pi);
 	for (const docs of docsList) {
+		if (foreign.has(docs.tool)) continue;
 		const index = indexed && docs.topics.length > 0 ? renderIndex(docs.tool, docs.topics) : undefined;
 		if (docs.surface === undefined && index === undefined) continue;
 		const result = rewriteTool(current, docs.tool, (native) => composeDescription(native, docs, index));
