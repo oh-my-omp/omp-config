@@ -71,7 +71,7 @@ Runs at `tool_call` on terminal structured `yield` calls inside `task:low`, `tas
 - **Bounce rules**:
   1. The first `NOT_DONE` blocks `yield` with the reason so the worker finishes and verifies the work.
   2. After `DONE`, the extension queries `omp-todo-more:read` and blocks once if any `pending` or `in_progress` items remain (`blocked` items do not block), listing their explanations so the worker updates its Todo list first.
-  3. Each bounce happens at most once per subagent session so a blocked worker cannot get trapped in an infinite bounce loop; after passing, subsequent `yield` calls in that session are not judged. When `yield` data is an open object without a custom `outputSchema`, passing results attach `data.completion_judge = { verdict, reason, bounced }` (`bounced` reflects only the `NOT_DONE` bounce). Config, model, or plugin-read errors log a warning and fail open.
+  3. Each bounce happens at most once per subagent session so a blocked worker cannot get trapped in an infinite bounce loop; after passing, subsequent `yield` calls in that session are not judged. The verdict is only logged (`task-completion-judge verdict`); the `yield` data keeps the agent's `{ report }` schema. Config, model, or plugin-read errors log a warning and fail open.
 
 ### subagent-usage
 

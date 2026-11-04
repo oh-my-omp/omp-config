@@ -71,7 +71,7 @@
 - **退回规则**：
   1. 首次判为 `NOT_DONE` 时拦截 `yield` 并返回原因，要求子代理继续完成并验证。
   2. 判为 `DONE` 后，同步触发 `omp-todo-more:read` 读取最新 Todo 列表；若仍有 `pending` 或 `in_progress` 项（`blocked` 项不计），再拦截一次并列出这些项的说明，要求先更新 Todo 状态。
-  3. 每种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；通过后，该会话后续 `yield` 不再拦截。若 `yield` 数据是无自定义 `outputSchema` 的开放对象，放行时写入 `data.completion_judge = { verdict, reason, bounced }`（`bounced` 仅记录是否发生过 `NOT_DONE` 退回）。配置、模型或插件读取失败时记 warning 并放行。
+  3. 每种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；通过后，该会话后续 `yield` 不再拦截。判定结论只写日志（`task-completion-judge verdict`），`yield` 数据保持 agent 的 `{ report }` schema。配置、模型或插件读取失败时记 warning 并放行。
 
 ### subagent-usage
 

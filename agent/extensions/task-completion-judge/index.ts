@@ -19,15 +19,9 @@
  * session still has pending or in-progress items is blocked once, asking the subagent
  * to bring the todo list up to date before yielding. Each bounce happens at
  * most once, so one session can see a NOT done bounce and later a todo
- * bounce. Every yield that passes after a definitive verdict carries it to
- * the parent as `data.completion_judge = { verdict, reason, bounced }`, where
- * `bounced` records only the NOT done bounce. Later yields in the same
- * session pass unjudged.
- *
- * The verdict is attached only when the yield's `data` is the schema-free open
- * object; a caller `outputSchema` could reject the extra field, so there the
- * yield passes unchanged (the bounce still applies). A data-less text result
- * is converted to `data: { result: <that text>, completion_judge }`.
+ * bounce. The verdict is logged, never attached to the result: the yield's
+ * `data` follows the agent's output schema. Later yields in the same session
+ * pass unjudged.
  *
  * Registers `tool_call` and `session_shutdown`; it reads the host-managed session
  * branch for the assignment/tools and requests the independent Todo owner's
@@ -133,8 +127,6 @@ const yieldInputSchema = z
 	.passthrough();
 type YieldInput = z.infer<typeof yieldInputSchema>;
 
-const dataObjectSchema = z.record(z.string(), z.unknown());
-
 const toolCallBlockSchema = z
 	.object({ type: z.literal("toolCall"), id: z.string(), name: z.string(), arguments: z.unknown() })
 	.passthrough();
@@ -159,22 +151,6 @@ const messageEntrySchema = z
 	})
 	.passthrough();
 
-/** The schema-free yield `data` is `{ type: 'object', additionalProperties: true }` declaring no properties (absent or `{}`). */
-const openYieldParametersSchema = z
-	.object({
-		properties: z
-			.object({
-				data: z
-					.object({
-						additionalProperties: z.literal(true),
-						properties: z.object({}).strict().optional(),
-					})
-					.passthrough(),
-			})
-			.passthrough(),
-	})
-	.passthrough();
-
 // --- domain types ---
 
 /** Per subagent session; absent = not judged yet. */
@@ -187,18 +163,8 @@ type Verdict =
 	| { readonly kind: "not_done"; readonly reason: string }
 	| { readonly kind: "unknown"; readonly why: string };
 
-type CompletionJudge = {
-	readonly verdict: "done" | "not_done";
-	readonly reason: string;
-	readonly bounced: boolean;
-};
-
 /** Terminal yields are judged; incremental sections, error yields, and workpool items pass untouched. */
-type YieldCall =
-	| { readonly kind: "data"; readonly data: Readonly<Record<string, unknown>> }
-	| { readonly kind: "text" }
-	| { readonly kind: "opaque" }
-	| { readonly kind: "not_terminal" };
+type YieldCall = { readonly kind: "data" } | { readonly kind: "text" } | { readonly kind: "not_terminal" };
 
 type ToolCallRecord = { readonly id: string; readonly name: string; readonly args: unknown };
 type ToolResultRecord = { readonly text: string; readonly isError: boolean };
@@ -245,9 +211,7 @@ const classifyYield = (input: YieldInput): YieldCall => {
 	if (input.key !== undefined && input.key !== null) return { kind: "not_terminal" };
 	if (typeof input.error === "string" && input.error.trim() !== "") return { kind: "not_terminal" };
 	if (Array.isArray(input.type)) return { kind: "not_terminal" };
-	if (input.data === undefined || input.data === null) return { kind: "text" };
-	const data = dataObjectSchema.safeParse(input.data);
-	return data.success && !Array.isArray(input.data) ? { kind: "data", data: data.data } : { kind: "opaque" };
+	return input.data === undefined || input.data === null ? { kind: "text" } : { kind: "data" };
 };
 
 /**
@@ -428,35 +392,11 @@ const openTodoItems = (todo: ReviewTodo): string[] =>
 export default function taskCompletionJudge(pi: ExtensionAPI): void {
 	const rounds = new Map<string, Round>();
 
-	const annotate = (
-		input: YieldInput,
-		call: YieldCall,
-		assistantText: string | undefined,
-		completionJudge: CompletionJudge,
-	): Record<string, unknown> | undefined => {
-		// Only the schema-free `data` can take an extra field without failing validation.
-		const yieldTool = pi.getAllTools().find((tool) => tool.name === "yield");
-		if (!openYieldParametersSchema.safeParse(yieldTool?.parameters).success) return undefined;
-		switch (call.kind) {
-			case "data":
-				return { ...input, data: { ...call.data, completion_judge: completionJudge } };
-			case "text":
-				return assistantText === undefined ? undefined : { ...input, data: { result: assistantText, completion_judge: completionJudge } };
-			case "opaque":
-			case "not_terminal":
-				return undefined;
-			default: {
-				const unexpected: never = call;
-				throw new Error(`Unexpected yield call: ${unexpected}`);
-			}
-		}
-	};
-
 	const review = async (
 		toolCallId: string,
 		rawInput: unknown,
 		ctx: ExtensionContext,
-	): Promise<{ block: true; reason: string } | { input: Record<string, unknown> } | undefined> => {
+	): Promise<{ block: true; reason: string } | undefined> => {
 		if (ctx.agent.kind !== "sub") return undefined;
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		if (sessionFile === undefined) return undefined;
@@ -503,7 +443,7 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 					const reason = [
 						"完成度鉴定：对照最初的任务和你最近的 tool call，这次任务还没有真正完成，yield 被退回。",
 						verdict.reason || "(鉴定未给出具体原因)",
-						"补完缺失的部分并实际验证后再 yield。之后不会再因完成度退回，鉴定结论会一并交给主 agent。",
+						"补完缺失的部分并实际验证后再 yield。之后不会再因完成度退回。",
 					].join("\n");
 					return { block: true, reason };
 				}
@@ -527,12 +467,7 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 			return { block: true, reason };
 		}
 		rounds.set(sessionFile, { kind: "settled" });
-		const revised = annotate(input, call, assistantText, {
-			verdict: verdict.kind,
-			reason: verdict.reason,
-			bounced: round.bounced,
-		});
-		return revised === undefined ? undefined : { input: revised };
+		return undefined;
 	};
 
 	// A throwing tool_call handler blocks the tool, so every failure lets the yield run.

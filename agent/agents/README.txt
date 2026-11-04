@@ -62,9 +62,11 @@ Observed: a depth-2 `task:free` child had no `task` tool in its tool list.
 5. Every child must deliver through `yield`; with only `yield`, prose is lost
 ------------------------------------------------------------------------------
 `config.yml` sets `task.structured: true`, so every task child has the `yield` tool and
-must finish through it: the `yield` payload is the result its parent receives. On OMP
-18.16 a child without structured mode gets no `yield` at all, so do not turn the setting
-off while these definitions require `yield`.
+must finish through it: the `yield` payload is the result its parent receives. Every
+definition here declares the same `output` schema, `{ report: string }`; without it a
+structured run accepts any object and each child picks its own shape. On OMP 18.16 a
+child without structured mode gets no `yield` at all, so do not turn the setting off
+while these definitions require `yield`.
 
 `mentor-default.md` declares `tools: []`, so `yield` is its only tool. Observed failure
 chain when it answered in prose instead:

@@ -11,7 +11,7 @@
 
 ## 子代理定义与模型绑定
 
-子代理的职责、工具限制和 `spawns` 列表写在 `agent/agents/<name>.md` 中，具体模型链写在 `agent/config.yml` 的 `task.agentModelOverrides` 下（修改模型绑定若改变了档位或成本量级，需同步更新 `agent/agents/<name>.md` 的 `description` 与下表）。`config.yml` 设置了 `task.structured: true`：每个 task 子代理都必须通过 `yield` 交付结果，`task-completion-judge` 拦截的也是这次调用。
+子代理的职责、工具限制和 `spawns` 列表写在 `agent/agents/<name>.md` 中，具体模型链写在 `agent/config.yml` 的 `task.agentModelOverrides` 下（修改模型绑定若改变了档位或成本量级，需同步更新 `agent/agents/<name>.md` 的 `description` 与下表）。`config.yml` 设置了 `task.structured: true`：每个 task 子代理都必须通过 `yield` 交付结果，`task-completion-judge` 拦截的也是这次调用。每个定义都声明同一个 `output` schema `{ report: string }`，父会话收到的结果总在 `report` 里；调用方传的 `outputSchema` 仍会在该次调用中覆盖它。
 
 | 子代理 | `description` 标明的成本（每 1M token） | `config.yml` 绑定的模型链 | 允许派生 (`spawns`) / 工具 (`tools`) | 职责与限制 |
 |---|---|---|---|---|
