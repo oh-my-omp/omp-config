@@ -2,7 +2,7 @@
 
 [Home](../README.md) · English | [简体中文](agents.zh-CN.md)
 
-`agent/config.yml` disables OMP's built-in subagents (`task`, `scout`, `sonic`, `reviewer`, `security-reviewer`) in `task.disabledAgents`; they are rejected at preflight even if listed in `spawns`. `agent/agents/*.md` contains the selectable worker/advisor definitions plus internal `fork:self`, used only when a `fork_task` item omits `agent` (see [`agent/agents/README.txt`](../agent/agents/README.txt) for frontmatter pitfalls; keep non-agent notes as `.txt`).
+`agent/config.yml` disables OMP's built-in subagents (`task`, `scout`, `sonic`, `reviewer`, `security-reviewer`) in `task.disabledAgents`; they are rejected at preflight even if listed in `spawns`. `agent/agents/*.md` contains the selectable worker/advisor definitions plus internal `fork:self`, the dispatch identity of every `fork_task` child (see [`agent/agents/README.txt`](../agent/agents/README.txt) for frontmatter pitfalls; keep non-agent notes as `.txt`).
 
 The subagent setup follows these design principles:
 1. **Cross-model complementarity**: trading a small amount of call latency across subagents combines distinct model traits — `gpt-*-sol` for conservative analysis (`discuss:steady`, `mentor:default`, `task:mid`), `gpt-*-luna` for low-cost execution and fallbacks (`task:low`), and `claude-opus` for open-ended design (`discuss:divergent`, `task:high`) — keeping reasoning variance bounded across models.
@@ -11,7 +11,7 @@ The subagent setup follows these design principles:
 
 ## Subagent Definitions and Model Bindings
 
-Responsibilities, tool limits, and `spawns` lists live in `agent/agents/<name>.md`; model chains live in `agent/config.yml` under `task.agentModelOverrides` (when a model change alters a tier's class or cost, update its `description` in `agent/agents/<name>.md` and this table together):
+Responsibilities, tool limits, and `spawns` lists live in `agent/agents/<name>.md`; model chains live in `agent/config.yml` under `task.agentModelOverrides` (when a model change alters a tier's class or cost, update its `description` in `agent/agents/<name>.md` and this table together). Every selectable definition sets `structured: true`: `task.structured` is off by default, and their handoff, multi-round replies and `task-completion-judge` rely on the `yield` tool that only structured runs get.
 
 | Subagent | Cost in `description` (per 1M tokens) | Model chain in `config.yml` | Allowed `spawns` / `tools` | Role and limits |
 |---|---|---|---|---|

@@ -59,8 +59,14 @@ its own `mentor:default`.
 Observed: a depth-2 `task:free` child had no `task` tool in its tool list.
 
 
-5. An agent whose only tool is `yield` will silently lose its answer
---------------------------------------------------------------------
+5. Without `structured: true` there is no `yield`; with only `yield`, prose is lost
+------------------------------------------------------------------------------------
+`task.structured` defaults to false, and an unstructured run gets no `yield` tool: the
+child's final message is its result. Every definition here except `fork:self` sets
+`structured: true`, because their handoff, multi-round dialogue (item 8) and the
+task-completion-judge extension all ride on `yield`. Drop that key and those prompts
+name a tool the child does not have.
+
 `mentor-default.md` declares `tools: []`, so `yield` is its only tool. Observed failure chain:
 
     writes the full answer as plain prose, no tool call
@@ -80,7 +86,7 @@ Any agent trimmed down to `yield` alone carries this risk, not just mentors.
 ------------------------------------------------------
     agent://<id>            the consumption channel; the `yield` payload lands here
     history://<id>          the full transcript, showing how it actually proceeded
-    agent://<id>?q=.field   pull one field out of a structured result
+    agent://<id>/field      pull one field (path segments, `/items/0`) out of a structured result
 
 A failed job can leave a perfectly good transcript behind an empty artifact (item 5).
 When debugging a failed child, read `history://` first; job status alone misleads.

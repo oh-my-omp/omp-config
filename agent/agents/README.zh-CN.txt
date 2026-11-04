@@ -53,8 +53,13 @@ prompt 的措辞无法绕过这一点。
 观察到：深度 2 的 `task:free` 子代工具列表里没有 `task` 工具。
 
 
-5. 唯一工具是 `yield` 的 agent 会悄无声息地丢掉答案
---------------------------------------------------
+5. 没有 `structured: true` 就没有 `yield`；只剩 `yield` 时，纯文本会丢
+-------------------------------------------------------------------
+`task.structured` 默认为 false，非结构化运行拿不到 `yield` 工具：子代的最后一条消息就是
+结果。这里除 `fork:self` 外每个定义都写了 `structured: true`，因为它们的交接、多轮对话
+（第 8 条）以及 task-completion-judge 扩展都依赖 `yield`。去掉这个键，这些 prompt 就会
+要求一个子代并不拥有的工具。
+
 `mentor-default.md` 声明 `tools: []`，所以 `yield` 是它唯一的工具。观察到的失败链：
 
     把完整答案写成纯文本，没有工具调用
@@ -73,7 +78,7 @@ prompt 的措辞无法绕过这一点。
 ----------------------------------------
     agent://<id>            消费通道；`yield` 的载荷落在这里
     history://<id>          完整 transcript，显示它实际是怎么进行的
-    agent://<id>?q=.field   从结构化结果里取出一个字段
+    agent://<id>/field      从结构化结果里取出一个字段（按路径段，如 `/items/0`）
 
 失败的 job 可能在空 artifact 后面留下完好的 transcript（第 5 条）。调试失败的子代时先读
 `history://`；只看 job 状态会被误导。

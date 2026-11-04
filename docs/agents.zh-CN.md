@@ -2,7 +2,7 @@
 
 [返回首页](../README.zh-CN.md) · [English](agents.md) | 简体中文
 
-`agent/config.yml` 在 `task.disabledAgents` 中禁用了 OMP 内置子代理（`task`、`scout`、`sonic`、`reviewer`、`security-reviewer`；即使写进 `spawns` 也会在 preflight 被拒）。`agent/agents/*.md` 包含可选的 worker/顾问定义，以及仅供省略 `agent` 的 `fork_task` 调用使用的内部 `fork:self`（frontmatter 陷阱见 [`agent/agents/README.zh-CN.txt`](../agent/agents/README.zh-CN.txt)；非 agent 笔记使用 `.txt`）。
+`agent/config.yml` 在 `task.disabledAgents` 中禁用了 OMP 内置子代理（`task`、`scout`、`sonic`、`reviewer`、`security-reviewer`；即使写进 `spawns` 也会在 preflight 被拒）。`agent/agents/*.md` 包含可选的 worker/顾问定义，以及内部的 `fork:self`，即所有 `fork_task` 子代理的派发身份（frontmatter 陷阱见 [`agent/agents/README.zh-CN.txt`](../agent/agents/README.zh-CN.txt)；非 agent 笔记使用 `.txt`）。
 
 子代理体系基于以下设计原则：
 1. **跨模型特性互补**：以少量调用延迟换取不同模型的特性组合——如 `gpt-*-sol` 偏稳健保守（`discuss:steady`、`mentor:default`、`task:mid`）、`gpt-*-luna` 成本低（`task:low` 及各角色回退链）、`claude-opus` 适合发散设计（`discuss:divergent`、`task:high`）——通过跨模型校验收敛单一模型的推理偏差。
@@ -11,7 +11,7 @@
 
 ## 子代理定义与模型绑定
 
-子代理的职责、工具限制和 `spawns` 列表写在 `agent/agents/<name>.md` 中，具体模型链写在 `agent/config.yml` 的 `task.agentModelOverrides` 下（修改模型绑定若改变了档位或成本量级，需同步更新 `agent/agents/<name>.md` 的 `description` 与下表）：
+子代理的职责、工具限制和 `spawns` 列表写在 `agent/agents/<name>.md` 中，具体模型链写在 `agent/config.yml` 的 `task.agentModelOverrides` 下（修改模型绑定若改变了档位或成本量级，需同步更新 `agent/agents/<name>.md` 的 `description` 与下表）。每个可选定义都写了 `structured: true`：`task.structured` 默认关闭，而它们的交接、多轮回复以及 `task-completion-judge` 都依赖只有结构化运行才有的 `yield` 工具。
 
 | 子代理 | `description` 标明的成本（每 1M token） | `config.yml` 绑定的模型链 | 允许派生 (`spawns`) / 工具 (`tools`) | 职责与限制 |
 |---|---|---|---|---|
