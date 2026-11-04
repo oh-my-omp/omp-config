@@ -48,14 +48,16 @@
 
 源码：`agent/extensions/task-split-check/`。
 
-在 `tool_call` 阶段检查 `task` 与 `fork_task`。整批共用 25 秒超时，对每个任务项并发执行两项是非检查，任一项不通过即拦截整次调用：
+在 `tool_call` 阶段检查 `task` 与 `fork_task`。整批共用 25 秒超时，对每个任务项并发执行适用的是非检查，任一项不通过即拦截整次调用：
 
 - **判定模型**：先取 OMP 模型角色 `@task-split-check`（在 `/model` 中配置，保存在本机 `modelRoles`），再取 `omomp.yml#task-split-check.fallbackRole`（仓库配置 `smol`），每次调用实时解析。角色条目未带 `:level` 后缀时使用 `medium` 推理强度；遇到 provider 错误时换链中的下一个模型。
-- **失败处理**：配置缺失或无效、解析不出模型、请求报错或超时均直接放行；每次完成判定记一条 `task-split-check verdicts` 日志。
+- **失败处理**：配置缺失或无效时仅移除配置的回退角色；`@task-split-check` 能解析出模型时仍继续判定。没有可用模型或有效结论（包括请求报错、超时或答案无法解析）时放行。每次完成判定记一条 `task-split-check verdicts` 日志。
+
+重试身份由共享 `context` 与该项 `task` 各自去除首尾空白后渲染的提示词决定；要复用结论，二者都必须保持不变。
 
 | 检查项 | 适用范围 | 判定问题 | 缓存与重试行为 |
 |---|---|---|---|
-| `split` | 主会话 `task` 调用中派给 `task:low`、`task:mid`、`task:free` 的项 | 只看该项的 `task` 文本（共享 `context` 仅作背景）：是否把多个互不相关的主题塞进了同一个子代理（按主题而非文件数判断）？ | 缓存所有结论（`pass-repeats`）：单主题边界可能存在判断分歧，被拦后若主会话确认属于同一主题并原样重发，第二次调用放行。 |
+| `split` | 主会话 `task` 调用中派给 `task:low`、`task:mid`、`task:free` 的项 | 只看该项的 `task` 文本（共享 `context` 仅作背景）：是否把多个互不相关的主题塞进了同一个子代理（按主题而非文件数判断）？ | 缓存所有结论（`pass-repeats`）：单主题边界可能存在判断分歧，被拦后若主会话确认属于同一主题，并保持共享 `context` 和该项 `task` 不变重发，第二次调用放行。 |
 | `report-limit` | 任意会话 `task` 与 `fork_task` 中派给 `task:*` 或未填 `agent` 的项 | 同时看共享 `context` 与该项 `task`：是否限制了子代理返回报告的长度（字数、行数、段落数、token 数或“简短汇报”；对写入仓库文件的交付物限制长度不算）？ | 只缓存通过结论（`skip-clear`）：限制报告长度会截断父会话验收所需的证据，必须删掉字数限制（长报告可写到 `local://<name>.md`），原样重发继续拦截。 |
 
 ### task-completion-judge
@@ -69,7 +71,7 @@
 - **退回规则**：
   1. 首次判为 `NOT_DONE` 时拦截 `yield` 并返回原因，要求子代理继续完成并验证。
   2. 判为 `DONE` 后，同步触发 `omp-todo-more:read` 读取最新 Todo 列表；若仍有 `pending` 或 `in_progress` 项（`blocked` 项不计），再拦截一次并列出这些项的说明，要求先更新 Todo 状态。
-  3. 两种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；通过后，该会话后续 `yield` 不再拦截。若 `yield` 数据是无自定义 `outputSchema` 的开放对象，放行时写入 `data.completion_judge = { verdict, reason, bounced }`（`bounced` 仅记录是否发生过 `NOT_DONE` 退回）。配置、模型或插件读取失败时记 warning 并放行。
+  3. 每种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；通过后，该会话后续 `yield` 不再拦截。若 `yield` 数据是无自定义 `outputSchema` 的开放对象，放行时写入 `data.completion_judge = { verdict, reason, bounced }`（`bounced` 仅记录是否发生过 `NOT_DONE` 退回）。配置、模型或插件读取失败时记 warning 并放行。
 
 ### subagent-usage
 
@@ -98,7 +100,7 @@
 
 ### tool-policy-nag
 
-源码：`agent/extensions/tool-policy-nag/`。`form`、`intent`、`risk` 三条通道只在主会话运行；`pty` 通道在主会话和子会话都运行。
+源码：`agent/extensions/tool-policy-nag/`。`form`、`intent`、`risk` 通道只在主会话运行；`pty` 通道在主会话和子会话都运行。
 
 在 `tool_call` 阶段检查宿主 `bash`、`bash_bg`（含写往 `xd://bash`、`xd://bash_bg` 的调用）和 `eval`；所有通道都忽略插件调用。`pty` 通道在执行前拒绝；提醒通道不拦截。提醒通道将长会话中违反宿主工具路由的调用作为偏离静态 system prompt 的信号：`form.prompt` 不是系统通知，而是以直接观察措辞发送的 user 角色 steer。启发式检测刻意不压低误报率：观察到的误报仅增加少量自检思考 token，未产生其他负面副作用。
 
@@ -134,7 +136,7 @@ tool-policy-nag:
   - 豁免项：结果用于 `$(…)` 捕获、仅经 stdin 过滤器传给 `wc`/`uniq -c`/`grep -c`、传给 `xargs`、作为 `if`/`while` 条件的 `grep -q`；目标是 `/dev/*`；以及 `tail -f`、`locate`、带 `-delete`/`-exec rm` 的 `find`、`git ls-files`、读管道 stdin 的无路径 `grep`。
   - 前 `form.afterHits`（`3`）次只计数；超出后每次以 steer 发送 `form.prompt` 并弹 UI 警告，每个上下文最多发 `form.maxNags`（`3`）次，直到下次 compaction、`/clear` 或 `branch_summary`（调高 `maxNags` 立即恢复）。计数保存在会话自定义条目 `mouriya.omp.tool-policy-nag.state` 中。
 - **`intent` 通道（`INTENT-policy.md`）**：每次调用并发发起一次不阻塞命令的 JUDGE `choice` 请求（选项：`list`、`read`、`search`、`edit`、`write`、`move`、`eval`、`ast`、`shell`、`mixed`、`none`）。当 shell 调用选中非 `none`（或 `eval` 选中非 `eval`/`none`）且概率 $\ge$ `threshold`（`0.5`）时，在下一个 step 边界插入 `aside` 提醒，标出意图名称、应改用的内置工具与原调用。命令该走哪个 shell 入口由 `pty` 通道判定，不是这里的选项。
-- **`risk` 通道（仅检查 shell，不调模型）**：配置了 `risk` 时在 `tool_call` 内同步执行。同时满足三项时触发：简单命令段数 $\ge$ `minCommands`（`4`）或总字符数 $\ge$ `minChars`（`600`）；排除 shell 内置命令（`cd`、`echo`、`printf`、`export`、`source`、`test`、`mkdir` 等）后调用的不同外部程序数 $\ge$ `minPrograms`（`3`）；且包含写入动作（重定向/`tee`/就地编辑，`rm`/`cp`/`mv`/`chmod`/`dd`/`tar -c|-x`/`rsync`/`scp`/`make`/`install`/`patch`，或 `git`、`gh`、`docker`、`kubectl`、`orb`、`npm`/`pnpm`/`yarn`/`bun`、`tofu`/`terraform`、`curl`、`wget` 的写子命令）。命中时发一条提醒列出段数、字符数、外部程序和写步骤。
+- **`risk` 通道（仅检查 shell，不调模型）**：配置了 `risk` 时在 `tool_call` 内同步执行。同时满足以下条件时触发：简单命令段数 $\ge$ `minCommands`（`4`）或总字符数 $\ge$ `minChars`（`600`）；排除 shell 内置命令（`cd`、`echo`、`printf`、`export`、`source`、`test`、`mkdir` 等）后调用的不同外部程序数 $\ge$ `minPrograms`（`3`）；且包含写入动作（重定向/`tee`/就地编辑，`rm`/`cp`/`mv`/`chmod`/`dd`/`tar -c|-x`/`rsync`/`scp`/`make`/`install`/`patch`，或 `git`、`gh`、`docker`、`kubectl`、`orb`、`npm`/`pnpm`/`yarn`/`bun`、`tofu`/`terraform`、`curl`、`wget` 的写子命令）。命中时发一条提醒列出段数、字符数、外部程序和写步骤。
 
 ### watchdog-agent
 
@@ -142,7 +144,7 @@ tool-policy-nag:
 
 按 `WATCHDOG-<label>.md` 文件定期审阅目标会话（扫描 `~/.omp/agent/extensions/watchdog-agent/` 及会话当前 `cwd` 至 git 根各层的 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`；归本机，不同步）。链接工作树使用自己的根目录；`/move` 后，下一条 prompt 或 `/watchdog` 命令从目标目录重新发现并匹配文件。发现文件不等于运行：会话必须同时匹配 `target` 和可选 `cwd`；之后由 `watchModel` / `watchProvider` 决定哪些助手消息计入 `every`。
 
-`target`、`cwd` 与两个模型正则使用 `agent/extensions/_shared/session-filter.ts` 中与 `turn-judge` 共用的会话筛选：同一个键内的多个值任一匹配即可，不同键之间取 AND。
+`target`、`cwd` 与消息来源正则 `watchModel`、`watchProvider` 使用 `agent/extensions/_shared/session-filter.ts` 中与 `turn-judge` 共用的会话筛选：同一个键内的多个值任一匹配即可，不同键之间取 AND。
 
 | Frontmatter 字段 | 取值与默认值 | 说明 |
 |---|---|---|
@@ -171,7 +173,7 @@ cwd: /absolute/path/to/leader-checkout
 
 - **游标保存**：每次完成审阅后将游标写入会话条目 `mouriya.omp.watchdog-agent.cursor`，恢复会话或切换分支时从分支重建。
 - **自身提醒**：发送 user 形式的提醒前，先写一条 `mouriya.omp.watchdog-agent.user-note` 条目记录文本与来源文件。该记录只是索引，不代表已送达：重载或切换分支后恢复的封顶计数只统计上次 compaction 之后该文件的 `watchdog` 自定义消息，以及文本与某条记录相同的 `attribution: "agent"` user 消息。审阅时两者都跳过，watchdog 不会审阅自己的提醒。
-- **管理命令**：`/watchdog [list]`、`/watchdog on|off <name> [session|global]`、`/watchdog rm <name>`。`/watchdog add <需求>` 与 `/watchdog edit <name> [改动]` 不直接写文件，而是向当前模型发送一条 `attribution: "agent"` 消息，按 **1. 起草（给出预期行为、设置表、完整文件内容与绝对路径，不写盘）→ 2. 按反馈修改 → 3. 用户确认后写盘** 三步执行。任何修改 `WATCHDOG-*.md` 的文件系统 `write`/`edit` 工具结果末尾都会附带该文件的识别状态；`out://` 等资源 URI 写入不附带此状态。
+- **管理命令**：`/watchdog [list]`、`/watchdog on|off <name> [session|global]`、`/watchdog rm <name>`。`/watchdog add <需求>` 与 `/watchdog edit <name> [改动]` 不直接写文件，而是向当前模型发送一条 `attribution: "agent"` 消息，按 **1. 起草（给出预期行为、设置表、完整文件内容与绝对路径，不写盘）→ 2. 按反馈修改 → 3. 用户确认后写盘** 执行。任何修改 `WATCHDOG-*.md` 的文件系统 `write`/`edit` 工具结果末尾都会附带该文件的识别状态；`out://` 等资源 URI 写入不附带此状态。
 - **范围展示**：`/watchdog list` 和 watchdog 文件写入/编辑的工具结果会展示 target、cwd 模式（省略时界面显示 `不限`、工具结果显示 `any`）、模型正则与注入形式，以及文件是否适用于本会话。`/watchdog add` 和 `/watchdog edit` 的设置参考包含全部筛选键与 `inject`；文件状态说明会指出由 target 或 cwd 限制排除，不再把所有排除都归因于 `target`。
 
 ### turn-judge
@@ -252,7 +254,7 @@ cwd: /absolute/path/to/leader-checkout
 
 在不改变原意的前提下重排、润色 `.md` 与 `.txt` 文档。不修改源文件，输出写在 `/tmp/doc-polish/<时间戳>-<文件名>/` 下（源文件副本、`split.json` 和对照报告 `review.md`）：
 
-- 分三阶段运行 `taskDepth: 1`、禁加载扩展的内存子代理：**拆分（Split）**（仅持 `[read, write]`，读取原文并写出起止行号与术语表 `split.json`）→ **润色（Polish）**（无工具，按每批 $\le 5000$ 码点并发改写，再用并查集按 `sourceIndices` 归并跨段合并块）→ **校验（Check）**（无工具，逐组检查是否保持原意）。
+- 各阶段运行 `taskDepth: 1`、禁加载扩展的内存子代理：**拆分（Split）**（仅持 `[read, write]`，读取原文并写出起止行号与术语表 `split.json`）→ **润色（Polish）**（无工具，并发改写各批次，通常每批不超过 5,000 码点；超长段落单独成批，不截断；再用并查集按 `sourceIndices` 归并跨段合并块）→ **校验（Check）**（无工具，逐组检查是否保持原意）。
 - 模型分别取自 `@doc-polish.split`、`@doc-polish.polish`、`@doc-polish.check`（在 `/model` 中配置；`check` 未配模型时复用 `split` 链），各自后接本机 `omomp.*` 中 `doc-polish` 段的 `fallbackRole`（默认并发 `6`）：
 
 ```yaml
@@ -261,7 +263,7 @@ doc-polish:
   concurrency: 8
 ```
 
-- 拆分或润色角色解析不出模型时直接报错退出，不创建 `/tmp/doc-polish/` 目录；无法解析的批次保留原文。返回结果要求主代理亲自完整阅读每份 `review.md`，不得转交子代理或截断。
+- 拆分或润色角色解析不出模型时直接报错退出，不创建 `/tmp/doc-polish/` 目录；无法解析的批次保留原文。工具在 execute 边界捕获失败、记 warning 并返回错误结果，不向 OMP 抛出异常。返回结果要求主代理亲自完整阅读每份 `review.md`，不得转交子代理或截断。
 
 ### wt-tool
 
@@ -292,7 +294,7 @@ OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PR
 
 Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-argon` 生成长 `write` 时，流在 thinking 摘要之后一直静默。OMP 的看门狗把这段静默判为卡死：300 s 后包装层报 `Provider stream stalled while waiting for the next event` 中止（首事件之前则报 `Cloud Code Assist stream timed out while waiting for the first event`），每次重试都重新生成同一调用，又撞上同一上限。本扩展只作用于 `api` 为 `google-gemini-cli`、id 匹配 `^gemini-4-argon` 的模型，与 provider 无关：
 
-- **超时**：三个看门狗（包装层 idle、provider 首事件、provider pre-response）的预算按 调用方 option > settings `providers.streamIdleTimeoutSeconds` / `providers.streamFirstEventTimeoutSeconds` > 环境变量 `PI_STREAM_IDLE_TIMEOUT_MS` / `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` > `model.compat.stream{Idle,FirstEvent}TimeoutMs` > 300000 取值，0 表示关闭该看门狗。扩展只填匹配模型行的 compat 层：宿主已解析出的值保留；否则取 `models.yml` 的 `compat` 值（OMP 的 Google compat 解析只把它留在 `compatConfig`，由扩展搬过去）；都没有时取 `0`。因此显式 option、settings 与环境变量仍优先，其他模型保持 300 s 默认值。静默中的请求仍可用 Esc 或 session dispose 立即终止。
+- **超时**：看门狗（包装层 idle、provider 首事件、provider pre-response）的预算按 调用方 option > settings `providers.streamIdleTimeoutSeconds` / `providers.streamFirstEventTimeoutSeconds` > 环境变量 `PI_STREAM_IDLE_TIMEOUT_MS` / `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` > `model.compat.stream{Idle,FirstEvent}TimeoutMs` > 300000 取值，0 表示关闭该看门狗。扩展只填匹配模型行的 compat 层：宿主已解析出的值保留；否则取 `models.yml` 的 `compat` 值（OMP 的 Google compat 解析只把它留在 `compatConfig`，由扩展搬过去）；都没有时取 `0`。因此显式 option、settings 与环境变量仍优先，其他模型保持 300 s 默认值。静默中的请求仍可用 Esc 或 session dispose 立即终止。
 - **生效位置**：每次扫描修补会话模型和注册表中所有可用模型行（模型行在进程内共享，子代理与 compaction 候选也随之生效）。扫描在 `session_start`、`before_agent_start`、`context`（每次模型调用前）和 `session.compacting` 运行。OMP 在每条 LLM compaction 路径（手动 `/compact`、自动、预取）发出摘要请求之前都会发出 `session.compacting`。compaction 从会话模型和注册表行中选模型，所以上一回合之后因 `models.yml` 重载而重建的模型行，会在发出请求之前被修补。处理函数不返回任何内容，不改变 compaction 本身。上下文窗口重拟合会构建扫描看不到的新行，但 OMP 没有给 argon 模型行设窗口档位，不会对它们重拟合。
 - **提示词**：argon 会话（主会话与每个子代理，各按自己的模型匹配）在 `before_agent_start` 时追加 `ARGON_PROMPT.md`（扩展同目录，仓库下发，每条 prompt 重读）：单次 `write` 内容、单次 `edit` 正文、单条最终回复都不超过 8,000 字符；更长的交付物先 `write` 只含标题的骨架，再逐节 `edit` 填充；修改已有大文件时只 `edit` 改动的节。文件缺失或不可读时按原因只警告一次，不追加。
 - **超大单次调用**：仍一次生成超过后端输出上限的调用时，沿用 OMP 现有处理（`MAX_TOKENS` → `length`；截断的函数调用 → `MALFORMED_FUNCTION_CALL` → `error`，不执行）。
@@ -315,9 +317,9 @@ Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-
 渐进式工具说明。被覆盖的工具在 system prompt 里的说明只保留常用调用说明，末尾附 `Topics` 索引；详细调用说明是按需读取的专题 `tool://<tool>/<topic>`（支持行选择器；`read tool://<tool>` 列出该工具的专题及读取条件；对 `tool://` 执行 `grep`/`find` 可检索全部专题）。`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题；[tool-topic-injection](#tool-topic-injection) 另在只读工具调用后补送专题。
 
 - **文件**：`TOPIC-<tool>-<name>.md` 带严格 YAML 头（`tool`、`name`、`title`、`when`、`upstream`）和 Markdown 正文；`SURFACE-<tool>.md`（头为 `tool`、`upstream`）整段替换该工具的说明。专题写调用说明——参数、语法、取值、前置条件、结果、出错后的改法——不写实现细节。`when` 是索引显示的一行（“before …”“when …”）。`upstream` 记录核对时依据的 OMP 版本与来源。
-- **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；`ast_grep`、`ast_edit`（经 [ast-top-level](#ast-top-level) 留在顶层）也有表层文件，只写哪类代码工作该交给它们而不是 `grep` 或 `edit`，以及路径要写成代码 glob（裸目录会把 Markdown 文件也带进来，其段落会匹配代码 pattern 并被改写）；pattern 语法在各自的 `patterns` 专题。有专题的工具：read、bash（含等待外部条件）、edit（hashline 模式）、eval、grep、find、task、write、ask、ast_grep、ast_edit，设备 debug、github、checkpoint。简单工具 `wait`、`glob`、`web_search`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。本仓库扩展或插件注册的工具（`fork_task`、`exec_command`、`playbook_*` 等）不在这里覆盖：它们以 `xd://<tool>/<topic>` 自己提供专题，并在自己的说明里列出。
-- **生命周期**：扩展加载时读取一次文件，把专题以 `tool://` 挂到 router 上，并替换之前加载（子代理、隔离子代理）留下的 handler；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引，每行一个专题及其完整 `tool://` URL。没有 `read` 的会话保留原生说明。
-- **失败处理**：解析失败的文件跳过并记 warning。找不到工具格式或 `{{native:…}}` 段时，该工具保留原生说明，记 warning，主会话按工具与原因各提示一次。OMP 或其他 handler 已占用 `tool://` 时，所有工具都不显示索引。
+- **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；`ast_grep`、`ast_edit`（经 [ast-top-level](#ast-top-level) 留在顶层）也有表层文件，只写哪类代码工作该交给它们而不是 `grep` 或 `edit`，以及路径要写成代码 glob（裸目录会把 Markdown 文件也带进来，其段落会匹配代码 pattern 并被改写）；pattern 语法在各自的 `patterns` 专题。有专题的工具：read、bash（含等待外部条件）、edit（hashline 模式）、eval、grep、find、task、write、OMP 内置 ask、ast_grep、ast_edit，设备 debug、github、checkpoint。简单工具 `wait`、`glob`、`web_search`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。从扩展或插件文件注册的工具保留自己的说明与专题索引，即使它以同名替换了内置工具（如 `omp-ask-more` 的 `ask`），本扩展也不向它添加表层说明或索引。插件工具说明：`xd://<tool>`。
+- **生命周期**：扩展加载时读取一次文件，把专题以 `tool://` 挂到 router 上，并替换之前加载（子代理、隔离子代理）留下的 handler；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位所覆盖的 OMP 自有工具——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引，每行一个专题及其完整 `tool://` URL。没有 `read` 的会话保留原生说明。
+- **失败处理**：逐个跳过格式错误或不可读的文件并记 warning，其他文件仍继续加载。找不到工具格式或 `{{native:…}}` 段时，该工具保留原生说明，记 warning，主会话按工具与原因各提示一次。OMP 或其他 handler 已占用 `tool://` 时，所有工具都不显示索引。
 
 ### tool-topic-injection
 
@@ -357,4 +359,4 @@ tool-topic-injection:
 - 从 agent 目录的 `omomp.*` 读取 `omomp.yml#omomp-lang.language`（仓库配置 `zh`；不读项目 `.omp/` 副本，修改后下次启动生效）。
 - 模块加载时将 `process.env.OMOMP_LANG` 设为该值，但若启动环境已设置（如 `OMOMP_LANG=en omp`）则保留环境值。
 - `_shared/i18n.ts` 的 `tr(en, zh)` 在每次生成文字时按 `OMOMP_LANG` → `omomp-lang` 配置段 → `LC_ALL` / `LC_MESSAGES` / `LANG`（`zh*` 为中文）→ 英文 的顺序解析，并直接读取配置段，使早于 `omomp-lang` 加载的扩展也能拿到配置语言。
-- 仅运行在 OMP 的插件（`omp-todo-more`、`omp-playbooks`、`omp-thinking-translator`、`omp-codex-image-gen`、`omp-peers`、`omp-sessions`、`omp-remote-build`）使用相同解析顺序；`omp-ask-more` 在模块加载时按 `OMOMP_LANG` → `LC_ALL` / `LC_MESSAGES` / `LANG` 从环境变量读取一次；兼容 Pi 的插件（`omp-unified-exec`、`pi-bansos`）只读环境变量；第三方 npm 插件（`pi-package-search`）仅英文。
+- `omomp-lang` 段归 omp-config 所有，OMP 插件在共享的语言发现顺序中读取该段。将它导出为 `OMOMP_LANG` 也为仅读环境变量的使用方与子进程提供语言。插件自有行为见[插件参考](plugins.zh-CN.md)。
