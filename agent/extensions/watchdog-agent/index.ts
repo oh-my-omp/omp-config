@@ -31,7 +31,7 @@
 //   watchModel: ^gpt-     # optional regex on each assistant message's model id
 //   watchProvider: ^openai-codex$                 # optional regex on its provider
 //   inject: system                                # system (default) | user
-//   model:  anthropic/claude-sonnet-4-5:medium   # chat reviewer; else @advisor role
+//   model:  anthropic/claude-sonnet-4-5:medium   # optional chat reviewer model
 //   tools:  [read, grep, glob]                   # optional; chat reviewer's tools
 //   instructions: Judge only the latest work.    # optional native question text
 //   option.<label>: <criteria>                   # selects the JUDGE backend (>= 2)
@@ -53,6 +53,9 @@
 // and `provider`; only actions of matching messages count. An empty or invalid
 // regex, or an `inject` other than system/user, makes the file invalid.
 // Body = review priorities for chat; judgment criterion for JUDGE.
+// Chat reviewers with no `model` try `@advisor`, then `advisor`, then `@slow`,
+// then the session model. An explicit `model` that does not resolve skips reviews
+// rather than falling back.
 // Option-based watchdogs use `openJudge` (`_shared/judge.ts`, purpose
 // `watchdog-agent`): the `@watchdog-agent` role's chat models when assigned,
 // otherwise OMP's JUDGE role chain, then the `judge` section's fallback role as
