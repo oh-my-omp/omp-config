@@ -11,10 +11,10 @@ description: 把本机 ~/.omp/agent 配置同步进本仓库快照（单向）
 本机 `~/.omp/agent` 与仓库 `agent/` 按同名一一对应，范围与更新器 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 的 `managedPlain` 和 `STRUCTURED` 一致，改一边就要改另一边：
 
 - 根目录：`config.yml`、`SYSTEM_TEMPLATE.md`、`APPEND_SYSTEM.md`、`PERSONALITY.md`、`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`，以及 `agents/` 整个目录。
-- 扩展目录里只有这些属于仓库：`extensions/<名字>/*.ts`（含 `extensions/_shared/*.ts` 和更新器 `extensions/omp-config-autoupdate/omp-config-update.ts`）、`extensions-last/<名字>/*.ts`、`extensions/user-prompt-inject/PROMPT-INJECT-*.md`、`extensions/turn-judge/TURN-JUDGE-*.md`、`extensions/tool-policy-nag/INTENT-*.md`、`extensions/tool-topics/TOPIC-*.md`、`extensions/tool-topics/SURFACE-*.md`、`extensions/append-system-model/APPEND-SYSTEM-*.md`、`extensions-last/system-prompt-replace/REPLACE-SYSTEM-*.yml`、`extensions/argon-long-output/ARGON_PROMPT.md`。扩展配置不在扩展目录里时，统一放在 `agent/omomp.yml`（见下）。
-- 统一扩展配置 `agent/omomp.yml` ↔ `~/.omp/agent/omomp.yml`：结构化文件，每个扩展一段，段名是扩展目录名；多个扩展共用的 `_shared` 模块按文件名占一段（`judge`）。仓库段为 `omomp-lang`、`judge`、`lang-nag`、`input-polish`、`tool-policy-nag`、`task-completion-judge`、`task-split-check`、`child-memory-warning`、`tool-topic-injection`。本机段（`doc-polish`、`model-compaction`、`omp-config-autoupdate`、`subagent-usage`）由更新器的 `LOCAL_OMOMP_SECTIONS` 列出，两个方向都不收回、不写入。本机仍有旧的 `system-prompt-replace` 段时不收回它，先执行 `/update-omp` 把它转换成 `REPLACE-SYSTEM-default.yml`。
+- 扩展目录里只有这些属于仓库：`extensions/<名字>/*.ts`（含 `extensions/_shared/*.ts` 和更新器 `extensions/omp-config-autoupdate/omp-config-update.ts`）、`extensions-last/<名字>/*.ts`、`extensions/user-prompt-inject/PROMPT-INJECT-*.md`、`extensions/turn-judge/TURN-JUDGE-*.md`、`extensions/tool-policy-nag/INTENT-*.md`、`extensions/tool-topics/TOPIC-*.md`、`extensions/tool-topics/SURFACE-*.md`、`extensions/append-system-model/APPEND-SYSTEM-*.md`、`extensions-last/system-prompt-replace/REPLACE-SYSTEM-*.yml` / `REPLACE-SYSTEM-*.yaml`、`extensions/argon-long-output/ARGON_PROMPT.md`。扩展配置不在扩展目录里时，统一放在 `agent/omomp.yml`（见下）。
+- 统一扩展配置 `agent/omomp.yml` ↔ `~/.omp/agent/omomp.yml`：结构化文件，每个扩展一段，段名是扩展目录名；多个扩展共用的 `_shared` 模块按文件名占一段（`judge`）。仓库段为 `omomp-lang`、`judge`、`lang-nag`、`input-polish`、`tool-policy-nag`、`task-completion-judge`、`task-split-check`、`child-memory-warning`、`tool-topic-injection`。本机段（`doc-polish`、`model-compaction`、`omp-config-autoupdate`、`subagent-usage`）由更新器的 `LOCAL_OMOMP_SECTIONS` 列出，两个方向都不收回、不写入。本机仍有旧的 `system-prompt-replace` 段或独立 JSON 时不收回它，先执行 `/update-omp`：未改的旧值移除后安装默认 `REPLACE-SYSTEM-default.yml`，仅定制规则转换并进入受管模板合并；目标占用、无效定制数据、歧义布局或其他 `omomp` 格式会保留并记 note，阻止默认模板安装。应用托管的旧源从不导入或删除，只跳过或阻止迁移。
 - 扩展目录里的其他文件属于本机，不收回：`extensions/watchdog-agent/WATCHDOG-*.md`，以及仓库没有的同名模式模板（如本机自建或由旧 `APPEND_SYSTEM_MODEL.md` 拆出的 `APPEND-SYSTEM-*.md`）。`subagent-usage` 的本机数据（`subagent-usage/calibration.json` 与 `cache/subagent-usage/`）同样属于本机，不收回。
-- 已退休的 Todo 源码不收回，即使旧机器仍有文件，也不进入“仓库缺失/不同/已删除”候选：`extensions/todo-more/index.ts`、`tool.ts`、`render.ts`、`reminders.ts`、`planning.ts`（后四个同属 `extensions/todo-more/`），`extensions/_shared/todo-more.ts`、`extensions/subagent-todo.ts`、`extensions/subagent-todo/index.ts`。已迁入 omp-todo-more 的 ctx 源码同样不收回：`extensions/ctx-tool/index.ts`、`inventory.ts`、`post-compact-hint.ts`、`extensions/ctx-tasklog/index.ts`、`extensions/_shared/task-log.ts`。被 `extensions/tool-topics/` 取代的 `extensions/read-topics/index.ts` 也不收回，本机残留由 `/update-omp` 删除。独立插件的安装只按第 3 步处理，不复制其 package 或内部 reader。
+- 已退休的 Todo 源码不收回，即使旧机器仍有文件，也不进入“仓库缺失/不同/已删除”候选：`extensions/todo-more/{index,tool,render,reminders,planning}.ts`、`extensions/_shared/todo-more.ts`、`extensions/subagent-todo.ts`、`extensions/subagent-todo/index.ts`。已迁入 omp-todo-more 的 ctx 源码同样不收回：`extensions/ctx-tool/index.ts`、`inventory.ts`、`post-compact-hint.ts`、`extensions/ctx-tasklog/index.ts`、`extensions/_shared/task-log.ts`。被 `extensions/tool-topics/` 取代的 `extensions/read-topics/index.ts` 也不收回，本机残留由 `/update-omp` 删除。Todo/ctx 退休由更新器预检归属，ctx 叶文件仅在就绪插件携带 `src/ctx` 时删除，否则保留。独立插件的安装只按第 3 步处理，不复制其 package 或内部 reader。
 
 本机 `settings.json` 不在范围内：`config.yml` 存在时 OMP 不再把它的 `extensions` 当扩展包根目录，但其中的 TS/JS 扩展模块条目照样加载，属于本机。
 
@@ -22,14 +22,14 @@ description: 把本机 ~/.omp/agent 配置同步进本仓库快照（单向）
 
 不进仓库：
 - 运行时文件：`*.db*`、`*-wal`、`*-shm`、`*.lock`、`models.yml`、`models.yml.bak-*`、`last-changelog-version`、`sessions/`、`terminal-sessions/`、`blobs/`、`cache/`、`logs/`，以及更新器的记录 `.omp-config-applied` 和基准目录 `.omp-config-base/`。本机开关是 `omomp.yml` 里的 `omp-config-autoupdate` 段，同样不收回。
-- `omp` 安装目录里的 `omp-light`、`omp-light.ts`、`omp-light.cmd`；light 三件只从 `~/.omp/agent` 取。
+- `omp` 安装目录里的 `omp-light`、`omp-light.ts`、`omp-light.cmd`；light 文件只从 `~/.omp/agent` 取。
 - 应用托管的扩展：首行为 `// @orca-managed-pi-extension`，或任意位置含 `marker: _otty`。以标记为准，不凭文件名判断。
 - 结构化配置中的本机路径与播种路径，仓库保留原值：即更新器的 `LOCAL_CONFIG_FIELDS`、`SEED_CONFIG_FIELDS`（`config.yml`）、`LOCAL_OMOMP_SECTIONS`、`SEED_OMOMP_FIELDS`（`omomp.yml`）。更新器从不写本机路径；播种路径只在本机缺少时写入一次，之后归本机，所以本机的值不代表仓库默认值。要改仓库默认值，直接改仓库。
 - `config.yml` 中本机列表的本机条目：更新器的 `MACHINE_LIST_FIELDS`（`extensions`）里，仓库列表没有的条目（例如 `~/.claude`）属于本机，不写进仓库。这类列表只比对仓库已有的条目：本机删掉的，从仓库删除。要给仓库加新条目，直接改仓库。
 
 ## 步骤
 
-0. 本机还是平铺布局时停止：`~/.omp/agent/extensions/` 下直接有本仓库扩展同名的 `.ts`（不含应用托管文件和上述退休 Todo 路径），或 `~/.omp/agent/extensions-last/system-prompt-replace.ts` 存在。报告这些文件，要求先执行 `/update-omp` 迁移本机，不比对、不写仓库：拿平铺布局和仓库比对会把仓库的整套目录误判为本机已删除。
+0. 本机还是平铺布局时停止：`~/.omp/agent/extensions/` 下直接有本仓库扩展同名的 `.ts`（不含应用托管文件和上述退休 Todo/`ctx` 路径），或 `~/.omp/agent/extensions-last/system-prompt-replace.ts` 存在。报告这些文件，要求先执行 `/update-omp` 迁移本机，不比对、不写仓库：拿平铺布局和仓库比对会把仓库的整套目录误判为本机已删除。根目录残留的 `PROMPT-INJECT-*` / `TURN-JUDGE-*` 不收回：更新器仅删除内容等于旧路径或新路径的仓库自带或本机已接受版本的模板；定制模板保留并记 note，需先移植。
 1. 按上面的范围逐文件比对，列出仓库缺失、内容不同、本机已删除的差异；扩展目录按范围里的文件类型逐个比对，不用整目录 `diff -rq`。`extensions-last/README.md` 和 `extensions-last/README.zh-CN.md` 只存在于仓库，不算本机已删除。同时比对第 3 步的插件列表。文件和插件列表都没有差异时，报告已同步并结束。
 2. 把差异写入仓库。结构化配置（`config.yml`、`omomp.yml`）先 `read` 两边、比出有差异的字段，再用 `edit` 只改这些行，不整文件覆盖、不重新序列化；本机路径、播种路径和本机列表条目不写。
 3. `~/.omp/plugins/package.json` 的依赖与 `install-plugins.sh` 的列表不一致时，重写列表：URL/Git 依赖原样保留，npm 依赖去掉版本号。列表里注释掉的条目是可选插件，本机装了也保持注释、不改成有效条目，也不算差异。
