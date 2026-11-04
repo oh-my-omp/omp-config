@@ -4,35 +4,37 @@
 
 ## 本地扩展总览表
 
-| 序号 | 扩展目录 | 所在章节 | 作用域 | 轻量模式 | 配置来源（`omomp.yml` 段或同目录文件） | 控制面与行为闭包 | 可定制项与定制时机 |
-|---|---|---|---|---|---|---|---|
-| 1 | `system-prompt-replace` | [提示词与上下文](prompts-and-context.zh-CN.md#system-prompt-replace) | 按规则（默认主 + 子） | 是 | `REPLACE-SYSTEM-*.yml`（仓库自带 `REPLACE-SYSTEM-default.yml`；其余为本机或项目文件） | 提示词与知识注入（`todo-continuity`；与 `omp-todo-more` 及 `inlineToolDescriptors` 耦合） | 延后：保留仓库规则；需要全局、按模型或按 agent 的替换时新建本机或项目 `REPLACE-SYSTEM-*.yml`；OMP 上游改动工具说明措辞时更新仓库文件 |
-| 2 | `append-system-model` | [提示词与上下文](prompts-and-context.zh-CN.md#append-system-model) | 主 + 子 | 是 | `APPEND-SYSTEM-*.md`（仓库自带 `APPEND-SYSTEM-decision-support.md`；其余为本机或项目文件） | 提示词与知识注入（`advisor-governance` 的决策支持片段在此下发） | 延后：保留仓库片段；某个场景需要条件规则时新建本机或项目 `APPEND-SYSTEM-*.md` |
-| 3 | `repo-rules` | [提示词与上下文](prompts-and-context.zh-CN.md#repo-rules) | 主 + 子 | 是 | 扫描 `.claude/rules`、`.agents/rules`、`.pi/rules`、`~/.claude/rules` 及原生规则的 `paths` | 提示词与知识注入（必选基底 `prompt-topics`） | 无需配置：自动扫描 `.claude/rules`、`.agents/rules`、`.pi/rules`、`~/.claude/rules` 与 `paths` 规则 |
-| 4 | `fork-task` | [提示词与上下文](prompts-and-context.zh-CN.md#fork-task) | 主 + 子 | 否 | 无配置文件 | 长程上下文与子代理（完整模式 `subagent-gates`；与 `fork:self` 耦合） | 无需配置：复用当前会话模型或目标 `agent` 模型绑定 |
-| 5 | `model-compaction` | [提示词与上下文](prompts-and-context.zh-CN.md#model-compaction) | 主写 / 子读 | 是 | `omomp.yml#model-compaction`（本机） | 长程状态与压缩（必选基底 `compaction-baseline`） | 当场定制（本机）：在 `<agentDir>/omomp.yml#model-compaction` 按本机主力模型的有效窗口设置正则 `thresholdTokens`，或在 `<cwd>/.omp/omomp.yml` 按项目设置（项目段整段取代本机段） |
-| 6 | `user-prompt-inject` | [子代理](agents.zh-CN.md#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库带 `user-goal.md`） | 子代理与顾问（完整模式 `advisor-governance`；与 `APPEND-SYSTEM-decision-support.md` 及顾问定义耦合） | 延后：保留 `PROMPT-INJECT-user-goal.md`；仅在自建新角色时添加本机 `PROMPT-INJECT-*.md` |
-| 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | 主 + 子 | 否 | 无配置文件 | 子代理与顾问（完整模式 `subagent-gates`） | 无需配置：并发可写 `task` 共用工作目录时提示显式设置 `isolated` |
-| 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check`（仓库） | 子代理与顾问（完整模式 `subagent-gates`） | 当场定制（本机）：在 `<agentDir>/config.yml` 将 `modelRoles.smol`（或 `@task-split-check`）绑到本机可用轻量模型 |
-| 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge`（仓库） | 子代理与顾问（完整模式 `subagent-gates` + `todo-continuity`；调用 `omp-todo-more:read`） | 当场定制（本机）：在 `<agentDir>/config.yml` 将 `modelRoles.smol`（或 `@task-completion-judge`）绑到本机可用轻量模型 |
-| 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `omomp.yml#tool-policy-nag` + `INTENT-policy.md`（仓库） | 运行时偏离纠偏（完整模式 `drift-monitors` + `pty-routing`；挂载了 `exec_command` 时，`pty` 通道拦截 passthrough/terminal/open-ended 的 `bash`/eval 调用；`heuristic` 模式在运行期将 `bashInterceptor.enabled` 覆写为 `false`） | 延后调阈值（`afterHits: 3`、`maxNags: 3`），保持 `pty: {}`；非中文环境可在项目 `.omp/omomp.yml` 覆盖 `form.prompt` |
-| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子（按文件 `target`、可选 `cwd` 通配与 `watchModel`/`watchProvider`） | 否 | `WATCHDOG-*.md`（本机） | 运行时偏离纠偏（完整模式 `drift-monitors`，可选） | 延后（本机）：未创建 `WATCHDOG-*.md` 时不运行，有需要时用 `/watchdog add` 创建 |
-| 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子（按文件 `target`、可选 `cwd` 通配与 `model`/`provider`） | 否 | `TURN-JUDGE-*.md`（仓库带 `gpt-talk-only`，其余归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场定制（本机）：确保 `modelRoles.judge` 或 `modelRoles.tiny` 可解析，或把 `@turn-judge` 绑到聊天模型；`TURN-JUDGE-gpt-talk-only.md` 的 `when.*` 规则阈值延后调整 |
-| 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `omomp.yml#lang-nag`（仓库默认值，首次播种后归本机） | 运行时偏离纠偏（完整模式 `drift-monitors`） | 当场诊断：依赖 `openJudge`（`@lang-nag`，未绑定时用 `judge`；之后 `tiny`）；`judge` 模型判错回复语言时把 `@lang-nag` 绑到聊天模型；在 `<agentDir>/omomp.yml#lang-nag` 设置语言（更新保留），或在 `<cwd>/.omp/omomp.yml` 按项目覆盖 |
-| 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局（由主会话启动） | 是 | `omomp.yml#child-memory-warning`（仓库默认值，首次播种后归本机） | 执行与宿主安全（条件启用 `macos-memory`：仅 macOS） | 延后：保持 `thresholdGiB: 4`；大内存构建可在 `<agentDir>/omomp.yml`（更新保留）或项目 `<cwd>/.omp/omomp.yml` 修改 |
-| 15 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `omomp.yml#input-polish`（仓库；`key` 与 `instruction` 首次播种后归本机） | 人机交互与 TUI（可选增强 `polish-tools`） | 按需当场：使用 `@input-polish` / `modelRoles.smol`；终端不支持 `ctrl+enter` 时可在 `<agentDir>/omomp.yml`（更新保留）或 `<cwd>/.omp/omomp.yml` 改配 `alt+enter` 或 `instruction` |
-| 16 | `doc-polish` | [doc-polish](#doc-polish) | 主 + 子 | 否 | `omomp.yml#doc-polish`（本机） | 人机交互与 TUI（完整模式可选增强 `polish-tools`） | 按需当场（本机）：需要使用 `/polish-doc` 时在本机 `omomp.yml` 添加 `doc-polish` 段并绑定 `@doc-polish.*` 角色 |
-| 17 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 执行与工作区控制（必选基底 `workspace-lifecycle`） | 无需配置：在回合空闲时排队执行 `/wt` 与 `/move` |
-| 18 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 执行与工作区控制（必选基底 `workspace-lifecycle`） | 无需配置：在回合空闲时重启进程并自动恢复会话继续任务 |
-| 19 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话（表为进程全局） | 是 | 后端 `fetchAvailableModels`；无文件 | 供应商与生命周期（条件必选 `antigravity-compat`） | 无需配置：本机存有 Antigravity 账号时自动刷新 `maxOutputTokens` |
-| 20 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） | 供应商与生命周期（必选基底 `workspace-lifecycle`） | 按需当场（本机）：用 `/omp-config-autoupdate on\|off` 切换，用 `/omp-config-autoupdate conflicts notify\|agent` 选择冲突处理方式，用 `/omp-config-autoupdate adapt` 适配冲突的本机定制 |
-| 21 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局（模块加载） | 是 | `omomp.yml#omomp-lang`（仓库默认值，首次播种后归本机） | 人机交互与 TUI（必选基底 `workspace-lifecycle`） | 当场诊断：仓库默认 `zh`；在 `<agentDir>/omomp.yml` 修改 `language`（更新保留），或在环境变量设置 `OMOMP_LANG=en` |
-| 22 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子（提示词）；进程全局（`tool://` scheme） | 是 | 同目录的 `TOPIC-*.md` / `SURFACE-*.md`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`） | 延后：自带 `SURFACE-*` / `TOPIC-*` 随仓库维护；仅在为 OMP 内置工具扩展专题时新增本机文件 |
-| 23 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection`（仓库） | 提示词与知识注入（必选基底 `prompt-topics`；依赖 `tool-topics`） | 延后：保持仓库默认只读触发规则；有特殊需求可在 `<cwd>/.omp/omomp.yml` 覆盖 |
-| 24 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无 | 执行与宿主安全（必选基底 `safe-deletion`） | 无需配置：常驻拦截 `bash`/`eval` 删除操作并注册字面路径 `delete` 工具 |
-| 25 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | `omomp.yml#subagent-usage`（本机授权）；校准数据在 `<agentDir>/subagent-usage/` | 子代理与顾问（可选） | 默认关闭；人工执行 `/subagent-usage on` 即同意读取本机会话与用量历史，并据此校准 |
-| 26 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | 同目录的 `ARGON_PROMPT.md`（仓库） | 供应商与生命周期（条件必选 `antigravity-compat`） | 无需配置：只对 `google-gemini-cli` 上的 `gemini-4-argon` 关闭流看门狗（显式设置的 env/settings/`models.yml` 超时仍优先）；改长输出规则时编辑 `ARGON_PROMPT.md` |
-| 27 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局（加载时改表）+ 主 + 子（`session_start`） | 是 | 无配置文件 | 原生引擎底座（必选基底 `engine-baseline`） | 无需配置：让内置 `ast_grep` / `ast_edit` 作为顶层函数工具出现，而不是 `xd://` 设备；停用后重启才生效 |
+配置文件承载用户可以按自己工作方式调整的选择。仓库随附的规则和值是一组可运行的示例：加载后会实际生效，也可以通过支持的配置接口修改或替换。各节说明作用域和加载方式；[更新归属](operations.zh-CN.md#文件归属与同步规则)说明后续更新怎样保留或合并本机修改。
+
+| 序号 | 扩展目录 | 所在章节 | 作用域 | 轻量模式 | 配置来源（`omomp.yml` 段或同目录文件） | 用户可定制内容 |
+|---|---|---|---|---|---|---|
+| 1 | `system-prompt-replace` | [提示词与上下文](prompts-and-context.zh-CN.md#system-prompt-replace) | 按规则（默认主 + 子） | 是 | `REPLACE-SYSTEM-*.yml`（仓库示例、本机或项目文件） | 修改或添加所需的措辞规则及会话条件；OMP 升级后核对匹配原文 |
+| 2 | `append-system-model` | [提示词与上下文](prompts-and-context.zh-CN.md#append-system-model) | 主 + 子 | 是 | `APPEND-SYSTEM-*.md`（仓库示例、本机或项目文件） | 修改或添加指令片段，选择适用会话、项目、模型和模式 |
+| 3 | `repo-rules` | [提示词与上下文](prompts-and-context.zh-CN.md#repo-rules) | 主 + 子 | 是 | 已发现目录中的规则文件 | 在 `.claude/rules`、`.agents/rules`、`.pi/rules` 或 `~/.claude/rules` 编写自己的规则及 `paths` 条件 |
+| 4 | `fork-task` | [提示词与上下文](prompts-and-context.zh-CN.md#fork-task) | 主 + 子 | 否 | 无扩展配置文件 | 每次调用选择来源会话和目标角色；模型沿用当前会话或目标 agent 的绑定 |
+| 5 | `model-compaction` | [提示词与上下文](prompts-and-context.zh-CN.md#model-compaction) | 主写 / 子读 | 是 | `omomp.yml#model-compaction`（本机或项目） | 按自己的模型和项目设置阈值；项目段整段取代本机段 |
+| 6 | `user-prompt-inject` | [子代理](agents.zh-CN.md#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库示例或本机文件） | 修改或添加模板，选择目标角色及其接收的用户原话和回答 |
+| 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | 主 + 子 | 否 | 无配置文件 | 在 task 调用中显式设置 `isolated`，选择共享只读工作或隔离写入 |
+| 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check` | 选择回退角色，将 `@task-split-check` 或 `modelRoles.smol` 绑定到自己的可用模型 |
+| 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge` | 选择回退角色，将 `@task-completion-judge` 或 `modelRoles.smol` 绑定到自己的可用模型 |
+| 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `omomp.yml#tool-policy-nag` 与 `INTENT-policy.md` | 按工作方式调整检测模式、提醒措辞与频率、意图及风险设置和终端路由通道 |
+| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子，按文件条件 | 否 | `WATCHDOG-*.md`（本机或项目） | 定义审阅内容、目标会话、间隔和投递方式；存在匹配文件后运行 |
+| 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子，按文件条件 | 否 | `TURN-JUDGE-*.md`（仓库示例或本机文件） | 编写判定问题、触发规则、提醒和会话条件，绑定适合的判定或聊天模型 |
+| 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `omomp.yml#lang-nag` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
+| 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局，仅 macOS | 是 | `omomp.yml#child-memory-warning` | 在本机或项目中按自己的硬件和负载选择告警阈值 |
+| 15 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `omomp.yml#input-polish` | 选择快捷键、改写指令和回退角色，绑定 `@input-polish` 或 `modelRoles.smol` |
+| 16 | `doc-polish` | [doc-polish](#doc-polish) | 主 + 子 | 否 | `omomp.yml#doc-polish`（本机） | 选择回退角色、并发数和 `@doc-polish.*` 模型绑定 |
+| 17 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
+| 18 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
+| 19 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话，进程全局表 | 是 | 提供商报告的模型元数据 | 有凭据时从 Antigravity 刷新输出容量；无本地策略文件 |
+| 20 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
+| 21 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | agent 目录的 `omomp.yml#omomp-lang` 或环境变量 | 在本机段选择界面语言，或用 `OMOMP_LANG` 覆盖 |
+| 22 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明与专题，重启 OMP 后加载 |
+| 23 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection` | 在本机或项目中选择工具参数匹配及专题；空规则列表关闭注入 |
+| 24 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无配置文件或开关 | 选择字面删除路径；默认可恢复，永久删除需要明确确认 |
+| 25 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
+| 26 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
+| 27 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
 
 ---
 
