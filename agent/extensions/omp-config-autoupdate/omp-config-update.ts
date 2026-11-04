@@ -116,7 +116,7 @@
 // base and fetches no history. Writes use a temp file and rename.
 // Order after readiness: moves, plain files, structured files, deletions, then
 // the base of every item whose host operation succeeded.
-// During Todo cutover, any move/write error prevents the deletion phase entirely.
+// Any move/write error prevents the deletion phase entirely.
 // Automatic markers are written last after an error-free apply; manual apply
 // never records a working-tree HEAD but does record the base, so a later
 // commit that differs from the working tree updates unmodified items again.
@@ -1597,7 +1597,7 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 	// Base changes of the host operations that succeeded, recorded after all of them.
 	const accepted: BaseChange[] = [];
 	for (const op of ops) {
-		if (!opts.check && todoRequired && op.kind === "delete" && report.errors.length > 0) break;
+		if (!opts.check && op.kind === "delete" && report.errors.length > 0) break;
 		if (op.kind === "base") {
 			accepted.push(op.change);
 			continue;
