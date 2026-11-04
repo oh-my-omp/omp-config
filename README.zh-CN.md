@@ -2,6 +2,26 @@
 
 [English](README.md) | 简体中文
 
+## 安装
+
+`/onboard-omp` 是 omomp 的安装入口。先安装 [Oh My Pi（`omp`）](https://github.com/can1357/oh-my-pi)，再克隆本仓库并在仓库根目录启动 `omp`：
+
+```bash
+git clone https://github.com/oh-my-omp/omp-config.git
+cd omp-config
+omp
+```
+
+在 `omp` 会话中运行：
+
+```text
+/onboard-omp
+```
+
+agent 默认先只读了解你已有的规则与 skills，用你的语言讲清 omomp 能替代什么、增加什么，并帮助你选择定制。你明确要求安装 omomp 后，agent 才会适配配置并通过 `/update-omp` 流程应用到本机；单独运行 `/onboard-omp` 不会安装配置。诊断、更新与同步见[安装、同步与维护](docs/operations.zh-CN.md#常用维护操作)。
+
+## 设计
+
 omomp 的完整定制面向高能力主 agent：编排和监督机制增强其执行能力，为任务质量提供保障；同样的要求对低能力主 agent 是沉重负担。个人与领域规则有意留给用户。入门先从本机已有的全局规则和 skills 出发，讲清哪些语义约束可以由 omomp 机制承担、还能增加什么能力，再以组件介绍补充理解。
 
 本仓库的配置围绕以下设计取舍展开：
@@ -31,7 +51,7 @@ omomp 的完整定制面向高能力主 agent：编排和监督机制增强其�
 在仓库根目录启动 `omp` 后运行的斜杠命令：
 
 ```text
-/onboard-omp [check|<plane>]                 # 从已有规则和 skills 讲清机制替代、新增能力与可定制示例
+/onboard-omp [check|<plane>]                 # 安装引导：讲清配置取舍，明确要求后适配并安装
 /update-omp [check]                          # 仓库工作区 -> ~/.omp/agent、omp-light 与插件；保留本机定制并当场适配冲突
 /sync-omp-config [check]                     # 本机受管改动 -> 仓库（按字段比对修改、校验、提交并推送）
 /omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]

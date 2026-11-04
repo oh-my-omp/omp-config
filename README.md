@@ -2,6 +2,26 @@
 
 English | [简体中文](README.zh-CN.md)
 
+## Installation
+
+Use `/onboard-omp` as the installation entry point for omomp. With [Oh My Pi (`omp`)](https://github.com/can1357/oh-my-pi) already installed, clone this repository and start `omp` at its root:
+
+```bash
+git clone https://github.com/oh-my-omp/omp-config.git
+cd omp-config
+omp
+```
+
+Inside the `omp` session, run:
+
+```text
+/onboard-omp
+```
+
+The agent starts with a read-only walkthrough of your existing rules and skills, explains what omomp can replace or add, and helps you choose customizations in your language. When you explicitly ask it to install omomp, it adapts the setup and applies it through the `/update-omp` workflow. Running `/onboard-omp` alone does not install the configuration. See [Setup, Sync and Maintenance](docs/operations.md#maintenance-workflows) for diagnosis, updates and sync.
+
+## Design
+
 The full omomp setup is designed for a high-capability main agent: orchestration and supervision strengthen its execution and help maintain task quality, while the same demands are a heavy burden for a lower-capability main agent. Personal and domain-specific rules deliberately remain with the user. Onboarding starts with the machine's existing global rules and skills, explains which semantic constraints omomp mechanisms can take over and what capabilities they add, then uses the component walkthrough as a supplement.
 
 This configuration is organized around the following design choices:
@@ -31,7 +51,7 @@ This configuration is organized around the following design choices:
 Slash commands run inside `omp` started at the repository root:
 
 ```text
-/onboard-omp [check|<plane>]                 # explain replacements for existing rules and skills, added capabilities, and customizable examples
+/onboard-omp [check|<plane>]                 # guided installation: explain the setup; adapt and install on explicit request
 /update-omp [check]                          # apply working tree -> ~/.omp/agent, omp-light, plugins; keeps local customizations, adapts conflicts
 /sync-omp-config [check]                     # copy eligible machine changes -> repo, validate, commit and push
 /omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]
