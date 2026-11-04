@@ -13,16 +13,17 @@
 // back to queued; an end interrupted by the user (Esc) cancels; session switch
 // and shutdown drop the request. This mirrors `wt-tool`'s queue/arm shape.
 //
-// The restart is process-wide, so the tool result never reaches the caller:
-// just before restarting, the request (reason, timestamp) is appended as a
-// durable `custom` session entry. On `session_start` the extension scans the
-// branch for a pending marker and injects it as an attributed user message,
-// so the restarted session opens with "restart completed: <reason>".
+// The tool returns a queued acknowledgement before the harness restarts; the
+// completion arrives after restart, not as the tool result. Just before
+// restarting, the request (reason, timestamp) is appended as a durable `custom`
+// session entry. On `session_start` or `session_switch`, activation scans the
+// branch for a pending request, sends an attributed restart-completed user
+// message, then appends a consumed marker so later activation does not replay it.
 //
 // TUI-main-only. Hook failures are logged without escaping into omp.
 // ============================================================================
 // TUI-main-only tool harness_restart; hooks: session_start/switch/shutdown, agent_start/end.
-// Reads the live InteractiveMode; writes one durable custom session entry per restart.
+// Reads the live InteractiveMode; writes durable custom request and consumed session entries.
 // No extension config files. Failures are returned to the agent; hook failures are logged.
 import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, InteractiveMode, z } from "@oh-my-pi/pi-coding-agent";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
