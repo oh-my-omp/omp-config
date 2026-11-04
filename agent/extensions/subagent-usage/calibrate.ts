@@ -6,7 +6,7 @@ import type { UsageHistoryEntry, UsageReport } from "@oh-my-pi/pi-ai";
 import { defaultRankingStrategy } from "@oh-my-pi/pi-ai/usage/registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { getSessionsDir } from "@oh-my-pi/pi-utils";
-import { providerChannel } from "./channels.ts";
+import { channelOf, providerChannel } from "./channels.ts";
 import { accountKeyOf, limitKey, reserveUsageLimits } from "./quota.ts";
 import type { ScannedDispatch, ScanRequest, ScanResult } from "./records.ts";
 import { eligible } from "./samples.ts";
@@ -37,12 +37,12 @@ export type CalibrationOutcome =
 	| { readonly kind: "failed"; readonly reason: string };
 
 /** Mean USD per eligible dispatch by agent+model+thinking and model+thinking, and the pooled log spread. */
-function priorsFrom(dispatches: readonly ScannedDispatch[], trackedProviders: ReadonlySet<string>, now: number): Calibration["dispatch"] {
+function priorsFrom(dispatches: readonly ScannedDispatch[], trackedModels: ReadonlySet<string>, now: number): Calibration["dispatch"] {
 	const byAgent = new Map<string, number[]>();
 	const byModel = new Map<string, number[]>();
 	for (const dispatch of dispatches) {
 		const counted = eligible(dispatch, now);
-		if (!counted || !trackedProviders.has(counted.provider)) continue;
+		if (!counted || !trackedModels.has(counted.model)) continue;
 		const agentKey = `${dispatch.agent}|${counted.model}|${counted.thinking}`;
 		const modelKey = `${counted.model}|${counted.thinking}`;
 		const agentCosts = byAgent.get(agentKey) ?? [];
@@ -133,6 +133,7 @@ function quotaFrom(
 	reports: readonly UsageReport[],
 	history: readonly UsageHistoryEntry[],
 	trackedProviders: ReadonlySet<string>,
+	trackedModels: ReadonlySet<string>,
 	sinceMs: number,
 	now: number,
 ): Calibration["quota"] {
@@ -155,7 +156,7 @@ function quotaFrom(
 		for (const limits of series.values()) for (const entries of limits.values()) entries.sort((a, b) => a.recordedAt - b.recordedAt);
 		const activity = new Map([...series].map(([account, limits]) => [account, activityOf(limits)]));
 		const models = Object.keys(spend)
-			.filter((key) => key.startsWith(`${provider}/`))
+			.filter((key) => key.startsWith(`${provider}/`) && trackedModels.has(key))
 			.map((key) => key.slice(provider.length + 1));
 		for (const report of own) {
 			const account = accountKeyOf(report, history);
@@ -264,9 +265,21 @@ async function calibrateOnce(session: AgentSession, mode: CalibrationMode, conse
 		...Object.keys(scan.spend).map((key) => key.split("/")[0] ?? ""),
 	]);
 	const tracked = new Set([...providers].filter((provider) => provider && providerChannel(session, provider).kind === "tracked"));
+	const models = new Set([...scan.dispatches.flatMap((dispatch) => dispatch.models), ...Object.keys(scan.spend)]);
+	const trackedModels = new Set(
+		[...models].filter((model) => {
+			const separator = model.indexOf("/");
+			return channelOf(session, { provider: model.slice(0, separator), id: model.slice(separator + 1) }).kind === "tracked";
+		}),
+	);
 	const stored = readCalibration();
-	const dispatch = mode === "quota" && stored.kind === "ready" ? stored.calibration.dispatch : priorsFrom(scan.dispatches, tracked, now);
-	const calibration: Calibration = { schema: 1, dispatch, quota: quotaFrom(scan.spend, reports, history, tracked, sinceMs, now) };
+	const dispatch =
+		mode === "quota" && stored.kind === "ready" ? stored.calibration.dispatch : priorsFrom(scan.dispatches, trackedModels, now);
+	const calibration: Calibration = {
+		schema: 1,
+		dispatch,
+		quota: quotaFrom(scan.spend, reports, history, tracked, trackedModels, sinceMs, now),
+	};
 	// Consent is re-read at commit: an `off` during the scan discards the result.
 	if (!consented()) return { kind: "declined" };
 	writeCalibration(calibration);

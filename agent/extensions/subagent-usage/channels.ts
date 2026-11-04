@@ -37,7 +37,7 @@ export function providerChannel(session: AgentSession, provider: string): Channe
  * A model is untracked on an untracked provider, or when models.yml defines it or overrides its headers;
  * metadata-only overrides (context window, cost) keep it tracked.
  */
-export function channelOf(session: AgentSession, model: Model<Api>): Channel {
+export function channelOf(session: AgentSession, model: Pick<Model<Api>, "provider" | "id">): Channel {
 	const provider = providerChannel(session, model.provider);
 	if (provider.kind === "untracked") return provider;
 	const entry = ModelsConfigFile.load()?.providers?.[model.provider];
