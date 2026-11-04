@@ -62,21 +62,23 @@ Observed: a depth-2 `task:free` child had no `task` tool in its tool list.
 5. Whether a child has `yield` is the host's decision; prompts must work either way
 -----------------------------------------------------------------------------------
 On OMP 18.16 a task child gets the `yield` tool only in structured runs (`task.structured`
-on, or `structured: true` in the definition). Neither is set here: structured runs
-impose no shared schema, and callers that read a child's result as text get a JSON
-object instead. So every definition treats its final message as the delivery and uses
-`yield` only when the tool is present. Do not write a prompt that names `yield` as the
-only way to answer.
+on, or `structured: true` in the definition). `config.yml` turns `task.structured` on, so
+every task child here has `yield`, and its result reaches the parent as the `yield`
+payload; no shared schema applies unless the caller passes one. The definitions still
+treat their final message as the delivery and use `yield` when the tool is present, so
+they keep working if the setting changes. Do not write a prompt that names `yield` as
+the only way to answer.
 
-Older observed failure, kept because it returns whenever a definition does demand
-`yield`: `mentor-default.md` declares `tools: []`; with `yield` as its only tool it
+`mentor-default.md` declares `tools: []`, so in a structured run `yield` is its only
+tool. Observed failure chain when it answered in prose instead:
 
     writes the full answer as plain prose, no tool call
       -> harness injects "Last turn had no tool call -> session idle"
       -> the forced follow-up `yield` carries nothing
       -> job ends `failed (exit 1)` + "Subagent called yield with null data."
 
-and `agent://<id>` held no answer at all.
+and `agent://<id>` held no answer at all. Its Dialogue section therefore requires the
+whole answer in the `yield` payload whenever the tool is present.
 
 
 6. `agent://` and `history://` are not the same thing

@@ -36,6 +36,7 @@ todo:
 task:
   eager: preferred
   maxRuntimeMs: 0
+  structured: true
   disabledAgents:
     - task
     - scout

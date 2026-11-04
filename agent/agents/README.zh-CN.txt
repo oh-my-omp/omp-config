@@ -56,19 +56,21 @@ prompt 的措辞无法绕过这一点。
 5. 子代有没有 `yield` 由宿主决定；prompt 两种情况都要成立
 -------------------------------------------------------
 OMP 18.16 上，task 子代只有在结构化运行时才有 `yield` 工具（`task.structured` 开启，或定义里写
-`structured: true`）。这里两者都不设：结构化运行没有统一的 schema，按文本读取子代结果的调用方
-会拿到一个 JSON 对象。所以每个定义都以最后一条消息作为交付，只在有 `yield` 工具时才用它。
-不要写把 `yield` 当作唯一回答途径的 prompt。
+`structured: true`）。`config.yml` 开启了 `task.structured`，所以这里每个 task 子代都有 `yield`，
+结果以 `yield` 的载荷交给父会话；调用方不传 schema 时没有统一的 schema。定义仍以最后一条消息
+作为交付、有 `yield` 工具时才用它，因此这个设置变化后它们照样可用。不要写把 `yield` 当作唯一
+回答途径的 prompt。
 
-一个旧的观察结果，只要定义要求 `yield` 就会复现：`mentor-default.md` 声明 `tools: []`；当
-`yield` 是它唯一的工具时，它
+`mentor-default.md` 声明 `tools: []`，所以在结构化运行里 `yield` 是它唯一的工具。它改用纯文本
+回答时观察到的失败链：
 
     把完整答案写成纯文本，没有工具调用
       -> harness 注入 "Last turn had no tool call -> session idle"
       -> 被迫补发的 `yield` 什么都没带
       -> job 以 `failed (exit 1)` 结束，并报 "Subagent called yield with null data."
 
-`agent://<id>` 里根本没有答案。
+`agent://<id>` 里根本没有答案。因此它的 Dialogue 一节要求：只要有这个工具，完整答案就放进
+`yield` 的载荷。
 
 
 6. `agent://` 和 `history://` 不是一回事

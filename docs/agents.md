@@ -11,7 +11,7 @@ The subagent setup follows these design principles:
 
 ## Subagent Definitions and Model Bindings
 
-Responsibilities, tool limits, and `spawns` lists live in `agent/agents/<name>.md`; model chains live in `agent/config.yml` under `task.agentModelOverrides` (when a model change alters a tier's class or cost, update its `description` in `agent/agents/<name>.md` and this table together). No definition sets `structured`: each delivers its final message as the result and uses `yield` only when the host provides it.
+Responsibilities, tool limits, and `spawns` lists live in `agent/agents/<name>.md`; model chains live in `agent/config.yml` under `task.agentModelOverrides` (when a model change alters a tier's class or cost, update its `description` in `agent/agents/<name>.md` and this table together). `config.yml` sets `task.structured: true`, so every task child has `yield` and delivers through it (which is also what `task-completion-judge` intercepts); the definitions are written so a child without `yield` delivers its final message instead.
 
 | Subagent | Cost in `description` (per 1M tokens) | Model chain in `config.yml` | Allowed `spawns` / `tools` | Role and limits |
 |---|---|---|---|---|
