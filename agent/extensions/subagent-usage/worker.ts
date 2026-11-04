@@ -26,6 +26,46 @@ function isRecord(value: unknown): value is Json {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isSpend(value: unknown): value is readonly [string, number, number] {
+	return (
+		Array.isArray(value) &&
+		value.length === 3 &&
+		typeof value[0] === "string" &&
+		typeof value[1] === "number" &&
+		typeof value[2] === "number"
+	);
+}
+
+function isDispatch(value: unknown): value is DispatchRecord {
+	return (
+		isRecord(value) &&
+		typeof value.agent === "string" &&
+		typeof value.resolvedModel === "string" &&
+		Array.isArray(value.models) &&
+		value.models.every((model) => typeof model === "string") &&
+		typeof value.fallback === "boolean" &&
+		typeof value.exited === "boolean" &&
+		typeof value.mtimeMs === "number" &&
+		isRecord(value.costByProvider) &&
+		Object.values(value.costByProvider).every((cost) => typeof cost === "number")
+	);
+}
+
+function isFileAggregate(value: unknown): value is FileAggregate {
+	return (
+		isRecord(value) &&
+		typeof value.size === "number" &&
+		typeof value.mtimeMs === "number" &&
+		Array.isArray(value.spend) &&
+		value.spend.every(isSpend) &&
+		(value.dispatch === null || isDispatch(value.dispatch))
+	);
+}
+
+function isCache(value: unknown): value is Cache {
+	return isRecord(value) && value.version === CACHE_VERSION && isRecord(value.files) && Object.values(value.files).every(isFileAggregate);
+}
+
 function parseLine(line: string): Json | undefined {
 	try {
 		const value: unknown = JSON.parse(line);
@@ -165,7 +205,7 @@ function aggregateFile(file: string, size: number, mtimeMs: number): FileAggrega
 	});
 	const tuples: [string, number, number][] = [];
 	for (const [key, usd] of spend) {
-		const [model, hour] = key.split("\t") as [string, string];
+		const [model = "", hour] = key.split("\t");
 		tuples.push([model, Number(hour), usd]);
 	}
 	const dispatch: DispatchRecord | null =
@@ -176,10 +216,7 @@ function aggregateFile(file: string, size: number, mtimeMs: number): FileAggrega
 function loadCache(cachePath: string): Cache {
 	try {
 		const value: unknown = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-		if (isRecord(value) && value.version === CACHE_VERSION && isRecord(value.files)) {
-			// Written only by this worker in this exact shape.
-			return value as Cache;
-		}
+		if (isCache(value)) return value;
 	} catch {
 		// Missing or unreadable cache: every transcript is parsed.
 	}

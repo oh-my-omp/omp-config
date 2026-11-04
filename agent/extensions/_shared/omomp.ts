@@ -51,17 +51,25 @@ type Located =
 
 function locate(dir: string): Located {
 	const found: string[] = [];
+	let extension: Ext | undefined;
 	for (const ext of EXTENSIONS) {
 		const path = join(dir, `${BASENAME}.${ext}`);
-		if (existsSync(path)) found.push(path);
+		if (existsSync(path)) {
+			found.push(path);
+			extension = ext;
+		}
 	}
-	if (found.length === 0) return { kind: "none" };
 	if (found.length > 1) return { kind: "ambiguous", paths: found };
-	const path = found[0] as string;
-	return { kind: "file", path, ext: extname(path).slice(1) as Ext };
+	const [path] = found;
+	if (path === undefined || extension === undefined) return { kind: "none" };
+	return { kind: "file", path, ext: extension };
 }
 
 type Parsed = { readonly kind: "ok"; readonly root: Root } | { readonly kind: "error"; readonly reason: string };
+
+function isRoot(value: unknown): value is Root {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function parseText(text: string, ext: Ext): unknown {
 	switch (ext) {
@@ -82,8 +90,8 @@ function readRoot(path: string, ext: Ext): Parsed {
 	} catch (error) {
 		return { kind: "error", reason: errorText(error) };
 	}
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return { kind: "error", reason: "root is not a mapping" };
-	return { kind: "ok", root: value as Root };
+	if (!isRoot(value)) return { kind: "error", reason: "root is not a mapping" };
+	return { kind: "ok", root: value };
 }
 
 function locations(cwd: string | null): readonly string[] {

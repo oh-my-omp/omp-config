@@ -1720,7 +1720,7 @@ function lockHolderAlive(): boolean {
 		process.kill(pid, 0);
 		return true;
 	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
+		return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
 	}
 }
 

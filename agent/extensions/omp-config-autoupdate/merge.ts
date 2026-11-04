@@ -253,7 +253,8 @@ export function mergeStructured(host: Mapping | undefined, repo: Mapping, source
 
 /** Set (or, for undefined, remove) the value at `path`, creating maps on the way. */
 export function setAt(root: Mapping, path: Path, value: unknown): void {
-	if (path.length === 0) throw new Error("cannot set the root");
+	const last = path[path.length - 1];
+	if (last === undefined) throw new Error("cannot set the root");
 	let node: Mapping = root;
 	for (const key of path.slice(0, -1)) {
 		const next = node[key];
@@ -265,7 +266,6 @@ export function setAt(root: Mapping, path: Path, value: unknown): void {
 			node = created;
 		}
 	}
-	const last = path[path.length - 1] as string;
 	if (value === undefined) delete node[last];
 	else node[last] = structuredClone(value);
 }

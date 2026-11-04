@@ -203,8 +203,8 @@ function stepsOf(command: string): Step[] {
 	for (const simple of splitSimpleCommands(command)) {
 		const words: string[] = [];
 		for (const token of simple.tokens) if (token.kind === "word") words.push(token.text);
-		while (words.length > 0 && isEnvAssignment(words[0] as string)) words.shift();
-		const head = words.shift();
+		let head = words.shift();
+		while (head !== undefined && isEnvAssignment(head)) head = words.shift();
 		if (head === undefined) continue;
 		steps.push({ program: basename(head), args: words.join(" ") });
 	}
