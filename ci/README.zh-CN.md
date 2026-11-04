@@ -9,7 +9,7 @@
 - **非目标**：让模型执行任务或调用工具；验证付费 helper 的判定（`task-split-check`、`task-completion-judge`）；TUI 专属行为；拦截合并（不设 branch protection）。
 - **输入**：仓库工作区（被检查对象），npm 上的 `@oh-my-pi/pi-coding-agent`，`install-plugins.sh` 声明的插件，Kilo 网关的匿名免费模型。
 
-实现：`ci/check.ts`（检查运行），`.github/workflows/config-check.yml`（触发；其中的 `omp-session` job）。本目录的第二个节点 [delete-guard Windows 验收](#delete-guard-windows-验收) 有自己的 workflow，见文末。
+实现：`ci/check.ts`（检查运行），`.github/workflows/config-check.yml`（触发；其中的 `omp-session` job）。本目录另有独立的 [delete-guard Windows 验收](#delete-guard-windows-验收) 节点，有自己的 workflow，见文末。
 
 ## 问题
 
@@ -17,7 +17,7 @@
 
 以下性质由隔离 HOME 中的实测得出（omp 18.8.7，Linux amd64 与 macOS arm64，2026-10-10）。
 
-1. **omp 不用退出码表达配置故障。** 扩展 import 抛错、`session_start` 或 `before_agent_start` 抛错、system-prompt-replace 规则找不到目标，进程都以 0 退出。故障只出现在三处：stderr（如 `Failed to load extension …`、`system-prompt-replace: … found no target …`），RPC 的 `extension_error` 事件，`$HOME/.omp/logs/omp.<date>.<pid>.log` 中 `warn` / `error` 级记录。
+1. **omp 不用退出码表达配置故障。** 扩展 import 抛错、`session_start` 或 `before_agent_start` 抛错、system-prompt-replace 规则找不到目标，进程都以 0 退出。故障出现在 stderr（如 `Failed to load extension …`、`system-prompt-replace: … found no target …`），RPC 的 `extension_error` 事件，`$HOME/.omp/logs/omp.<date>.<pid>.log` 中 `warn` / `error` 级记录。
 2. **一部分故障要真实模型请求才出现。** `before_agent_start` 只在 prompt 被准备时运行，而 omp 在此之前检查模型凭据；没有可用模型时，启动类检查走不到这些钩子。
 3. **配置引用 CI 没有凭据的模型。** `task.agentModelOverrides` 引用 openai-codex、anthropic、opencode-go 与 bansos 模型。翻译偏好归插件与本机，本检查不分发或读取。扩展模型角色（`@input-polish`、`@task-completion-judge`、`@task-split-check`、`@doc-polish.*`）放在本机 `modelRoles`，CI 不指定它们，所以这些扩展回退到各自的 `fallbackRole`（`smol`，绑定免费模型），或自行报告“没有模型”。
 4. **Kilo 网关的 `:free` 模型允许匿名调用、不计费**（kilo.ai 文档：每 IP 每小时 200 次）。`nvidia/nemotron-3-ultra-550b-a55b:free` 能处理完整配置的 system prompt（约 2 万 token）。同期实测：配置里的 `bansos` 免费 Muse 与 Zen big-pickle 返回 429 `FreeUsageLimitError`；`opencode-go` 按官方价目收费；Kilo `cohere/north-mini-code:free` 对完整配置的请求返回 422。
@@ -49,8 +49,9 @@
 
 ```mermaid
 flowchart LR
-  install["安装 omp latest"] --> apply["更新器 apply（含插件）"]
-  apply --> models["写 models.yml 与 modelRoles<br/>启动影子代理"]
+  proxy["启动影子代理"] --> install["安装 omp latest"]
+  install --> apply["更新器 apply（含插件）"]
+  apply --> models["写 models.yml、modelRoles 并关闭 skills"]
   models --> full["完整模式 session<br/>omp --mode rpc"]
   full --> light["轻量模式 session<br/>omp-light --mode rpc"]
   light --> logs["读 omp 日志"]
@@ -60,12 +61,12 @@ flowchart LR
 |阶段|做什么|产生的诊断|
 |---|---|---|
 |install|`bun install -g @oh-my-pi/pi-coding-agent@${OMP_VERSION:-latest}`，`omp --version`|失败为 `environment`，检查就此结束|
-|apply|`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source <仓库> --agent-dir … --json`|stderr 每行；JSON 报告的 `errors`；`pluginsMissing` 每项；没有 JSON 报告|
-|models|写 `models.yml`（免费模型 + 影子模型），把 `config.yml` 的 `modelRoles` 设为免费模型|无|
+|apply|`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source <仓库> --agent-dir … --json`|stderr 每行；JSON 报告的 `errors`；`pluginsMissing` 每项；没有 JSON 报告。没有报告或存在任何 `errors` 条目时检查就此结束：更新器先安装插件再写配置，因此失败的 apply 没有写入可供 session 运行的配置|
+|models|写 `models.yml`（免费模型 + 影子模型），把 `config.yml` 的 `modelRoles` 设为免费模型，`skills.enabled` 设为 `false`|无|
 |full session、light session|RPC 模式启动，等 `ready` 后发一条 prompt，保持 stdin 直到 `prompt_result`，再关闭并等进程退出|见下方判据|
 |omp 日志|读 `$HOME/.omp/logs/*.log` 的 `warn`、`error` 记录|不属于主机噪声的每条记录|
 
-`modelRoles` 是更新器不写的本机字段（`LOCAL_CONFIG_FIELDS`）。检查运行像一台机器那样设置它，因此不改变被检查的托管配置。
+`modelRoles` 与 `skills` 是更新器不写的本机字段（`LOCAL_CONFIG_FIELDS`）。检查运行像一台机器那样设置它们，因此不改变被检查的托管配置。关闭 skills 是因为一次性 HOME 没有 skill 描述缓存：开启时，omp 会在每次运行中让免费模型在后台压缩每个已安装插件的 skill 描述。
 
 ### 诊断判据
 
@@ -82,9 +83,9 @@ session 阶段的每一项都是一条诊断：
 
 免费模型失败会连带产生别的诊断，它们也记为 `provider`：session 中所有失败回复都符合 R3 条件时，该 session 的 `prompt_result` 未完成和非零退出；omp 日志记录的 `error` 或 `errorMessage` 字段是免费模型服务失败（连接、DNS、超时、限流、5xx）时，该记录。影子代理收到上游 HTTP 400 及以上的响应时，记一条 `provider` 诊断。
 
-同一个故障会在多处出现：完整模式和轻量模式各打印一次，omp 日志里再记一次。报告不逐条列诊断，而是按发现列出，每条发现写明标识、类别、各阶段出现次数和归一化文本。为让同一故障的不同表述得到同一标识，有两条规则：
+同一个故障会在多处出现：完整模式和轻量模式各打印一次，omp 日志里再记一次。报告不逐条列诊断，而是按发现列出，每条发现写明标识、类别、各阶段出现次数和归一化文本。以下规则让同一故障的不同表述得到同一标识：
 
-- omp 日志中上下文只有 `path`、`error` 两个字段的记录，按 omp 在 stderr 上的格式写成 `<message> <path>: <error>`。
+- omp 日志中上下文只有 `path`、`error` 的记录，按 omp 在 stderr 上的格式写成 `<message> <path>: <error>`。
 - omp 会把过长的 stderr 行截断并以 `…` 结尾。截断行去掉 `…` 后（截断点落在绝对路径中时，再去掉这段路径）恰好是一条完整文本的前缀时，并入那条发现；有多条候选时不合并。
 
 主机噪声同样按归一化文本合并，并注明次数。
@@ -119,7 +120,7 @@ flowchart TB
 - **影子模型而不是配置覆盖。** 将 `task.agentModelOverrides` 覆盖为免费模型会改动被检查配置；影子模型仅改本机 `models.yml`。`ci/check.ts` 从 `config.yml` 的 `task.agentModelOverrides` 生成列表，不读插件配置；仅写在扩展源码里的模型不在其中。仅在 `task` 等工具中调用的 helper 不被文字 prompt 触发，凭据行为不在覆盖范围。
 - **始终安装最新 omp。** 操作员裁决：机器通过 `omp update` 跟随最新版，检查也跟随。代价：上游的变化会让与之无关的提交也变红；这类红是真实的兼容性问题，比如 system-prompt-replace 规则的目标被上游删掉。可用 `OMP_VERSION` 在本地复现指定版本。
 - **插件不钉版本。** 与 `install-plugins.sh` 一致：检查装的就是机器会装的。
-- **stderr 每行都是诊断；日志只排除主机噪声。** 扩展警告不设白名单，因为一条被放行的警告就是一个被接受的缺陷，应当修配置或开 issue。主机噪声只覆盖与配置无关的事实：没有本地模型服务器；没有 D-Bus；技能描述压缩时免费模型输出被截断（`Model stopped: length`）——`modelRoles` 是本机字段，CI 把所有角色绑到会推理的免费模型上，它偶尔用完 omp 给这项后台任务的输出预算（同一配置 10 次运行中出现 1 次），机器上实际用哪个模型由各机器自己的 `modelRoles` 决定。
+- **stderr 每行都是诊断；日志只排除主机噪声。** 扩展警告不设白名单，因为一条被放行的警告就是一个被接受的缺陷，应当修配置或开 issue。主机噪声只覆盖与配置无关的事实：没有本地模型服务器；没有 D-Bus。
 
 ### 触发与权限
 
@@ -155,15 +156,15 @@ CI_KEEP_ROOT=1 bun ci/check.ts       # 保留临时根目录以便排查
 
 ## delete-guard Windows 验收
 
-本节点在真实 omp 会话里验证 `delete-guard` 在 Windows 上的行为（issue #69）：嵌套的 PowerShell 与 cmd 方言、eval 交给 cmd 的调用、回收站后端与 Windows 拒绝集。OrbStack 不提供 Windows 容器，Windows 是唯一无法在本地观察这些行为的平台。
+本节点在真实 omp 会话里验证 `delete-guard` 在 Windows 上的行为（issue #69）：嵌套的 PowerShell 与 cmd 方言、eval 交给 cmd 的调用、回收站后端与 Windows 拒绝集。OrbStack 不提供 Windows 容器，无法在本地观察这些 Windows 行为。
 
 - **实现**：`ci/windows-guard.ts`（准备与会话）、`ci/windows-guard-steps.ts`（步骤与判定）、`.github/workflows/delete-guard-windows.yml`（`windows-latest` 上的 `windows` job）。
 - **准备**：`bun install -g @oh-my-pi/pi-coding-agent@latest`，用仓库更新器 `apply` 到 runner 的 `~/.omp/agent`，把 `modelRoles` 的每个角色绑定到 `opencode-go/deepseek-v4.1-flash`，并设 `skills.enabled: false`。runner 是一次性虚拟机，因此直接使用 runner 账户真实的家目录与回收站。
-- **步骤**：每步一个 RPC 会话（`--mode rpc --no-session`，cwd 为 `$RUNNER_TEMP\omp-dg-work`；除需要回答确认的 permanent 步骤外都加 `--no-ui`），要求模型只发一次工具调用：经 `bash` 的十一条嵌套 PowerShell/cmd 命令（#69 第 1 行的七条，加上 `$x=Remove-Item`、`return Remove-Item`、`. Remove-Item` 与 `start /d <dir> cmd /c del`）与 `rm -rf`，四个 eval 单元格（`shell=True`/`os.system` 各一、`child_process.execSync`、`Bun.$`），一次 `trash` 的 `delete`，三次 `permanent` 的 `delete`（#80：无界面，不弹确认即被拒；有界面且确认答「否」；有界面且确认答「是」），以及六次把 `C:\omp-dg\keep` 与 `C:\`、`C:`、`\`、`\\localhost\C$`、`USERPROFILE`、会话 cwd 配对的 `delete`。有界面的步骤里，脚本对每个 `confirm` 的 `extension_ui_request` 按该步的取值作答，其他对话框一律取消。prompt 写明这是删除 guard 的验收、操作对象都是一次性探针，模型因此没有理由拒绝或改写调用。每步之前创建对应探针（`C:\omp-dg\d\f`、`C:\omp-dg\p\f` 或 `C:\omp-dg\keep\f`）。
+- **步骤**：每步一个 RPC 会话（`--mode rpc --no-session`，cwd 为 `$RUNNER_TEMP\omp-dg-work`；除需要回答确认的 permanent 步骤外都加 `--no-ui`），要求模型只发一次工具调用。用例定义在 `ci/windows-guard-steps.ts`。有界面的步骤里，脚本对每个 `confirm` 的 `extension_ui_request` 按该步的取值作答，其他对话框一律取消。prompt 写明这是删除 guard 的验收、操作对象都是一次性探针，模型因此没有理由拒绝或改写调用。每步之前创建对应探针（`C:\omp-dg\d\f`、`C:\omp-dg\p\f` 或 `C:\omp-dg\keep\f`）。
 - **每步通过条件**：所要求工具的第一次调用存在（否则报「model did not call <tool>」），输入与要求一字不差，结果符合预期——`bash`/`eval` 返回 `delete-guard:` 错误，`delete` 成功，拒绝时错误点名危险路径，被拒的 permanent 调用返回「nothing was deleted」并提示省略 `mode`——且之后探针状态符合预期：`C:\omp-dg\d\f`、`C:\omp-dg\p\f` 或 `C:\omp-dg\keep` 仍在；`trash` 后目录消失且回收站（`Shell.Application` 的 `NameSpace(10)`）列出它；确认通过的 `permanent` 后目录消失且回收站不列出它。有界面的 permanent 步骤还要求出现点名该路径的确认，无界面的那一步要求没有确认。runner 账户没有回收站时以「no recycle bin on runner」失败。日志打印每个确认、每次工具调用、结果原文、`Test-Path` 与回收站列表，步骤失败时另打印模型的最后一条回复。
 - **退出码**：全部步骤通过为 0，否则（含准备失败）为 1。
-- **触发与权限**：`workflow_dispatch`，以及改动 `agent/extensions/delete-guard/`、这两个脚本或该 workflow 的 `pull_request`，使改动在合并前得到验证。fork 的 PR 跳过该 job（拿不到 secret）。`contents: read`、`persist-credentials: false`、actions 按 commit SHA 固定；只报告，不拦截合并。
-- **Secret**：与配置检查（R4）不同，本节点使用一个仓库 secret `OPENCODE_API_KEY`，即操作员的 opencode-go key，只传给运行 `bun ci/windows-guard.ts` 的那一步。操作员决定（2026-10-30）：用其他 delete-guard 验收所用的同一模型取代 Kilo 免费模型，失败只归因于 guard，而非更弱的模型。代价：每次运行都计费到这个 key。
+- **触发与权限**：`workflow_dispatch`，以及改动 `agent/extensions/delete-guard/`、上述脚本或该 workflow 的 `pull_request`，使改动在合并前得到验证。fork 的 PR 跳过该 job（拿不到 secret）。`contents: read`、`persist-credentials: false`、actions 按 commit SHA 固定；只报告，不拦截合并。
+- **Secret**：与配置检查（R4）不同，本节点使用仓库 secret `OPENCODE_API_KEY`，即操作员的 opencode-go key，只传给运行 `bun ci/windows-guard.ts` 的那一步。操作员决定（2026-10-30）：用其他 delete-guard 验收所用的同一模型取代 Kilo 免费模型，失败只归因于 guard，而非更弱的模型。代价：每次运行都计费到这个 key。
 - **不覆盖**：`exec_command` 退回 PowerShell 的情况；WSL；其他低档模型的矩阵。
 
 本地运行：无，本节点需要 Windows。workflow 进入 `main` 后用 `gh workflow run delete-guard-windows.yml --ref <branch>` 触发，或推送改动上述路径的 PR。

@@ -9,7 +9,7 @@ This node designs omp-config's configuration check: in a throwaway environment i
 - **Non-goals**: having the model carry out tasks or call tools; verifying the verdicts of paid helpers (`task-split-check`, `task-completion-judge`); TUI-only behavior; blocking merges (no branch protection).
 - **Inputs**: the repository working tree (the thing checked), `@oh-my-pi/pi-coding-agent` on npm, the plugins declared in `install-plugins.sh`, and the Kilo gateway's anonymous free model.
 
-Implementation: `ci/check.ts` (the check run) and `.github/workflows/config-check.yml` (triggers; its `omp-session` job). A second node in this directory, the [delete-guard Windows acceptance](#delete-guard-windows-acceptance), has its own workflow and is described at the end.
+Implementation: `ci/check.ts` (the check run) and `.github/workflows/config-check.yml` (triggers; its `omp-session` job). A separate node in this directory, the [delete-guard Windows acceptance](#delete-guard-windows-acceptance), has its own workflow and is described at the end.
 
 ## Problem
 
@@ -17,7 +17,7 @@ Implementation: `ci/check.ts` (the check run) and `.github/workflows/config-chec
 
 The following properties come from measurements in an isolated HOME (omp 18.8.7, Linux amd64 and macOS arm64, 2026-10-10).
 
-1. **omp does not report config faults through its exit code.** An extension import that throws, a `session_start` or `before_agent_start` that throws, or a system-prompt-replace rule that finds no target all exit the process with 0. Faults show up in only three places: stderr (such as `Failed to load extension …` or `system-prompt-replace: … found no target …`), RPC `extension_error` events, and `warn` / `error` records in `$HOME/.omp/logs/omp.<date>.<pid>.log`.
+1. **omp does not report config faults through its exit code.** An extension import that throws, a `session_start` or `before_agent_start` that throws, or a system-prompt-replace rule that finds no target all exit the process with 0. Faults show up in stderr (such as `Failed to load extension …` or `system-prompt-replace: … found no target …`), RPC `extension_error` events, and `warn` / `error` records in `$HOME/.omp/logs/omp.<date>.<pid>.log`.
 2. **Some faults appear only with a real model request.** `before_agent_start` runs only when a prompt is prepared, and omp checks model credentials before that; without a usable model, startup-only checks never reach these hooks.
 3. **The config references models whose credentials CI does not have.** `task.agentModelOverrides` names openai-codex, anthropic, opencode-go and bansos models. Translator preferences are plugin/machine-owned and are neither shipped nor read by this check. Extension model roles (`@input-polish`, `@task-completion-judge`, `@task-split-check`, `@doc-polish.*`) live in machine-local `modelRoles`, which CI leaves unassigned, so those extensions fall back to their `fallbackRole` (`smol`, bound to the free model) or report "no model" on their own.
 4. **The Kilo gateway's `:free` models allow anonymous calls at no charge** (kilo.ai docs: 200 per IP per hour). `nvidia/nemotron-3-ultra-550b-a55b:free` handles the full config's system prompt (about 20k tokens). Measured at the same time: the free `bansos` Muse in the config and Zen big-pickle returned 429 `FreeUsageLimitError`; `opencode-go` charges by its official price list; Kilo `cohere/north-mini-code:free` returned 422 for the full config's request.
@@ -49,8 +49,9 @@ The following properties come from measurements in an isolated HOME (omp 18.8.7,
 
 ```mermaid
 flowchart LR
-  install["install latest omp"] --> apply["updater apply (with plugins)"]
-  apply --> models["write models.yml, modelRoles and skills off<br/>start the shadow proxy"]
+  proxy["start the shadow proxy"] --> install["install latest omp"]
+  install --> apply["updater apply (with plugins)"]
+  apply --> models["write models.yml, modelRoles and skills off"]
   models --> full["full-mode session<br/>omp --mode rpc"]
   full --> light["light-mode session<br/>omp-light --mode rpc"]
   light --> logs["read omp logs"]
@@ -82,9 +83,9 @@ Each of the following in a session stage is a diagnostic:
 
 A free model failure brings other diagnostics with it, and those are recorded as `provider` too: when every failed reply in a session meets R3's condition, that session's unfinished `prompt_result` and non-zero exit; when the `error` or `errorMessage` field of an omp log record is a free model service failure (connection, DNS, timeout, rate limit, 5xx), that record. When the shadow proxy receives an upstream response of HTTP 400 or above, it records one `provider` diagnostic.
 
-The same fault appears in several places: printed once each in full and light mode, and recorded once more in the omp log. The report does not list diagnostics one by one but by finding, each with its id, category, per-stage counts and normalized text. Two rules give different wordings of the same fault the same id:
+The same fault appears in several places: printed once each in full and light mode, and recorded once more in the omp log. The report does not list diagnostics one by one but by finding, each with its id, category, per-stage counts and normalized text. The following rules give different wordings of the same fault the same id:
 
-- An omp log record whose context has only the two fields `path` and `error` is written in omp's stderr format, `<message> <path>: <error>`.
+- An omp log record whose context has only `path` and `error` is written in omp's stderr format, `<message> <path>: <error>`.
 - omp truncates overlong stderr lines and ends them with `…`. When a truncated line, with `…` removed (and, when the cut falls inside an absolute path, with that path removed too), is exactly a prefix of one complete text, it merges into that finding; with several candidates it does not merge.
 
 Host noise is merged by normalized text in the same way, with counts.
@@ -155,15 +156,15 @@ Needs Bun, git and public internet access.
 
 ## delete-guard Windows acceptance
 
-This node checks `delete-guard` on Windows (issue #69) in real omp sessions: the nested PowerShell and cmd dialects, eval's cmd handoffs, the Recycle Bin backend and the Windows refusal set. Windows is the one platform its behavior cannot be observed on locally, because OrbStack has no Windows containers.
+This node checks `delete-guard` on Windows (issue #69) in real omp sessions: the nested PowerShell and cmd dialects, eval's cmd handoffs, the Recycle Bin backend and the Windows refusal set. Its Windows behavior cannot be observed locally, because OrbStack has no Windows containers.
 
 - **Implementation**: `ci/windows-guard.ts` (setup and sessions), `ci/windows-guard-steps.ts` (the steps and their checks), `.github/workflows/delete-guard-windows.yml` (job `windows` on `windows-latest`).
 - **Setup**: `bun install -g @oh-my-pi/pi-coding-agent@latest`, the repository's updater `apply` into the runner's `~/.omp/agent`, and every `modelRoles` role bound to `opencode-go/deepseek-v4.1-flash` with `skills.enabled: false`. The runner is a throwaway VM, so it uses the runner account's real home and Recycle Bin.
-- **Steps**: one RPC session per step (`--mode rpc --no-session`, cwd `$RUNNER_TEMP\omp-dg-work`; `--no-ui` except for the permanent steps that answer a confirmation), each asking the model for exactly one tool call: eleven nested PowerShell/cmd commands (the seven of #69 row 1, plus `$x=Remove-Item`, `return Remove-Item`, `. Remove-Item` and `start /d <dir> cmd /c del`) and `rm -rf` through `bash`, four eval cells (two `shell=True`/`os.system`, `child_process.execSync`, `Bun.$`), a `trash` `delete`, three `permanent` `delete` calls (#80: headless, so refused without a dialog; with UI and the confirmation declined; with UI and the confirmation accepted), and six `delete` calls that pair `C:\omp-dg\keep` with `C:\`, `C:`, `\`, `\\localhost\C$`, `USERPROFILE` and the session cwd. In the UI steps the script answers every `confirm` `extension_ui_request` with the step's value and cancels any other dialog. The prompt says the run is an acceptance test of a deletion guard on disposable probes, so the model has no reason to decline or rewrite the call. Before each step the probe (`C:\omp-dg\d\f`, `C:\omp-dg\p\f` or `C:\omp-dg\keep\f`) is created.
+- **Steps**: one RPC session per step (`--mode rpc --no-session`, cwd `$RUNNER_TEMP\omp-dg-work`; `--no-ui` except for the permanent steps that answer a confirmation), each asking the model for exactly one tool call. The cases are defined in `ci/windows-guard-steps.ts`. In the UI steps the script answers every `confirm` `extension_ui_request` with the step's value and cancels any other dialog. The prompt says the run is an acceptance test of a deletion guard on disposable probes, so the model has no reason to decline or rewrite the call. Before each step the probe (`C:\omp-dg\d\f`, `C:\omp-dg\p\f` or `C:\omp-dg\keep\f`) is created.
 - **Pass criteria per step**: the first call of the requested tool exists (otherwise "model did not call <tool>"), carries the requested input unchanged, and has the expected result — a `delete-guard:` error for `bash`/`eval`, success for `delete`, an error naming the dangerous path for refusals, and for the refused permanent calls an error saying nothing was deleted and to leave `mode` unset — and the probe is as expected afterwards: `C:\omp-dg\d\f`, `C:\omp-dg\p\f` or `C:\omp-dg\keep` still exists; after `trash` the directory is gone and the Recycle Bin (`Shell.Application` `NameSpace(10)`) lists it; after the accepted `permanent` it is gone and not listed. The UI permanent steps also require a confirmation that names the path; the headless one requires none. A runner account without a Recycle Bin fails with "no recycle bin on runner". The log prints every confirmation, tool call, its result text, `Test-Path` and the Recycle Bin listing, and the model's last reply when a step fails.
 - **Exit code**: 0 when every step passes, 1 otherwise, including setup failures.
 - **Triggers and permissions**: `workflow_dispatch`, and `pull_request` touching `agent/extensions/delete-guard/`, these scripts or the workflow, so a change is verified before it merges. Fork pull requests skip the job (they get no secrets). `contents: read`, `persist-credentials: false`, actions pinned by commit SHA; it reports only and does not block merges.
-- **Secret**: unlike the configuration check (R4), this node uses one repository secret, `OPENCODE_API_KEY`, the operator's opencode-go key, passed only to the step that runs `bun ci/windows-guard.ts`. Operator decision, 2026-10-30: the free Kilo model was replaced by the same model the other delete-guard checks use, so a failure is the guard's and not a weaker model's. Cost: every run is billed to that key.
+- **Secret**: unlike the configuration check (R4), this node uses the repository secret `OPENCODE_API_KEY`, the operator's opencode-go key, passed only to the step that runs `bun ci/windows-guard.ts`. Operator decision, 2026-10-30: the free Kilo model was replaced by the same model the other delete-guard checks use, so a failure is the guard's and not a weaker model's. Cost: every run is billed to that key.
 - **Not covered**: `exec_command` falling back to PowerShell; WSL; the model matrix of other low-tier models.
 
 Local run: none; the node needs Windows. Run it with `gh workflow run delete-guard-windows.yml --ref <branch>` once the workflow is on `main`, or by pushing to a pull request that touches the paths above.
