@@ -17,7 +17,8 @@ import { unquote } from "./spec-files.ts";
  *   both. Absent = any directory.
  * - model / provider: one JavaScript regex each (alternatives with `|`),
  *   unanchored `RegExp.test` against the model and provider that produced an
- *   assistant message.
+ *   assistant message. In frontmatter one pair of surrounding quotes is
+ *   syntax; a YAML string is the regex source as decoded.
  * - inject: `system` (default) or `user`.
  *
  * Parse problems are returned as data; the caller words them.
@@ -136,13 +137,16 @@ function parseCwds(raw: string | undefined, key: string): Parsed<readonly CwdPat
 	return { kind: "ok", value: patterns };
 }
 
-function parseModels(fields: Readonly<Record<string, string>>, keys: FilterKeys): Parsed<readonly ModelConstraint[]> {
+/** How field values were written: frontmatter text, where surrounding quotes are syntax, or YAML strings already decoded. */
+export type ValueSyntax = "frontmatter" | "yaml";
+
+function parseModels(fields: Readonly<Record<string, string>>, keys: FilterKeys, syntax: ValueSyntax): Parsed<readonly ModelConstraint[]> {
 	const constraints: ModelConstraint[] = [];
 	for (const field of ["model", "provider"] as const) {
 		const key = keys[field];
 		const raw = fields[key.toLowerCase()];
 		if (raw === undefined) continue;
-		const source = unquote(raw);
+		const source = syntax === "yaml" ? raw : unquote(raw);
 		if (source === "") return { kind: "invalid", problem: { kind: "empty", key } };
 		try {
 			constraints.push({ field, source, pattern: new RegExp(source) });
@@ -157,12 +161,13 @@ export function parseSessionFilter(
 	fields: Readonly<Record<string, string>>,
 	keys: FilterKeys,
 	fallback: TargetDefault,
+	syntax: ValueSyntax,
 ): Parsed<SessionFilter> {
 	const targets = parseTargets(fields[keys.target.toLowerCase()], keys.target, fallback);
 	if (targets.kind === "invalid") return targets;
 	const cwds = parseCwds(fields[keys.cwd.toLowerCase()], keys.cwd);
 	if (cwds.kind === "invalid") return cwds;
-	const models = parseModels(fields, keys);
+	const models = parseModels(fields, keys, syntax);
 	if (models.kind === "invalid") return models;
 	return { kind: "ok", value: { targets: targets.value, cwds: cwds.value, models: models.value } };
 }

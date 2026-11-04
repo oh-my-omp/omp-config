@@ -15,7 +15,7 @@ const mid: ExtensionContext["agent"] = { kind: "sub", id: "0-Fixer", name: "task
 const mentor: ExtensionContext["agent"] = { kind: "sub", id: "1-Coach", name: "mentor:default", depth: 1, parentId: "Main" };
 
 function filter(fields: Record<string, string>): SessionFilter {
-	const parsed = parseSessionFilter(fields, KEYS, { kind: "default", targets: [{ kind: "main" }] });
+	const parsed = parseSessionFilter(fields, KEYS, { kind: "default", targets: [{ kind: "main" }] }, "frontmatter");
 	if (parsed.kind !== "ok") throw new Error(JSON.stringify(parsed.problem));
 	return parsed.value;
 }
@@ -28,7 +28,10 @@ describe("session filter targets", () => {
 	});
 
 	test("a missing target is a problem when the caller requires it", () => {
-		expect(parseSessionFilter({}, KEYS, { kind: "required" })).toEqual({ kind: "invalid", problem: { kind: "missing", key: "target" } });
+		expect(parseSessionFilter({}, KEYS, { kind: "required" }, "frontmatter")).toEqual({
+			kind: "invalid",
+			problem: { kind: "missing", key: "target" },
+		});
 	});
 
 	test("listed targets are alternatives: main, a subagent name, a registry id", () => {
@@ -66,11 +69,11 @@ describe("session filter cwd globs", () => {
 	});
 
 	test("a relative pattern is a problem naming the pattern", () => {
-		expect(parseSessionFilter({ cwd: "/a, src/*" }, KEYS, { kind: "required" })).toMatchObject({
+		expect(parseSessionFilter({ cwd: "/a, src/*" }, KEYS, { kind: "required" }, "frontmatter")).toMatchObject({
 			kind: "invalid",
 			problem: { kind: "missing" },
 		});
-		expect(parseSessionFilter({ target: "main", cwd: "/a, src/*" }, KEYS, { kind: "required" })).toEqual({
+		expect(parseSessionFilter({ target: "main", cwd: "/a, src/*" }, KEYS, { kind: "required" }, "frontmatter")).toEqual({
 			kind: "invalid",
 			problem: { kind: "relative", key: "cwd", pattern: "src/*" },
 		});
@@ -88,9 +91,23 @@ describe("session filter producers", () => {
 
 	test("keys are looked up case-insensitively but reported as declared", () => {
 		const keys: FilterKeys = { ...KEYS, model: "watchModel" };
-		expect(parseSessionFilter({ target: "main", watchmodel: "" }, keys, { kind: "required" })).toEqual({
+		expect(parseSessionFilter({ target: "main", watchmodel: "" }, keys, { kind: "required" }, "frontmatter")).toEqual({
 			kind: "invalid",
 			problem: { kind: "empty", key: "watchModel" },
 		});
+	});
+
+	test("frontmatter quotes are syntax; a decoded YAML string is the regex source itself", () => {
+		const quoted = { target: "main", model: "'^gpt$'" };
+		const front = parseSessionFilter(quoted, KEYS, { kind: "required" }, "frontmatter");
+		const yaml = parseSessionFilter(quoted, KEYS, { kind: "required" }, "yaml");
+		if (front.kind !== "ok" || yaml.kind !== "ok") throw new Error("both parse");
+		expect(producerMatches(front.value, { model: "gpt", provider: "p" })).toBe(true);
+		expect(producerMatches(yaml.value, { model: "gpt", provider: "p" })).toBe(false);
+		expect(producerMatches(yaml.value, { model: "'gpt'", provider: "p" })).toBe(false);
+		expect(producerMatches(yaml.value, { model: "x'gpt'", provider: "p" })).toBe(false);
+		const literal = parseSessionFilter({ target: "main", model: "^'gpt'$" }, KEYS, { kind: "required" }, "yaml");
+		if (literal.kind !== "ok") throw new Error("parses");
+		expect(producerMatches(literal.value, { model: "'gpt'", provider: "p" })).toBe(true);
 	});
 });

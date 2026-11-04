@@ -7,6 +7,7 @@ import {
 	type SessionFilter,
 	type TargetDefault,
 	targetsSession,
+	type ValueSyntax,
 } from "./session-filter.ts";
 import { unquote } from "./spec-files.ts";
 
@@ -72,22 +73,26 @@ function parseModes(raw: string | undefined, key: string): Parsed<readonly Mode[
 	return { kind: "ok", value: modes };
 }
 
-function parseSide(fields: Readonly<Record<string, string>>, keys: SideKeys, fallback: TargetDefault): Parsed<Side> {
-	const filter = parseSessionFilter(fields, keys, fallback);
+function parseSide(fields: Readonly<Record<string, string>>, keys: SideKeys, fallback: TargetDefault, syntax: ValueSyntax): Parsed<Side> {
+	const filter = parseSessionFilter(fields, keys, fallback, syntax);
 	if (filter.kind === "invalid") return filter;
 	const modes = parseModes(fields[keys.mode], keys.mode);
 	if (modes.kind === "invalid") return modes;
 	return { kind: "ok", value: { filter: filter.value, modes: modes.value } };
 }
 
-/** `fields` maps condition keys (lowercase, as listed in CONDITION_KEYS) to their raw string values. */
-export function parseSessionConditions(fields: Readonly<Record<string, string>>, includeDefault: TargetDefault): Parsed<SessionConditions> {
-	const include = parseSide(fields, INCLUDE_KEYS, includeDefault);
+/** `fields` maps condition keys (lowercase, as listed in CONDITION_KEYS) to their values, written in `syntax`. */
+export function parseSessionConditions(
+	fields: Readonly<Record<string, string>>,
+	includeDefault: TargetDefault,
+	syntax: ValueSyntax,
+): Parsed<SessionConditions> {
+	const include = parseSide(fields, INCLUDE_KEYS, includeDefault, syntax);
 	if (include.kind === "invalid") return include;
 	if (!Object.values(EXCLUDE_KEYS).some((key) => fields[key] !== undefined)) {
 		return { kind: "ok", value: { include: include.value, exclusion: { kind: "none" } } };
 	}
-	const exclude = parseSide(fields, EXCLUDE_KEYS, { kind: "default", targets: [{ kind: "all" }] });
+	const exclude = parseSide(fields, EXCLUDE_KEYS, { kind: "default", targets: [{ kind: "all" }] }, syntax);
 	if (exclude.kind === "invalid") return exclude;
 	return { kind: "ok", value: { include: include.value, exclusion: { kind: "side", side: exclude.value } } };
 }

@@ -160,7 +160,7 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 	}
 	const { fields, body } = parseFrontmatter(raw) ?? { fields: {}, body: raw };
 	const enabled = fields.enabled === undefined || /^(true|yes|on|1)$/i.test(unquote(fields.enabled));
-	const filter = parseSessionFilter(fields, WATCHDOG_FILTER_KEYS, { kind: "required" });
+	const filter = parseSessionFilter(fields, WATCHDOG_FILTER_KEYS, { kind: "required" }, "frontmatter");
 	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
 	const inject = parseInjectMode(fields.inject);
 	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };

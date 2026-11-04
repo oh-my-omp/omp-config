@@ -42,8 +42,9 @@
 // patterns. Optional condition keys, string values, follow
 // `_shared/prompt-conditions.ts` (shared with append-system-model): `target`,
 // `cwd`, `model`, `provider`, `mode` and the same keys under `exclude.`;
-// without `target` a rule applies to every session. Any other key makes the
-// file invalid. Files apply in discovery order and rules in file order, each
+// without `target` a rule applies to every session. A `model` / `provider`
+// string is the regex source exactly as YAML decodes it. Any other key makes
+// the file invalid. Files apply in discovery order and rules in file order, each
 // to the output of the previous one, across every system-prompt block.
 //
 // TIMING. Every `before_agent_start`, in the main session and in every
@@ -158,7 +159,7 @@ function parseRule(value: unknown, path: string, index: number): Parse<Rule> {
 	}
 	const matcher = parseMatcher(record, at);
 	if (matcher.kind === "invalid") return matcher;
-	const conditions = parseSessionConditions(fields, { kind: "default", targets: [{ kind: "all" }] });
+	const conditions = parseSessionConditions(fields, { kind: "default", targets: [{ kind: "all" }] }, "yaml");
 	if (conditions.kind === "invalid") return { kind: "invalid", reason: `${at}: ${describeProblem(conditions.problem)}` };
 	const shown = matcher.value.kind === "literal" ? `literal ${JSON.stringify(matcher.value.text)}` : `regex ${matcher.value.pattern}`;
 	return {

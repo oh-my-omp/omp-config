@@ -13,20 +13,25 @@
 //     the session cwd up to the git root.
 // Every file that applies is appended; there is no override by name.
 // Frontmatter (between `---` fences), one `key: value` per line; whole-line
-// `#` comments are skipped. The body, everything after the closing fence, is
-// the prompt text and may contain `---` lines.
-//   enabled:          false            # optional; only true/yes/on/1 keep it on
-//   target:           main             # optional; default main
-//   cwd:              ~/code/app{,/**} # optional; absolute or ~/ globs
-//   model:            ^gpt-            # optional; regex on the model id
-//   provider:         ^openai          # optional; regex on the provider id
-//   mode:             full             # optional; full and/or light
-//   exclude.target:   task:mid         # optional; same grammar as target
-//   exclude.cwd:      ~/scratch/**     # optional
+// `#` comments are skipped, and text after a value, `#` included, is part of
+// the value. The body, everything after the closing fence, is the prompt text
+// and may contain `---` lines. Every key is optional:
+//   enabled:          false
+//   target:           main
+//   cwd:              ~/code/app{,/**}
+//   model:            ^gpt-
+//   provider:         ^openai
+//   mode:             full
+//   exclude.target:   task:mid
+//   exclude.cwd:      ~/scratch/**
 //   exclude.model:    ^claude-opus-5-5$
 //   exclude.provider: ^anthropic$
 //   exclude.mode:     light
-// Any other key makes the file invalid.
+// `enabled` keeps the file on only for true/yes/on/1; `target` defaults to
+// main; `cwd` lists absolute or ~/ globs; `model` / `provider` are regexes on
+// the model and provider ids; `mode` lists full and/or light; each `exclude.*`
+// key has the grammar of its inclusion key. Any other key makes the file
+// invalid.
 //
 // MATCHING. `_shared/prompt-conditions.ts` (shared with system-prompt-replace):
 // items inside a key are alternatives, keys AND; `mode` lists `full` and/or
@@ -124,7 +129,7 @@ function parseFragment(path: string): FragmentParse {
 	if (fields.enabled !== undefined && !/^(true|yes|on|1)$/i.test(unquote(fields.enabled))) return { kind: "disabled" };
 	const text = body.trim();
 	if (text === "") return { kind: "invalid", reason: tr("empty body", "正文为空") };
-	const conditions = parseSessionConditions(fields, { kind: "default", targets: [{ kind: "main" }] });
+	const conditions = parseSessionConditions(fields, { kind: "default", targets: [{ kind: "main" }] }, "frontmatter");
 	if (conditions.kind === "invalid") return { kind: "invalid", reason: describeProblem(conditions.problem) };
 	return { kind: "ok", fragment: { conditions: conditions.value, body: text } };
 }

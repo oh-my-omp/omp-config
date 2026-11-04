@@ -351,7 +351,7 @@ function parseSpecFile(path: string): SpecParse {
 		if (!Number.isInteger(maxChars) || maxChars <= 0)
 			return { kind: "invalid", reason: tr("maxChars must be a positive integer", "maxChars 必须是正整数") };
 	}
-	const filter = parseSessionFilter(fields, FILTER_KEYS, { kind: "default", targets: [{ kind: "main" }] });
+	const filter = parseSessionFilter(fields, FILTER_KEYS, { kind: "default", targets: [{ kind: "main" }] }, "frontmatter");
 	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
 	const inject = parseInjectMode(fields.inject);
 	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };
