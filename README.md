@@ -29,7 +29,7 @@ This configuration is organized around the following design choices:
 Slash commands run inside `omp` started at the repository root:
 
 ```text
-/onboard-omp [check|<plane>]                 # progressive guided walkthrough, live runtime check, and machine-local setup
+/onboard-omp [check|<plane>]                 # explain why omomp is customized, explore practical concerns, then adapt and install locally
 /update-omp [check]                          # apply working tree -> ~/.omp/agent, omp-light, plugins; keeps local customizations, adapts conflicts
 /sync-omp-config [check]                     # copy eligible machine changes -> repo, validate, commit and push
 /omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]

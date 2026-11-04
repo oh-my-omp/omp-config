@@ -45,7 +45,7 @@ flowchart LR
 在仓库根目录启动 `omp` 后执行斜杠命令：
 
 1. **新机器首次配置（`/onboard-omp [check|<plane>]` 或 `/update-omp`）**：
-   - 首次引导安装可在仓库根目录运行 `/onboard-omp`：只读盘点后先询问是否扩充 AI 提供商（`omp://providers.md` 中的 `/login` / 环境变量渠道、`pi-package` 提供商与本机 `models.yml` 的中转站），再按命令定义的运行时控制面调查内置文档与工作区，诊断模型和语言匹配度（`task.agentModelOverrides`、`omomp.yml`），保持工作树干净。随后调用 `/update-omp`，仅将定制写入本机所有项（`LOCAL_CONFIG_FIELDS`、`LOCAL_OMOMP_SECTIONS`、已有播种路径与 `models.yml`）。思考翻译设置按 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) 操作，不使用仓库模型链。传 `check` 只读诊断，传 `<plane>` 调查指定控制面。
+   - 首次引导可在仓库根目录运行 `/onboard-omp`。命令先解释 omomp 为什么定制 OMP，再围绕用户关心的实际问题深入：规则一致性、理解上下文后修改文件、长任务记忆、模型协作、执行检查、日常使用与更新。讲解说明原因、可见变化和取舍，不向用户摊开源码或配置清单。需要时再诊断和适配本机，优先使用已有模型服务，也可协助内置登录、补充提供商或自定义中转站。用户批准设置后，命令将定制写入本机副本，并按 `/update-omp` 完成安装，不改仓库工作树。思考翻译设置按 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) 操作。传 `check` 只读诊断，不提问、不写入；传 `<plane>` 可用主题关键词或原有主题编号跳转。
    - 若已熟悉配置、只需直接安装，运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件执行 `omp install`）。
    - 若本机使用 `~/.claude`，在 `~/.omp/agent/config.yml` 的 `extensions` 第一项加上 `~/.claude`，然后重启 `omp`。
    - 需要开启启动自动更新时，运行 `/omp-config-autoupdate on`（下次启动起生效）。
