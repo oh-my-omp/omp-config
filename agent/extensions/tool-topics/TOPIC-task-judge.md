@@ -25,5 +25,5 @@ await b.close();
 - The judge sees only the text you pass, no files, history or tools. Texts come from values already in the cell, such as `tool.<name>()` bridge results; `output(ids)` returns `{ id, content }` records, so pass `content`. Files still go through `read`.
 - Derive the labels from the decision you have to make. `bool` is a probability of yes, and the threshold is yours.
 - An answer sorts and filters; it is not evidence. Read what you act on.
-- Assignment splitting, parallel-writer isolation and `task:*` completion are already judged when you dispatch and when a worker yields; do not judge them again.
+- Assignment splitting and parallel-writer isolation are already judged when you dispatch; do not judge them again.
 - One text: `await judge(text, questions)`. Signatures, `score`, images and batch draining: `xd://eval/judge`.

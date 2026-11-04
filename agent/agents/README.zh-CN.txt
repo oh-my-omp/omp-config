@@ -53,30 +53,27 @@ prompt 的措辞无法绕过这一点。
 观察到：深度 2 的 `task:free` 子代工具列表里没有 `task` 工具。
 
 
-5. 没有 `structured: true` 就没有 `yield`；只剩 `yield` 时，纯文本会丢
--------------------------------------------------------------------
-`task.structured` 默认为 false，非结构化运行拿不到 `yield` 工具：子代的最后一条消息就是
-结果。这里除 `fork:self` 外每个定义都写了 `structured: true`，因为它们的交接、多轮对话
-（第 8 条）以及 task-completion-judge 扩展都依赖 `yield`。去掉这个键，这些 prompt 就会
-要求一个子代并不拥有的工具。
+5. 子代有没有 `yield` 由宿主决定；prompt 两种情况都要成立
+-------------------------------------------------------
+OMP 18.16 上，task 子代只有在结构化运行时才有 `yield` 工具（`task.structured` 开启，或定义里写
+`structured: true`）。这里两者都不设：结构化运行没有统一的 schema，按文本读取子代结果的调用方
+会拿到一个 JSON 对象。所以每个定义都以最后一条消息作为交付，只在有 `yield` 工具时才用它。
+不要写把 `yield` 当作唯一回答途径的 prompt。
 
-`mentor-default.md` 声明 `tools: []`，所以 `yield` 是它唯一的工具。观察到的失败链：
+一个旧的观察结果，只要定义要求 `yield` 就会复现：`mentor-default.md` 声明 `tools: []`；当
+`yield` 是它唯一的工具时，它
 
     把完整答案写成纯文本，没有工具调用
       -> harness 注入 "Last turn had no tool call -> session idle"
       -> 被迫补发的 `yield` 什么都没带
       -> job 以 `failed (exit 1)` 结束，并报 "Subagent called yield with null data."
 
-这是真实的数据丢失，不是表面问题：`agent://<id>` 里根本没有答案。父会话只是碰巧从文本里
-捞回来。修法是在 prompt 里写明：开场答案必须放进 `yield` 的载荷，一轮绝不能只以文字结束
-（见 mentor-default.md 的 Dialogue 一节）。
-
-任何被削减到只剩 `yield` 的 agent 都有这个风险，不只是 mentor。
+`agent://<id>` 里根本没有答案。
 
 
 6. `agent://` 和 `history://` 不是一回事
 ----------------------------------------
-    agent://<id>            消费通道；`yield` 的载荷落在这里
+    agent://<id>            消费通道；子代的结果落在这里
     history://<id>          完整 transcript，显示它实际是怎么进行的
     agent://<id>/field      从结构化结果里取出一个字段（按路径段，如 `/items/0`）
 
@@ -90,10 +87,10 @@ job 行只在本进程内存在，结算后大约五分钟消失。之后 agent 
 `write agent://<id>`、`agent://<id>`、`history://<id>`。
 
 
-8. 子代 yield 之后仍然可以联系
------------------------------
-yield 让子代进入 idle，之后进入 parked，但一条 `write agent://<id>` 消息会把它唤醒，上下文
-完好；它用新的 `yield` 回答，作为一个新的 task 结果送到发送方。discussant 和 mentor 就是这样
+8. 子代结束之后仍然可以联系
+--------------------------
+结束让子代进入 idle，之后进入 parked，但一条 `write agent://<id>` 消息会把它唤醒，上下文
+完好；它的下一条最终消息作为一个新的 task 结果送到发送方。discussant 和 mentor 就是这样
 进行多轮对话的。为继续同一话题而新派一个，会扔掉它读过的一切，还要重新付费。
 
 

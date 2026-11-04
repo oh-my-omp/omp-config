@@ -3,7 +3,7 @@ tool: task
 upstream: pi-coding-agent@18.13.2 src/prompts/tools/task.md, src/prompts/tools/task-async-contract.md
 ---
 Spawn `tasks[]` concurrently; IDs return immediately. Results auto-deliver; NEVER poll. Completely blocked? Call `wait`. Coordinate while peers run via `write agent://<id>` (`agent://all` broadcasts).
-`completed`: the subagent yielded; claimed artifacts are unverified.
+`completed`: the subagent finished; claimed artifacts are unverified.
 
 # Delegation
 Choose a worker tier by cost and required trust, not task type, difficulty, ambiguity, code volume, or tool familiarity. Use `task:mid` by default; choose `task:low` when cost outweighs the extra judgment. Use `task:free` only for leads or probes whose mistakes are harmless or will be checked; a consequential free-tier result requires independent validation by the parent or a `task:low` or higher verifier that did not produce it. Free-tier agreement is not validation. Keep the operator's model bindings and role assignments unchanged. Prefer one agent to investigate + edit.
