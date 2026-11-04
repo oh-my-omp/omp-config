@@ -6,34 +6,9 @@
  * caller's decision. Used by delete-guard (fail closed) and tool-policy-nag's
  * pty lane (fail open).
  */
+import type { Expression, Node, ObjectExpression, Program } from "@babel/types";
 import { loadBabelParser } from "@oh-my-pi/pi-coding-agent/eval/js/shared/rewrite-imports";
 import type { LaunchVia, LaunchWord } from "./eval-py-launches.ts";
-
-type BabelParser = Awaited<ReturnType<typeof loadBabelParser>>;
-type StripParseResult<T> = T extends unknown ? Omit<T, "comments" | "errors" | "tokens"> : never;
-type ParsedFile = ReturnType<BabelParser["parse"]>;
-type Expression = StripParseResult<ReturnType<BabelParser["parseExpression"]>>;
-type Program = ParsedFile["program"];
-type AstDepth = 0 | 1 | 2 | 3 | 4 | 5 | 6;
-type PreviousAstDepth = [0, 0, 1, 2, 3, 4, 5];
-type IsAny<T> = 0 extends 1 & T ? true : false;
-type AstChildren<T, Depth extends AstDepth> = { [Key in keyof T]: AstNodes<T[Key], PreviousAstDepth[Depth]> }[keyof T];
-type AstNodes<T, Depth extends AstDepth = 6> =
-	IsAny<T> extends true
-		? never
-		: Depth extends 0
-			? never
-			: T extends readonly (infer Item)[]
-				? AstNodes<Item, PreviousAstDepth[Depth]>
-				: T extends { readonly type: infer Kind extends string }
-					? string extends Kind
-						? AstChildren<T, Depth>
-						: T | AstChildren<T, Depth>
-					: T extends object
-						? AstChildren<T, Depth>
-						: never;
-export type Node = Exclude<AstNodes<Program | Expression>, undefined>;
-type ObjectExpression = Extract<Expression, { type: "ObjectExpression" }>;
 
 /**
  * A process launch at one node. `childScript`: child_process `exec`/`execSync`
