@@ -2,6 +2,8 @@
 
 [English](README.md) | 简体中文
 
+omomp 的完整定制面向高能力主 agent：编排和监督机制增强其执行能力，为任务质量提供保障；同样的要求对低能力主 agent 是沉重负担。个人与领域规则有意留给用户。入门先从本机已有的全局规则和 skills 出发，讲清哪些语义约束可以由 omomp 机制承担、还能增加什么能力，再以组件介绍补充理解。
+
 本仓库的配置围绕以下设计取舍展开：
 
 1. **消除 system prompt 内部的重复与前后矛盾。** 非空壳 harness 在基础模板、内置工具说明与子代理包装层中自带的预定义文本极易与用户规则重复或冲突，而模型遇到前后矛盾的提示词时会直接忽略。依托 Pi 系（含 `omp`）对 Handlebars 模板、personality 槽位、追加提示词与 `before_agent_start` 钩子的完整定制能力，本仓库从 `SYSTEM_TEMPLATE.md` 中剔除重复的工具说明，通过 [`tool-topics`](docs/extensions.zh-CN.md#tool-topics) 只把 OMP 自身工具的说明压到常用调用说明加 `Topics` 索引，详细调用说明按需读取 `tool://<tool>/<topic>`；扩展与插件工具保留各自说明。再通过 [`system-prompt-replace`](docs/prompts-and-context.zh-CN.md#system-prompt-replace) 做其余措辞级修改（如移除原生子代理禁用 Todo 的冲突句子），使每条规则只出现一次且前后一致。
@@ -29,7 +31,7 @@
 在仓库根目录启动 `omp` 后运行的斜杠命令：
 
 ```text
-/onboard-omp [check|<plane>]                 # 现场调查并连续讲解整套定制；仓库配置作为可按个人需要调整的示例
+/onboard-omp [check|<plane>]                 # 从已有规则和 skills 讲清机制替代、新增能力与可定制示例
 /update-omp [check]                          # 仓库工作区 -> ~/.omp/agent、omp-light 与插件；保留本机定制并当场适配冲突
 /sync-omp-config [check]                     # 本机受管改动 -> 仓库（按字段比对修改、校验、提交并推送）
 /omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]

@@ -45,10 +45,10 @@ flowchart LR
 在仓库根目录启动 `omp` 后执行斜杠命令：
 
 1. **新机器首次配置（`/onboard-omp [check|<plane>]` 或 `/update-omp`）**：
-   - 在仓库根目录运行 `/onboard-omp`，让模型当场调查配置、提示词、子代理角色、全部本地扩展和全部声明插件（含可选项）。模型从当前来源理解原生行为与 omomp 的改变，再用连贯文字讲清用途和设计取舍。调查与讲解连续推进，不调用 `ask`，不逐章确认；用户随时可以通过普通对话打断或点题。已有文档是参考，不是讲稿。仓库配置是一组可运行的示例：引导会调查 schema 与加载方式，解释用户可以改什么、在哪个范围生效、何时加载。默认讲解只读；用户明确要求配置或安装时，再做本机适配并按 `/update-omp` 执行，优先使用已有服务，缺少的个人选择用普通文字沟通，定制留在本机。思考翻译设置按 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) 操作。传 `check` 做本机只读诊断；传 `<plane>` 可指定主题、组件名或原有主题编号。
+   - 在仓库根目录运行 `/onboard-omp`。开场先说明完整定制为什么对低能力主 agent 是负担、对高能力主 agent 则能增强执行并保障任务质量。模型先调查 omomp 之外本机已有的全局规则和 skills，用真实故事讲清哪些语义约束可以由机制承担、哪些只覆盖一部分、哪些用户要求继续保留，以及还能增加什么能力。实际加载、文件存在和安装后才有的行为分别说明，个人与领域知识留给用户。配置、提示词、子代理、本地扩展和全部声明插件（含可选项）的介绍作为补充，不再主导开场。当前来源提供依据，仓库配置提供可调整的可运行示例，而不是讲稿。模型使用用户语言；非中文用户的第一条回复会建议 fork 并本地化配置和 prompt，用普通文字询问是否先做，等待回复；跳过则以同一语言只读继续。接受本地化时保留 schema 和机器可读文字，UI 仍只支持 `en`/`zh`。fork 维护的译文先同步上游，再从 fork 工作树运行 `/update-omp`，保持官方启动自动更新关闭。命令不调用 `ask` 工具，不逐章确认。明确的安装要求进入本机适配与 `/update-omp`；缺少的个人决定用普通文字沟通，思考翻译按 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) 设置。传 `check` 做本机只读诊断；传 `<plane>` 可指定主题、组件名或原有主题编号。
    - 若已熟悉配置、只需直接安装，运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件执行 `omp install`）。
    - 若本机使用 `~/.claude`，在 `~/.omp/agent/config.yml` 的 `extensions` 第一项加上 `~/.claude`，然后重启 `omp`。
-   - 需要开启启动自动更新时，运行 `/omp-config-autoupdate on`（下次启动起生效）。
+   - 跟随官方仓库、而非维护 fork 译文的安装，需要开启启动自动更新时运行 `/omp-config-autoupdate on`（下次启动起生效）。
    - 用 `omp config list --json`、`omp plugin list --json`、`git status --short` 检查结果。
 2. **把本机修改收回仓库（`/sync-omp-config [check]`）**：
    - 先运行 `/sync-omp-config check` 查看差异，再运行 `/sync-omp-config` 写回仓库、执行 `Bun.YAML.parse` / `JSON.parse` 与 `bun run check` 校验，并提交推送（`chore: sync snapshot with local omp config`）。本机所有路径、播种路径和基准记录都不进仓库。

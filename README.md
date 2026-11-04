@@ -2,6 +2,8 @@
 
 English | [简体中文](README.zh-CN.md)
 
+The full omomp setup is designed for a high-capability main agent: orchestration and supervision strengthen its execution and help maintain task quality, while the same demands are a heavy burden for a lower-capability main agent. Personal and domain-specific rules deliberately remain with the user. Onboarding starts with the machine's existing global rules and skills, explains which semantic constraints omomp mechanisms can take over and what capabilities they add, then uses the component walkthrough as a supplement.
+
 This configuration is organized around the following design choices:
 
 1. **Eliminate duplication and internal contradictions across the system prompt.** Any non-minimal harness ships predefined text across its base template, built-in tool descriptions, and subagent wrappers that easily duplicates or conflicts with local rules, and models ignore instructions that contradict each other. Using Pi/OMP's full customization across the Handlebars base template, personality slot, appendices, and `before_agent_start` hooks, this repository removes duplicate per-tool prose from `SYSTEM_TEMPLATE.md` and uses [`tool-topics`](docs/extensions.md#tool-topics) to cut OMP's own tool descriptions down to common call instructions plus a `Topics` index, with detailed instructions served on demand as `tool://<tool>/<topic>`; extension and plugin tools keep their own descriptions. [`system-prompt-replace`](docs/prompts-and-context.md#system-prompt-replace) handles the remaining wording-level edits (such as stripping the built-in child sentence that forbids Todo tracking), so each instruction appears once without contradiction.
@@ -29,7 +31,7 @@ This configuration is organized around the following design choices:
 Slash commands run inside `omp` started at the repository root:
 
 ```text
-/onboard-omp [check|<plane>]                 # investigate and explain all omomp customizations continuously; shipped settings are adaptable examples
+/onboard-omp [check|<plane>]                 # explain replacements for existing rules and skills, added capabilities, and customizable examples
 /update-omp [check]                          # apply working tree -> ~/.omp/agent, omp-light, plugins; keeps local customizations, adapts conflicts
 /sync-omp-config [check]                     # copy eligible machine changes -> repo, validate, commit and push
 /omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]
