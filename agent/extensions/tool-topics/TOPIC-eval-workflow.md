@@ -7,7 +7,7 @@ upstream: pi-coding-agent@18.13.2 src/prompts/tools/eval-agents.md, src/prompts/
 ---
 # Program-driven model work over many items
 
-The cell owns the item list and the merge; a model handles only each item's judgment. Start from values already in the cell, from an earlier tool result or a bridge such as `tool.session_query`; files are still acquired with `read`/`grep`/`glob`.
+The cell owns the item list and the merge; a model handles only each item's judgment. Start from values already in the cell, from an earlier tool result or a `tool.<name>()` bridge call; files are still acquired with `read`/`grep`/`glob`.
 
 | Each item needs | Use | The cell gets |
 |---|---|---|
