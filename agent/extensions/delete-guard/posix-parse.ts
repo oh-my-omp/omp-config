@@ -21,7 +21,7 @@ export type SimpleCommand = { readonly words: readonly Word[]; readonly stdin: S
 
 export type Script = { readonly commands: readonly SimpleCommand[]; readonly nested: readonly Script[] };
 
-export type ParseResult = { readonly kind: "parsed"; readonly script: Script } | { readonly kind: "invalid"; readonly detail: string };
+type ParseResult = { readonly kind: "parsed"; readonly script: Script } | { readonly kind: "invalid"; readonly detail: string };
 
 class ParseFailure extends Error {}
 

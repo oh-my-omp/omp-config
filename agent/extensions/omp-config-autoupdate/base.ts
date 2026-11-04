@@ -29,7 +29,7 @@ const STATE_FILE = "state.json";
 const FILES_DIR = "files";
 const STATE_VERSION = 1;
 
-export type PlainBase = { readonly kind: "none" } | { readonly kind: "unknown" } | { readonly kind: "known"; readonly content: Buffer };
+type PlainBase = { readonly kind: "none" } | { readonly kind: "unknown" } | { readonly kind: "known"; readonly content: Buffer };
 
 export interface StructuredRecord {
 	readonly value: Mapping;

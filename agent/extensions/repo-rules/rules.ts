@@ -11,7 +11,7 @@ const PROJECT_RULE_DIRS = [".claude/rules", ".agents/rules", ".pi/rules"] as con
 const USER_RULE_DIR = path.join(os.homedir(), ".claude", "rules");
 
 /** Placement of a rule that applies everywhere. */
-export type UnscopedKind = { readonly kind: "always" } | { readonly kind: "catalog"; readonly description: string };
+type UnscopedKind = { readonly kind: "always" } | { readonly kind: "catalog"; readonly description: string };
 
 /** A scanned rule without `paths`, rendered into the system prompt. */
 export interface UnscopedRule {
@@ -27,13 +27,10 @@ export interface UnscopedRule {
  * Where OMP itself puts a native rule (`bucketRules`: alwaysApply before description). When the
  * rule has `paths`, the extension removes it from there and loads it by path instead.
  */
-export type NativePlacement =
-	| { readonly kind: "always"; readonly content: string }
-	| { readonly kind: "rulebook" }
-	| { readonly kind: "dropped" };
+type NativePlacement = { readonly kind: "always"; readonly content: string } | { readonly kind: "rulebook" } | { readonly kind: "dropped" };
 
 /** Who discovered a path-scoped rule. Native rules keep OMP's agent scope. */
-export type ScopedOrigin =
+type ScopedOrigin =
 	| { readonly kind: "scan" }
 	| { readonly kind: "native"; readonly agents: readonly string[] | undefined; readonly placement: NativePlacement };
 

@@ -23,7 +23,7 @@ import { unquote } from "./spec-files.ts";
  *
  * Parse problems are returned as data; the caller words them.
  */
-export type Target =
+type Target =
 	| { readonly kind: "all" }
 	| { readonly kind: "main" }
 	| { readonly kind: "subagents" }
@@ -63,7 +63,7 @@ export type FilterProblem =
 	| { readonly kind: "badRegex"; readonly key: string; readonly detail: string }
 	| { readonly kind: "badInject"; readonly key: string; readonly value: string };
 
-export type Parsed<T> = { readonly kind: "ok"; readonly value: T } | { readonly kind: "invalid"; readonly problem: FilterProblem };
+type Parsed<T> = { readonly kind: "ok"; readonly value: T } | { readonly kind: "invalid"; readonly problem: FilterProblem };
 
 /** The producer of an assistant message, as `model` / `provider` constraints see it. */
 export type Producer = { readonly model: string; readonly provider: string };

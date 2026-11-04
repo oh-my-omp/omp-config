@@ -35,12 +35,12 @@ export type StructuredBaseSource =
 	/** No record yet: a host value equal to any historical repo value at its path is unmodified. */
 	| { readonly kind: "history"; readonly versions: readonly Mapping[] };
 
-export interface KeyConflict {
+interface KeyConflict {
 	readonly path: Path;
 	readonly reason: ConflictReason;
 }
 
-export interface StructuredMerge {
+interface StructuredMerge {
 	/** The host file after the merge; undefined only when it had nothing and gets nothing. */
 	readonly host: Mapping;
 	/** The new base record: repo values where accepted, old base values at conflicts. */

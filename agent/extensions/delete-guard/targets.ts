@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 
 /** What `lstat` saw: backends act on the entry itself, never on a link's target. */
-export type EntryKind = "file" | "directory" | "link";
+type EntryKind = "file" | "directory" | "link";
 
 /**
  * A path that passed validation. `operand` is what a backend acts on: the
@@ -12,9 +12,9 @@ export type EntryKind = "file" | "directory" | "link";
  */
 export type Target = { readonly given: string; readonly operand: string; readonly kind: EntryKind };
 
-export type Refusal = { readonly given: string; readonly reason: string };
+type Refusal = { readonly given: string; readonly reason: string };
 
-export type Validation =
+type Validation =
 	| { readonly kind: "ok"; readonly targets: readonly Target[] }
 	| { readonly kind: "refused"; readonly refusals: readonly Refusal[] };
 

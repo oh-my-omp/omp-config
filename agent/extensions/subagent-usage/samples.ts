@@ -20,7 +20,7 @@ const SETTLED_MS = 30 * 60 * 1000;
 const THINKING = /:(off|minimal|low|medium|high|xhigh|max)(?=@|$)/;
 
 /** A dispatch that ran wholly on the model its `session_init` resolved, with no fallback, and has ended. */
-export type Eligible = { readonly model: string; readonly provider: string; readonly thinking: string; readonly usd: number };
+type Eligible = { readonly model: string; readonly provider: string; readonly thinking: string; readonly usd: number };
 
 /** Splits `openai-codex/gpt-5.6-sol:high@route` into `openai-codex/gpt-5.6-sol` and `high`. */
 function parseResolved(resolvedModel: string): { readonly model: string; readonly thinking: string } {

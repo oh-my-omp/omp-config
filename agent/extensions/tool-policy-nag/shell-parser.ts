@@ -122,7 +122,7 @@ function markLoops(commands: readonly ParsedCommand[], background: ReadonlySet<n
 }
 
 /** `unterminated`: a quote or `$(`/backtick substitution never closes, so the shell would refuse the line. */
-export type ShellParse = { readonly kind: "complete"; readonly commands: SimpleCommand[] } | { readonly kind: "unterminated" };
+type ShellParse = { readonly kind: "complete"; readonly commands: SimpleCommand[] } | { readonly kind: "unterminated" };
 
 /** The simple commands of a line, best effort: an unterminated line yields what was read. */
 export function splitSimpleCommands(command: string): SimpleCommand[] {

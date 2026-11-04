@@ -6,9 +6,9 @@
 //                   (pi-coding-agent tools/xdev.ts renderDocs with the "##" heading).
 import type { ToolDocs, Topic } from "./catalog.ts";
 
-export type Composed = { readonly kind: "ok"; readonly text: string } | { readonly kind: "drift"; readonly reason: string };
+type Composed = { readonly kind: "ok"; readonly text: string } | { readonly kind: "drift"; readonly reason: string };
 
-export type Rewrite =
+type Rewrite =
 	| { readonly kind: "rewritten"; readonly blocks: string[] }
 	| { readonly kind: "absent" }
 	| { readonly kind: "drift"; readonly reason: string };

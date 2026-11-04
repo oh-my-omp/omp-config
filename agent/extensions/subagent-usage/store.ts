@@ -42,7 +42,7 @@ const calibrationSchema = z.object({
 export type Calibration = z.infer<typeof calibrationSchema>;
 export type Prior = z.infer<typeof priorSchema>;
 
-export type StoredCalibration =
+type StoredCalibration =
 	| { readonly kind: "none" }
 	| { readonly kind: "invalid"; readonly reason: string }
 	| { readonly kind: "ready"; readonly calibration: Calibration };

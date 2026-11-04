@@ -24,7 +24,7 @@ export type ConfigLoad<T> =
 	| { readonly kind: "found"; readonly value: T; readonly path: string; readonly skipped: readonly ConfigProblem[] }
 	| { readonly kind: "none"; readonly skipped: readonly ConfigProblem[] };
 
-export type OmompSection<T> = {
+type OmompSection<T> = {
 	readonly id: string;
 	readonly schema: zod.ZodLikeSchema<T>;
 };

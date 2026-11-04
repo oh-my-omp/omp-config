@@ -9,7 +9,7 @@ import { z } from "@oh-my-pi/pi-coding-agent";
  * error, carries no answer at all, or is not an ask result, so a cancelled or
  * refused ask never reads as a decision.
  */
-export type AskAnswer = { readonly question: string; readonly answer: string };
+type AskAnswer = { readonly question: string; readonly answer: string };
 
 const questionResult = z.object({
 	question: z.string(),

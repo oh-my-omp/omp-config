@@ -76,7 +76,7 @@ export type AccountQuota =
 	/** No number for this account: unmatched to its history, or a limit without a constant yet. */
 	| { readonly kind: "pending"; readonly reason: string };
 
-export type Pool =
+type Pool =
 	/** No live report for the provider right now. */
 	{ readonly kind: "unreported" } | { readonly kind: "accounts"; readonly accounts: readonly AccountQuota[] };
 

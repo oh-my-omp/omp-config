@@ -26,7 +26,7 @@ import { type ConfigLoad, defineOmompSection, loadOmompSection } from "./omomp.t
  * content) does not go through here.
  */
 
-export type Language = "en" | "zh";
+type Language = "en" | "zh";
 
 /** The environment variable that names the language explicitly. */
 export const LANGUAGE_ENV = "OMOMP_LANG";
@@ -34,9 +34,9 @@ export const LANGUAGE_ENV = "OMOMP_LANG";
 const sectionSchema = z.object({ language: z.enum(["en", "zh"]) }).strict();
 
 /** The `omomp-lang` section: owned by the `omomp-lang` extension, read by every consumer. */
-export const omompLangSection = defineOmompSection(join(import.meta.dir, "..", "omomp-lang"), sectionSchema);
+const omompLangSection = defineOmompSection(join(import.meta.dir, "..", "omomp-lang"), sectionSchema);
 
-export type ConfiguredLanguage = ConfigLoad<z.infer<typeof sectionSchema>>;
+type ConfiguredLanguage = ConfigLoad<z.infer<typeof sectionSchema>>;
 
 let configured: ConfiguredLanguage | undefined;
 
@@ -52,7 +52,7 @@ export function parseLanguage(value: string | undefined): Language | null {
 	return normalized === "en" || normalized === "zh" ? normalized : null;
 }
 
-export function resolveLanguage(env: Readonly<Record<string, string | undefined>>, configuredValue: Language | null): Language {
+function resolveLanguage(env: Readonly<Record<string, string | undefined>>, configuredValue: Language | null): Language {
 	const explicit = parseLanguage(env[LANGUAGE_ENV]);
 	if (explicit !== null) return explicit;
 	if (configuredValue !== null) return configuredValue;
@@ -63,7 +63,7 @@ export function resolveLanguage(env: Readonly<Record<string, string | undefined>
 	return "en";
 }
 
-export function language(): Language {
+function language(): Language {
 	const load = configuredLanguage();
 	return resolveLanguage(process.env, load.kind === "found" ? load.value.language : null);
 }

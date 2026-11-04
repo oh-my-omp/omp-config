@@ -28,7 +28,7 @@ const MIN_SIGMA_GROUP = 5;
 const MIN_DAY_DELTA = 0.05;
 const MIN_QUALIFYING_DAYS = 3;
 
-export type CalibrationMode = "full" | "quota";
+type CalibrationMode = "full" | "quota";
 
 export type CalibrationOutcome =
 	| { readonly kind: "ready"; readonly calibration: Calibration; readonly files: number; readonly parsed: number }

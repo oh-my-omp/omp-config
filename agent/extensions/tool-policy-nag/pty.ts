@@ -40,7 +40,7 @@ import { type LaunchWord, type PyScan, pyLaunchAt, scanPy } from "../_shared/eva
 import { optionName, resolveCommand } from "./shell-command.ts";
 import { type CommandToken, parseShellCommands } from "./shell-parser.ts";
 
-export type PtyCategory = "passthrough" | "terminal" | "open-ended";
+type PtyCategory = "passthrough" | "terminal" | "open-ended";
 
 /** One simple command, resolved through wrappers to the program it runs, in its shell context. */
 type Command = {
@@ -522,7 +522,7 @@ const RULES = {
 
 export type PtyRuleId = keyof typeof RULES;
 
-export type PtyHit = { readonly rule: PtyRuleId; readonly category: PtyCategory; readonly program: string };
+type PtyHit = { readonly rule: PtyRuleId; readonly category: PtyCategory; readonly program: string };
 
 const isRuleId = (key: string): key is PtyRuleId => Object.hasOwn(RULES, key);
 const RULE_IDS: readonly PtyRuleId[] = Object.keys(RULES).filter(isRuleId);

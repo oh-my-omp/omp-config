@@ -3,14 +3,14 @@ import type { CommandToken } from "./shell-parser.ts";
 /** One argument word; `dynamic` words hold `$…` or a substitution, so their runtime text is unknown. */
 export type ShellWord = { readonly text: string; readonly dynamic: boolean };
 
-export type OutputRedirect = { readonly operator: "write" | "append"; readonly target: string };
+type OutputRedirect = { readonly operator: "write" | "append"; readonly target: string };
 
 /**
  * Where the resolved program gets operands beyond its own words: `argv` only,
  * or `xargs`, which appends words read from stdin (unless `-I`/`--replace`
  * places them at explicit `{}` positions already among the words).
  */
-export type ArgumentFeed = { readonly kind: "argv" } | { readonly kind: "xargs"; readonly replace: boolean };
+type ArgumentFeed = { readonly kind: "argv" } | { readonly kind: "xargs"; readonly replace: boolean };
 
 /** The program a simple command actually runs, after wrappers, with what it reads and writes. */
 export type Invocation = {
@@ -40,7 +40,7 @@ export type Invocation = {
  * reach (the tool-routing lanes); `none` resolves them like any program (the
  * pty lane, which judges the entry point, not the work).
  */
-export type Exemption = "elevatedAndRemote" | "none";
+type Exemption = "elevatedAndRemote" | "none";
 
 export const basename = (path: string): string => {
 	const slash = path.lastIndexOf("/");

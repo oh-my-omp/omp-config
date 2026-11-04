@@ -66,7 +66,7 @@ function reasonFor(rule: Rule, fragment: string, detail: string, deleteAvailable
 	}
 }
 
-export type GuardResult = { readonly block: true; readonly reason: string } | undefined;
+type GuardResult = { readonly block: true; readonly reason: string } | undefined;
 
 /** The `tool_call` decision: a block with its reason, or undefined to let the call run. */
 export async function guardToolCall(toolName: string, input: unknown, deleteAvailable: () => boolean): Promise<GuardResult> {

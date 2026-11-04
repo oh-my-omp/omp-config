@@ -3,7 +3,7 @@ import { errorText } from "./errors.ts";
 import { lastAssistantText } from "./messages.ts";
 import type { Model, ThinkingLevel } from "./models.ts";
 
-export interface HelperPrompt {
+interface HelperPrompt {
 	/** Session id shown in logs; also the helper's agent name. */
 	readonly agentId: string;
 	readonly model: Model;
@@ -22,7 +22,7 @@ export interface HelperPrompt {
 	readonly onText?: (partial: string) => void;
 }
 
-export type HelperResult =
+type HelperResult =
 	/** Trimmed reply text, possibly empty. */
 	| { readonly kind: "text"; readonly text: string }
 	| { readonly kind: "canceled" }

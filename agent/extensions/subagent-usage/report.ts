@@ -7,7 +7,7 @@ import { type AccountQuota, type Binding as LimitBinding, poolFor } from "./quot
 import { OBSERVED_WINDOW_DAYS } from "./samples.ts";
 import type { Calibration } from "./store.ts";
 
-export type Estimate =
+type Estimate =
 	| { readonly kind: "observed"; readonly usd: number; readonly n: number }
 	| { readonly kind: "prior"; readonly usd: number; readonly n: number; readonly basis: "agent" | "model" }
 	| { readonly kind: "none" };
@@ -20,7 +20,7 @@ type Resolved = Extract<Binding, { kind: "resolved" }>;
  * without one or when a dispatch cost 0. Without observations, this machine's mean for agent+model+thinking,
  * else model+thinking; else no estimate.
  */
-export function estimate(binding: Resolved, costs: readonly number[], dispatch: Calibration["dispatch"]): Estimate {
+function estimate(binding: Resolved, costs: readonly number[], dispatch: Calibration["dispatch"]): Estimate {
 	if (costs.length > 0) {
 		const sigma = dispatch.sigma;
 		const usd =
@@ -37,7 +37,7 @@ export function estimate(binding: Resolved, costs: readonly number[], dispatch: 
 	return { kind: "none" };
 }
 
-export type ReportInput = {
+type ReportInput = {
 	readonly now: number;
 	readonly calibration: Calibration;
 	readonly bindings: readonly { readonly binding: Binding; readonly channel: Channel | undefined }[];

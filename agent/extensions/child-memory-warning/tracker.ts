@@ -1,5 +1,5 @@
 /** Kernel identities and live ancestry/group ownership; no IO or session state. */
-export interface ProcessIdentity {
+interface ProcessIdentity {
 	readonly pid: number;
 	readonly startedAt: bigint;
 }
@@ -9,7 +9,7 @@ export interface ProcessRecord extends ProcessIdentity {
 	readonly groupId: number;
 }
 
-export interface ProcessSnapshot {
+interface ProcessSnapshot {
 	/** Two-pass verified non-zombie rows only; an enumerated PID alone is not a live anchor. */
 	readonly processes: ReadonlyMap<number, ProcessRecord>;
 	/** Includes PIDs whose BSD info was unavailable; absence alone proves exit. */
@@ -26,7 +26,7 @@ export interface ProcessSource {
 	close(): void;
 }
 
-export interface TrackedProcess {
+interface TrackedProcess {
 	readonly identity: ProcessIdentity;
 	alerted: boolean;
 }

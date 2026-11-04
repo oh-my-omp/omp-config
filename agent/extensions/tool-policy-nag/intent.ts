@@ -35,7 +35,7 @@ const SPEC_NAME = /^INTENT-.*\.md$/;
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 /** One option: what the judge reads, what the reminder calls it, what it needs. */
-export type IntentOption = {
+type IntentOption = {
 	readonly label: string;
 	readonly title: string;
 	readonly tool: string;
@@ -48,7 +48,7 @@ export type IntentSpec = {
 	readonly options: readonly IntentOption[];
 };
 
-export type IntentSpecLoad =
+type IntentSpecLoad =
 	| { readonly kind: "found"; readonly spec: IntentSpec }
 	| { readonly kind: "missing" }
 	| { readonly kind: "disabled" }
@@ -87,7 +87,7 @@ export async function loadIntentSpec(directory: string): Promise<IntentSpecLoad>
 }
 
 /** Synchronous read kept separate so the caller can report a reason, not throw. */
-export function parseIntentSpec(path: string, raw: string): IntentSpecLoad {
+function parseIntentSpec(path: string, raw: string): IntentSpecLoad {
 	const match = FRONTMATTER.exec(raw);
 	if (match === null) return { kind: "invalid", reason: "no `---` frontmatter" };
 	const fields = frontmatterSchema.safeParse(Bun.YAML.parse(match[1] ?? ""));
@@ -106,7 +106,7 @@ export function parseIntentSpec(path: string, raw: string): IntentSpecLoad {
 	return { kind: "found", spec: { path, instructions, options } };
 }
 
-export type IntentVerdict =
+type IntentVerdict =
 	| { readonly kind: "ok"; readonly label: string; readonly probability: number; readonly confidence: number }
 	| { readonly kind: "failed"; readonly reason: string };
 
@@ -132,7 +132,7 @@ export async function judgeIntent(judge: Judge, spec: IntentSpec, call: WatchedC
 }
 
 /** A code fence longer than any backtick run inside `text`. */
-export function fenced(text: string, language: string): string {
+function fenced(text: string, language: string): string {
 	let longest = 2;
 	for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
 	const marks = "`".repeat(longest + 1);

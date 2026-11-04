@@ -5,7 +5,7 @@ import { classifyPowershell } from "./powershell.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
 /** The dialect a shell program interprets its script in; null for other programs. */
-export type ShellKind = "posix" | "powershell" | "cmd";
+type ShellKind = "posix" | "powershell" | "cmd";
 
 /** A program name as any dialect sees it: basename (either separator), lowercased, without `.exe`/`.com`. */
 export function programName(text: string): string {

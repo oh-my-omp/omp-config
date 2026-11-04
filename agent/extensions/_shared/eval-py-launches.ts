@@ -42,7 +42,7 @@ export type PyScan = {
 	readonly bindings: Bindings;
 };
 
-export type PyScanResult = { readonly kind: "scanned"; readonly scan: PyScan } | { readonly kind: "unlexable"; readonly reason: string };
+type PyScanResult = { readonly kind: "scanned"; readonly scan: PyScan } | { readonly kind: "unlexable"; readonly reason: string };
 
 /** Tokenizes a cell; an unterminated string or bracket cannot run and is `unlexable`. */
 export function scanPy(code: string): PyScanResult {

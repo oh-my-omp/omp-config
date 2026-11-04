@@ -10,7 +10,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
 import type { Topic } from "./catalog.ts";
 
-export type Publish = { readonly kind: "published" } | { readonly kind: "taken"; readonly reason: string };
+type Publish = { readonly kind: "published" } | { readonly kind: "taken"; readonly reason: string };
 
 function target(url: InternalUrl): { readonly tool: string; readonly topic: string | undefined } {
 	const tool = url.rawHost || url.hostname;

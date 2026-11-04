@@ -7,9 +7,7 @@ import type { Dialect, Verdict } from "./verdict.ts";
 export type ArgvWord = { readonly text: string; readonly literal: boolean };
 
 /** What is handed to a shell: command text, or an argv list run without a shell. */
-export type CommandInput =
-	| { readonly kind: "script"; readonly text: string }
-	| { readonly kind: "argv"; readonly words: readonly ArgvWord[] };
+type CommandInput = { readonly kind: "script"; readonly text: string } | { readonly kind: "argv"; readonly words: readonly ArgvWord[] };
 
 /**
  * Classifies a command input; `depth` counts enclosing nested scripts. An argv list runs without a shell, so

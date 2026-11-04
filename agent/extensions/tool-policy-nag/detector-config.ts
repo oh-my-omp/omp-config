@@ -53,13 +53,13 @@ export type IntentLane = {
 };
 
 /** The risk lane: deterministic, for calls whose side-effect surface is unreadable. */
-export type RiskLane = { readonly kind: "risk" } & RiskConfig;
+type RiskLane = { readonly kind: "risk" } & RiskConfig;
 
 /** The pty lane: deterministic, blocking; it has no settings. */
-export type PtyLane = { readonly kind: "pty" };
+type PtyLane = { readonly kind: "pty" };
 
 /** How tool-routing violations are caught, chosen by `detector`. */
-export type ToolLanes =
+type ToolLanes =
 	| { readonly detector: "heuristic"; readonly form: FormLane }
 	| { readonly detector: "jev"; readonly intent: IntentLane; readonly fallback: FormLane | null };
 

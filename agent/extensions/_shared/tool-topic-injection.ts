@@ -12,7 +12,7 @@ import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/route
 import { createContextDelivery } from "./context-delivery.ts";
 import { errorText } from "./errors.ts";
 
-export interface ToolTopicInjectionRule {
+interface ToolTopicInjectionRule {
 	readonly id: string;
 	readonly tool: string;
 	readonly parameter: string;

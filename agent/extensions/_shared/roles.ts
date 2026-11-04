@@ -7,7 +7,7 @@ import { kindOf } from "@oh-my-pi/pi-coding-agent/judgment";
 import { sessionSettings } from "./settings.ts";
 
 /** A concrete thinking level: off or one of the host's efforts. */
-export type RoleLevel = "off" | (typeof THINKING_EFFORTS)[number];
+type RoleLevel = "off" | (typeof THINKING_EFFORTS)[number];
 
 /** One chat model of a role chain; `level` is the entry's `:level` suffix, undefined without one. */
 export type RoleModel = { readonly role: string; readonly model: Model; readonly level: RoleLevel | undefined };

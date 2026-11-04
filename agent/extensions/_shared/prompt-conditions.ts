@@ -23,7 +23,7 @@ import { unquote } from "./spec-files.ts";
  * with none, a model or provider constraint matches on neither side.
  * The default inclusion target belongs to the caller.
  */
-export type Mode = "full" | "light";
+type Mode = "full" | "light";
 
 interface Side {
 	readonly filter: SessionFilter;

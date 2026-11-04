@@ -25,7 +25,7 @@ export type Platform = "darwin" | "linux" | "win32";
 export const supportedPlatform = (platform: NodeJS.Platform): Platform | null =>
 	platform === "darwin" || platform === "linux" || platform === "win32" ? platform : null;
 
-export type Mode = "trash" | "permanent";
+type Mode = "trash" | "permanent";
 
 export type Outcome =
 	| { readonly kind: "done"; readonly given: string; readonly note: string }
