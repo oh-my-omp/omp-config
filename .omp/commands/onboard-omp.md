@@ -151,7 +151,7 @@ argument-hint: "[check|<plane>]"
 
 向用户明确说明以下参数**不建议在首次安装时凭直觉修改**，应保持仓库经过校准的默认值：
 - `tool-policy-nag` 的 `afterHits: 3`、`maxNags: 3`、`intent.threshold: 0.5` 与 `risk` 阈值（启发式高误报率是有意设计，只消耗少量自检 thinking token；这些提醒通道不会阻断命令）。`pty: {}` 保持开启：它是确定性的入口路由，没有阈值可调，只在会话挂载了 `exec_command` 时拦截。
-- `TURN-JUDGE-gpt-talk-only.md` 的 `threshold: 0.8`（基于真实 GPT 会话样本校准为 0 误报）。
+- `TURN-JUDGE-gpt-talk-only.md` 的 `when.*` 规则阈值（在人工标注的 GPT 会话回合上评测为 0 误报）。
 - `compaction.methodOrder`（`remote → soft → snapcompact → handoff → shake`）与 `compaction.asyncEnabled: false`。
 - `child-memory-warning.thresholdGiB: 4`、`tool-topic-injection.rules`、`REPLACE-SYSTEM-default.yml` 的替换规则（需要额外替换时新建本机 `REPLACE-SYSTEM-*.yml`）。
 

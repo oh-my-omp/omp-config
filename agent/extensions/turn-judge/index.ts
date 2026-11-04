@@ -1,7 +1,8 @@
 // ============================================================================
 // turn-judge — after every turn of a session a `TURN-JUDGE-*.md` file targets,
-// ask JUDGE (`openJudge`, purpose `turn-judge`) that file's question about the turn, then either
-// report the verdict or send the configured prompt.
+// ask JUDGE (`openJudge`, purpose `turn-judge`) that file's yes/no questions
+// about the turn, then either report the answers or, when one of the file's
+// rules holds, send the configured prompt.
 // Registers input, session_switch/branch/tree, and message_end hooks; no tools
 // or commands. Reads adjacent/repository specs and session history; writes no
 // files. Runs in main and sub sessions.
@@ -21,10 +22,13 @@
 //   skipTools: wt, harness_restart       # optional; tool names, see SCOPE
 //   inject:  system                      # optional; system (default) | user, see OUTCOME
 //   maxChars: 30000                      # optional; 时间线 budget, see STATE
-//   option.<label>: <criteria>           # >= 2 options; empty criteria = the label says it all
-//   option.<label>.prompt: <text>        # optional; sent to the agent when triggered
-//   option.<label>.threshold: 0.7        # required with .prompt, in (0, 1]
-// Labels are any text without `.` or spaces. Body = the question, sent verbatim.
+//   question.<id>: <instructions>       # >= 1; one Noul (yes/no) question each
+//   question.<id>.true: <criterion>     # optional; what a yes means
+//   question.<id>.false: <criterion>    # optional; what a no means
+//   when.<name>: a >= 0.7 & b < 0.3     # >= 1 rule; see OUTCOME
+//   prompt:  <text>                     # required; sent when a rule holds
+// Ids and rule names are `[a-z0-9_]+`. Every declared question appears in at
+// least one rule. The body stays empty.
 //
 // SCOPE. `target`, `cwd`, `model` and `provider` follow
 // `_shared/session-filter.ts` (the grammar watchdog-agent uses); items inside a
@@ -59,7 +63,8 @@
 // subagent's final report is such a message, and so is its reply to an IRC
 // wake. Files are re-read at every turn, so edits apply to the next turn.
 //
-// STATE. Each file is one separate judge request whose state is
+// STATE. Each file is one separate judge request, carrying all of the file's
+// questions, whose state is
 //   { 时间线: [{ 类型, 内容 }...], 本轮回复 }
 // 时间线 covers the work the judged turn belongs to: it starts at the last
 // human prompt on the current branch and runs to the judged message, one
@@ -88,11 +93,11 @@
 // When the entries after 用户说 exceed `maxChars` characters, whole entries
 // are dropped from the oldest end; 用户说 itself is never dropped.
 //
-// OUTCOME. JUDGE answers one choice question with a probability per option.
-// Among options that carry a prompt, the one with the highest probability at
-// or above its threshold is triggered; otherwise the file's verdict and every
-// option's probability are reported. A turn the prompt itself causes is judged
-// like any other; nothing caps it.
+// OUTCOME. JUDGE answers each question with the probability of yes. A rule
+// holds when every one of its comparisons holds (`>= p`: probability at least
+// p; `< p`: below p); the first holding rule, in file order, triggers the
+// file's prompt. Otherwise the file's answers are reported. A turn the prompt
+// itself causes is judged like any other; nothing caps it.
 // `inject` sets how a triggered prompt reaches the agent, verbatim either way:
 // `system` (default) as a `turn-judge` custom message on OMP's harness-notice
 // channel (`developer` where the provider has that role, a mid-conversation
@@ -139,7 +144,7 @@
 
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import type { AssistantMessage, Judge } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Judge, NoulQuestion } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { errorText } from "../_shared/errors.ts";
@@ -159,7 +164,9 @@ import {
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 
 const FILE_PATTERN = /^TURN-JUDGE-.+\.md$/i;
-const OPTION_KEY = /^option\.([^.\s]+)(?:\.(prompt|threshold))?$/;
+const QUESTION_KEY = /^question\.([a-z0-9_]+)(?:\.(true|false))?$/;
+const RULE_KEY = /^when\.([a-z0-9_]+)$/;
+const COMPARISON = /^([a-z0-9_]+)\s*(>=|<)\s*(\d*\.?\d+)$/;
 const DEFAULT_MAX_CHARS = 30_000;
 const JUDGE_TIMEOUT_MS = 90_000;
 /** Whole subagent handler budget; OMP stops waiting for an extension handler after 30 s. */
@@ -174,15 +181,24 @@ const PROMPT_CUSTOM_TYPE = "turn-judge";
 /** Custom message types that are notes to the judged agent, so the timeline lists them as 提醒: watchdog-agent's system-form notes and this extension's prompts. */
 const REMINDER_CUSTOM_TYPES: ReadonlySet<string> = new Set(["watchdog", PROMPT_CUSTOM_TYPE]);
 
-type Outcome = { readonly kind: "info" } | { readonly kind: "prompt"; readonly prompt: string; readonly threshold: number };
+/** What yes and no mean for one Noul; either side may be left to the instructions. */
+type NoulCriteria = { readonly true?: string; readonly false?: string };
 
-type JudgeOption = { readonly label: string; readonly criteria: string | null; readonly outcome: Outcome };
+/** One Noul question: the probability that its statement about the turn holds. */
+type TurnQuestion = { readonly id: string; readonly instructions: string; readonly criteria: NoulCriteria | null };
+
+/** `question >= value` (atLeast) or `question < value` (below) on that question's probability. */
+type Comparison = { readonly question: string; readonly op: "atLeast" | "below"; readonly value: number };
+
+/** A conjunction of comparisons; the file's prompt is sent when any rule holds. */
+type Rule = { readonly name: string; readonly conditions: readonly Comparison[] };
 
 type TurnJudgeSpec = {
 	readonly name: string;
 	readonly filePath: string;
-	readonly question: string;
-	readonly options: readonly JudgeOption[];
+	readonly questions: readonly TurnQuestion[];
+	readonly rules: readonly Rule[];
+	readonly prompt: string;
 	readonly maxChars: number;
 	/** Tool names whose call in the judged turn skips this file. */
 	readonly skipTools: ReadonlySet<string>;
@@ -207,13 +223,12 @@ type TurnState = { readonly 时间线: readonly TimelineEntry[]; readonly 本轮
  */
 type Before = { readonly timeline: readonly TimelineEntry[]; readonly toolCalls: readonly string[] };
 
-type Verdict = { readonly choice: string; readonly probabilities: Readonly<Record<string, number>> };
+/** Probability of yes per question id. */
+type Verdict = Readonly<Record<string, number>>;
 
 type JudgeResult = { readonly kind: "ok"; readonly verdict: Verdict } | { readonly kind: "failed"; readonly reason: string };
 
-type Action =
-	| { readonly kind: "prompt"; readonly option: string; readonly probability: number; readonly prompt: string }
-	| { readonly kind: "info" };
+type Action = { readonly kind: "prompt"; readonly rule: string; readonly prompt: string } | { readonly kind: "info" };
 
 /** One file's judgment of one turn, before anything is sent. */
 type Judged =
@@ -235,62 +250,85 @@ const warnedFiles = new Set<string>();
 
 // --- discovery + parsing ----------------------------------------------------
 
-type OptionsParse =
-	| { readonly kind: "ok"; readonly options: readonly JudgeOption[] }
+type QuestionsParse =
+	| { readonly kind: "ok"; readonly questions: readonly TurnQuestion[] }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-/** Collect flat `option.<label>[.prompt|.threshold]` keys into options, in declaration order. */
-function parseOptions(fields: Readonly<Record<string, string>>): OptionsParse {
-	const criteria = new Map<string, string | null>();
-	const prompts = new Map<string, string>();
-	const thresholds = new Map<string, string>();
+/** Collect flat `question.<id>[.true|.false]` keys into Noul questions, in declaration order. */
+function parseQuestions(fields: Readonly<Record<string, string>>): QuestionsParse {
+	const instructions = new Map<string, string>();
+	const yes = new Map<string, string>();
+	const no = new Map<string, string>();
 	for (const [key, raw] of Object.entries(fields)) {
-		const m = key.match(OPTION_KEY);
-		const label = m?.[1];
-		if (!m || label === undefined) continue;
+		const m = key.match(QUESTION_KEY);
+		const id = m?.[1];
+		if (!m || id === undefined) continue;
 		const value = unquote(raw);
-		// OPTION_KEY admits exactly these suffixes; no cast of file input is needed.
-		const suffix = m[2];
-		if (suffix === undefined) {
-			criteria.set(label, value || null);
-		} else if (suffix === "prompt") {
-			if (!value) return { kind: "invalid", reason: tr(`option.${label}.prompt is empty`, `option.${label}.prompt 为空`) };
-			prompts.set(label, value);
-		} else if (suffix === "threshold") {
-			thresholds.set(label, value);
-		}
+		if (!value) return { kind: "invalid", reason: tr(`${key} is empty`, `${key} 为空`) };
+		// QUESTION_KEY admits exactly these suffixes; no cast of file input is needed.
+		const side = m[2];
+		if (side === undefined) instructions.set(id, value);
+		else if (side === "true") yes.set(id, value);
+		else no.set(id, value);
 	}
-	if (criteria.size < 2)
-		return { kind: "invalid", reason: tr("needs at least two option.<label> entries", "至少需要两个 option.<label> 条目") };
-	for (const label of [...prompts.keys(), ...thresholds.keys()]) {
-		if (!criteria.has(label)) return { kind: "invalid", reason: tr(`option.${label} is not declared`, `option.${label} 未声明`) };
+	if (instructions.size === 0)
+		return { kind: "invalid", reason: tr("needs at least one question.<id> entry", "至少需要一个 question.<id> 条目") };
+	for (const id of [...yes.keys(), ...no.keys()]) {
+		if (!instructions.has(id)) return { kind: "invalid", reason: tr(`question.${id} is not declared`, `question.${id} 未声明`) };
 	}
-	const options: JudgeOption[] = [];
-	for (const [label, rubric] of criteria) {
-		const prompt = prompts.get(label);
-		const rawThreshold = thresholds.get(label);
-		if (prompt === undefined) {
-			if (rawThreshold !== undefined)
+	const questions: TurnQuestion[] = [];
+	for (const [id, text] of instructions) {
+		const whenYes = yes.get(id);
+		const whenNo = no.get(id);
+		const criteria: NoulCriteria | null =
+			whenYes === undefined && whenNo === undefined
+				? null
+				: { ...(whenYes === undefined ? {} : { true: whenYes }), ...(whenNo === undefined ? {} : { false: whenNo }) };
+		questions.push({ id, instructions: text, criteria });
+	}
+	return { kind: "ok", questions };
+}
+
+type RulesParse = { readonly kind: "ok"; readonly rules: readonly Rule[] } | { readonly kind: "invalid"; readonly reason: string };
+
+/** Parse `when.<name>: <id> >= p & <id> < p …` rules over the declared questions; every question must feed a rule. */
+function parseRules(fields: Readonly<Record<string, string>>, questions: readonly TurnQuestion[]): RulesParse {
+	const declared = new Set(questions.map((q) => q.id));
+	const used = new Set<string>();
+	const rules: Rule[] = [];
+	for (const [key, raw] of Object.entries(fields)) {
+		const name = key.match(RULE_KEY)?.[1];
+		if (name === undefined) continue;
+		const conditions: Comparison[] = [];
+		for (const part of unquote(raw).split("&")) {
+			const m = part.trim().match(COMPARISON);
+			const [, question, op, rawValue] = m ?? [];
+			if (question === undefined || op === undefined || rawValue === undefined)
 				return {
 					kind: "invalid",
 					reason: tr(
-						`option.${label}.threshold set without option.${label}.prompt`,
-						`option.${label}.threshold 已设置，但未设置 option.${label}.prompt`,
+						`${key}: "${part.trim()}" is not <question> >= p or <question> < p`,
+						`${key}：“${part.trim()}”不是 <question> >= p 或 <question> < p`,
 					),
 				};
-			options.push({ label, criteria: rubric, outcome: { kind: "info" } });
-			continue;
+			if (!declared.has(question))
+				return { kind: "invalid", reason: tr(`${key}: question.${question} is not declared`, `${key}：question.${question} 未声明`) };
+			const value = Number(rawValue);
+			if (!(value > 0 && value <= 1))
+				return { kind: "invalid", reason: tr(`${key}: ${rawValue} must be in (0, 1]`, `${key}：${rawValue} 必须在 (0, 1] 范围内`) };
+			used.add(question);
+			conditions.push({ question, op: op === ">=" ? "atLeast" : "below", value });
 		}
-		const threshold = rawThreshold === undefined ? Number.NaN : Number(rawThreshold);
-		if (!(threshold > 0 && threshold <= 1)) {
-			return {
-				kind: "invalid",
-				reason: tr(`option.${label}.threshold must be a number in (0, 1]`, `option.${label}.threshold 必须是 (0, 1] 范围内的数字`),
-			};
-		}
-		options.push({ label, criteria: rubric, outcome: { kind: "prompt", prompt, threshold } });
+		rules.push({ name, conditions });
 	}
-	return { kind: "ok", options };
+	if (rules.length === 0) return { kind: "invalid", reason: tr("needs at least one when.<name> rule", "至少需要一条 when.<name> 规则") };
+	const unused = questions.find((q) => !used.has(q.id));
+	if (unused !== undefined)
+		return {
+			kind: "invalid",
+			reason: tr(`question.${unused.id} is used by no when.<name> rule`, `没有 when.<name> 规则使用 question.${unused.id}`),
+		};
+	return { kind: "ok", rules };
 }
 
 /** UI wording of a frontmatter filter or inject problem. */
@@ -343,8 +381,13 @@ function parseSpecFile(path: string): SpecParse {
 	if (!parsed) return { kind: "invalid", reason: tr("missing frontmatter", "缺少 frontmatter") };
 	const { fields, body } = parsed;
 	if (fields.enabled !== undefined && !/^(true|yes|on|1)$/i.test(unquote(fields.enabled))) return { kind: "disabled" };
-	const question = body.trim();
-	if (question === "") return { kind: "invalid", reason: tr("empty body (the body is the question)", "正文为空（正文就是问题）") };
+	if (body.trim() !== "")
+		return {
+			kind: "invalid",
+			reason: tr("the body must be empty: questions are question.<id> keys", "正文必须为空：问题写在 question.<id> 键中"),
+		};
+	const prompt = fields.prompt === undefined ? "" : unquote(fields.prompt);
+	if (prompt === "") return { kind: "invalid", reason: tr("prompt is missing or empty", "缺少 prompt 或 prompt 为空") };
 	let maxChars = DEFAULT_MAX_CHARS;
 	if (fields.maxchars !== undefined) {
 		maxChars = Number(unquote(fields.maxchars));
@@ -357,8 +400,10 @@ function parseSpecFile(path: string): SpecParse {
 	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };
 	const skipTools = parseSkipTools(fields.skiptools);
 	if (skipTools.kind === "invalid") return skipTools;
-	const options = parseOptions(fields);
-	if (options.kind === "invalid") return options;
+	const questions = parseQuestions(fields);
+	if (questions.kind === "invalid") return questions;
+	const rules = parseRules(fields, questions.questions);
+	if (rules.kind === "invalid") return rules;
 	const label = basename(path)
 		.replace(/^TURN-JUDGE-/i, "")
 		.replace(/\.md$/i, "");
@@ -367,8 +412,9 @@ function parseSpecFile(path: string): SpecParse {
 		spec: {
 			name: fields.name ? unquote(fields.name) : label,
 			filePath: path,
-			question,
-			options: options.options,
+			questions: questions.questions,
+			rules: rules.rules,
+			prompt,
 			maxChars,
 			filter: filter.value,
 			inject: inject.value,
@@ -523,41 +569,57 @@ function hasMessageAfter(ctx: ExtensionContext, judgedTimestamp: number): boolea
 
 async function runJudge(judge: Judge, spec: TurnJudgeSpec, state: TurnState, signal: AbortSignal): Promise<JudgeResult> {
 	try {
-		const criteria: Record<string, string | null> = {};
-		for (const option of spec.options) criteria[option.label] = option.criteria;
-		const result = await judge.judge(
-			{
-				state,
-				questions: { turn: { type: "choice", instructions: spec.question, criteria } },
-			},
-			{ signal },
-		);
-		const answer = result.answers.turn;
-		return { kind: "ok", verdict: { choice: answer.choice, probabilities: answer.probabilities } };
+		const questions: Record<string, NoulQuestion> = {};
+		for (const q of spec.questions)
+			questions[q.id] =
+				q.criteria === null
+					? { type: "noul", instructions: q.instructions }
+					: { type: "noul", instructions: q.instructions, criteria: q.criteria };
+		const result = await judge.judge({ state, questions }, { signal });
+		const verdict: Record<string, number> = {};
+		for (const q of spec.questions) {
+			const answer = result.answers[q.id];
+			if (answer === undefined) return { kind: "failed", reason: tr(`no answer for question.${q.id}`, `question.${q.id} 没有回答`) };
+			verdict[q.id] = answer.noul;
+		}
+		return { kind: "ok", verdict };
 	} catch (error) {
 		return { kind: "failed", reason: errorText(error) };
 	}
 }
 
-/** The prompt option with the highest probability at or above its threshold, else info. */
-function decide(spec: TurnJudgeSpec, verdict: Verdict): Action {
-	let best: Action = { kind: "info" };
-	for (const option of spec.options) {
-		if (option.outcome.kind !== "prompt") continue;
-		const p = verdict.probabilities[option.label] ?? 0;
-		if (p < option.outcome.threshold) continue;
-		if (best.kind === "prompt" && best.probability >= p) continue;
-		best = { kind: "prompt", option: option.label, probability: p, prompt: option.outcome.prompt };
+function holds(condition: Comparison, verdict: Verdict): boolean {
+	const p = verdict[condition.question] ?? 0;
+	switch (condition.op) {
+		case "atLeast":
+			return p >= condition.value;
+		case "below":
+			return p < condition.value;
+		default: {
+			const unreachable: never = condition.op;
+			return unreachable;
+		}
 	}
-	return best;
 }
 
-function describeVerdict(spec: TurnJudgeSpec, verdict: Verdict): string {
-	const parts = spec.options.map((o) => `${o.label} ${(verdict.probabilities[o.label] ?? 0).toFixed(2)}`);
-	return tr(
-		`turn-judge ${spec.name}: ${verdict.choice} (${parts.join(" · ")})`,
-		`turn-judge ${spec.name}：${verdict.choice}（${parts.join(" · ")}）`,
-	);
+/** The first rule, in declaration order, whose every comparison holds; else info. */
+function decide(spec: TurnJudgeSpec, verdict: Verdict): Action {
+	const rule = spec.rules.find((r) => r.conditions.every((c) => holds(c, verdict)));
+	return rule === undefined ? { kind: "info" } : { kind: "prompt", rule: rule.name, prompt: spec.prompt };
+}
+
+function describeVerdict(spec: TurnJudgeSpec, verdict: Verdict, action: Action): string {
+	const parts = spec.questions.map((q) => `${q.id} ${(verdict[q.id] ?? 0).toFixed(2)}`).join(" · ");
+	switch (action.kind) {
+		case "prompt":
+			return tr(`turn-judge ${spec.name}: when.${action.rule} (${parts})`, `turn-judge ${spec.name}：when.${action.rule}（${parts}）`);
+		case "info":
+			return tr(`turn-judge ${spec.name}: no rule (${parts})`, `turn-judge ${spec.name}：未命中规则（${parts}）`);
+		default: {
+			const unreachable: never = action;
+			return unreachable;
+		}
+	}
 }
 
 async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, context: Before, reply: string, signal: AbortSignal): Promise<Judged> {
@@ -576,8 +638,8 @@ async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, context: Before, rep
 			return unreachable;
 		}
 	}
-	const line = describeVerdict(spec, result.verdict);
 	const action = decide(spec, result.verdict);
+	const line = describeVerdict(spec, result.verdict, action);
 	switch (action.kind) {
 		case "info":
 			return { kind: "info", line };

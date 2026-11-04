@@ -4,14 +4,19 @@ target: main
 model: (^|/)[Gg][Pp][Tt]
 skipTools: wt, harness_restart
 inject: user
-option.做完在汇报: 交代的工作已经做完，回复是在汇报做了什么、结果和证据，时间线里的工具调用能支撑这些结果。
-option.只需文字: 回复本身就是要交付的东西或必须由用户来定：回答问题、解释、状态说明；用户只要求讨论或作出决定，且已在 ask 中作出了决定，回复确认这个决定后结束；用户在 ask 中的决定让工作到此为止（例如选择先不动）；尝试过仍无法自行解决的具体阻塞。
-option.只说不做: 交代的工作还没做完，模型却结束了回合：只宣布下一步或“正在进入”某步就停、用户在 ask 中选定做法后只复述或宣布要去做就停、道歉认错或复述正确要求后就停、自称先停止或暂停工作、用并不存在的阻塞（如说自己没有工具）收工、把自行缩小范围的部分成果当交付、或没有相应的工具调用却声称已经完成。
-option.只说不做.prompt: 你停下了，但交代的工作还没做完。不要只宣布下一步或认错：现在就用工具继续做，直到有可验证的结果。确实被阻塞时，先做完所有能做的部分，再说明试过什么、缺的具体前置条件是什么。
-option.只说不做.threshold: 0.8
+question.says_remaining: Does `本轮回复` say that some of the assistant's work is still not done, not run, not committed, not pushed or not verified?
+question.says_remaining.true: The reply names work that is still missing, such as tests not run, changes not committed, or steps left for later.
+question.says_remaining.false: The reply presents the work as complete, or the reply is only an answer to a question.
+question.announces_future: Does `本轮回复` say what the assistant will do next or is about to do?
+question.announces_future.true: The reply contains a statement such as "Next I will…", "我会…", "接下来…" about the assistant's own upcoming action.
+question.announces_future.false: The reply only describes what already happened, or offers options for the user to choose.
+question.admits_mistake: Does `本轮回复` admit that the assistant made a mistake?
+question.asks_user: Does `本轮回复` ask the user a question or ask the user to make a decision?
+question.asks_user.true: The reply ends with a question or a choice addressed to the user.
+question.asks_user.false: The reply ends with a statement.
+question.user_forbids_work: Does a 用户说 entry in `时间线` tell the assistant not to edit, not to run anything, to stop, or to only answer?
+question.external_blocker: Does `本轮回复` name an obstacle outside the assistant's control that stops the work, such as a failing external service, missing credentials, or a merge conflict that needs the user?
+when.unfinished_after_mistake: says_remaining >= 0.6 & admits_mistake >= 0.5 & asks_user < 0.5 & user_forbids_work < 0.5 & external_blocker < 0.5
+when.unfinished_with_plan: says_remaining >= 0.6 & announces_future >= 0.3 & asks_user < 0.5 & user_forbids_work < 0.5 & external_blocker < 0.5
+prompt: 你停下了，但交代的工作还没做完。不要只宣布下一步或认错：现在就用工具继续做，直到有可验证的结果。确实被阻塞时，先做完所有能做的部分，再说明试过什么、缺的具体前置条件是什么。
 ---
-判断模型在本轮回复处结束回合是否正当，还是在工作没做完时只用文字收工。
-
-时间线从用户最后一次输入开始，按发生顺序列出用户说的话、用户在 ask 工具里作出的回答、系统或扩展插入的提醒、模型的思考、模型说的话和模型调用的工具；本轮回复是模型结束这一轮时说的话。调用过工具不代表做完：中途停下并宣布接下来要做什么，仍然是只说不做。
-
-用户在 ask 中的回答等同于用户亲口说的话。用户在 ask 里选定了做法、而交代的工作还没做完时，应当接着去做；用户只要求作出决定，或用户的回答本身让工作到此为止时，确认决定后只用文字结束是正当的。
