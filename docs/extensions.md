@@ -48,7 +48,7 @@ Runs at `tool_call` on `task` in main and subagent sessions; `fork_task` is not 
 
 Source: `agent/extensions/task-split-check/`.
 
-Runs at `tool_call` on `task` and `fork_task`. Evaluates the applicable yes/no checks per item concurrently under a shared 25 s timeout, blocking the whole call if any item fails:
+Runs at `tool_call` on `task` and `fork_task`. Judges items concurrently under a shared 25 s timeout, asking every applicable yes/no check of one item in a single model request, and blocks the whole call if any item fails:
 
 - **Models**: queries the OMP model role `@task-split-check` (assigned in `/model`, stored in machine-local `modelRoles`), then the role named by `omomp.yml#task-split-check.fallbackRole` (shipped value `smol`), resolved per call. Uses `medium` reasoning unless the role entry has a `:level` suffix; on provider error, moves to the next model in the chain.
 - **Failure handling**: missing or invalid config removes only the configured fallback; `@task-split-check` still judges when it resolves. With no usable model or verdict (including request errors, timeouts and unparseable answers), the call fails open. Every judged call logs `task-split-check verdicts`.
@@ -348,7 +348,7 @@ Shipped rules cover only calls that change nothing and are cheap to repeat (read
 
 `tool` is an exact tool name; `parameter` names a string argument (or dotted property path). `pattern` is JavaScript regex source, without slash delimiters or flags; it is a text matcher, not a shell parser. Missing/non-string parameters do not match. `topic` is a `tool://<tool>/<topic>` leaf served by [tool-topics](#tool-topics). Rule ids must be unique and stable within the owner.
 
-Each rule injects once while its marker remains in the actual model context reconstructed from the active leaf. The shared `_shared/context-delivery.ts` guard is also used by `repo-rules`; its only temporary set covers the current turn before the host persists the developer message. Compaction that drops a marker makes the rule eligible again; retained-tail markers still suppress duplicates. Resume and tree navigation follow the current branch, not the entire transcript. Two rules pointing to one topic each get one injection. A missing/empty/failed topic is warned and does not consume eligibility; other rules still run.
+Each rule injects once while its marker remains in the actual model context reconstructed from the active leaf. The shared `_shared/context-delivery.ts` guard is also used by `repo-rules`; its only temporary set covers the current turn before the host persists the developer message. Compaction that drops a marker makes the rule eligible again; retained-tail markers still suppress duplicates. Resume and tree navigation follow the current branch, not the entire transcript. Rules that point to the same topic each keep their own eligibility. A missing/empty/failed topic is warned and does not consume eligibility; other rules still run.
 
 ### omomp-lang
 
@@ -359,4 +359,4 @@ Sets the UI language (`en` or `zh`) for person-facing text across local extensio
 - Reads `omomp.yml#omomp-lang.language` (shipped `zh`) from the agent-dir `omomp.*` only (project `.omp/` copies are ignored; changes apply on the next OMP start).
 - At module load, sets `process.env.OMOMP_LANG` unless the launch environment already defines it (`OMOMP_LANG=en omp`).
 - `_shared/i18n.ts` `tr(en, zh)` resolves `OMOMP_LANG` → `omomp.yml#omomp-lang.language` → `LC_ALL` / `LC_MESSAGES` / `LANG` (`zh*` = Chinese) → English at each call site, reading the config section directly so deferred extensions that produce text before `omomp-lang` finishes loading still use the configured language.
-- The `omomp-lang` section belongs to omp-config; OMP plugins read it as part of the shared language-discovery order. Exporting it as `OMOMP_LANG` also supplies environment-only consumers and child processes. Plugin-owned behavior belongs in the [plugin references](plugins.md).
+- The `omomp-lang` section belongs to omp-config; OMP plugins read it as part of the shared language-discovery order. Exporting it as `OMOMP_LANG` also supplies environment-only consumers and child processes. Plugin-owned behavior belongs in the [plugin references](plugins-and-modes.md).

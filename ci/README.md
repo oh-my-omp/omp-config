@@ -61,7 +61,7 @@ flowchart LR
 |Stage|What it does|Diagnostics produced|
 |---|---|---|
 |install|`bun install -g @oh-my-pi/pi-coding-agent@${OMP_VERSION:-latest}`, `omp --version`|Failure is `environment`, and the check ends there|
-|apply|`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source <repository> --agent-dir … --json`|Every stderr line; the JSON report's `errors`; every `pluginsMissing` entry; a missing JSON report. A missing report or any `errors` entry ends the check there: the updater installs plugins before writing, so a failed apply has written no config to run a session on|
+|apply|`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source <repository> --agent-dir … --json`|Every stderr line; the JSON report's `errors`; every `pluginsMissing` entry; a missing JSON report. A missing report or any `errors` entry ends the check there: preflight and plugin errors stop the updater before it writes anything, and a write error leaves a partial cutover, so neither leaves a complete config to run a session on|
 |models|Writes `models.yml` (free model + shadow models), sets `config.yml`'s `modelRoles` to the free model and `skills.enabled` to `false`|None|
 |full session, light session|Start in RPC mode, send one prompt after `ready`, keep stdin open until `prompt_result`, then close and wait for the process to exit|See the criteria below|
 |omp logs|Read the `warn` and `error` records in `$HOME/.omp/logs/*.log`|Every record that is not host noise|

@@ -61,7 +61,7 @@ flowchart LR
 |阶段|做什么|产生的诊断|
 |---|---|---|
 |install|`bun install -g @oh-my-pi/pi-coding-agent@${OMP_VERSION:-latest}`，`omp --version`|失败为 `environment`，检查就此结束|
-|apply|`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source <仓库> --agent-dir … --json`|stderr 每行；JSON 报告的 `errors`；`pluginsMissing` 每项；没有 JSON 报告。没有报告或存在任何 `errors` 条目时检查就此结束：更新器先安装插件再写配置，因此失败的 apply 没有写入可供 session 运行的配置|
+|apply|`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source <仓库> --agent-dir … --json`|stderr 每行；JSON 报告的 `errors`；`pluginsMissing` 每项；没有 JSON 报告。没有报告或存在任何 `errors` 条目时检查就此结束：预检与插件错误会让更新器在写入任何文件之前停止，写入错误则留下未完成的切换，两者都不会留下可供 session 运行的完整配置|
 |models|写 `models.yml`（免费模型 + 影子模型），把 `config.yml` 的 `modelRoles` 设为免费模型，`skills.enabled` 设为 `false`|无|
 |full session、light session|RPC 模式启动，等 `ready` 后发一条 prompt，保持 stdin 直到 `prompt_result`，再关闭并等进程退出|见下方判据|
 |omp 日志|读 `$HOME/.omp/logs/*.log` 的 `warn`、`error` 记录|不属于主机噪声的每条记录|

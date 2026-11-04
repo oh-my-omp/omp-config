@@ -48,7 +48,7 @@
 
 源码：`agent/extensions/task-split-check/`。
 
-在 `tool_call` 阶段检查 `task` 与 `fork_task`。整批共用 25 秒超时，对每个任务项并发执行适用的是非检查，任一项不通过即拦截整次调用：
+在 `tool_call` 阶段检查 `task` 与 `fork_task`。整批共用 25 秒超时，各任务项并发判定，同一项的全部适用是非检查合在一次模型请求中提问，任一项不通过即拦截整次调用：
 
 - **判定模型**：先取 OMP 模型角色 `@task-split-check`（在 `/model` 中配置，保存在本机 `modelRoles`），再取 `omomp.yml#task-split-check.fallbackRole`（仓库配置 `smol`），每次调用实时解析。角色条目未带 `:level` 后缀时使用 `medium` 推理强度；遇到 provider 错误时换链中的下一个模型。
 - **失败处理**：配置缺失或无效时仅移除配置的回退角色；`@task-split-check` 能解析出模型时仍继续判定。没有可用模型或有效结论（包括请求报错、超时或答案无法解析）时放行。每次完成判定记一条 `task-split-check verdicts` 日志。
@@ -348,7 +348,7 @@ tool-topic-injection:
 
 `tool` 精确匹配工具名；`parameter` 指定字符串参数名，也支持点分属性路径。`pattern` 是不带斜杠定界符和 flags 的 JavaScript 正则源码，只匹配文本，不解释 shell 语义。参数缺失或不是字符串时不匹配。`topic` 指向 [tool-topics](#tool-topics) 提供的 `tool://<tool>/<topic>` 正文。规则 id 在同一 owner 内须唯一且稳定。
 
-每条规则在活动叶节点重建的真实模型上下文中保有自身标记时只注入一次。共享 `_shared/context-delivery.ts` 也服务 `repo-rules`；临时集合只覆盖当前 turn 中宿主尚未持久化 developer 消息的窗口。compact 移除标记后，该规则可再次注入；若标记仍在保留尾部，则不重复注入。resume 和树导航按当前分支判断，不扫描整份历史。两条规则即使指向同一专题，也各有一次注入机会。专题缺失、为空或加载失败时记 warning，不消耗资格，也不妨碍其他规则执行。
+每条规则在活动叶节点重建的真实模型上下文中保有自身标记时只注入一次。共享 `_shared/context-delivery.ts` 也服务 `repo-rules`；临时集合只覆盖当前 turn 中宿主尚未持久化 developer 消息的窗口。compact 移除标记后，该规则可再次注入；若标记仍在保留尾部，则不重复注入。resume 和树导航按当前分支判断，不扫描整份历史。指向同一专题的多条规则各自保有注入资格。专题缺失、为空或加载失败时记 warning，不消耗资格，也不妨碍其他规则执行。
 
 ### omomp-lang
 
@@ -359,4 +359,4 @@ tool-topic-injection:
 - 从 agent 目录的 `omomp.*` 读取 `omomp.yml#omomp-lang.language`（仓库配置 `zh`；不读项目 `.omp/` 副本，修改后下次启动生效）。
 - 模块加载时将 `process.env.OMOMP_LANG` 设为该值，但若启动环境已设置（如 `OMOMP_LANG=en omp`）则保留环境值。
 - `_shared/i18n.ts` 的 `tr(en, zh)` 在每次生成文字时按 `OMOMP_LANG` → `omomp-lang` 配置段 → `LC_ALL` / `LC_MESSAGES` / `LANG`（`zh*` 为中文）→ 英文 的顺序解析，并直接读取配置段，使早于 `omomp-lang` 加载的扩展也能拿到配置语言。
-- `omomp-lang` 段归 omp-config 所有，OMP 插件在共享的语言发现顺序中读取该段。将它导出为 `OMOMP_LANG` 也为仅读环境变量的使用方与子进程提供语言。插件自有行为见[插件参考](plugins.zh-CN.md)。
+- `omomp-lang` 段归 omp-config 所有，OMP 插件在共享的语言发现顺序中读取该段。将它导出为 `OMOMP_LANG` 也为仅读环境变量的使用方与子进程提供语言。插件自有行为见[插件参考](plugins-and-modes.zh-CN.md)。
