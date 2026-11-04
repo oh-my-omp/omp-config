@@ -53,29 +53,27 @@ prompt 的措辞无法绕过这一点。
 观察到：深度 2 的 `task:free` 子代工具列表里没有 `task` 工具。
 
 
-5. 子代有没有 `yield` 由宿主决定；prompt 两种情况都要成立
--------------------------------------------------------
-OMP 18.16 上，task 子代只有在结构化运行时才有 `yield` 工具（`task.structured` 开启，或定义里写
-`structured: true`）。`config.yml` 开启了 `task.structured`，所以这里每个 task 子代都有 `yield`，
-结果以 `yield` 的载荷交给父会话；调用方不传 schema 时没有统一的 schema。定义仍以最后一条消息
-作为交付、有 `yield` 工具时才用它，因此这个设置变化后它们照样可用。不要写把 `yield` 当作唯一
-回答途径的 prompt。
+5. 每个子代都必须用 `yield` 交付；只剩 `yield` 时，纯文本会丢
+------------------------------------------------------------
+`config.yml` 设置了 `task.structured: true`，所以每个 task 子代都有 `yield` 工具，并且必须用它
+结束：`yield` 的载荷就是父会话收到的结果。OMP 18.16 上，非结构化运行的子代根本没有 `yield`，
+所以在这些定义仍要求 `yield` 时，不要关掉这个设置。
 
-`mentor-default.md` 声明 `tools: []`，所以在结构化运行里 `yield` 是它唯一的工具。它改用纯文本
-回答时观察到的失败链：
+`mentor-default.md` 声明 `tools: []`，所以 `yield` 是它唯一的工具。它改用纯文本回答时观察到的
+失败链：
 
     把完整答案写成纯文本，没有工具调用
       -> harness 注入 "Last turn had no tool call -> session idle"
       -> 被迫补发的 `yield` 什么都没带
       -> job 以 `failed (exit 1)` 结束，并报 "Subagent called yield with null data."
 
-`agent://<id>` 里根本没有答案。因此它的 Dialogue 一节要求：只要有这个工具，完整答案就放进
-`yield` 的载荷。
+`agent://<id>` 里根本没有答案。因此它的 Dialogue 一节要求开场答案放进 `yield` 的载荷，
+一轮绝不能只以文字结束。
 
 
 6. `agent://` 和 `history://` 不是一回事
 ----------------------------------------
-    agent://<id>            消费通道；子代的结果落在这里
+    agent://<id>            消费通道；`yield` 的载荷落在这里
     history://<id>          完整 transcript，显示它实际是怎么进行的
     agent://<id>/field      从结构化结果里取出一个字段（按路径段，如 `/items/0`）
 
@@ -89,10 +87,10 @@ job 行只在本进程内存在，结算后大约五分钟消失。之后 agent 
 `write agent://<id>`、`agent://<id>`、`history://<id>`。
 
 
-8. 子代结束之后仍然可以联系
---------------------------
-结束让子代进入 idle，之后进入 parked，但一条 `write agent://<id>` 消息会把它唤醒，上下文
-完好；它的下一条最终消息作为一个新的 task 结果送到发送方。discussant 和 mentor 就是这样
+8. 子代 yield 之后仍然可以联系
+-----------------------------
+yield 让子代进入 idle，之后进入 parked，但一条 `write agent://<id>` 消息会把它唤醒，上下文
+完好；它用新的 `yield` 回答，作为一个新的 task 结果送到发送方。discussant 和 mentor 就是这样
 进行多轮对话的。为继续同一话题而新派一个，会扔掉它读过的一切，还要重新付费。
 
 

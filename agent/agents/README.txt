@@ -59,18 +59,15 @@ its own `mentor:default`.
 Observed: a depth-2 `task:free` child had no `task` tool in its tool list.
 
 
-5. Whether a child has `yield` is the host's decision; prompts must work either way
------------------------------------------------------------------------------------
-On OMP 18.16 a task child gets the `yield` tool only in structured runs (`task.structured`
-on, or `structured: true` in the definition). `config.yml` turns `task.structured` on, so
-every task child here has `yield`, and its result reaches the parent as the `yield`
-payload; no shared schema applies unless the caller passes one. The definitions still
-treat their final message as the delivery and use `yield` when the tool is present, so
-they keep working if the setting changes. Do not write a prompt that names `yield` as
-the only way to answer.
+5. Every child must deliver through `yield`; with only `yield`, prose is lost
+------------------------------------------------------------------------------
+`config.yml` sets `task.structured: true`, so every task child has the `yield` tool and
+must finish through it: the `yield` payload is the result its parent receives. On OMP
+18.16 a child without structured mode gets no `yield` at all, so do not turn the setting
+off while these definitions require `yield`.
 
-`mentor-default.md` declares `tools: []`, so in a structured run `yield` is its only
-tool. Observed failure chain when it answered in prose instead:
+`mentor-default.md` declares `tools: []`, so `yield` is its only tool. Observed failure
+chain when it answered in prose instead:
 
     writes the full answer as plain prose, no tool call
       -> harness injects "Last turn had no tool call -> session idle"
@@ -78,12 +75,12 @@ tool. Observed failure chain when it answered in prose instead:
       -> job ends `failed (exit 1)` + "Subagent called yield with null data."
 
 and `agent://<id>` held no answer at all. Its Dialogue section therefore requires the
-whole answer in the `yield` payload whenever the tool is present.
+opening answer in the `yield` payload and forbids ending a turn with text only.
 
 
 6. `agent://` and `history://` are not the same thing
 ------------------------------------------------------
-    agent://<id>            the consumption channel; the child's result lands here
+    agent://<id>            the consumption channel; the `yield` payload lands here
     history://<id>          the full transcript, showing how it actually proceeded
     agent://<id>/field      pull one field (path segments, `/items/0`) out of a structured result
 
@@ -97,10 +94,10 @@ Job rows are process-local and disappear roughly five minutes after settling. Af
 that the agent id is the only handle: `write agent://<id>`, `agent://<id>`, `history://<id>`.
 
 
-8. A child stays reachable after it finishes
---------------------------------------------
-Finishing moves a child to idle, and later to parked, but a `write agent://<id>` message
-wakes it with its context intact; its next final message reaches the
+8. A child stays reachable after it yields
+-------------------------------------------
+Yielding moves a child to idle, and later to parked, but a `write agent://<id>` message
+wakes it with its context intact; it answers with a new `yield`, which reaches the
 sender as a fresh task result. That is how discussants and mentors do multiple rounds. Spawning a
 fresh one to continue the same topic throws away everything it read and pays for it
 again.
