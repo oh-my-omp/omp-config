@@ -159,7 +159,7 @@ const messageEntrySchema = z
 	})
 	.passthrough();
 
-/** The schema-free yield `data` is `{ type: 'object', additionalProperties: true }` with no declared properties. */
+/** The schema-free yield `data` is `{ type: 'object', additionalProperties: true }` declaring no properties (absent or `{}`). */
 const openYieldParametersSchema = z
 	.object({
 		properties: z
@@ -167,7 +167,7 @@ const openYieldParametersSchema = z
 				data: z
 					.object({
 						additionalProperties: z.literal(true),
-						properties: z.unknown().refine((value) => value === undefined),
+						properties: z.object({}).strict().optional(),
 					})
 					.passthrough(),
 			})
