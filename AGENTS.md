@@ -109,7 +109,9 @@ review.
   `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins
   and relative paths. A host subpath is used only if an extension already loads
   it in a real omp session: `tsc` resolves from `node_modules/` and passes
-  subpaths the omp binary does not map. Native bindings load only after a
+  subpaths the omp binary does not map. An `import type` may also name the type
+  package of a host dependency (`@babel/types` for omp's Babel parser): it is
+  erased before omp loads the module. Native bindings load only after a
   platform guard.
 - **Code copied from OMP** is wrapped in
   `// @upstream <verbatim|adapted> <package>@<version> <src path>#<symbol>` …
