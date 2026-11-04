@@ -22,11 +22,13 @@ argument-hint: "[check|<plane>]"
 
 ## 先建立本次调查的范围
 
-阅读 `README.md` 或中文版本，了解仓库陈述的设计出发点；再读 `agent/config.yml`、`agent/config-light.yml`、`agent/omomp.yml` 和 `install-plugins.sh`，看清当前组合，而不只看功能介绍。
+先按参数确定本次范围。以下调查、理解和完整性核对都围绕这个范围展开。
 
-用 `glob` 发现 `agent/extensions/*/index.ts`、`agent/extensions-last/*/index.ts` 和 `agent/agents/*.md`。将提示词模板、主会话追加规则、`omp-light` 启动器也纳入理解。插件范围取安装脚本的实际声明，包括注释的可选插件。`_shared` 是实现辅助，不是另外一组需要用户学习的扩展。
+完整讲解时，阅读 `README.md` 或中文版本了解设计出发点，再读 `agent/config.yml`、`agent/config-light.yml`、`agent/omomp.yml` 和 `install-plugins.sh`，看清当前组合。用 `glob` 发现 `agent/extensions/*/index.ts`、`agent/extensions-last/*/index.ts` 和 `agent/agents/*.md`，将提示词模板、主会话追加规则、`omp-light` 启动器也纳入理解。插件范围取安装脚本的实际声明，包括注释的可选插件。`_shared` 是实现辅助，不是另外一组需要用户学习的扩展。
 
-用 `docs/` 中的相关页面帮助定位用途和关系。先形成整套组合的大致脉络，向用户解释它在意什么，再按实际问题分组深入。本机安装状态和账号盘点留到 `check` 或本机适配时进行。
+用户点名主题或组件时，从该项自己的入口、配置和说明开始，沿理解它所必需的关联调查，再直接讲解该项。完整组合的发现清单用于完整讲解，不是单项介绍的前置作业。
+
+用 `docs/` 中的相关页面帮助定位用途和关系，形成这次范围内的脉络，再按实际问题展开。本机安装状态和账号盘点留到 `check` 或本机适配时进行。
 
 ## 每一项都要自己读懂
 
