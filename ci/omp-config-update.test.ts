@@ -600,6 +600,40 @@ describe("legacy model appendix fragments", () => {
 	}
 });
 
+describe("earlier layouts", () => {
+	test("an app-managed legacy section file is skipped, not imported or deleted", async () => {
+		const src = source();
+		src.commit({ "agent/omomp.yml": "lang-nag:\n  language: en\n" });
+		const agentDir = temp("omp-legacy-section-");
+		const managed = JSON.stringify({ language: "zh", note: ["marker:", "_otty"].join(" ") });
+		writeTree(agentDir, { "extensions/tool-policy-nag/tool-policy-nag.json": managed });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		const legacy = join(agentDir, "extensions/tool-policy-nag/tool-policy-nag.json");
+		expect(report.skipped).toContainEqual({ path: legacy, reason: "app-managed" });
+		expect(host(agentDir, "extensions/tool-policy-nag/tool-policy-nag.json")).toBe(managed);
+		expect(host(agentDir, "omomp.yml")).not.toContain("tool-policy-nag");
+	});
+
+	test("an agent-root template moves to its directory copy only when unmodified; a customized one stays with a note", async () => {
+		const src = source();
+		const shipped = "---\ntarget: *\n---\nShipped.\n";
+		src.commit({
+			"agent/extensions/user-prompt-inject/PROMPT-INJECT-a.md": shipped,
+			"agent/extensions/user-prompt-inject/PROMPT-INJECT-b.md": shipped,
+		});
+		const agentDir = temp("omp-template-relocation-");
+		const custom = "---\ntarget: *\n---\nMachine edit.\n";
+		writeTree(agentDir, { "PROMPT-INJECT-a.md": shipped, "PROMPT-INJECT-b.md": custom });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(existsSync(join(agentDir, "PROMPT-INJECT-a.md"))).toBe(false);
+		expect(host(agentDir, "PROMPT-INJECT-b.md")).toBe(custom);
+		expect(report.notes.some((entry) => entry.startsWith(`${join(agentDir, "PROMPT-INJECT-b.md")} left in place`))).toBe(true);
+		expect(host(agentDir, "extensions/user-prompt-inject/PROMPT-INJECT-b.md")).toBe(shipped);
+	});
+});
+
 describe("legacy system replacement rule files", () => {
 	const ruleRel = "extensions-last/system-prompt-replace/REPLACE-SYSTEM-default.yml";
 	const repoRuleRel = `agent/${ruleRel}`;
@@ -867,6 +901,11 @@ describe("legacy system replacement rule files", () => {
 		expect(report.written).toEqual([]);
 	});
 
+	test("an empty legacy model regex matched every model and converts to a rule without a model condition", () => {
+		const text = converted({ replacements: [{ literal: "x", replace: "y", model: "" }] });
+		expect(Bun.YAML.parse(text)).toEqual([{ literal: "x", replace: "y", mode: "full" }]);
+	});
+
 	const modifiedRules = originalRules.map((rule, index) =>
 		index === 1 && isMapping(rule) ? { ...rule, replace: "HOST replacement `$1`" } : rule,
 	);
@@ -1052,6 +1091,18 @@ describe("legacy system replacement rule files", () => {
 			report.notes.some((entry) => entry.startsWith("system-prompt-replace migration left in place: agent/system-prompt-replace.json:")),
 		).toBe(true);
 		expect(host(agentDir, "system-prompt-replace.json")).toBe("not JSON\n");
+		expect(existsSync(join(agentDir, ruleRel))).toBe(false);
+	});
+
+	test("app-managed standalone JSON blocks the migration and stays in place", async () => {
+		const src = migrationSource();
+		const agentDir = temp("omp-replacement-app-json-");
+		const managed = JSON.stringify({ ...section, note: ["marker:", "_otty"].join(" ") });
+		writeTree(agentDir, { "system-prompt-replace.json": managed });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.notes).toContain(note(`${join(agentDir, "system-prompt-replace.json")} is app-managed`));
+		expect(host(agentDir, "system-prompt-replace.json")).toBe(managed);
 		expect(existsSync(join(agentDir, ruleRel))).toBe(false);
 	});
 

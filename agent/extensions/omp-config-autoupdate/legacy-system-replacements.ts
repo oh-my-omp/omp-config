@@ -1,4 +1,5 @@
 // One-time conversion of the former omomp system-prompt-replace section.
+import { parseSessionConditions } from "../_shared/prompt-conditions.ts";
 import { isMapping } from "./merge.ts";
 
 type Match = { readonly literal: string } | { readonly regex: string };
@@ -36,14 +37,15 @@ export function convertLegacySystemReplacements(value: unknown): Conversion {
 		if (typeof pattern !== "string" || pattern.length === 0) return invalid("pattern must be a non-empty string");
 		if (typeof input.replace !== "string") return invalid("replace must be a string");
 		if (input.scope !== undefined && input.scope !== "all" && input.scope !== "sub") return invalid("scope must be all or sub");
-		if (input.model !== undefined) {
-			if (typeof input.model !== "string") return invalid("model must be a string");
-			try {
-				new RegExp(input.model);
-			} catch {
-				return invalid("model regex is invalid");
-			}
-		}
+		if (input.model !== undefined && typeof input.model !== "string") return invalid("model must be a string");
+		// An empty legacy regex matched every model, which is the same as no model condition.
+		const model = input.model === "" ? undefined : input.model;
+		const conditions: Record<string, string> = { mode: "full" };
+		if (input.scope === "sub") conditions.target = "subagents";
+		if (model !== undefined) conditions.model = model;
+		const parsed = parseSessionConditions(conditions, { kind: "default", targets: [{ kind: "all" }] }, "yaml");
+		if (parsed.kind === "invalid")
+			return invalid(parsed.problem.kind === "badRegex" ? "model regex is invalid" : `${parsed.problem.key} is not a valid condition`);
 		if (Object.hasOwn(input, "regex")) {
 			try {
 				new RegExp(pattern);
@@ -56,7 +58,7 @@ export function convertLegacySystemReplacements(value: unknown): Conversion {
 			...match,
 			replace: input.replace,
 			...(input.scope === "sub" ? { target: "subagents" as const } : {}),
-			...(input.model !== undefined ? { model: input.model } : {}),
+			...(model !== undefined ? { model } : {}),
 			mode: "full",
 		});
 	}

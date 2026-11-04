@@ -36,7 +36,9 @@
 //   - every other repo path is managed (see CUSTOMIZATIONS).
 // Shipped APPEND-SYSTEM-*.md, PROMPT-INJECT-*.md, TURN-JUDGE-*.md and
 // REPLACE-SYSTEM-*.yml/.yaml rule files are managed templates; additional host
-// files stay machine-owned. Template edits take effect on the next prompt.
+// files stay machine-owned. Edits to APPEND-SYSTEM and REPLACE-SYSTEM files
+// take effect on the next prompt, TURN-JUDGE files on the next turn, and
+// PROMPT-INJECT files in the next subagent started.
 // Untouched by every rule: keys and files the repo never had, app-managed
 // files (`// @orca-managed-pi-extension` first line, or the Otty marker
 // anywhere; see OTTY_MARKER), runtime state. A symlinked target is written
@@ -68,8 +70,8 @@
 // different: when the source declares the independent Todo plugin, both modes
 // retire those exact leaves after the OMP owner confirms plugin readiness,
 // even on first apply or without history. CTX_RETIREMENTS (the ctx leaves the
-// Todo plugin now ships) follow the same rule, but only when the ready plugin
-// carries src/ctx; until then the old leaves stay.
+// Todo plugin now ships) are inspected in the same preflight, but deleted only
+// when the ready plugin carries src/ctx; until then the old leaves stay.
 //
 // RELOCATIONS. Both modes, planned like every other op. Earlier layouts kept
 // extensions flat (extensions/<name>.ts) and their files at the agent root.
@@ -79,6 +81,8 @@
 //     extensions/omp-config-autoupdate/, and read-topics/index.ts would
 //     contest tool://read with the tool-topics extension that now owns it.
 //     An app-managed one is reported as an error instead.
+//     Every legacy source below that is app-managed stays in place and is
+//     skipped or blocks its migration; it is never imported or deleted.
 //   - An omomp section a machine lacks is imported from its old standalone JSON
 //     file (OMOMP_LEGACY_SECTIONS), then the old file is deleted. A section the
 //     machine already has leaves the old file in place with a note.
@@ -97,8 +101,10 @@
 //     block and destination is checked before writing; malformed inputs or
 //     occupied destinations leave the old file in place with a note.
 //     Other data moves carry agent-root data into its extension directory:
-//     host files move only to free paths; repo templates (shipped now or by
-//     the previous commit) are deleted as the source writes or dropped them.
+//     host files move only to free paths; a repo template (shipped now or by
+//     the previous commit) is deleted as the source writes or dropped it when
+//     it equals a version the repo shipped or this machine accepted at its old
+//     or new path; a customized one stays in place with a note to port it.
 //     Symlinks are never moved, only noted.
 //   - Retired config.yml list entries (RETIRED_LIST_ENTRIES) are dropped.
 //
@@ -130,7 +136,9 @@
 // When `auto` finds the config commit unchanged it still refreshes plugins
 // whose source moves on its own: every unpinned (no `#ref`) GitHub URL among
 // the required entries and the installed optional ones (a comment line holding
-// only a source). The same `omp install` re-resolves each one, so the plugin
+// only a source). An installed plugin matches a declared GitHub URL by its
+// owner/repo in any form omp records (`github:`, https or git URL). The same
+// `omp install` re-resolves each one, so the plugin
 // manager, not this script, decides whether the default branch moved; npm
 // entries and pinned URLs wait for the next config commit. The result rides on
 // `up-to-date`; a failed install is reported there and never touches the marker.
@@ -672,6 +680,8 @@ function planReplacementMigration(opts: ApplyOptions, report: ApplyReport, base:
 	if (lexists(destination)) return blocked(`${destination} already exists`);
 	if (files.some((rel) => isAppManaged(join(opts.agentDir, rel))))
 		return blocked(`${join(opts.agentDir, "omomp.yml")} is app-managed`, true);
+	const managedLegacy = legacy.find((rel) => isAppManaged(targetOf(rel, opts.agentDir)));
+	if (managedLegacy !== undefined) return blocked(`${targetOf(managedLegacy, opts.agentDir)} is app-managed`);
 	let value: unknown = root?.["system-prompt-replace"];
 	if (!hasSection) {
 		if (legacy.length !== 1) return blocked(`multiple legacy JSON files: ${legacy.join(", ")}`);
@@ -957,12 +967,18 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 		const consumed: string[] = [];
 		for (const legacy of item.legacySections ?? []) {
 			const present = legacy.rels.filter((rel) => lexists(targetOf(rel, opts.agentDir)));
-			if (present.length === 0) continue;
+			const [first] = present;
+			if (first === undefined) continue;
 			if (host !== undefined && Object.hasOwn(host, legacy.section)) {
 				for (const rel of present) report.notes.push(`${rel} left in place: ${item.rel} already has section ${legacy.section}`);
 				continue;
 			}
-			const from = targetOf(present[0] as string, opts.agentDir);
+			const managed = present.filter((rel) => isAppManaged(targetOf(rel, opts.agentDir)));
+			if (managed.length > 0) {
+				for (const rel of managed) report.skipped.push({ path: targetOf(rel, opts.agentDir), reason: "app-managed" });
+				continue;
+			}
+			const from = targetOf(first, opts.agentDir);
 			let value: Mapping;
 			try {
 				value = parseStructured(readFileSync(from, "utf8"), "json");
@@ -1125,7 +1141,8 @@ function planLegacyModelSplits(opts: ApplyOptions, report: ApplyReport, from: re
 }
 
 /** SUPERSEDED and DATA_MOVES as ops (see RELOCATIONS in the header). */
-function planRelocations(opts: ApplyOptions, report: ApplyReport): Op[] {
+function planRelocations(ctx: PlanContext): Op[] {
+	const { opts, report } = ctx;
 	const ops: Op[] = [];
 	for (const { from, by } of SUPERSEDED) {
 		const target = join(opts.agentDir, from);
@@ -1170,8 +1187,10 @@ function planRelocations(opts: ApplyOptions, report: ApplyReport): Op[] {
 			continue;
 		}
 		const repoOwned = owner === "template" && (existsSync(join(opts.source, "agent", to)) || previouslyShipped(opts, `agent/${from}`));
-		if (repoOwned) {
-			// The source writes the new copy, or dropped the template: the old copy has no owner left.
+		if (repoOwned && !shippedTemplateCopy(ctx, from, to, readFileSync(source))) {
+			report.notes.push(`${source} left in place: it differs from every shipped version; port its changes into ${target}, then delete it`);
+		} else if (repoOwned) {
+			// An unmodified old copy: the source writes the new copy, or dropped the template, so it has no owner left.
 			ops.push({ kind: "delete", rel: `agent/${from}`, target: source });
 		} else if (lstatSync(source).isSymbolicLink()) {
 			report.notes.push(`${source} is a symlink and was not moved; point it at ${target} yourself`);
@@ -1182,6 +1201,17 @@ function planRelocations(opts: ApplyOptions, report: ApplyReport): Op[] {
 		}
 	}
 	return ops;
+}
+
+/** The old-layout template equals a version the repo shipped or this machine accepted, at either its old or its new path. */
+function shippedTemplateCopy(ctx: PlanContext, from: string, to: string, content: Buffer): boolean {
+	return [`agent/${from}`, `agent/${to}`].some((rel) => {
+		const recorded = ctx.base.plain(rel);
+		if (recorded.kind === "known" && recorded.content.equals(content)) return true;
+		const current = join(ctx.opts.source, rel);
+		if (existsSync(current) && readFileSync(current).equals(content)) return true;
+		return ctx.history.hasVersion(rel, content);
+	});
 }
 
 /**
@@ -1321,14 +1351,23 @@ function npmName(spec: string): string {
 	return at === -1 ? spec : spec.slice(0, at);
 }
 
+/** `owner/repo` of a GitHub source in any form `omp install` records (`github:`, https or git URL, optional `.git`), else undefined. */
+function githubRepo(source: string): string | undefined {
+	const match = /^(?:github:|(?:git\+)?https:\/\/github\.com\/|git@github\.com:)([^/\s]+)\/([^/\s#]+?)(?:\.git)?\/?$/i.exec(source);
+	return match === null ? undefined : `${match[1]}/${match[2]}`.toLowerCase();
+}
+
 /** The package name a declared spec is installed under, or undefined when it is not installed. */
 function installedName(spec: string, installed: InstalledPlugins): string | undefined {
 	if (!spec.includes("://")) {
 		const name = npmName(spec);
 		return installed.has(name) ? name : undefined;
 	}
-	const source = spec.split("#", 1)[0]!;
-	for (const [name, value] of installed) if (value === source) return name;
+	const source = spec.split("#", 1)[0] ?? spec;
+	const repo = githubRepo(source);
+	for (const [name, value] of installed) {
+		if (value === source || (repo !== undefined && githubRepo(value) === repo)) return name;
+	}
 	return undefined;
 }
 
@@ -1483,6 +1522,8 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 	let todoRequired: boolean;
 	let base: BaseRecord;
 	let ctxReady = false;
+	// Planned with the rest so blocked ownership stops the apply before plugins install; used only once the plugin carries src/ctx.
+	let ctxRetirements: Op[] = [];
 	try {
 		const sources = parseSources(opts, report);
 		declared = declaredPlugins(opts.source).required;
@@ -1500,11 +1541,12 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 			replacementMigration,
 		};
 		const planned = [
-			...planRelocations(opts, report),
+			...planRelocations(ctx),
 			...planPlain(ctx),
 			...planStructured(ctx, sources),
 			...(todoRequired ? planRetirements(opts, report, TODO_RETIREMENTS) : []),
 		];
+		ctxRetirements = todoRequired ? planRetirements(opts, report, CTX_RETIREMENTS) : [];
 		report.notes.push(...history.notes);
 		// Moves first, managed writes next, deletions after them, base records last; Todo retirement requires all preceding operations to succeed.
 		const rank: Record<Op["kind"], number> = { move: 0, split: 0, "migrate-replacements": 0, write: 1, delete: 2, base: 3 };
@@ -1551,7 +1593,7 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 			return report;
 		}
 	}
-	if (ctxReady) ops = [...ops, ...planRetirements(opts, report, CTX_RETIREMENTS)];
+	if (ctxReady) ops = [...ops, ...ctxRetirements];
 	// Base changes of the host operations that succeeded, recorded after all of them.
 	const accepted: BaseChange[] = [];
 	for (const op of ops) {
