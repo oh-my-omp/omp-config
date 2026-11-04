@@ -20,7 +20,7 @@ const AGENT_EXCLUDES = [
 	"agent/cache",
 	"agent/history.db*",
 	"agent/agent.db*",
-	"*.lock",
+	"agent/*.lock",
 	// Built for the host's platform; copyPlugins reinstalls them from the lock file.
 	"plugins/node_modules",
 ];
