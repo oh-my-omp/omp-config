@@ -90,7 +90,7 @@ omp-config-autoupdate.exclude:
   omomp.yml:lang-nag               # 让 omomp.yml 的该段不参与插件设置迁移
 ```
 
-被排除的项从不被写入、创建或删除，已记录的基准也保持原样，因此之后移除条目会从原位继续更新；每个被保留的项都列在报告的 skipped 部分。无效条目（路径写法错误、`file:field` 指定的文件不是 `config.yml`/`omomp.yml`、条目含空白）与其他预检错误一样让整个更新中止。
+被排除的项从不被写入、创建或删除，已记录的基准也保持原样，因此之后移除条目会从原位继续更新；每个被保留的项都列在报告的 skipped 部分。无效条目（路径写法错误、`file:field` 指定的文件不是 `config.yml`/`omomp.yml`、两个 omomp 文件里都有 `omp-config-autoupdate` 段）与其他预检错误一样让整个更新中止。
 
 | 命令 | 行为 |
 |---|---|

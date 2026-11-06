@@ -89,7 +89,7 @@ config.yml:task.eager            # one field path inside a structured file
 omomp.yml:lang-nag               # keeps that omomp section out of the settings move
 ```
 
-Excluded items are never written, created or deleted and keep their recorded base, so removing an entry later resumes updates from where it left off; every kept item is listed in the report's skipped section. An invalid entry (a malformed path, `file:field` naming a file other than `config.yml`/`omomp.yml`, or two omomp copies of the same section) stops the whole apply like any other preflight error.
+Excluded items are never written, created or deleted and keep their recorded base, so removing an entry later resumes updates from where it left off; every kept item is listed in the report's skipped section. An invalid entry (a malformed path, `file:field` naming a file other than `config.yml`/`omomp.yml`, or an `omp-config-autoupdate` section in two omomp files) stops the whole apply like any other preflight error.
 
 | Command | Behavior |
 |---|---|
