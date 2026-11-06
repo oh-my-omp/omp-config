@@ -179,7 +179,7 @@ cwd: /absolute/path/to/leader-checkout
 
 源码：`agent/extensions/lang-nag/`。仅在主会话运行。
 
-在 `agent_end` 取最后一条非空回复最后一段的前 200 个字符，通过 `openJudge` 判断是否主要使用 `lang-nag.language` 设置的语言（`omp-config`；manifest 默认 `language: 中文`、`instruction: 说中文`，会话开始或切换时读取；项目覆盖优先于机器值）。若不符，在用户下一条输入前加上配置的 instruction（斜杠命令会清除待发标记；用户发送时若判定仍未返回则直接中止判定并原样发出）。
+在 `agent_end` 取最后一条非空回复最后一段的前 200 个字符，通过 `openJudge` 判断是否主要使用 `lang-nag.language` 设置的语言（`omp-config`；manifest 默认 `language: 中文`、`instruction: 说中文`，会话开始或切换时读取；项目覆盖优先于机器值）。会话等待后台任务时交还控制权的回复同样检测；会话自行安排的续跑不检测。若不符，在用户下一条输入前加上配置的 instruction（斜杠命令会清除待发标记；用户发送时若判定仍未返回则直接中止判定并原样发出）。
 
 ---
 

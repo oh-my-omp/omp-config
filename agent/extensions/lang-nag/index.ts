@@ -222,8 +222,10 @@ export default function langNag(pi: ExtensionAPI): void {
 	pi.on("agent_end", (event, ctx) => {
 		try {
 			if (ctx.agent.kind !== "main" || config === null) return;
-			// An auto-scheduled continuation is not a user-visible terminal reply.
-			if (event.willContinue === true) return;
+			// An auto-scheduled continuation (reminder, retry, compaction) is not a
+			// user-visible reply. A reply that hands control back while waiting on a
+			// background job (`willContinue` with `awaitingAsyncWork`) is, so it is checked.
+			if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
 			// A newer terminal reply supersedes any verdict still pending for an older one.
 			cancelDetection();
 			const sample = lastParagraphSample(lastAssistantText(event.messages));

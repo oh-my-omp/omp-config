@@ -179,7 +179,7 @@ Evaluates discovered `TURN-JUDGE-<label>.md` files after every turn that the mod
 
 Source: `agent/extensions/lang-nag/`. Main session only.
 
-At `agent_end`, takes the first 200 characters of the last paragraph of the last non-empty reply and asks `openJudge` whether it is written in the `lang-nag.language` setting (`omp-config`; manifest defaults `language: 中文`, `instruction: 说中文`, read at session start or switch; a project override wins over the machine value). On mismatch, prepends the configured instruction to the user's next input (slash commands clear the pending flag; if the user sends a message before the check finishes, the check is aborted and the message is sent unchanged).
+At `agent_end`, takes the first 200 characters of the last paragraph of the last non-empty reply and asks `openJudge` whether it is written in the `lang-nag.language` setting (`omp-config`; manifest defaults `language: 中文`, `instruction: 说中文`, read at session start or switch; a project override wins over the machine value). A reply that hands control back while the session waits on background jobs is checked the same way; a continuation the session schedules itself is not. On mismatch, prepends the configured instruction to the user's next input (slash commands clear the pending flag; if the user sends a message before the check finishes, the check is aborted and the message is sent unchanged).
 
 ---
 
