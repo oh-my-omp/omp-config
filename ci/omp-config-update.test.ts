@@ -1,9 +1,11 @@
 // omp-config-update three-way apply: unmodified items follow the repo,
 // customizations survive (merged, kept, or reported as conflicts until
 // resolved), seed and machine-owned paths are never overwritten, code stays
-// repo-wins, deletions respect customizations, a machine without a base is
-// matched against the repo's history, a first install over omp's own
-// first-run config.yml writes every managed key, and --check writes nothing.
+// repo-wins, deletions respect customizations, machine-owned agent
+// definitions follow the repo while unmodified but a machine-modified or
+// -removed copy always wins, a machine without a base is matched against the
+// repo's history, a first install over omp's own first-run config.yml writes
+// every managed key, and --check writes nothing.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -90,31 +92,31 @@ describe("plain files", () => {
 	test("overlapping edits conflict, keep the local copy, and stay pending until resolved", async () => {
 		const src = source();
 		const agentDir = temp("omp-agent-");
-		src.commit({ "agent/agents/x.md": "one\n" });
+		src.commit({ "agent/APPEND_SYSTEM.md": "one\n" });
 		await apply(src.dir, agentDir);
-		writeTree(agentDir, { "agents/x.md": "mine\n" });
-		src.commit({ "agent/agents/x.md": "theirs\n" });
+		writeTree(agentDir, { "APPEND_SYSTEM.md": "mine\n" });
+		src.commit({ "agent/APPEND_SYSTEM.md": "theirs\n" });
 		const first = await apply(src.dir, agentDir);
-		expect(first.conflicts.map((conflict) => [conflict.rel, conflict.reason])).toEqual([["agent/agents/x.md", "both-changed"]]);
-		expect(host(agentDir, "agents/x.md")).toBe("mine\n");
+		expect(first.conflicts.map((conflict) => [conflict.rel, conflict.reason])).toEqual([["agent/APPEND_SYSTEM.md", "both-changed"]]);
+		expect(host(agentDir, "APPEND_SYSTEM.md")).toBe("mine\n");
 		const again = await apply(src.dir, agentDir);
 		expect(again.conflicts.map((conflict) => conflict.id)).toEqual(first.conflicts.map((conflict) => conflict.id));
 		resolveIds(src.dir, agentDir, [first.conflicts[0]?.id ?? ""]);
 		expect((await apply(src.dir, agentDir)).conflicts).toEqual([]);
-		expect(host(agentDir, "agents/x.md")).toBe("mine\n");
-		src.commit({ "agent/agents/x.md": "theirs again\n" });
+		expect(host(agentDir, "APPEND_SYSTEM.md")).toBe("mine\n");
+		src.commit({ "agent/APPEND_SYSTEM.md": "theirs again\n" });
 		expect((await apply(src.dir, agentDir)).conflicts.map((conflict) => conflict.reason)).toEqual(["both-changed"]);
 	});
 
 	test("a stale id is refused after upstream moves", async () => {
 		const src = source();
 		const agentDir = temp("omp-agent-");
-		src.commit({ "agent/agents/x.md": "one\n" });
+		src.commit({ "agent/APPEND_SYSTEM.md": "one\n" });
 		await apply(src.dir, agentDir);
-		writeTree(agentDir, { "agents/x.md": "mine\n" });
-		src.commit({ "agent/agents/x.md": "two\n" });
+		writeTree(agentDir, { "APPEND_SYSTEM.md": "mine\n" });
+		src.commit({ "agent/APPEND_SYSTEM.md": "two\n" });
 		const id = (await apply(src.dir, agentDir)).conflicts[0]?.id ?? "";
-		src.commit({ "agent/agents/x.md": "three\n" });
+		src.commit({ "agent/APPEND_SYSTEM.md": "three\n" });
 		const result = spawnSync("bun", [UPDATER, "resolve", "--source", src.dir, "--agent-dir", agentDir, id], {
 			encoding: "utf8",
 			env: { ...process.env, HOME: temp("omp-home-") },
@@ -139,14 +141,71 @@ describe("plain files", () => {
 	test("an upstream deletion removes an unmodified file and conflicts on a customized one", async () => {
 		const src = source();
 		const agentDir = temp("omp-agent-");
-		src.commit({ "agent/agents/plain.md": "p\n", "agent/agents/edited.md": "e\n" });
+		src.commit({ "agent/PERSONALITY.md": "p\n", "agent/APPEND_SYSTEM.md": "e\n" });
 		await apply(src.dir, agentDir);
-		writeTree(agentDir, { "agents/edited.md": "mine\n" });
-		src.commit({ "agent/agents/plain.md": null, "agent/agents/edited.md": null });
+		writeTree(agentDir, { "APPEND_SYSTEM.md": "mine\n" });
+		src.commit({ "agent/PERSONALITY.md": null, "agent/APPEND_SYSTEM.md": null });
 		const report = await apply(src.dir, agentDir);
-		expect(existsSync(join(agentDir, "agents/plain.md"))).toBe(false);
-		expect(host(agentDir, "agents/edited.md")).toBe("mine\n");
-		expect(report.conflicts.map((conflict) => [conflict.rel, conflict.reason])).toEqual([["agent/agents/edited.md", "dropped-upstream"]]);
+		expect(existsSync(join(agentDir, "PERSONALITY.md"))).toBe(false);
+		expect(host(agentDir, "APPEND_SYSTEM.md")).toBe("mine\n");
+		expect(report.conflicts.map((conflict) => [conflict.rel, conflict.reason])).toEqual([["agent/APPEND_SYSTEM.md", "dropped-upstream"]]);
+	});
+
+	test("an unmodified agent definition follows the repo: updates apply and a dropped file is deleted", async () => {
+		const src = source();
+		const agentDir = temp("omp-agent-");
+		src.commit({ "agent/agents/x.md": "v1\n" });
+		await apply(src.dir, agentDir);
+		src.commit({ "agent/agents/x.md": "v2\n" });
+		await apply(src.dir, agentDir);
+		expect(host(agentDir, "agents/x.md")).toBe("v2\n");
+		src.commit({ "agent/agents/x.md": null, "agent/agents/renamed.md": "v2\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.conflicts).toEqual([]);
+		expect(existsSync(join(agentDir, "agents/x.md"))).toBe(false);
+		expect(host(agentDir, "agents/renamed.md")).toBe("v2\n");
+	});
+
+	test("a machine-modified agent definition is kept and never conflicts; a machine-removed one is never re-created", async () => {
+		const src = source();
+		const agentDir = temp("omp-agent-");
+		src.commit({ "agent/agents/x.md": "v1\n", "agent/agents/y.md": "y1\n" });
+		await apply(src.dir, agentDir);
+		writeTree(agentDir, { "agents/x.md": "mine\n", "agents/y.md": null });
+		src.commit({ "agent/agents/x.md": "v2\n", "agent/agents/y.md": "y2\n" });
+		const first = await apply(src.dir, agentDir);
+		expect(first.conflicts).toEqual([]);
+		expect(host(agentDir, "agents/x.md")).toBe("mine\n");
+		expect(existsSync(join(agentDir, "agents/y.md"))).toBe(false);
+		const again = await apply(src.dir, agentDir);
+		expect(again.conflicts).toEqual([]);
+		expect(existsSync(join(agentDir, "agents/y.md"))).toBe(false);
+	});
+
+	test("a modified agent definition stays when the repo drops it", async () => {
+		const src = source();
+		const agentDir = temp("omp-agent-");
+		src.commit({ "agent/agents/x.md": "v1\n" });
+		await apply(src.dir, agentDir);
+		writeTree(agentDir, { "agents/x.md": "mine\n" });
+		src.commit({ "agent/agents/x.md": null });
+		const report = await apply(src.dir, agentDir);
+		expect(report.conflicts).toEqual([]);
+		expect(host(agentDir, "agents/x.md")).toBe("mine\n");
+	});
+
+	test("an agent file the machine created is left alone and stays gone once removed", async () => {
+		const src = source();
+		const agentDir = temp("omp-agent-");
+		src.commit({ "agent/SYSTEM_TEMPLATE.md": "sys\n" });
+		writeTree(agentDir, { "agents/mine.md": "custom\n" });
+		await apply(src.dir, agentDir);
+		expect(host(agentDir, "agents/mine.md")).toBe("custom\n");
+		writeTree(agentDir, { "agents/mine.md": null });
+		await apply(src.dir, agentDir);
+		src.commit({ "agent/agents/mine.md": "repo\n" });
+		await apply(src.dir, agentDir);
+		expect(existsSync(join(agentDir, "agents/mine.md"))).toBe(false);
 	});
 });
 
@@ -264,24 +323,26 @@ describe("machines without a base", () => {
 	test("a host copy equal to a committed version updates; one equal to none conflicts until resolved", async () => {
 		const src = source();
 		const agentDir = temp("omp-agent-");
-		src.commit({ "agent/agents/old.md": "v1\n", "agent/agents/custom.md": "c1\n", "agent/config.yml": "lsp:\n  enabled: false\n" });
-		src.commit({ "agent/agents/old.md": "v2\n", "agent/agents/custom.md": "c2\n", "agent/config.yml": "lsp:\n  enabled: true\n" });
-		// What an older updater left behind: the first commit, plus one local edit, and the updater itself; no base record.
+		src.commit({ "agent/agents/old.md": "v1\n", "agent/PERSONALITY.md": "c1\n", "agent/config.yml": "lsp:\n  enabled: false\n" });
+		src.commit({ "agent/agents/old.md": "v2\n", "agent/PERSONALITY.md": "c2\n", "agent/config.yml": "lsp:\n  enabled: true\n" });
+		// What an older updater left behind: the first commit, plus local edits, and the updater itself; no base record.
 		writeTree(agentDir, {
 			"agents/old.md": "v1\n",
 			"agents/custom.md": "mine\n",
+			"PERSONALITY.md": "mine\n",
 			"config.yml": "lsp:\n  enabled: false\n",
 			"extensions/omp-config-autoupdate/omp-config-update.ts": "// installed updater\n",
 		});
 		const report = await apply(src.dir, agentDir);
-		expect(host(agentDir, "agents/old.md")).toBe("v2\n");
+		expect(host(agentDir, "agents/old.md")).toBe("v1\n");
+		expect(host(agentDir, "agents/custom.md")).toBe("mine\n");
 		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({ lsp: { enabled: true } });
-		expect(report.conflicts.map((conflict) => [conflict.rel, conflict.reason])).toEqual([["agent/agents/custom.md", "unknown-base"]]);
+		expect(report.conflicts.map((conflict) => [conflict.rel, conflict.reason])).toEqual([["agent/PERSONALITY.md", "unknown-base"]]);
 		const again = await apply(src.dir, agentDir);
 		expect(again.conflicts.map((conflict) => conflict.id)).toEqual(report.conflicts.map((conflict) => conflict.id));
 		resolveIds(src.dir, agentDir, [report.conflicts[0]?.id ?? ""]);
 		expect((await apply(src.dir, agentDir)).conflicts).toEqual([]);
-		expect(host(agentDir, "agents/custom.md")).toBe("mine\n");
+		expect(host(agentDir, "PERSONALITY.md")).toBe("mine\n");
 	});
 
 	test("a first install over omp's own config.yml writes every managed key; a key the user already set conflicts", async () => {

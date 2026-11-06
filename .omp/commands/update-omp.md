@@ -19,6 +19,7 @@ description: 用本仓库工作区更新本机 OMP 配置（repo → 本机）�
    agent 目录默认取 `PI_CODING_AGENT_DIR`，否则 `~/.omp/agent`；使用 named profile 时加 `--agent-dir <omp config path 的输出>`。脚本报告 `another update holds …` 时，说明有一次自动更新正在进行，稍后重跑。
    更新器先完整 preflight（含 `TODO_RETIREMENTS` 与 `CTX_RETIREMENTS` 的归属），再对每个必装声明插件执行 `omp install`（缺的补装，已装的升级），并重新向 OMP owner 核对 `omp-todo-more` 的 enabled、manifest entry 与实际入口；就绪后才写消费者并退休已知的旧 Todo 路径，ctx 路径还要求就绪插件携带 `src/ctx`，否则保留。插件无法安装或升级、disabled、坏 entry、app-managed/父链接/异常退休对象时不切换；退休归属出错会在安装插件前停止。报告 errors 时停止后续卸载、冲突适配和初始化项流程：保留实际部分结果，先修复并重跑；出现 `Cutover incomplete; do not restart OMP` 时不能重启混合状态。
    写入按更新器文件头的 CUSTOMIZATIONS 三方合并：本机没改过的受管项取工作区版本，改过的保留本机修改，文本文件两边都改时用 `git merge-file` 合并；`*.ts` 代码以仓库为准，被覆盖的本机修改列在 `overwrote customized code`。
+   `agents/*.md` 子代理定义是本机级用户设置（更新器的 `MACHINE_OWNED_PLAIN`）：无基准记录时播种一次，本机未改仍随工作区更新和删除，本机改过的一律保留、不合并不报冲突，本机删掉或改名的不再重建。
    `thinking-translator.json` 不属于受管项：不会创建、重写或删除已有本机文件，旧结构化基准也不参与操作；翻译设置只参考 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme)。
    旧独立 JSON 只在 `omomp.yml` 缺少对应段时导入，成功后删除源；已有段时保留源并记 note。旧 `system-prompt-replace` 段或 JSON 与本机已接受基准一致（无基准时与仓库某个已提交版本一致）时移除，默认规则文件正常安装；仅定制规则转换并进入受管模板合并。目标占用、无效定制数据、歧义布局或其他 `omomp` 格式会保留迁移源并记 note，阻止默认模板安装。应用托管的旧源从不导入或删除，只跳过或阻止迁移。
 2. 报告里有 `conflict (…), local copy kept: <id>` 时，与用户逐项适配：运行 `bun agent/extensions/omp-config-autoupdate/omp-config-update.ts conflicts --source .`（named profile 加同样的 `--agent-dir`），按它打印的步骤处理每个冲突，适配完用它给出的 `resolve --source .` 命令记录。用户选择以后再处理的冲突保持原样，在报告里列出。

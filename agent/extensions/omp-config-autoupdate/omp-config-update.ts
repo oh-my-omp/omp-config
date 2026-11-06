@@ -34,6 +34,13 @@
 //     install gets the repo default), then belong to the machine;
 //   - MACHINE_LIST_FIELDS keep the host's own entries ahead of the repo's;
 //   - every other repo path is managed (see CUSTOMIZATIONS).
+// Agent definitions (MACHINE_OWNED_PLAIN, agents/*.md) are machine-level user
+// settings: the repo's copy is a default seeded while the rel has no record.
+// After that an unmodified copy still follows the repo (upstream edits and
+// drops apply, which is how repo-side renames propagate), a machine-modified
+// copy always wins without merge or conflict, and a rel absent with a
+// recorded base — removed or renamed by the machine — is never re-created.
+// /sync-omp-config never pulls them into the repo.
 // Shipped APPEND-SYSTEM-*.md, PROMPT-INJECT-*.md, TURN-JUDGE-*.md and
 // REPLACE-SYSTEM-*.yml/.yaml rule files are managed templates; additional host
 // files stay machine-owned. Edits to APPEND-SYSTEM and REPLACE-SYSTEM files
@@ -44,10 +51,12 @@
 // anywhere; see OTTY_MARKER), runtime state. A symlinked target is written
 // through to its resolved file.
 //
-// CUSTOMIZATIONS. A managed item is merged three-way: host H, base B (the repo
-// content this machine last accepted, recorded under BASE_DIR; see base.ts)
-// and repo R. H==R or H==B takes R; R==B keeps H; text files changed on both
-// sides go through `git merge-file`, and a clean merge is written. Anything
+// CUSTOMIZATIONS. A managed item other than machine-owned agent definitions
+// (MACHINE_OWNED_PLAIN, see OWNERSHIP) is merged three-way: host H, base B
+// (the repo content this machine last accepted, recorded under BASE_DIR; see
+// base.ts) and repo R. H==R or H==B takes R; R==B keeps H; text files
+// changed on both sides go through `git merge-file`, and a clean merge is
+// written. Anything
 // else is a conflict: H and B stay as they are, so the next run finds the
 // conflict again until H converges to R or `resolve` moves B to R.
 // Structured files merge per path (merge.ts). Code (`*.ts`, the updater
@@ -64,7 +73,9 @@
 // was adapted.
 //
 // DELETIONS. An item the base has and the source dropped is deleted when the
-// host copy is unmodified (code: always), else it conflicts. Items dropped
+// host copy is unmodified (code: always), else it conflicts; a machine-owned
+// agent definition that was modified is kept instead (see OWNERSHIP). Items
+// dropped
 // before this machine had a base use `git diff previousCommit HEAD` when the
 // caller passes the previous commit. The finite TODO_RETIREMENTS are
 // different: when the source declares the independent Todo plugin, both modes
@@ -346,13 +357,17 @@ interface StructuredItem {
  */
 export const LOCAL_OMOMP_SECTIONS: readonly string[] = ["doc-polish", "model-compaction", "omp-config-autoupdate", "subagent-usage"];
 
-/** `omomp.yml` paths seeded from the repo while the host lacks them: language, input and hardware preferences. */
+/**
+ * `omomp.yml` paths seeded from the repo while the host lacks them: language,
+ * input and hardware preferences, and the machine's own dispatch allow-list.
+ */
 export const SEED_OMOMP_FIELDS: readonly string[] = [
 	"omomp-lang",
 	"lang-nag",
 	"input-polish.key",
 	"input-polish.instruction",
 	"child-memory-warning",
+	"task-split-check.agents",
 ];
 
 /** Every section's data as earlier layouts kept it. */
@@ -391,9 +406,18 @@ const STRUCTURED: readonly StructuredItem[] = [
 ];
 
 /**
+ * Agent definitions the repo ships as defaults: seeded while the rel has no
+ * base record, then the machine's (see OWNERSHIP). agents/*.txt are not agent
+ * definitions — non-agent notes stay managed.
+ */
+const MACHINE_OWNED_PLAIN = /^agent\/agents\/[^/]+\.md$/;
+
+/**
  * Repo files copied verbatim. `rel` uses `/` separators. Inside an extension
  * directory only modules and shipped templates are the repo's; any other file
  * there (settings, switches, the machine's own templates) is the host's.
+ * MACHINE_OWNED_PLAIN paths match too: shipped files still plan through
+ * `planPlainItem`, which keeps the machine's copy once a base is recorded.
  */
 function managedPlain(rel: string): boolean {
 	if (rel.split("/").some((part) => part.startsWith("."))) return false;
@@ -830,6 +854,24 @@ function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, 
 		const change: BaseChange = dropped !== undefined ? { kind: "plain-known", rel, content: dropped } : { kind: "plain-unknown", rel };
 		return [{ kind: "base", rel, change }];
 	};
+	// Machine-owned agent definitions (see OWNERSHIP): seeded while the rel has
+	// no record; an unmodified copy follows the repo, a machine-modified copy
+	// always wins without merge or conflict, and a recorded rel the machine
+	// removed or renamed is never re-created.
+	if (MACHINE_OWNED_PLAIN.test(rel)) {
+		if (host === undefined)
+			return repo !== undefined && recorded.kind === "none" ? [{ kind: "write", rel, target, content: repo, base: accept }] : [];
+		const unmodified = base.kind === "known" && host.equals(base.content);
+		if (repo !== undefined && host.equals(repo))
+			return recorded.kind === "known" && recorded.content.equals(repo) ? [] : [{ kind: "base", rel, change: accept }];
+		if (unmodified)
+			return repo === undefined
+				? [{ kind: "delete", rel, target, base: accept }]
+				: [{ kind: "write", rel, target, content: repo, base: accept }];
+		// First sight of a rel the machine (or an earlier apply) left behind:
+		// record its presence so a later local removal stays removed.
+		return recorded.kind === "none" ? [{ kind: "base", rel, change: { kind: "plain-unknown", rel } }] : [];
+	}
 	if (repo === undefined) {
 		if (host === undefined) return [{ kind: "base", rel, change: accept }];
 		const unmodified = base.kind === "known" && host.equals(base.content);
@@ -897,6 +939,19 @@ function planPlain(ctx: PlanContext): Op[] {
 		else ops.push(...planPlainItem(ctx, rel, undefined));
 	}
 	for (const [rel, content] of droppedBeforeBase(ctx)) if (!known.has(rel)) ops.push(...planPlainItem(ctx, rel, undefined, content));
+	// Machine-authored agent definitions the repo never shipped: record their
+	// presence too, so removing one stays removed if the repo ever ships the name.
+	try {
+		for (const entry of readdirSync(join(opts.agentDir, "agents"), { withFileTypes: true })) {
+			const rel = `agent/agents/${entry.name}`;
+			if (!entry.isFile() || known.has(rel) || entry.name.startsWith(".") || !MACHINE_OWNED_PLAIN.test(rel)) continue;
+			const target = targetOf(rel, opts.agentDir);
+			if (isAppManaged(target) || ctx.base.plain(rel).kind !== "none") continue;
+			ops.push({ kind: "base", rel, change: { kind: "plain-unknown", rel } });
+		}
+	} catch {
+		// No agents directory (or unreadable): nothing to record.
+	}
 	return ops;
 }
 

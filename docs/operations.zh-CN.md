@@ -15,11 +15,12 @@ flowchart LR
 
 ## 文件归属与同步规则
 
-仓库 → 本机通过 `agent/extensions/omp-config-autoupdate/omp-config-update.ts`，本机 → 仓库通过 `.omp/commands/sync-omp-config.md`。更新器对每个受管项做三方合并：本机副本、本机上次接受的仓库版本（基准，记录在 `<agentDir>/.omp-config-base/`）和新到的仓库版本。本机没改过的项直接取新版本；改过的保留本机修改；两边都改了时，文本文件用 `git merge-file` 合并，仍然重叠的部分保持本机原样并报告为冲突（见 [omp-config-autoupdate](#omp-config-autoupdate)）。下文提到的归属清单都是更新器里的常量。
+仓库 → 本机通过 `agent/extensions/omp-config-autoupdate/omp-config-update.ts`，本机 → 仓库通过 `.omp/commands/sync-omp-config.md`。更新器对每个受管项做三方合并——本机所有的子代理定义（`agents/*.md`）除外，它们只播种一次后按下表自己的规则保留——比对的三个版本是：本机副本、本机上次接受的仓库版本（基准，记录在 `<agentDir>/.omp-config-base/`）和新到的仓库版本。本机没改过的项直接取新版本；改过的保留本机修改；两边都改了时，文本文件用 `git merge-file` 合并，仍然重叠的部分保持本机原样并报告为冲突（见 [omp-config-autoupdate](#omp-config-autoupdate)）。下文提到的归属清单都是更新器里的常量。
 
 | 路径 / 类别 | 归属 | 仓库 → 本机（更新器） | 本机 → 仓库（`/sync-omp-config`） | 生效时间 |
 |---|---|---|---|---|
-| `agent/SYSTEM_TEMPLATE.md`、`APPEND_SYSTEM.md`、`PERSONALITY.md`、`APPEND_SYSTEM_LIGHT.md`、`agents/*` | 仓库；保留本机修改 | 三方合并：本机未改的文件用临时文件 + `rename` 覆盖（保留 symlink），改过的保留修改并合并上游的其他改动，重叠的改动报告冲突；源中已删除的文件，本机未改则删除，改过则报告冲突 | 只读 `cmp` 比对，有差异则复制回仓库 | `agents/*` 下次派发生效；其余下次启动生效 |
+| `agent/SYSTEM_TEMPLATE.md`、`APPEND_SYSTEM.md`、`PERSONALITY.md`、`APPEND_SYSTEM_LIGHT.md`、`agents/*.txt`（非 agent 笔记） | 仓库；保留本机修改 | 三方合并：本机未改的文件用临时文件 + `rename` 覆盖（保留 symlink），改过的保留修改并合并上游的其他改动，重叠的改动报告冲突；源中已删除的文件，本机未改则删除，改过则报告冲突 | 只读 `cmp` 比对，有差异则复制回仓库 | 下次启动生效 |
+| `agent/agents/*.md` | 本机（仓库仅首次播种默认值） | 本机所有的播种文件：仅在该文件无任何基准记录时从仓库播种；此后本机未改的副本仍跟随仓库（上游修改和删除生效，仓库侧的重命名因此传播），本机改过的一律保留、不合并也不报冲突，本机删除或改名的不再重建；本机自建的 `.md` 不动，只登记其存在 | 不收回仓库（要改默认直接改仓库里的 `agent/agents/*.md`） | 下次派发生效 |
 | `agent/config-light.yml` | 仓库；保留本机修改 | 按上面文本文件的规则三方合并 | 与本机 `cmp` 比对，有改动时写回仓库 | 实时重载的设置覆盖层（`omp-light` 通过 `--config` 传入）；不会重跑仅在启动时执行的工作，当前进程从未导入的扩展源仍需重启（[设置](omp://settings.md#live-file-changes)、[扩展加载](omp://extension-loading.md#live-source-changes)） |
 | `agent/extensions/<name>/*.ts`、`extensions/_shared/*.ts`、`extensions-last/<name>/*.ts`、`omp-light.ts` | 仓库（代码以仓库为准） | 即使本机改过也覆盖，改过的文件列入 `overwritten`；基准（尚无基准时为 `auto` 的上一个提交）有而源中已删除的文件会被删除（`extensions-last/README*.md` 只留仓库） | 逐个 `.ts` 比对并写回仓库 | 下次启动 OMP |
 | `PROMPT-INJECT-*.md`、`TURN-JUDGE-*.md`、`INTENT-*.md`、`extensions/append-system-model/APPEND-SYSTEM-*.md`、`extensions-last/system-prompt-replace/REPLACE-SYSTEM-*.yml` / `REPLACE-SYSTEM-*.yaml` | 仓库自带归仓库；本机自建归本机 | 仓库自带文件按上面文本文件的规则三方合并；不改动或删除同目录下本机自建的文件 | 只收回仓库已跟踪的同名文件 | 下次派发 / 下一轮 / 下次调用 / 下一条 prompt |
@@ -28,7 +29,7 @@ flowchart LR
 | `WATCHDOG-*.md` | 本机 | 不写入也不删除（仅在旧平铺目录迁移时从根目录移入扩展目录） | 不收回仓库 | 写入即重读 |
 | `APPEND_SYSTEM_MODEL.md`（`append-system-model` 旧格式） | 本机 | 一次性按块拆成 `extensions/append-system-model/APPEND-SYSTEM-model-NN.md`，每块一个本机文件并带 `target: *`，随后删除原文件；目标文件名已存在或原文件无法解析时保留原文件并记 note | 不收回仓库 | — |
 | `agent/config.yml` | 仓库 + 本机按字段合并 | 按字段三方合并。`LOCAL_CONFIG_FIELDS`（本机、OMP 或用户本人同意所有，如 `modelRoles`、`theme`、`setupVersion`、`dev.autoqaConsent`、`codexResets`）从不写入；`SEED_CONFIG_FIELDS`（默认值，如 `task.agentModelOverrides`、`retry.fallbackChains`、`browser`、`task.maxConcurrency`）只在本机缺少时写入；本机独有键保留；`extensions`（`MACHINE_LIST_FIELDS`）中的本机条目（如 `~/.claude`）保留在前，仓库条目作为一个整体三方合并 | 只用 `edit` 修改差异行，不整文件重序列化；跳过 `LOCAL_CONFIG_FIELDS`、`SEED_CONFIG_FIELDS` 与本机 `extensions` 条目 | OMP 热重载 |
-| `agent/omomp.yml` | 仓库段 + 本机段 | 仓库段按字段三方合并；本机段（`LOCAL_OMOMP_SECTIONS`：`doc-polish`、`model-compaction`、`omp-config-autoupdate`、`subagent-usage`）从不写入；`SEED_OMOMP_FIELDS`（语言、输入与硬件偏好：`omomp-lang`、`lang-nag`、`input-polish.key`、`input-polish.instruction`、`child-memory-warning`）只在缺少时写入 | 只修改仓库段的差异行，跳过本机段与播种路径 | 按各扩展读取时机生效 |
+| `agent/omomp.yml` | 仓库段 + 本机段 | 仓库段按字段三方合并；本机段（`LOCAL_OMOMP_SECTIONS`：`doc-polish`、`model-compaction`、`omp-config-autoupdate`、`subagent-usage`）从不写入；`SEED_OMOMP_FIELDS`（语言、输入与硬件偏好——`omomp-lang`、`lang-nag`、`input-polish.key`、`input-polish.instruction`、`child-memory-warning`——以及本机的派发白名单 `task-split-check.agents`）只在缺少时写入 | 只修改仓库段的差异行，跳过本机段与播种路径 | 按各扩展读取时机生效 |
 | `<agentDir>/subagent-usage/calibration.json` | 本机（`subagent-usage` 扩展在 `/subagent-usage on` 之后写入） | 不写入也不删除；`/subagent-usage reset` 删除 | 不收回仓库 | 下次调用 `subagent_usage` |
 | `<agentDir>/thinking-translator.json` | 插件 / 本机 | 从不创建、重写或删除；旧结构化基准记录不再参与操作 | 不收回仓库；设置见 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) | 由插件定义 |
 | `<agentDir>/.omp-config-base/` | 更新器（本机） | 每个受管项的基准：本机写入成功后写入，`resolve` 也会写；`--check` 从不写 | 不进仓库 | — |
