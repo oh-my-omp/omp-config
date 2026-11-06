@@ -3,8 +3,9 @@
 // more dispatches each available subagent can make before the provider quota
 // of its first bound model runs out. Off until a human enables it.
 //
-// Consent: machine-local `omomp.yml#subagent-usage` `{ enabled: true }`, read
-// from the agent directory only and written only by the human command
+// Consent: the machine-wide `subagent-usage.enabled` plugin setting
+// (`omp-config`; `/settings → Plugins → omp-config` or `omp plugin config`;
+// a project override cannot grant it), written only by the human command
 // `/subagent-usage on|off|status|recalibrate|reset`. Enabling is consent to
 // read this machine's session transcripts and usage history; without it the
 // extension reads neither and the tool stays inactive. Consent is re-checked
@@ -37,7 +38,7 @@ import { worktreeSessionDirs } from "@oh-my-pi/pi-coding-agent/session/session-p
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { defineOmompSection, loadOmompSection, writeOmompSection } from "../_shared/omomp.ts";
+import { defineSettings, readSettings, writeSetting } from "../_shared/plugin-settings.ts";
 import { availableAgents, bindAgent, rootSession } from "./agents.ts";
 import { type CalibrationOutcome, calibrate, QUOTA_MAX_AGE_MS, QUOTA_WINDOW_MS, scanTranscripts, stopCalibration } from "./calibrate.ts";
 import { channelOf } from "./channels.ts";
@@ -53,14 +54,14 @@ const DESCRIPTION = [
 ].join("\n");
 
 const params = z.object({});
-const consentSection = defineOmompSection(import.meta.dir, z.object({ enabled: z.boolean() }).strict());
+const consentSection = defineSettings(import.meta.dir, z.object({ enabled: z.boolean() }).strict());
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: true };
 
-/** Agent-directory section only: a project's `.omp/omomp.*` cannot grant consent. Any problem reads as off. */
-function consented(): boolean {
-	const loaded = loadOmompSection(consentSection, null);
-	return loaded.kind === "found" && loaded.value.enabled;
+/** Machine scope only: a project override cannot grant consent. Any problem reads as off. */
+async function consented(): Promise<boolean> {
+	const loaded = await readSettings(consentSection, { kind: "machine" });
+	return loaded.kind === "ok" && loaded.value.enabled;
 }
 
 async function setToolActive(pi: ExtensionAPI, active: boolean): Promise<void> {
@@ -95,7 +96,7 @@ function text(value: string, isError?: true): ToolResult {
 }
 
 async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
-	if (!consented()) {
+	if (!(await consented())) {
 		return text("subagent_usage is disabled on this machine. Only a human can enable it with /subagent-usage on; do not retry.", true);
 	}
 	const session = callerSession(ctx);
@@ -131,7 +132,7 @@ async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
 	const rootFile = root.getSessionFile();
 	const sessionDir = rootFile ? dirname(rootFile) : root.getSessionDir();
 	const dirs = [sessionDir, ...(await worktreeSessionDirs(root.getCwd(), sessionDir))];
-	if (!consented()) {
+	if (!(await consented())) {
 		return text("subagent_usage was disabled. Only a human can enable it with /subagent-usage on; do not retry.", true);
 	}
 	const [scan, reports] = await Promise.all([scanTranscripts(), session.fetchUsageReports()]);
@@ -201,9 +202,9 @@ function calibrateInBackground(pi: ExtensionAPI, ctx: ExtensionCommandContext, s
 	);
 }
 
-function showStatus(ctx: ExtensionCommandContext): void {
+async function showStatus(ctx: ExtensionCommandContext): Promise<void> {
 	const stored = readCalibration();
-	const state = consented() ? tr("enabled", "已开启") : tr("disabled", "已关闭");
+	const state = (await consented()) ? tr("enabled", "已开启") : tr("disabled", "已关闭");
 	let detail: string;
 	switch (stored.kind) {
 		case "none":
@@ -232,14 +233,14 @@ async function handleCommand(pi: ExtensionAPI, args: string, ctx: ExtensionComma
 	const action = args.trim().toLowerCase() || "status";
 	switch (action) {
 		case "on": {
-			writeOmompSection(consentSection.id, { enabled: true });
+			await writeSetting("subagent-usage.enabled", true);
 			await setToolActive(pi, true);
 			const session = callerSession(ctx);
 			if (session) calibrateInBackground(pi, ctx, session);
 			return;
 		}
 		case "off":
-			writeOmompSection(consentSection.id, { enabled: false });
+			await writeSetting("subagent-usage.enabled", false);
 			stopCalibration();
 			await setToolActive(pi, false);
 			ctx.ui.notify(
@@ -251,7 +252,7 @@ async function handleCommand(pi: ExtensionAPI, args: string, ctx: ExtensionComma
 			);
 			return;
 		case "recalibrate": {
-			if (!consented()) {
+			if (!(await consented())) {
 				ctx.ui.notify(
 					tr("subagent-usage: disabled; run /subagent-usage on first.", "subagent-usage：未开启，请先执行 /subagent-usage on。"),
 					"warning",
@@ -268,7 +269,7 @@ async function handleCommand(pi: ExtensionAPI, args: string, ctx: ExtensionComma
 			ctx.ui.notify(tr("subagent-usage: calibration and scan cache deleted.", "subagent-usage：已删除校准数据与扫描缓存。"), "info");
 			return;
 		case "status":
-			showStatus(ctx);
+			await showStatus(ctx);
 			return;
 		default:
 			ctx.ui.notify(
@@ -281,7 +282,7 @@ async function handleCommand(pi: ExtensionAPI, args: string, ctx: ExtensionComma
 export default function subagentUsage(pi: ExtensionAPI): void {
 	const activate = async (): Promise<void> => {
 		try {
-			await setToolActive(pi, consented());
+			await setToolActive(pi, await consented());
 		} catch (error) {
 			pi.logger.warn("subagent-usage: tool activation failed", { error: errorText(error) });
 		}

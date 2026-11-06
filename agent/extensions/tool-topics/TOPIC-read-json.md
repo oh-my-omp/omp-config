@@ -4,6 +4,11 @@ name: json
 title: Querying JSON with jq
 when: before extracting fields from JSON/JSONL/NDJSON (instead of reading it whole or parsing it in a script)
 upstream: pi-coding-agent@18.13.2 src/tools/read-json.ts, omp://tools/read.md § JSON queries
+inject:
+  - id: read-json
+    tool: read
+    parameter: path
+    pattern: '\.(json|jsonl|ndjson)(\?|:|$)'
 ---
 # Querying JSON with jq
 

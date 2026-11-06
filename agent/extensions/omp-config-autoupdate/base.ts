@@ -41,7 +41,8 @@ export type BaseChange =
 	| { readonly kind: "plain-known"; readonly rel: string; readonly content: Uint8Array }
 	| { readonly kind: "plain-unknown"; readonly rel: string }
 	| { readonly kind: "plain-drop"; readonly rel: string }
-	| { readonly kind: "structured"; readonly rel: string; readonly record: StructuredRecord };
+	| { readonly kind: "structured"; readonly rel: string; readonly record: StructuredRecord }
+	| { readonly kind: "structured-drop"; readonly rel: string };
 
 const isPath = (value: unknown): value is string[] => Array.isArray(value) && value.every((part) => typeof part === "string");
 
@@ -147,6 +148,9 @@ export class BaseRecord {
 					break;
 				case "structured":
 					this.structured.set(change.rel, change.record);
+					break;
+				case "structured-drop":
+					this.structured.delete(change.rel);
 					break;
 				default: {
 					const unreachable: never = change;

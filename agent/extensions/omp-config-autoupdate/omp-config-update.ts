@@ -50,22 +50,47 @@
 // files (`// @orca-managed-pi-extension` first line, or the Otty marker
 // anywhere; see OTTY_MARKER), runtime state. A symlinked target is written
 // through to its resolved file. The machine's own `omp-config-autoupdate.exclude`
-// omomp option (see EXCLUSIONS) overrides every rule below for the items it names.
+// setting (see EXCLUSIONS) overrides every rule below for the items it names.
 //
 // EXCLUSIONS. The machine lists items the updater never writes, creates or
-// deletes in `omp-config-autoupdate.exclude` of the agent dir's omomp file
-// (the section is machine-local; the repo never ships it). Entries are
-// agent-dir relative plain paths or globs (`agents/task-high.md`,
-// `extensions/foo/**`; a literal name covers its subtree, so `config.yml`
-// excludes the whole file) and, for structured files, `<file>:<dotted path>`
-// (`config.yml:task.agentModelOverrides`, `omomp.yml:lang-nag`). An invalid
-// option — ambiguous omomp files, a malformed entry — stops the whole apply
-// like every other preflight error. Excluded items keep their host copy and
-// their recorded base and are reported under `skipped`; excluding the updater
-// itself is only ever visible through that report. Excluded structured paths
-// merge like `local` ones (machine-owned), relocation and retirement ops that
-// touch an excluded path are dropped as whole operations, and a final
-// invariant check aborts the apply if any planned op still touches one.
+// deletes in the plugin setting `omp-config-autoupdate.exclude` of `omp-config`
+// (whitespace-separated; the machine's, the repo never ships a value), read
+// through `omp plugin config list`; until the SETTINGS step moved it, the list
+// still in the omomp section counts. Entries are agent-dir relative plain
+// paths or globs (`agents/task-high.md`, `extensions/foo/**`; a literal name
+// covers its subtree, so `config.yml` excludes the whole file), for config.yml
+// `config.yml:<dotted path>` (`config.yml:task.agentModelOverrides`), and
+// `omomp.yml:<section>`, which keeps that section out of the SETTINGS move. An
+// invalid option — two omomp copies of the section, a malformed entry — stops
+// the whole apply like every other preflight error. Excluded items keep their
+// host copy and their recorded base and are reported under `skipped`;
+// excluding the updater itself is only ever visible through that report.
+// Excluded structured paths merge like `local` ones (machine-owned),
+// relocation and retirement ops that touch an excluded path are dropped as
+// whole operations, and a final invariant check aborts the apply if any
+// planned op still touches one.
+//
+// SETTINGS. The extensions' settings are OMP plugin settings of the local
+// plugin `omp-config`, whose manifest is the managed
+// `extensions/_shared/package.json`. After every file operation succeeded,
+// apply links that directory (`omp plugin link`) unless OMP already lists the
+// plugin (registered elsewhere: left alone with a note). Then the omp-config
+// sections of the machine's omomp file (and of the standalone JSON files that
+// held them before it) move out (omomp-migration.ts): a value becomes a plugin
+// setting only when the machine has not set that key and it differs from the
+// manifest default; list data goes where it now lives (task-split-check
+// agents → `splitCheck: true` in agents/*.md, model-compaction rules →
+// `extensions/model-compaction/COMPACTION-rule-NN.md`, tool-topic-injection
+// rules → dropped only when equal to what the repo shipped, since the TOPIC
+// files carry them); `judge.fallbackRole` is dropped and every other
+// `fallbackRole` becomes `modelRoles.<role>: "@<fallbackRole>"` in config.yml
+// for each role it backed that the machine left unassigned. The `omp plugin`
+// CLI runs from `/`, so a project's plugin-overrides.json never hides the
+// machine's values. A section leaves the file only after OMP lists each of its
+// values and config.yml holds each binding; sections of other owners (omp-unified-exec) stay, and the file is
+// deleted once nothing is left in it. Invalid, ambiguous or blocked sections
+// stay with a note; nothing here stops the apply. `--check` and
+// `--no-plugins` never ask OMP to change anything and only report the move.
 //
 // CUSTOMIZATIONS. A managed item other than machine-owned agent definitions
 // (MACHINE_OWNED_PLAIN, see OWNERSHIP) is merged three-way: host H, base B
@@ -110,9 +135,8 @@
 //     An app-managed one is reported as an error instead.
 //     Every legacy source below that is app-managed stays in place and is
 //     skipped or blocks its migration; it is never imported or deleted.
-//   - An omomp section a machine lacks is imported from its old standalone JSON
-//     file (OMOMP_LEGACY_SECTIONS), then the old file is deleted. A section the
-//     machine already has leaves the old file in place with a note.
+//   - The omp-config sections of the omomp file and their old standalone JSON
+//     files move into plugin settings; see SETTINGS.
 //   - The former system-prompt-replace section (or its standalone JSON) is
 //     removed when it matches this machine's accepted structured base, or a
 //     committed repo version if no base exists. The shipped REPLACE-SYSTEM
@@ -196,7 +220,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BASE_DIR, type BaseChange, BaseRecord, RepoHistory, type StructuredRecord } from "./base.ts";
 import { parseLegacyModelFragments } from "./legacy-model-fragments.ts";
-import { convertLegacySystemReplacements, removeLegacyReplacementSection } from "./legacy-system-replacements.ts";
+import { convertLegacySystemReplacements } from "./legacy-system-replacements.ts";
 import {
 	type ConflictReason,
 	canonical,
@@ -211,6 +235,26 @@ import {
 	setAt,
 	valueAt,
 } from "./merge.ts";
+import {
+	holdsOwnedSection,
+	linkPlugin,
+	type Manifest,
+	OMOMP_FILES,
+	type OmompPlan,
+	PLUGIN_DIR,
+	PLUGIN_NAME,
+	type PluginState,
+	parseManifest,
+	planOmompMigration,
+	pluginState as queryPluginState,
+	REPLACEMENT_SECTION,
+	type RoleBinding,
+	removeYamlSections,
+	type SectionMove,
+	setPluginSetting,
+	splitCheckEdit,
+	withoutSections,
+} from "./omomp-migration.ts";
 
 export const REPO_URL = "https://github.com/oh-my-omp/omp-config.git";
 /** Origins of updater clones made before the repo moved to oh-my-omp; repointed to REPO_URL on the next fetch. */
@@ -353,67 +397,17 @@ const DATA_MOVES: readonly DataMove[] = [
 
 type Format = "json" | "yaml";
 
-/** An omomp section and the old standalone JSON files that held it, newest layout first. */
-interface LegacySection {
-	readonly section: string;
-	readonly rels: readonly string[];
-}
-
 interface StructuredItem {
 	readonly rel: string;
-	/** Old standalone files whose contents become sections of `rel`; see RELOCATIONS. */
-	readonly legacySections?: readonly LegacySection[];
 	readonly format: Format;
 	readonly rules: PathRules;
 }
 
-/**
- * Sections of `omomp.yml` that belong to the machine: the repo never writes
- * them and they are never synced back. A section the machine lacks stays absent.
- */
-export const LOCAL_OMOMP_SECTIONS: readonly string[] = ["doc-polish", "model-compaction", "omp-config-autoupdate", "subagent-usage"];
+/** The machine's omomp file: no longer managed; its omp-config sections move out (see SETTINGS). */
+const OMOMP_REL = "agent/omomp.yml";
 
-/**
- * `omomp.yml` paths seeded from the repo while the host lacks them: language,
- * input and hardware preferences, and the machine's own dispatch allow-list.
- */
-export const SEED_OMOMP_FIELDS: readonly string[] = [
-	"omomp-lang",
-	"lang-nag",
-	"input-polish.key",
-	"input-polish.instruction",
-	"child-memory-warning",
-	"task-split-check.agents",
-];
-
-/** Every section's data as earlier layouts kept it. */
-const OMOMP_LEGACY_SECTIONS: readonly LegacySection[] = [
-	{ section: "lang-nag", rels: ["agent/extensions/lang-nag/lang-nag.json", "agent/extensions/lang-nag.json"] },
-	{ section: "input-polish", rels: ["agent/extensions/input-polish/input-polish.json"] },
-	{
-		section: "tool-policy-nag",
-		rels: ["agent/extensions/tool-policy-nag/tool-policy-nag.json", "agent/extensions/tool-policy-nag.json"],
-	},
-	{
-		section: "task-completion-judge",
-		rels: ["agent/extensions/task-completion-judge/task-completion-judge.json", "agent/extensions/task-completion-judge.json"],
-	},
-	{ section: "doc-polish", rels: ["agent/extensions/doc-polish/doc-polish.json", "agent/extensions/doc-polish.json"] },
-	{ section: "model-compaction", rels: ["agent/extensions/model-compaction/model-compaction.json"] },
-	{
-		section: "omp-config-autoupdate",
-		rels: ["agent/extensions/omp-config-autoupdate/omp-config-autoupdate.json", "agent/omp-config-autoupdate.json"],
-	},
-];
-
-/** Structured files, in apply order: config.yml last (it is live-reloaded). */
+/** Structured files. */
 const STRUCTURED: readonly StructuredItem[] = [
-	{
-		rel: "agent/omomp.yml",
-		format: "yaml",
-		rules: { local: [...LOCAL_OMOMP_SECTIONS, "system-prompt-replace"], seed: SEED_OMOMP_FIELDS, machineLists: [], retired: {} },
-		legacySections: OMOMP_LEGACY_SECTIONS,
-	},
 	{
 		rel: "agent/config.yml",
 		format: "yaml",
@@ -448,7 +442,8 @@ function managedPlain(rel: string): boolean {
 		/^agent\/extensions\/turn-judge\/TURN-JUDGE-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions\/tool-policy-nag\/INTENT-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions\/tool-topics\/(TOPIC|SURFACE)-[^/]+\.md$/.test(rel) ||
-		rel === "agent/extensions/argon-long-output/ARGON_PROMPT.md"
+		rel === "agent/extensions/argon-long-output/ARGON_PROMPT.md" ||
+		rel === `agent/${PLUGIN_DIR}/package.json`
 	);
 }
 
@@ -459,19 +454,19 @@ const RESTART_SCOPED =
 // --- exclusions ---------------------------------------------------------------
 
 /**
- * The machine's own `omp-config-autoupdate.exclude` list (omomp section): items
- * the updater never writes, creates or deletes. Plain entries are agent-dir
- * relative paths or globs (`agents/task-high.md`, `extensions/foo/**`, and a
- * literal directory or file name covers everything under it, so `config.yml`
- * excludes the whole structured file too); `<file>:<dotted.path>` excludes a
- * field path inside a structured file (`config.yml:task.agentModelOverrides`).
- * The section is machine-local: the repo never writes it and /sync-omp-config
- * never carries it. `_shared/omomp.ts` cannot be imported here — this script
- * runs standalone, where runtime host-package imports fail — so the section is
- * located and checked by hand; the option's schema lives in index.ts.
- * Excluded items keep their host copy and their recorded base untouched and are
- * reported under `skipped`; the updater itself is only ever excluded visibly,
- * through the same report.
+ * The machine's own `omp-config-autoupdate.exclude` setting (plugin settings
+ * of `omp-config`, whitespace-separated; until the omomp migration moved it,
+ * the list still in the omomp section): items the updater never writes,
+ * creates or deletes. Plain entries are agent-dir relative paths or globs
+ * (`agents/task-high.md`, `extensions/foo/**`, and a literal directory or file
+ * name covers everything under it, so `config.yml` excludes the whole
+ * structured file too); `<file>:<dotted.path>` excludes a field path inside a
+ * structured file (`config.yml:task.agentModelOverrides`), and
+ * `omomp.yml:<section>` keeps that omomp section out of the migration. The
+ * setting is the machine's: the repo never writes it and /sync-omp-config never
+ * carries it. Excluded items keep their host copy and their recorded base
+ * untouched and are reported under `skipped`; the updater itself is only ever
+ * excluded visibly, through the same report.
  */
 
 /** `field` names `path` or one of its ancestors; same contract as the `local` rule in merge.ts. */
@@ -493,73 +488,45 @@ interface Exclusions {
 const GLOB_MAGIC = /[*?[\]{}!\\]/;
 
 /**
- * The exclude entries of the agent dir's `omomp.*` files, as validated lists.
- * One `omp-config-autoupdate` section across the omomp files is the machine's
- * option; several sections or unreadable files make the machine's intent
- * ambiguous and throw, so the apply stops before anything is planned. Entries
- * normalize `agent/` prefixes and reject absolute paths, `..` and empty
- * segments; `file:path` entries require a managed structured file. Anything
- * invalid throws: an ambiguous option applies nothing.
+ * Validated exclude entries; `origin` names where they came from in errors.
+ * Entries normalize `agent/` prefixes and reject absolute paths, `..` and
+ * empty segments; `file:path` entries require a managed structured file or
+ * the omomp file. Anything invalid throws: an ambiguous option applies nothing.
  */
-function readExclusions(agentDir: string): Exclusions {
+function parseExclusions(raw: readonly string[], origin: string): Exclusions {
 	/** One exclude operand as an agent-dir relative path: `agent/` dropped, root, `..` and empty segments refused. */
-	const normalize = (raw: string, path: string): string => {
-		const trimmed = raw.trim();
+	const normalize = (entry: string): string => {
+		const trimmed = entry.trim();
 		const parts = (trimmed.startsWith("agent/") ? trimmed.slice("agent/".length) : trimmed).split("/");
 		if (isAbsolute(trimmed) || parts.some((part) => part === "" || part === "." || part === ".."))
-			throw new Error(`${path}: invalid exclude entry ${JSON.stringify(raw)}: expected an agent-dir relative path or glob`);
+			throw new Error(`${origin}: invalid exclude entry ${JSON.stringify(entry)}: expected an agent-dir relative path or glob`);
 		return parts.join("/");
 	};
 	const entries: ExcludeEntry[] = [];
 	const fields = new Map<string, Path[]>();
-	const names = ["omomp.yml", "omomp.yaml", "omomp.json", "omomp.toml"].filter((rel) => lexists(join(agentDir, rel)));
-	let found: string | undefined;
-	for (const name of names) {
-		const path = join(agentDir, name);
-		let parsed: Mapping;
-		try {
-			const value: unknown = name.endsWith(".json")
-				? JSON.parse(readFileSync(path, "utf8"))
-				: name.endsWith(".toml")
-					? Bun.TOML.parse(readFileSync(path, "utf8"))
-					: Bun.YAML.parse(readFileSync(path, "utf8"));
-			if (!isMapping(value)) throw new Error("root is not a mapping");
-			parsed = value;
-		} catch {
-			// An unreadable omomp file holds no readable section for any consumer
-			// (loadOmompSection skips it the same way); whatever owns it reports it.
+	for (const entry of raw) {
+		const colon = entry.indexOf(":");
+		if (colon >= 0) {
+			const item = `agent/${normalize(entry.slice(0, colon))}`;
+			const field = entry.slice(colon + 1);
+			const segments = field.split(".");
+			if (
+				(item !== OMOMP_REL && !STRUCTURED.some((structured) => structured.rel === item)) ||
+				field === "" ||
+				segments.some((segment) => segment === "")
+			)
+				throw new Error(
+					`${origin}: invalid exclude entry ${JSON.stringify(entry)}: use <structured file>:<dotted field path>, the file being config.yml or omomp.yml`,
+				);
+			entries.push({ kind: "field", item, path: segments });
+			(fields.get(item) ?? fields.set(item, []).get(item)!).push(segments);
 			continue;
 		}
-		if (!Object.hasOwn(parsed, "omp-config-autoupdate")) continue;
-		if (found !== undefined) throw new Error(`${path}: omp-config-autoupdate also appears in ${found}; the exclude list is ambiguous`);
-		found = path;
-		const section: unknown = parsed["omp-config-autoupdate"];
-		if (!isMapping(section)) throw new Error(`${path}: section omp-config-autoupdate is not a mapping`);
-		const raw: unknown = section.exclude;
-		if (raw === undefined) continue;
-		if (!Array.isArray(raw) || !raw.every((entry): entry is string => typeof entry === "string"))
-			throw new Error(`${path}: omp-config-autoupdate.exclude must be a list of strings`);
-		for (const entry of raw) {
-			const colon = entry.indexOf(":");
-			if (colon >= 0) {
-				const file = normalize(entry.slice(0, colon), path);
-				const item = `agent/${file}`;
-				const field = entry.slice(colon + 1);
-				const segments = field.split(".");
-				if (!STRUCTURED.some((structured) => structured.rel === item) || field === "" || segments.some((segment) => segment === ""))
-					throw new Error(
-						`${path}: invalid exclude entry ${JSON.stringify(entry)}: use <structured file>:<dotted field path>, the file being config.yml or omomp.yml`,
-					);
-				entries.push({ kind: "field", item, path: segments });
-				(fields.get(item) ?? fields.set(item, []).get(item)!).push(segments);
-				continue;
-			}
-			const pattern = normalize(entry, path);
-			const match = GLOB_MAGIC.test(pattern)
-				? (leaf: string): boolean => new Bun.Glob(pattern).match(leaf)
-				: (leaf: string): boolean => leaf === pattern || leaf.startsWith(`${pattern}/`);
-			entries.push({ kind: "plain", match });
-		}
+		const pattern = normalize(entry);
+		const match = GLOB_MAGIC.test(pattern)
+			? (leaf: string): boolean => new Bun.Glob(pattern).match(leaf)
+			: (leaf: string): boolean => leaf === pattern || leaf.startsWith(`${pattern}/`);
+		entries.push({ kind: "plain", match });
 	}
 	return { entries, fields };
 }
@@ -582,7 +549,7 @@ function skipExcluded(ctx: PlanContext, rel: string): boolean {
 	return true;
 }
 
-const EXCLUDED_REASON = "excluded by the machine (omomp-config-autoupdate.exclude)";
+const EXCLUDED_REASON = "excluded by the machine (omp-config-autoupdate.exclude)";
 
 /**
  * Invariant over the finished plan: no op may write, create, move or delete an
@@ -815,12 +782,14 @@ const LEGACY_REPLACEMENT_RELS = [
 
 type ReplacementMigration =
 	| { readonly kind: "none" }
-	| { readonly kind: "blocked"; readonly skipOmomp: boolean }
+	| { readonly kind: "blocked" }
 	| {
 			readonly kind: "ready";
 			readonly rules: string | undefined;
 			readonly omomp: string | undefined;
 			readonly legacy: readonly string[];
+			/** The omomp base record without the moved section, so a later copy of it is never mistaken for accepted repo content. */
+			readonly omompBase: BaseChange | undefined;
 	  };
 
 function unmodifiedReplacementSection(
@@ -843,11 +812,11 @@ function planReplacementMigration(
 	history: RepoHistory,
 	exclusions: Exclusions,
 ): ReplacementMigration {
-	const files = ["omomp.yml", "omomp.yaml", "omomp.json", "omomp.toml"].filter((rel) => lexists(join(opts.agentDir, rel)));
+	const files = OMOMP_FILES.filter((rel) => lexists(join(opts.agentDir, rel)));
 	const legacy = LEGACY_REPLACEMENT_RELS.filter((rel) => lexists(targetOf(rel, opts.agentDir)));
-	const blocked = (reason: string, skipOmomp = false): ReplacementMigration => {
+	const blocked = (reason: string): ReplacementMigration => {
 		report.notes.push(`system-prompt-replace migration left in place: ${reason}; move the section to REPLACE-SYSTEM-*.yml by hand`);
-		return { kind: "blocked", skipOmomp };
+		return { kind: "blocked" };
 	};
 	let root: Mapping | undefined;
 	let text: string | undefined;
@@ -867,11 +836,11 @@ function planReplacementMigration(
 				root = parsed;
 			}
 		} catch (error) {
-			return blocked(`${join(opts.agentDir, rel)}: ${errorText(error)}`, true);
+			return blocked(`${join(opts.agentDir, rel)}: ${errorText(error)}`);
 		}
 	}
 	if (containsSection && (files.length > 1 || files[0] !== "omomp.yml"))
-		return blocked(`unsupported or ambiguous omomp files: ${files.map((rel) => join(opts.agentDir, rel)).join(", ")}`, true);
+		return blocked(`unsupported or ambiguous omomp files: ${files.map((rel) => join(opts.agentDir, rel)).join(", ")}`);
 	const hasSection = root !== undefined && Object.hasOwn(root, "system-prompt-replace");
 	if (!hasSection && legacy.length === 0) return { kind: "none" };
 	// The migration is one operation (destination write, section removal,
@@ -879,20 +848,19 @@ function planReplacementMigration(
 	// in place, reported like any other excluded item.
 	const migrationExcluded =
 		plainRelExcluded(REPLACEMENT_RULES_REL, exclusions) ||
-		plainRelExcluded("agent/omomp.yml", exclusions) ||
-		fieldExcluded("agent/omomp.yml", ["system-prompt-replace"], exclusions) ||
+		plainRelExcluded(OMOMP_REL, exclusions) ||
+		fieldExcluded(OMOMP_REL, [REPLACEMENT_SECTION], exclusions) ||
 		legacy.some((rel) => plainRelExcluded(rel, exclusions));
 	if (migrationExcluded) {
-		for (const rel of [REPLACEMENT_RULES_REL, "agent/omomp.yml", ...legacy])
+		for (const rel of [REPLACEMENT_RULES_REL, OMOMP_REL, ...legacy])
 			if (plainRelExcluded(rel, exclusions)) report.skipped.push({ path: targetOf(rel, opts.agentDir), reason: EXCLUDED_REASON });
-		if (fieldExcluded("agent/omomp.yml", ["system-prompt-replace"], exclusions))
-			report.skipped.push({ path: `${join(opts.agentDir, "omomp.yml")}:system-prompt-replace`, reason: EXCLUDED_REASON });
+		if (fieldExcluded(OMOMP_REL, [REPLACEMENT_SECTION], exclusions))
+			report.skipped.push({ path: `${targetOf(OMOMP_REL, opts.agentDir)}:${REPLACEMENT_SECTION}`, reason: EXCLUDED_REASON });
 		return { kind: "none" };
 	}
 	const destination = targetOf(REPLACEMENT_RULES_REL, opts.agentDir);
 	if (lexists(destination)) return blocked(`${destination} already exists`);
-	if (files.some((rel) => isAppManaged(join(opts.agentDir, rel))))
-		return blocked(`${join(opts.agentDir, "omomp.yml")} is app-managed`, true);
+	if (files.some((rel) => isAppManaged(join(opts.agentDir, rel)))) return blocked(`${targetOf(OMOMP_REL, opts.agentDir)} is app-managed`);
 	const managedLegacy = legacy.find((rel) => isAppManaged(targetOf(rel, opts.agentDir)));
 	if (managedLegacy !== undefined) return blocked(`${targetOf(managedLegacy, opts.agentDir)} is app-managed`);
 	let value: unknown = root?.["system-prompt-replace"];
@@ -904,7 +872,7 @@ function planReplacementMigration(
 			return blocked(`${legacy[0]}: ${errorText(error)}`);
 		}
 	}
-	const item = hasSection ? { rel: "agent/omomp.yml", format: "yaml" as const } : { rel: legacy[0]!, format: "json" as const };
+	const item = hasSection ? { rel: OMOMP_REL, format: "yaml" as const } : { rel: legacy[0]!, format: "json" as const };
 	const path = hasSection ? ["system-prompt-replace"] : [];
 	let rules: string | undefined;
 	if (!unmodifiedReplacementSection(base, history, item, path, value)) {
@@ -914,27 +882,39 @@ function planReplacementMigration(
 	}
 	let omomp: string | undefined;
 	if (hasSection && root !== undefined && text !== undefined) {
-		const removed = removeLegacyReplacementSection(text, root);
-		if (removed.kind === "invalid") return blocked(removed.reason, true);
+		const removed = removeYamlSections(text, root, [REPLACEMENT_SECTION]);
+		if (removed.kind === "invalid") return blocked(removed.reason);
 		omomp = removed.text;
 	}
-	return { kind: "ready", rules, omomp, legacy };
+	const recorded = base.structuredOf(OMOMP_REL);
+	const omompBase: BaseChange | undefined =
+		recorded === undefined || valueAt(recorded.value, [REPLACEMENT_SECTION]) === undefined
+			? undefined
+			: {
+					kind: "structured",
+					rel: OMOMP_REL,
+					record: {
+						value: Object.fromEntries(Object.entries(recorded.value).filter(([key]) => key !== REPLACEMENT_SECTION)),
+						unknown: recorded.unknown.filter((path) => path[0] !== REPLACEMENT_SECTION),
+					},
+				};
+	return { kind: "ready", rules, omomp, legacy, omompBase };
 }
 
 /** One destination write, followed by section/legacy cleanup, with bases accepted only after all succeed. */
 function groupReplacementMigration(opts: ApplyOptions, migration: ReplacementMigration, planned: readonly Op[]): Op[] {
 	if (migration.kind !== "ready") return [...planned];
-	const rels = new Set([REPLACEMENT_RULES_REL, "agent/omomp.yml"]);
 	const writes: Extract<Op, { kind: "write" }>[] = [];
 	const changes: BaseChange[] = [];
 	const rest: Op[] = [];
 	for (const op of planned) {
-		if (rels.has(op.rel) && op.kind === "write") writes.push(op);
-		else if (rels.has(op.rel) && op.kind === "base") changes.push(op.change);
+		if (op.rel === REPLACEMENT_RULES_REL && op.kind === "write") writes.push(op);
+		else if (op.rel === REPLACEMENT_RULES_REL && op.kind === "base") changes.push(op.change);
 		else rest.push(op);
 	}
-	if (migration.omomp !== undefined && !writes.some((write) => write.rel === "agent/omomp.yml"))
-		writes.push({ kind: "write", rel: "agent/omomp.yml", target: join(opts.agentDir, "omomp.yml"), content: migration.omomp });
+	if (migration.omomp !== undefined)
+		writes.push({ kind: "write", rel: OMOMP_REL, target: targetOf(OMOMP_REL, opts.agentDir), content: migration.omomp });
+	if (migration.omompBase !== undefined) changes.push(migration.omompBase);
 	// planPlain always emits the final destination write before the structured cleanup.
 	return [
 		{
@@ -1195,9 +1175,6 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 	const ops: Op[] = [];
 	for (const { item, text, repo } of sources) {
 		if (skipExcluded(ctx, item.rel)) continue;
-		const migration = ctx.replacementMigration;
-		if (item.rel === "agent/omomp.yml" && migration.kind === "blocked" && migration.skipOmomp) continue;
-		const projectedText = item.rel === "agent/omomp.yml" && migration.kind === "ready" ? migration.omomp : undefined;
 		const target = targetOf(item.rel, opts.agentDir);
 		let host: Mapping | undefined;
 		if (existsSync(target)) {
@@ -1206,38 +1183,12 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 				continue;
 			}
 			try {
-				host = parseStructured(projectedText === undefined ? readFileSync(target, "utf8") : projectedText || "{}", item.format);
+				host = parseStructured(readFileSync(target, "utf8"), item.format);
 			} catch (error) {
 				// Replacing it would drop the host's own values; leave it and retry next start.
 				report.errors.push(`${target}: host copy unparsable (${errorText(error)}); left untouched`);
 				continue;
 			}
-		}
-		const consumed: string[] = [];
-		for (const legacy of item.legacySections ?? []) {
-			const present = legacy.rels.filter((rel) => lexists(targetOf(rel, opts.agentDir)));
-			const [first] = present;
-			if (first === undefined) continue;
-			if (fieldExcluded(item.rel, [legacy.section], ctx.exclusions)) continue;
-			if (host !== undefined && Object.hasOwn(host, legacy.section)) {
-				for (const rel of present) report.notes.push(`${rel} left in place: ${item.rel} already has section ${legacy.section}`);
-				continue;
-			}
-			const managed = present.filter((rel) => isAppManaged(targetOf(rel, opts.agentDir)));
-			if (managed.length > 0) {
-				for (const rel of managed) report.skipped.push({ path: targetOf(rel, opts.agentDir), reason: "app-managed" });
-				continue;
-			}
-			const from = targetOf(first, opts.agentDir);
-			let value: Mapping;
-			try {
-				value = parseStructured(readFileSync(from, "utf8"), "json");
-			} catch (error) {
-				report.errors.push(`${from}: old copy unparsable (${errorText(error)}); left untouched`);
-				continue;
-			}
-			host = { ...host, [legacy.section]: value };
-			consumed.push(...present);
 		}
 		const recorded = ctx.base.structuredOf(item.rel);
 		const source: StructuredBaseSource =
@@ -1274,19 +1225,13 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 				(recorded !== undefined && valueAt(recorded.value, field) !== undefined)
 			)
 				report.skipped.push({ path: `${target}:${field.join(".")}`, reason: EXCLUDED_REASON });
-		if (projectedText === undefined && consumed.length === 0 && host !== undefined && Bun.deepEquals(host, merged.host, true)) {
+		if (host !== undefined && Bun.deepEquals(host, merged.host, true)) {
 			if (change !== undefined) ops.push({ kind: "base", rel: item.rel, change });
 			continue;
 		}
 		// Keep the repo's own formatting whenever the result is exactly the repo file.
-		const content =
-			projectedText !== undefined && Bun.deepEquals(host, merged.host, true)
-				? projectedText
-				: Bun.deepEquals(merged.host, repo, true)
-					? text
-					: serialize(merged.host, item.format);
+		const content = Bun.deepEquals(merged.host, repo, true) ? text : serialize(merged.host, item.format);
 		ops.push({ kind: "write", rel: item.rel, target, content, base: change });
-		for (const rel of consumed) if (!skipExcluded(ctx, rel)) ops.push({ kind: "delete", rel, target: targetOf(rel, opts.agentDir) });
 	}
 	return ops;
 }
@@ -1796,6 +1741,353 @@ function refreshMovingPlugins(source: string): PluginRefresh {
 	return installPlugins(omp, specs);
 }
 
+// --- settings ---------------------------------------------------------------
+
+/** What the settings step knows before any write: the plugin's registration, the manifest and the pending omomp move. */
+interface SettingsPreflight {
+	/** omp on PATH, when plugin steps run; null otherwise. */
+	readonly omp: string | null;
+	readonly plugin: PluginState;
+	/** The source's manifest; undefined when the source ships none (an older commit). */
+	readonly manifest: Manifest | undefined;
+	readonly plan: OmompPlan;
+}
+
+function pluginDirOf(agentDir: string): string {
+	return join(agentDir, PLUGIN_DIR);
+}
+
+function readManifest(source: string): Manifest | undefined {
+	const path = join(source, "agent", PLUGIN_DIR, "package.json");
+	return existsSync(path) ? parseManifest(readFileSync(path, "utf8"), path) : undefined;
+}
+
+/** The repo shipped `value` for omomp `section`: equal to this machine's recorded base, or to a committed version without one. */
+function shippedSection(base: BaseRecord, history: RepoHistory): (section: string, value: unknown) => boolean {
+	return (section, value) => unmodifiedReplacementSection(base, history, { rel: OMOMP_REL, format: "yaml" }, [section], value);
+}
+
+/**
+ * Read-only: registration and stored settings through `omp plugin`, and the
+ * omomp move. Without plugin steps (`--no-plugins`) OMP is not asked and
+ * the plugin counts as unregistered.
+ */
+function settingsPreflight(opts: ApplyOptions, base: BaseRecord, history: RepoHistory): SettingsPreflight {
+	const manifest = readManifest(opts.source);
+	const omp = opts.plugins ? Bun.which("omp") : null;
+	const plugin: PluginState = omp === null ? { kind: "unregistered" } : queryPluginState(omp, pluginDirOf(opts.agentDir));
+	if (plugin.kind === "failed") throw new Error(`plugin ${PLUGIN_NAME}: ${plugin.error}; nothing applied`);
+	// Planned even when the source ships no manifest: the exclude list still in the omomp file is the machine's option.
+	const plan = planOmompMigration({
+		agentDir: opts.agentDir,
+		manifest: manifest ?? new Map(),
+		shipped: shippedSection(base, history),
+		appManaged: (path) => isAppManaged(path),
+	});
+	return { omp, plugin, manifest, plan };
+}
+
+/** The machine's exclude option: the stored plugin setting, else the list still waiting in the omomp file. */
+function exclusionsOf(preflight: SettingsPreflight, agentDir: string): Exclusions {
+	const stored =
+		preflight.plugin.kind === "unregistered" || preflight.plugin.kind === "failed" ? undefined : preflight.plugin.settings[EXCLUDE_KEY];
+	if (stored !== undefined) {
+		if (typeof stored !== "string") throw new Error(`plugin setting ${EXCLUDE_KEY} is not a string; nothing applied`);
+		return parseExclusions(
+			stored.split(/\s+/).filter((entry) => entry !== ""),
+			`plugin setting ${EXCLUDE_KEY}`,
+		);
+	}
+	const pending = preflight.plan.kind === "none" ? undefined : preflight.plan.pendingExclude;
+	return parseExclusions(pending ?? [], `${join(agentDir, "omomp.yml")}: omp-config-autoupdate.exclude`);
+}
+
+const EXCLUDE_KEY = "omp-config-autoupdate.exclude";
+
+function describeMove(move: SectionMove): string {
+	const parts = [
+		...[...move.settings].map(([key, value]) => `${key}=${JSON.stringify(value)}`),
+		...move.files.map((file) => file.rel.slice("agent/".length)),
+		...move.splitAgents.map((name) => `splitCheck: true in ${name}`),
+		...move.bindings.map((binding) => `modelRoles.${binding.role}=${binding.value} unless assigned`),
+	];
+	return `${move.section}${parts.length === 0 ? " (nothing to keep)" : `: ${parts.join(", ")}`}`;
+}
+
+const CONFIG_REL = "agent/config.yml";
+
+/** The machine's `modelRoles` in config.yml; a missing file or block has none. */
+function machineRoles(agentDir: string): Mapping {
+	const target = targetOf(CONFIG_REL, agentDir);
+	if (!existsSync(target)) return {};
+	const roles = valueAt(parseStructured(readFileSync(target, "utf8"), "yaml"), ["modelRoles"]);
+	if (roles === undefined) return {};
+	if (!isMapping(roles)) throw new Error(`${target}: modelRoles is not a mapping`);
+	return roles;
+}
+
+/** `--check` and `--no-plugins`: say what the settings step would do. */
+function reportPendingSettings(opts: ApplyOptions, preflight: SettingsPreflight): string[] {
+	const notes: string[] = [];
+	if (preflight.manifest === undefined) return notes;
+	if (opts.plugins && preflight.plugin.kind === "unregistered")
+		notes.push(`plugin ${PLUGIN_NAME}: apply links ${pluginDirOf(opts.agentDir)}`);
+	const plan = preflight.plan;
+	switch (plan.kind) {
+		case "none":
+			return notes;
+		case "blocked":
+			return [...notes, `omomp sections left in place: ${plan.reason}`];
+		case "ready": {
+			const why = opts.plugins ? "apply moves" : "left in place without plugin steps (--no-plugins); a plugin apply moves";
+			if (plan.moves.length > 0) notes.push(`omomp sections ${why} into plugin ${PLUGIN_NAME}: ${plan.moves.map(describeMove).join("; ")}`);
+			for (const { section, reason } of plan.kept) notes.push(`omomp section ${section} left in place: ${reason}`);
+			return notes;
+		}
+		default: {
+			const unreachable: never = plan;
+			return unreachable;
+		}
+	}
+}
+
+/** Register `<agentDir>/extensions/_shared` as plugin `omp-config` unless OMP already knows the plugin. Returns its stored settings, or null on failure. */
+function ensurePlugin(opts: ApplyOptions, report: ApplyReport, omp: string, before: PluginState): Mapping | null {
+	const dir = pluginDirOf(opts.agentDir);
+	switch (before.kind) {
+		case "registered":
+			return before.settings;
+		case "elsewhere":
+			report.notes.push(`plugin ${PLUGIN_NAME} is registered from ${before.path}; left as it is (not ${dir})`);
+			return before.settings;
+		case "failed":
+			report.errors.push(`plugin ${PLUGIN_NAME}: ${before.error}`);
+			return null;
+		case "unregistered": {
+			if (!existsSync(join(dir, "package.json"))) {
+				report.notes.push(`plugin ${PLUGIN_NAME} not linked: ${join(dir, "package.json")} is missing`);
+				return null;
+			}
+			const error = linkPlugin(omp, dir);
+			if (error !== undefined) {
+				report.errors.push(`plugin ${PLUGIN_NAME} not linked: ${error}`);
+				return null;
+			}
+			report.notes.push(`plugin ${PLUGIN_NAME} linked from ${dir}`);
+			const after = queryPluginState(omp, dir);
+			if (after.kind === "registered" || after.kind === "elsewhere") return after.settings;
+			report.errors.push(`plugin ${PLUGIN_NAME}: not listed after linking ${dir}`);
+			return null;
+		}
+		default: {
+			const unreachable: never = before;
+			return unreachable;
+		}
+	}
+}
+
+/** `moved` carries the role bindings this run wrote, which the read-back must find with their values. */
+type MoveOutcome =
+	| { readonly kind: "moved"; readonly bindings: readonly RoleBinding[] }
+	| { readonly kind: "kept"; readonly reason: string }
+	| { readonly kind: "skipped" };
+
+/** One section: settings the machine has not set yet, then its files and agent flags. Writes nothing before every check passed. */
+function moveSection(
+	opts: ApplyOptions,
+	report: ApplyReport,
+	omp: string,
+	stored: Mapping,
+	exclusions: Exclusions,
+	move: SectionMove,
+): MoveOutcome {
+	const writes: { rel: string; content: string }[] = [];
+	for (const file of move.files) {
+		if (plainRelExcluded(file.rel, exclusions)) {
+			report.skipped.push({ path: targetOf(file.rel, opts.agentDir), reason: EXCLUDED_REASON });
+			return { kind: "skipped" };
+		}
+		const target = targetOf(file.rel, opts.agentDir);
+		if (existsSync(target) && readFileSync(target, "utf8") !== file.content) return { kind: "kept", reason: `${target} already exists` };
+		writes.push(file);
+	}
+	for (const name of move.splitAgents) {
+		const edit = splitCheckEdit(opts.agentDir, name);
+		switch (edit.kind) {
+			case "edit":
+				if (plainRelExcluded(edit.rel, exclusions)) {
+					report.skipped.push({ path: targetOf(edit.rel, opts.agentDir), reason: EXCLUDED_REASON });
+					return { kind: "skipped" };
+				}
+				writes.push(edit);
+				break;
+			case "present":
+				break;
+			case "declined":
+				report.notes.push(`${targetOf(edit.rel, opts.agentDir)} sets splitCheck itself; left as it is`);
+				break;
+			case "missing":
+				report.notes.push(`task-split-check.agents names ${name}, which no agents/*.md defines; add splitCheck: true to its definition`);
+				break;
+			default: {
+				const unreachable: never = edit;
+				return unreachable;
+			}
+		}
+	}
+	const bindings: RoleBinding[] = [];
+	if (move.bindings.length > 0) {
+		const config = targetOf(CONFIG_REL, opts.agentDir);
+		if (
+			plainRelExcluded(CONFIG_REL, exclusions) ||
+			move.bindings.some((binding) => fieldExcluded(CONFIG_REL, ["modelRoles", binding.role], exclusions))
+		) {
+			report.skipped.push({ path: `${config}:modelRoles`, reason: EXCLUDED_REASON });
+			return { kind: "skipped" };
+		}
+		if (isAppManaged(config)) return { kind: "kept", reason: `${config} is app-managed` };
+		const roles = machineRoles(opts.agentDir);
+		for (const binding of move.bindings) {
+			const current = roles[binding.role];
+			if (current === undefined) bindings.push(binding);
+			else
+				report.notes.push(
+					`modelRoles.${binding.role} already assigned (${JSON.stringify(current)}); ${move.section}.fallbackRole ${binding.value} not applied`,
+				);
+		}
+	}
+	for (const [key, value] of move.settings) {
+		if (Object.hasOwn(stored, key)) {
+			if (stored[key] !== value)
+				report.notes.push(
+					`plugin setting ${key} already set (${JSON.stringify(stored[key])}); omomp value ${JSON.stringify(value)} not applied`,
+				);
+			continue;
+		}
+		const error = setPluginSetting(omp, key, value);
+		if (error !== undefined) return { kind: "kept", reason: error };
+	}
+	for (const write of writes) {
+		const target = targetOf(write.rel, opts.agentDir);
+		atomicWrite(target, write.content);
+		report.written.push(target);
+	}
+	if (bindings.length > 0) {
+		const target = targetOf(CONFIG_REL, opts.agentDir);
+		const config: Mapping = existsSync(target) ? parseStructured(readFileSync(target, "utf8"), "yaml") : {};
+		for (const binding of bindings) setAt(config, ["modelRoles", binding.role], binding.value);
+		atomicWrite(target, serialize(config, "yaml"));
+		if (!report.written.includes(target)) report.written.push(target);
+		for (const binding of bindings) report.notes.push(`${move.section}.fallbackRole became modelRoles.${binding.role}: ${binding.value}`);
+	}
+	report.notes.push(...move.notes);
+	return { kind: "moved", bindings };
+}
+
+/**
+ * SETTINGS step, after every file operation: link the plugin, then move the
+ * omomp sections (planned again from disk, since this apply may have rewritten
+ * the file). A section leaves the file only after OMP lists each of its values
+ * and `config.yml` reads back each role binding it wrote with the written value;
+ * anything that cannot move stays with a note. The file goes once nothing is
+ * left in it; the omomp base record goes once no omp-config section is.
+ */
+function settleSettings(
+	opts: ApplyOptions,
+	report: ApplyReport,
+	preflight: SettingsPreflight,
+	exclusions: Exclusions,
+	base: BaseRecord,
+	history: RepoHistory,
+): void {
+	const { omp, manifest } = preflight;
+	if (omp === null || manifest === undefined) return;
+	let stored = ensurePlugin(opts, report, omp, preflight.plugin);
+	if (stored === null) return;
+	if (plainRelExcluded(OMOMP_REL, exclusions)) {
+		if (preflight.plan.kind !== "none") report.skipped.push({ path: targetOf(OMOMP_REL, opts.agentDir), reason: EXCLUDED_REASON });
+		return;
+	}
+	const plan = planOmompMigration({
+		agentDir: opts.agentDir,
+		manifest,
+		shipped: shippedSection(base, history),
+		appManaged: (path) => isAppManaged(path),
+	});
+	if (plan.kind === "none") return;
+	if (plan.kind === "blocked") {
+		report.notes.push(`omomp sections left in place: ${plan.reason}`);
+		return;
+	}
+	for (const { section, reason } of plan.kept) report.notes.push(`omomp section ${section} left in place: ${reason}`);
+	const moved: { readonly move: SectionMove; readonly bindings: readonly RoleBinding[] }[] = [];
+	for (const move of plan.moves) {
+		if (fieldExcluded(OMOMP_REL, [move.section], exclusions)) {
+			report.skipped.push({ path: `${targetOf(OMOMP_REL, opts.agentDir)}:${move.section}`, reason: EXCLUDED_REASON });
+			continue;
+		}
+		let outcome: MoveOutcome;
+		try {
+			outcome = moveSection(opts, report, omp, stored, exclusions, move);
+		} catch (error) {
+			outcome = { kind: "kept", reason: errorText(error) };
+		}
+		if (outcome.kind === "kept") report.notes.push(`omomp section ${move.section} left in place: ${outcome.reason}`);
+		if (outcome.kind === "moved") moved.push({ move, bindings: outcome.bindings });
+	}
+	if (moved.length === 0) return;
+	const after = queryPluginState(omp, pluginDirOf(opts.agentDir));
+	if (after.kind === "failed" || after.kind === "unregistered") {
+		report.notes.push(
+			`omomp sections left in place: plugin settings could not be read back (${after.kind === "failed" ? after.error : "unregistered"})`,
+		);
+		return;
+	}
+	stored = after.settings;
+	let roles: Mapping;
+	try {
+		roles = machineRoles(opts.agentDir);
+	} catch (error) {
+		report.notes.push(`omomp sections left in place: modelRoles could not be read back (${errorText(error)})`);
+		return;
+	}
+	const confirmed = moved
+		.filter(({ move, bindings }) => {
+			const missing = [
+				...[...move.settings.keys()].filter((key) => !Object.hasOwn(stored ?? {}, key)),
+				...bindings
+					.filter((binding) => roles[binding.role] !== binding.value)
+					.map((binding) => `modelRoles.${binding.role} as ${JSON.stringify(binding.value)}`),
+			];
+			if (missing.length > 0) report.notes.push(`omomp section ${move.section} left in place: not stored: ${missing.join(", ")}`);
+			return missing.length === 0;
+		})
+		.map(({ move }) => move);
+	for (const move of confirmed)
+		if (move.from.kind === "legacy") {
+			const target = targetOf(move.from.rel, opts.agentDir);
+			unlinkSync(target);
+			report.deleted.push(target);
+		}
+	const sections = confirmed.filter((move) => move.from.kind === "omomp").map((move) => move.section);
+	const file = plan.file;
+	if (file === undefined || sections.length === 0) return;
+	const rewritten = withoutSections(file, sections);
+	if (rewritten.kind === "invalid") {
+		report.notes.push(`omomp sections ${sections.join(", ")} moved but left in ${file.path}: ${rewritten.reason}; delete them by hand`);
+		return;
+	}
+	if (rewritten.empty) {
+		unlinkSync(file.path);
+		report.deleted.push(file.path);
+	} else {
+		atomicWrite(file.path, rewritten.text);
+		report.written.push(file.path);
+	}
+	const rest = Object.fromEntries(Object.entries(file.root).filter(([key]) => !sections.includes(key)));
+	if (!holdsOwnedSection(rest) && base.structuredOf(OMOMP_REL) !== undefined) base.commit([{ kind: "structured-drop", rel: OMOMP_REL }]);
+}
+
 // --- apply ------------------------------------------------------------------
 
 export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
@@ -1807,13 +2099,17 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 	let ctxReady = false;
 	// Planned with the rest so blocked ownership stops the apply before plugins install; used only once the plugin carries src/ctx.
 	let ctxRetirements: Op[] = [];
+	let history: RepoHistory;
+	let settings: SettingsPreflight;
+	let exclusions: Exclusions;
 	try {
-		const exclusions = readExclusions(opts.agentDir);
+		base = BaseRecord.load(opts.agentDir);
+		history = new RepoHistory(opts.source, !opts.check);
+		settings = settingsPreflight(opts, base, history);
+		exclusions = exclusionsOf(settings, opts.agentDir);
 		const sources = parseSources(opts, report);
 		declared = declaredPlugins(opts.source).required;
 		todoRequired = declared.includes(TODO_PLUGIN_URL);
-		base = BaseRecord.load(opts.agentDir);
-		const history = new RepoHistory(opts.source, !opts.check);
 		const replacementMigration = planReplacementMigration(opts, report, base, history, exclusions);
 		const ctx: PlanContext = {
 			opts,
@@ -1833,6 +2129,7 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		];
 		ctxRetirements = todoRequired ? planRetirements(ctx, CTX_RETIREMENTS) : [];
 		report.notes.push(...history.notes);
+		if (opts.check || !opts.plugins) report.notes.push(...reportPendingSettings(opts, settings));
 		// Moves first, managed writes next, deletions after them, base records last; Todo retirement requires all preceding operations to succeed.
 		const rank: Record<Op["kind"], number> = { move: 0, split: 0, "migrate-replacements": 0, write: 1, delete: 2, base: 3 };
 		ops = groupReplacementMigration(opts, replacementMigration, planned).toSorted((a, b) => rank[a.kind] - rank[b.kind]);
@@ -1953,6 +2250,13 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		} catch (error) {
 			report.errors.push(`${join(opts.agentDir, BASE_DIR)}: ${errorText(error)}`);
 		}
+		if (report.errors.length === 0) {
+			try {
+				settleSettings(opts, report, settings, exclusions, base, history);
+			} catch (error) {
+				report.errors.push(`settings: ${errorText(error)}`);
+			}
+		}
 	}
 	installLauncher(opts, report);
 	if (report.errors.length > 0 && !opts.check && (todoRequired || report.restartNeeded))
@@ -1960,16 +2264,17 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 	return report;
 }
 
-/** Plan read-only against `source` and return the conflicts: no plugins, no writes, no history fetch. */
+/** Plan read-only against `source` and return the conflicts: no plugin installs, no writes, no history fetch. */
 export function scanConflicts(source: string, agentDir: string): ConflictScan {
 	const opts: ApplyOptions = { source, agentDir, previousCommit: undefined, check: true, plugins: false };
 	const report = newReport();
 	try {
-		const exclusions = readExclusions(agentDir);
-		const sources = parseSources(opts, report);
-		const todoRequired = declaredPlugins(source).required.includes(TODO_PLUGIN_URL);
 		const base = BaseRecord.load(agentDir);
 		const history = new RepoHistory(source, false);
+		// The exclude option lives in plugin settings: asking OMP is read-only.
+		const exclusions = exclusionsOf(settingsPreflight({ ...opts, plugins: true }, base, history), agentDir);
+		const sources = parseSources(opts, report);
+		const todoRequired = declaredPlugins(source).required.includes(TODO_PLUGIN_URL);
 		const ctx: PlanContext = {
 			opts,
 			report,
@@ -2171,7 +2476,7 @@ function conflictsText(conflicts: readonly Conflict[], source: string, agentDir:
 		"Adapt them with the user, one at a time:",
 		"1. Read the local copy, the base and the incoming version listed for the conflict. Base → incoming is what upstream changed; base → local is what this machine changed. With an unknown base, compare local and incoming directly.",
 		"2. Explain both changes in one sentence each. Then use `ask`: keep local, take incoming, or a merged version you propose and show. Recommend the merge when both changes can coexist.",
-		"3. Apply the choice to the local file with `edit`. In config.yml and omomp.yml change only the conflicting key and keep comments and other keys. Keeping local needs no edit.",
+		"3. Apply the choice to the local file with `edit`. In config.yml change only the conflicting key and keep comments and other keys. Keeping local needs no edit.",
 		`4. Record the adapted conflicts: ${resolveCommand}`,
 		"   A refused (stale) id means upstream moved meanwhile: list the conflicts again and adapt the new version.",
 		"5. Report what each conflict became. Extension code, system prompt files and tool topics load on the next OMP start; config.yml reloads live.",

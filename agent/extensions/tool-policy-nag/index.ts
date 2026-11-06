@@ -6,8 +6,8 @@
  *   `bash` call (direct, or a write to `xd://bash`; `pty: true` does not
  *   exempt it) or an eval cell that starts a passthrough, terminal or
  *   open-ended command is refused before any process starts, with a short
- *   reason and one `xd://exec_command` pointer. Runs only when the section
- *   has `pty` and the calling session's active tools include `exec_command`.
+ *   reason and one `xd://exec_command` pointer. Runs only when `pty.enabled`
+ *   is on and the calling session's active tools include `exec_command`.
  *   A refused call reaches no other lane (no count, no reminder, no judge
  *   request, no nested-device marker). Entry routing, not risk judgment.
  * - `form`/`intent` (tool routing) and `risk` — main session only,
@@ -30,10 +30,12 @@
  * background). An intent verdict that lands after its call's result rides on
  * the next watched result, or starts a turn when the session is idle.
  *
- * CONFIGURED in the `tool-policy-nag` section of omomp.* (project copy first,
- * then the agent dir; re-read at every watched call, so edits apply to the next
- * shell or eval call). Nothing is preset in code: without a valid section no
- * lane runs. `detector` picks one way to catch tool-routing violations:
+ * CONFIGURED in the `tool-policy-nag.*` plugin settings of `omp-config`
+ * (`/settings → Plugins → omp-config` or `omp plugin config`; the project's
+ * `.omp/plugin-overrides.json` wins over the machine values; re-read at every
+ * watched call, so edits apply to the next shell or eval call). The manifest
+ * carries the defaults; an unreadable or invalid value warns and runs no
+ * lane. `detector` picks one way to catch tool-routing violations:
  *
  * - `heuristic` — the deterministic string lane (`shell-parser.ts` splits the
  *   line, `shell-command.ts` resolves each command through wrappers to the
@@ -51,18 +53,21 @@
  *   which built-in tool does that intent belong to — started at `tool_call`
  *   so it runs beside the call, and reminds naming the intent and the
  *   required tool. The question, its options and their cases come from the
- *   spec beside this extension (`INTENT-*.md`), read per call. No counting,
+ *   spec beside this extension (`INTENT-*.md`), read per call; `intent.threshold`
+ *   is the probability at which a judged violation counts. No counting,
  *   no cap: one reminder per offending call. A failed judge request warns
- *   once per reason and reminds nothing. An optional `form` block makes the
+ *   once per reason and reminds nothing. The `form.*` settings make the
  *   string lane count beside it and remind only while the intent lane cannot
  *   run (no valid enabled spec, or no judge model at all); a failed judge
  *   request does not fall back.
  *
- * `risk` — the risk lane (`risk.ts`): no judge, no counting. On a traced run
+ * `tool-policy-nag.risk.*` — the risk lane (`risk.ts`), only when
+ * `risk.enabled`: no judge, no counting. On a traced run
  * it reminds when a step failed silently (a non-zero status nothing tested,
  * no output of its own); a text-judged call keeps the size, breadth and write
- * thresholds. Independent of `detector`: a call can be a tool violation, a
- * risk, both, or neither.
+ * thresholds (`risk.minCommands`/`risk.minChars`/`risk.minPrograms`).
+ * Independent of `detector`: a call can be a tool violation, a risk, both,
+ * or neither.
  *
  * BASH INTERCEPTOR. While `detector` is `heuristic`, every watched main-session
  * call that the pty lane let through first puts a runtime-only override
@@ -522,7 +527,7 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		if (call === null) return;
 		let loaded: { lanes: Lanes; warnings: readonly LaneWarning[] };
 		try {
-			loaded = loadLanes(ctx.cwd);
+			loaded = await loadLanes(ctx.cwd);
 		} catch (error) {
 			pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) });
 			return;
@@ -551,7 +556,7 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		intentJobs.delete(event.toolCallId);
 		const reminders = lateReminders.splice(0);
 		try {
-			const { lanes } = loadLanes(ctx.cwd);
+			const { lanes } = await loadLanes(ctx.cwd);
 			const settings = sessionSettings(ctx);
 			if (settings !== undefined && interceptorOwns(call, settings)) return context(reminders);
 			const outcome = call.kind === "shell" ? shellOutcome(event.details, event.isError) : null;
@@ -571,10 +576,8 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 				}
 				case "jev": {
 					const available = job === undefined ? false : await job.available;
-					if (tool.fallback !== null) {
-						const nag = heuristicCheck(pi, ctx, violationsOf(call, outcome), tool.fallback, state, commit, !available);
-						if (nag !== null) reminders.push(nag);
-					}
+					const nag = heuristicCheck(pi, ctx, violationsOf(call, outcome), tool.fallback, state, commit, !available);
+					if (nag !== null) reminders.push(nag);
 					if (job === undefined || !available) break;
 					const intent = await collectIntent(ctx, job);
 					if (intent !== null) reminders.push(intent);

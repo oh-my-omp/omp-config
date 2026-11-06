@@ -1,42 +1,24 @@
-// Container side of the startup auto-update switch. Runs as `bun /sandbox/autoupdate-off.ts AGENT_DIR`.
-// The copied omomp file carries the host's machine-local `omp-config-autoupdate` section; left on,
-// the first omp start in the sandbox applies GitHub `main` over the working tree under test. This
-// writes `omp-config-autoupdate: { enabled: false }` into the container's agent-dir omomp file
-// (creating `omomp.yml` when there is none), keeps every other section, reads the section back and
-// prints it. A `.toml` file or several omomp files fail: the switch could not be set reliably.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+// Container side of the startup auto-update switch. Runs as `bun /sandbox/autoupdate-off.ts`, after
+// the /repo updater linked the plugin `omp-config` and moved the copied omomp values into its settings.
+// The copied host settings may have the startup auto-update on; left on, the first omp start in the
+// sandbox applies GitHub `main` over the working tree under test. This sets the plugin setting
+// `omp-config-autoupdate.enabled` to false through `omp plugin config set`, reads it back with
+// `omp plugin config get` and prints it; any other value fails the build.
+import { spawnSync } from "node:child_process";
 
-const SECTION = "omp-config-autoupdate";
-const [agentDir] = process.argv.slice(2);
-if (agentDir === undefined) {
-	process.stderr.write("usage: autoupdate-off.ts AGENT_DIR\n");
-	process.exit(2);
+const KEY = "omp-config-autoupdate.enabled";
+
+function omp(args: readonly string[]): string {
+	const result = spawnSync("omp", args, { encoding: "utf8" });
+	if (result.error !== undefined || result.status !== 0) {
+		process.stderr.write(`omp ${args.join(" ")}: ${result.error?.message ?? (result.stderr || result.stdout).trim()}\n`);
+		process.exit(1);
+	}
+	return result.stdout;
 }
 
-const present = ["yml", "yaml", "json", "toml"].map((ext) => join(agentDir, `omomp.${ext}`)).filter((path) => existsSync(path));
-if (present.length > 1) {
-	process.stderr.write(`several omomp files: ${present.join(", ")}\n`);
-	process.exit(1);
-}
-const path = present[0] ?? join(agentDir, "omomp.yml");
-if (path.endsWith(".toml")) {
-	process.stderr.write(`${path}: TOML cannot be rewritten here\n`);
-	process.exit(1);
-}
-const json = path.endsWith(".json");
-
-/** The omomp root is a map of section id → section; anything else (empty file, list) starts from an empty map. */
-const sectionsOf = (text: string | null): Record<string, unknown> => {
-	const parsed: unknown = text === null ? null : json ? JSON.parse(text) : Bun.YAML.parse(text);
-	return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? { ...parsed } : {};
-};
-
-const root = sectionsOf(existsSync(path) ? readFileSync(path, "utf8") : null);
-root[SECTION] = { enabled: false };
-writeFileSync(path, json ? `${JSON.stringify(root, null, 2)}\n` : Bun.YAML.stringify(root, null, 2), { mode: 0o600 });
-
-const written = sectionsOf(readFileSync(path, "utf8"))[SECTION];
-process.stdout.write(`${path}: ${SECTION} ${JSON.stringify(written)}\n`);
-const off = typeof written === "object" && written !== null && "enabled" in written && written.enabled === false;
-process.exit(off ? 0 : 1);
+omp(["plugin", "config", "set", "omp-config", KEY, "false"]);
+const read: unknown = JSON.parse(omp(["plugin", "config", "get", "omp-config", KEY, "--json"]));
+const value = typeof read === "object" && read !== null ? Object.entries(read).find(([key]) => key === KEY)?.[1] : undefined;
+process.stdout.write(`plugin omp-config: ${KEY} ${JSON.stringify(value)}\n`);
+process.exit(value === false ? 0 : 1);

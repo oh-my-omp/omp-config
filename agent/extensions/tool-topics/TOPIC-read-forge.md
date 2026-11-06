@@ -4,6 +4,11 @@ name: forge
 title: GitHub issues, PRs and GitLab MRs
 when: before reading a GitHub issue/PR, its diff, or a GitLab merge-request diff
 upstream: pi-coding-agent@18.13.2 src/internal-urls/issue-pr-protocol.ts, src/internal-urls/mr-protocol.ts
+inject:
+  - id: read-forge
+    tool: read
+    parameter: path
+    pattern: '^(issue|pr|mr)://'
 ---
 # GitHub issues, PRs and GitLab MRs
 

@@ -4,6 +4,11 @@ name: scopes
 title: What `path` can search
 when: before excluding paths, or searching archives, internal URLs, web pages or remote `ssh://` directories
 upstream: pi-coding-agent@18.13.2 src/tools/grep.ts, src/tools/path-utils.ts, omp://tools/grep.md § Inputs, § Modes / Variants
+inject:
+  - id: grep-scopes
+    tool: grep
+    parameter: path
+    pattern: '(^|;)!|://|\.(zip|jar|whl|tar|tgz|gz|zst):'
 ---
 # What `path` can search
 

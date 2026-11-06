@@ -4,6 +4,11 @@ name: regex
 title: Pattern syntax
 when: before using lookaround, backreferences, multiline patterns, or patterns containing braces or parentheses
 upstream: pi-coding-agent@18.13.2 src/tools/grep.ts, omp://tools/grep.md § Flow, § Notes
+inject:
+  - id: grep-regex
+    tool: grep
+    parameter: pattern
+    pattern: '\(\?[=!<]|\\[1-9]|\\n|\n'
 ---
 # Pattern syntax
 

@@ -4,6 +4,11 @@ name: runtime
 title: Agents, jobs, artifacts and transcripts
 when: before reading `agent://`, `history://`, `proc://` or `artifact://`
 upstream: pi-coding-agent@18.13.2 src/internal-urls/{agent,history,proc,artifact}-protocol.ts, src/prompts/internal-urls/proc.md, omp://tools/read.md § Internal URLs
+inject:
+  - id: read-runtime
+    tool: read
+    parameter: path
+    pattern: '^(agent|history|proc|artifact)://'
 ---
 # Agents, jobs, artifacts and transcripts
 

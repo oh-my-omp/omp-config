@@ -16,7 +16,7 @@ Any non-minimal harness ships predefined text across its base template, built-in
 | [system-prompt-replace](#system-prompt-replace) | Per rule (default every session; full and light mode) | Runs last among path-loaded extensions and makes wording-level edits to the rendered system prompt from `REPLACE-SYSTEM-*.yml` rule files; each rule can be global or limited to sessions, cwd, models, providers, the current model's delegation bias or modes, and `exclude.*` says when not to apply it. |
 | [append-system-model](#append-system-model) | Per fragment (default main session) | Appends `APPEND-SYSTEM-*.md` fragments whose frontmatter conditions (session, cwd, model, provider, the current model's delegation bias, full/light mode, and `exclude.*` for when not to inject) match. The repo ships `APPEND-SYSTEM-decision-support.md`: in the full-mode main session, consult `discuss:steady` and `discuss:divergent` on consequential decisions and `mentor:default` before and after long investigations, except while the main model is `claude-opus-5-5`. |
 | [argon-long-output](extensions.md#argon-long-output) | Main + Subagents (each matched on its own model) | Appends the repo's `ARGON_PROMPT.md` when the model is `gemini-4-argon` on `google-gemini-cli`: each `write`/`edit` payload and final reply stays within 8,000 characters by writing a skeleton first and filling it one section per `edit`. |
-| [tool-topic-injection](extensions.md#tool-topic-injection) | Main + Subagents | Loads a topic only after a configured tool argument matches, once per rule in the actual uncompacted context; it adds developer context rather than growing the static tool description. |
+| [tool-topics](extensions.md#tool-topics) | Main + Subagents | `TOPIC` frontmatter `inject:` rules deliver a topic once per actual context after a matching read-only tool call, adding developer context rather than growing the static tool description. |
 
 ### system-prompt-replace
 
@@ -123,21 +123,19 @@ Source: `agent/extensions/fork-task/`. Registers `fork_task` (`context` + `tasks
 
 Source: `agent/extensions/model-compaction/`.
 
-OMP's `compaction.modelThresholds` only matches exact `provider/id` keys or `*` prefixes. On every main-session `before_agent_start`, this extension reads the `model-compaction` section of `omomp.*` from the project (`<cwd>/.omp/`, following the session's current directory) and then from the agent directory (machine-local); the first valid copy is used whole and never merged with the other:
+OMP's `compaction.modelThresholds` only matches exact `provider/id` keys or `*` prefixes. On every main-session `before_agent_start`, this extension re-discovers and re-reads `COMPACTION-<label>.md` files from the extension's own directory (machine rules) plus every directory between the session's cwd and its git root and each one's `.omp/` (project rules). One file is one rule, `---`-fenced frontmatter with `provider` and/or `model` as JavaScript regexes (unanchored; `"model": ".*"` matches every model) and `thresholdTokens` as a positive integer:
 
-```yaml
-model-compaction:
-  rules:
-    - provider: "^anthropic$"
-      model: "opus"
-      thresholdTokens: 150000
-    - model: "[gG][pP][tT]"
-      thresholdTokens: 650000
+```markdown
+---
+provider: ^anthropic$
+model: opus
+thresholdTokens: 150000
+---
 ```
 
-Each rule sets `model`, `provider`, or both as JavaScript regexes (use `"model": ".*"` to match all models). For each model in `ctx.models.list()`, the first matching rule writes `"<provider>/<id>": "f<thresholdTokens>"` into the main session's runtime settings layer (`config.yml` on disk is not modified; `/model` switches, retry fallbacks, and subagents reading the main session's settings pick up their model's threshold).
+For each model in `ctx.models.list()`, the first matching valid rule — every project rule before every machine rule of the extension's directory, whatever the file names, and inside each layer the discovery order (cwd upward, filename order in each directory) — writes `"<provider>/<id>": "f<thresholdTokens>"` into the main session's runtime settings layer (`config.yml` on disk is not modified; `/model` switches, retry fallbacks, and subagents reading the main session's settings pick up their model's threshold). The repository ships no rule files.
 
-Because a native `f<N>` threshold can switch a model between its standard and extended context window, any rule whose `thresholdTokens` would change a model's current context-window tier is skipped for that model with a warning. A project copy replaces the machine rules for that project, so it repeats every machine rule it still wants, and `rules: []` there turns the machine rules off. An unreadable, ambiguous or invalid copy is skipped with a warning and the next location is used: an invalid project copy falls back to the machine copy, and with no valid copy no rules apply. Existing runtime entries from other sources are preserved and restored when no rules match or at `session_shutdown`; if another writer modifies the runtime map during the session, the extension warns once and stops updating it.
+Because a native `f<N>` threshold can switch a model between its standard and extended context window, a rule whose `thresholdTokens` would change a model's current context-window tier is refused for that model with a warning. Unknown keys and a non-empty body are errors, so a misspelled key cannot widen a rule; an unreadable or invalid file is skipped with a warning and the other files still apply, and with no valid file no rules apply. Existing runtime entries from other sources are preserved and restored when no rules match or at `session_shutdown`; if another writer modifies the runtime map during the session, the extension warns once and stops updating it.
 
 ### ctx
 

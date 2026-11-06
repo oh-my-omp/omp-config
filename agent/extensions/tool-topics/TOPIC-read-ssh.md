@@ -4,6 +4,19 @@ name: ssh
 title: Reading remote files over SSH
 when: before reading a file or directory on a remote host
 upstream: pi-coding-agent@18.13.2 src/internal-urls/ssh-protocol.ts, src/prompts/internal-urls/ssh.md, src/tools/read.ts
+inject:
+  - id: read-ssh
+    tool: read
+    parameter: path
+    pattern: '^ssh://'
+  - id: eval-ssh-cat
+    tool: eval
+    parameter: code
+    pattern: '\bssh\b[^\n;|&]*\bcat\b'
+  - id: bash-ssh-cat
+    tool: bash
+    parameter: command
+    pattern: '\bssh\b[^\n;|&]*\bcat\b'
 ---
 # Reading remote files over SSH
 

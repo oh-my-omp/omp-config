@@ -1,5 +1,6 @@
 /**
- * Registers `tool_call`; takes its model from the OMP model role `@task-split-check` and writes no files. Split checks are main-only;
+ * Registers `tool_call`; takes its model from the OMP model role `@task-split-check`, then the
+ * `default` role chain, and writes no files. Split checks are main-only;
  * report-limit checks apply to main and sub sessions. Unexpected hook errors
  * are logged as warnings and let the call run.
  *
@@ -11,11 +12,12 @@
  * item is flagged by any check the whole call is blocked with the reasons of
  * every flagging check. Checks differ only in their definition:
  *
- * - `split`: main session `task` calls, items whose `agent` is one of the
- *   names in `omomp.*#task-split-check.agents`; does the item cover more than
- *   one topic. A prompt that got a
- *   verdict passes unchanged the second time, so the main agent can force an
- *   item it judges to be one topic.
+ * - `split`: main session `task` calls, items whose `agent` definition file
+ *   declares `splitCheck: true` in its frontmatter (resolved with the same
+ *   lookup the task tool's spawn preflight uses); does the item cover more
+ *   than one topic. Items without `agent` are not split-checked. A prompt that
+ *   got a verdict passes unchanged the second time, so the main agent can
+ *   force an item it judges to be one topic.
  * - `report-limit`: every session, `task` and `fork_task`, every task-series
  *   item (`task:*`, or `agent` omitted); does the dispatch cap the length of
  *   the worker's report. No re-dispatch bypass — the cap must go and long
@@ -23,33 +25,28 @@
  *   again.
  *
  * Memory is per process, keyed by check + sha256 of the item prompt.
- * The model is the OMP model role `@task-split-check` (assign it in `/model`), then the role named by
- * `fallbackRole` in the `task-split-check` section of omomp.*, both resolved at every request; a
- * provider failure moves to the next model of that chain. `agents` in the same section names the
- * `agent` values `split` covers; the repo ships `task:low`/`task:free`/`task:mid`, the updater seeds
- * it once and it is machine-owned after that. An absent or invalid section (or absent `agents`)
- * leaves `split` covering no agent, while `report-limit` still applies. Every failure (no model in either role,
+ * The model is the OMP model role `@task-split-check` (assign it in `/model`), then the `default`
+ * role chain, both resolved at every request; a provider failure moves to the next model of that
+ * chain. Every failure (no model in either role, provider errors, aborted, unparseable answer)
+ * is a warning-level note that lets the call run; only `flagged` verdicts block.
  * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise
  * block the call.
  */
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { declaresFlag } from "../_shared/agent-definition.ts";
+import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
-import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
-import { modelLabel, roleModels, roleName } from "../_shared/roles.ts";
+import { modelLabel, roleModels } from "../_shared/roles.ts";
 
-const configSchema = z.object({
-	/** OMP model role (`smol`, `@smol`, …) whose models answer when `@task-split-check` resolves none or all of its models fail. */
-	fallbackRole: z.string().min(1).optional(),
-	/** `agent` names the `split` check covers; seeded from the repo, then machine-owned. Absent or invalid → `split` covers nothing. */
-	agents: z.array(z.string().min(1)).optional(),
-});
-const omompSection = defineOmompSection(import.meta.dir, configSchema);
 /** The OMP model role this extension's model comes from: the extension's own name. */
-const ROLE = omompSection.id;
+const ROLE = basename(import.meta.dir);
+/** Frontmatter key an agent definition sets to opt into split checking. */
+const SPLIT_CHECK_KEY = "splitcheck";
 /** Effort when the role entry has no `:level` suffix. */
 const EFFORT = THINKING_EFFORTS.find((effort) => effort === "medium");
 if (EFFORT === undefined) throw new Error("task-split-check: host does not recognize medium reasoning effort");
@@ -91,7 +88,7 @@ type Check = {
 	readonly id: string;
 	readonly tools: Readonly<Record<string, true>>;
 	readonly mainSessionOnly: boolean;
-	readonly covers: (agent: string | undefined, splitAgents: ReadonlySet<string>) => boolean;
+	readonly covers: (ctx: ExtensionContext, agent: string | undefined) => Promise<boolean>;
 	/** The question put to the model; `true` means the item is flagged. */
 	readonly question: string;
 	readonly memory: Memory;
@@ -103,7 +100,8 @@ const CHECKS: readonly Check[] = [
 		id: "split",
 		tools: { task: true },
 		mainSessionOnly: true,
-		covers: (agent, splitAgents) => agent !== undefined && splitAgents.has(agent),
+		covers: (ctx, agent) =>
+			agent === undefined ? Promise.resolve(false) : declaresFlag(callerSession(ctx), ctx.sessionManager.getCwd(), agent, SPLIT_CHECK_KEY),
 		question: [
 			"Does this one assignment cover more than one topic, so that it should have been split into separate assignments for separate workers?",
 			"A topic is one subject: one question to answer, one outcome to deliver, one area to investigate. The number of files, documents, steps, or edits does not matter: one change applied across many files, or several documents written about the same subject, is still one topic.",
@@ -120,7 +118,7 @@ const CHECKS: readonly Check[] = [
 		id: "report-limit",
 		tools: { task: true, fork_task: true },
 		mainSessionOnly: false,
-		covers: (agent) => agent === undefined || agent.startsWith("task:"),
+		covers: (_ctx, agent) => Promise.resolve(agent === undefined || agent.startsWith("task:")),
 		question: [
 			"Does the dispatch limit the length of the report the worker returns: a cap on words, characters, lines, tokens, sentences, bullets or paragraphs, or an instruction to keep the report or answer short, brief or within some size?",
 			"For this question both the shared context and the assignment count: a length limit in either one applies to this worker.",
@@ -192,20 +190,14 @@ type Reply = { readonly kind: "text"; readonly text: string } | { readonly kind:
 type ItemVerdicts = { readonly label: string; readonly verdicts: ReadonlyMap<Check, Verdict> };
 
 export default function taskSplitCheck(pi: ExtensionAPI): void {
-	const ask = async (
-		ctx: ExtensionContext,
-		fallbackRole: string | undefined,
-		systemPrompt: string,
-		prompt: string,
-		signal: AbortSignal,
-	): Promise<Reply> => {
+	const ask = async (ctx: ExtensionContext, systemPrompt: string, prompt: string, signal: AbortSignal): Promise<Reply> => {
 		const failures: string[] = [];
 		try {
-			const models = roleModels(ctx, fallbackRole === undefined ? [ROLE] : [ROLE, fallbackRole]);
+			const models = roleModels(ctx, [ROLE, "default"]);
 			if (models.length === 0) {
 				return {
 					kind: "failed",
-					why: `no model: assign @${ROLE} in /model${fallbackRole === undefined ? "" : ` or @${roleName(fallbackRole)}`}`,
+					why: `no model: assign @${ROLE} or the default role in /model`,
 				};
 			}
 			for (const { model, level } of models) {
@@ -226,6 +218,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 						failures.push(`${modelLabel(model)}: ${reply.errorMessage ?? "error"}`);
 						continue;
 					}
+					pi.logger.info("task-split-check answered", { model: modelLabel(model), failures });
 					return { kind: "text", text: textOf(reply.content) };
 				} catch (error) {
 					if (signal.aborted) return { kind: "failed", why: "deadline" };
@@ -242,7 +235,6 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 	const judgeItem = async (
 		ctx: ExtensionContext,
 		checks: readonly Check[],
-		fallbackRole: string | undefined,
 		prompt: string,
 		signal: AbortSignal,
 	): Promise<ReadonlyMap<Check, Verdict>> => {
@@ -257,7 +249,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		}
 		if (pending.length === 0) return verdicts;
 
-		const reply = await ask(ctx, fallbackRole, renderSystemPrompt(pending), prompt, signal);
+		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal);
 		for (const check of pending) {
 			const verdict: Verdict = reply.kind === "text" ? parseAnswer(reply.text, check) : { kind: "unknown", why: reply.why };
 			memorize(check, keyOf(check), verdict);
@@ -273,23 +265,20 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		if (checks.length === 0) return null;
 		const call = parseTaskCall(input);
 		if (call === null) return null;
-		const config = loadOmompSection(omompSection, ctx.cwd);
-		const fallbackRole = config.kind === "found" ? config.value.fallbackRole : undefined;
-		const splitAgents: ReadonlySet<string> = new Set(config.kind === "found" ? config.value.agents : []);
-
 		const deadline = AbortSignal.timeout(DEADLINE_MS);
-		const judged: ItemVerdicts[] = await Promise.all(
-			call.items.flatMap((item, index) => {
-				const covering = checks.filter((check) => check.covers(item.agent, splitAgents));
-				if (covering.length === 0) return [];
-				return [
-					(async (): Promise<ItemVerdicts> => ({
+		const judged: ItemVerdicts[] = (
+			await Promise.all(
+				call.items.map(async (item, index): Promise<ItemVerdicts | undefined> => {
+					const flags = await Promise.all(checks.map((check) => check.covers(ctx, item.agent)));
+					const covered = checks.filter((_check, position) => flags[position] === true);
+					if (covered.length === 0) return undefined;
+					return {
 						label: itemLabel(item, index),
-						verdicts: await judgeItem(ctx, covering, fallbackRole, renderPrompt(call.context, item), deadline),
-					}))(),
-				];
-			}),
-		);
+						verdicts: await judgeItem(ctx, covered, renderPrompt(call.context, item), deadline),
+					};
+				}),
+			)
+		).filter((entry): entry is ItemVerdicts => entry !== undefined);
 		if (judged.length === 0) return null;
 		pi.logger.info("task-split-check verdicts", {
 			verdicts: judged.map(({ label, verdicts }) => ({

@@ -79,22 +79,3 @@ export function convertLegacySystemReplacements(value: unknown): Conversion {
 	}
 	return { kind: "ok", text };
 }
-
-export function removeLegacyReplacementSection(text: string, root: Readonly<Record<string, unknown>>): Conversion {
-	const lines = text.split(/(?<=\n)/);
-	const starts = lines.flatMap((line, index) => (/^system-prompt-replace:[ \t]*(?:#.*)?\r?\n?$/.test(line) ? [index] : []));
-	if (starts.length !== 1) return { kind: "invalid", reason: "section is not one direct top-level YAML block" };
-	const start = starts[0]!;
-	let end = start + 1;
-	while (end < lines.length && (/^[ \t]/.test(lines[end]!) || /^[\r\n]*$/.test(lines[end]!))) end++;
-	const remaining = [...lines.slice(0, start), ...lines.slice(end)].join("");
-	const expected = { ...root };
-	delete expected["system-prompt-replace"];
-	try {
-		const parsed: unknown = Bun.YAML.parse(remaining);
-		if (Bun.deepEquals(parsed ?? {}, expected)) return { kind: "ok", text: parsed == null ? `${remaining}{}\n` : remaining };
-	} catch {
-		// Anchors, flow mappings and other ambiguous layouts must be moved by hand.
-	}
-	return { kind: "invalid", reason: "removing the section would change other YAML values" };
-}

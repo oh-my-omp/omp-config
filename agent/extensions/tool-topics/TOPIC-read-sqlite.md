@@ -4,6 +4,11 @@ name: sqlite
 title: Inspecting SQLite databases
 when: before inspecting a `.sqlite`/`.sqlite3`/`.db`/`.db3` database
 upstream: pi-coding-agent@18.13.2 src/tools/sqlite-reader.ts, src/tools/read-sqlite.ts, omp://tools/read.md § SQLite databases
+inject:
+  - id: read-sqlite
+    tool: read
+    parameter: path
+    pattern: '\.(sqlite3?|db3?)(:|\?|$)'
 ---
 # Inspecting SQLite databases
 

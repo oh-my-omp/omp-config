@@ -2,16 +2,18 @@
 // omp-config-autoupdate — apply the omp-config repo at OMP start, when enabled,
 // or on demand.
 //
-// SWITCH. Off by default. `/omp-config-autoupdate on|off` writes section
-// `omp-config-autoupdate` ({"enabled": true|false, "conflicts"?: "notify" |
-// "agent", "exclude"?: string[]}) of the agent dir's omomp.* file;
-// `/omp-config-autoupdate` or `… status` shows it. A missing or invalid
-// section means off. The section is machine-local: the updater does not
-// manage it and /sync-omp-config does not carry it. Read at each start, so a
-// change applies from the next OMP start. The updater reads `exclude` at each
-// run (apply and auto): agent-dir relative paths/globs and structured
-// `file:path` entries it never writes, creates or deletes; see EXCLUSIONS in
-// omp-config-update.ts.
+// SWITCH. Off by default. `/omp-config-autoupdate on|off` writes the
+// `omp-config-autoupdate.enabled` plugin setting and
+// `/omp-config-autoupdate conflicts notify|agent` writes
+// `omp-config-autoupdate.conflicts` (`omp-config`; `/settings → Plugins →
+// omp-config` or `omp plugin config`); `/omp-config-autoupdate` or
+// `… status` shows them. An invalid value means off. The settings are
+// machine-wide: the updater does not manage them and /sync-omp-config does
+// not carry them. Read at each start, so a change applies from the next
+// OMP start. The updater reads the `omp-config-autoupdate.exclude` setting
+// (whitespace-separated agent-dir paths/globs or structured `file:path`
+// entries it never writes, creates or deletes) at each run (apply and auto);
+// see EXCLUSIONS in omp-config-update.ts.
 //
 // CONFLICTS. The updater keeps a local customization that conflicts with an
 // upstream change and reports it (see CUSTOMIZATIONS in omp-config-update.ts).
@@ -34,16 +36,27 @@
 // commit, plugins by version) and disappears after 5 s. Up to date, a busy
 // lock and an offline fetch only log; failures warn. None of them affect the
 // session.
+//
+// PROJECT SECTIONS. OMP once read omp-config sections from a project's
+// `.omp/omomp.*` before the machine's. When a main session starts in such a
+// project, its sections move into that project (see project-migration.ts):
+// scalars into `.omp/plugin-overrides.json`, model-compaction rules into
+// `.omp/COMPACTION-rule-NN.md`. The files belong to the project's repository,
+// so a notice names them before and after the move and asks the user to commit
+// them; nothing is committed here. Sections that cannot move are named once per
+// process and stay.
 // ============================================================================
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getAgentDir, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { defineOmompSection, loadOmompSection, writeOmompSection } from "../_shared/omomp.ts";
+import { defineSettings, readSettings, writeSetting } from "../_shared/plugin-settings.ts";
+import { parseManifest } from "./omomp-migration.ts";
+import { type Kept, migrateProject, planProject } from "./project-migration.ts";
 
 const SCRIPT = "omp-config-update.ts";
 const REPORT_TYPE = "omp-config-update";
@@ -55,41 +68,24 @@ type Switch =
 	| { readonly kind: "off"; readonly conflicts: ConflictMode }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-const switchSchema = z
-	.object({ enabled: z.boolean(), conflicts: z.enum(["notify", "agent"]).optional(), exclude: z.array(z.string()).optional() })
-	.strict();
-type SwitchValue = z.infer<typeof switchSchema>;
-const switchSection = defineOmompSection(import.meta.dir, switchSchema);
+const switchSchema = z.object({ enabled: z.boolean(), conflicts: z.enum(["notify", "agent"]), exclude: z.string() }).strict();
+const switchSection = defineSettings(import.meta.dir, switchSchema);
 
 /** Where the switch lives, for messages. */
-const switchLocation = (): string => `${getAgentDir()} (omomp section ${switchSection.id})`;
+const switchLocation = (): string => `/settings → Plugins → omp-config (${switchSection.id}.*)`;
 
-function readSwitch(): Switch {
-	const loaded = loadOmompSection(switchSection, null);
+async function readSwitch(): Promise<Switch> {
+	const loaded = await readSettings(switchSection, { kind: "machine" });
 	switch (loaded.kind) {
-		case "found": {
-			const conflicts = loaded.value.conflicts ?? "notify";
-			return loaded.value.enabled ? { kind: "on", conflicts } : { kind: "off", conflicts };
-		}
-		case "none": {
-			// A missing file or section is off; a file that exists but is unusable is reported.
-			const [problem] = loaded.skipped;
-			return problem === undefined
-				? { kind: "off", conflicts: "notify" }
-				: { kind: "invalid", reason: `${problem.path}: ${problem.reason}` };
-		}
+		case "ok":
+			return loaded.value.enabled ? { kind: "on", conflicts: loaded.value.conflicts } : { kind: "off", conflicts: loaded.value.conflicts };
+		case "invalid":
+			return { kind: "invalid", reason: loaded.reason };
 		default: {
 			const exhaustive: never = loaded;
 			return exhaustive;
 		}
 	}
-}
-
-/** Change one field of the switch, keeping the other; an invalid section is replaced. */
-function writeSwitch(patch: Partial<SwitchValue>): void {
-	const loaded = loadOmompSection(switchSection, null);
-	const current: SwitchValue = loaded.kind === "found" ? loaded.value : { enabled: false };
-	writeOmompSection(switchSection.id, { ...current, ...patch });
 }
 
 /** Mirrors PluginChange in omp-config-update.ts. */
@@ -424,10 +420,16 @@ async function adaptNow(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise
 	}
 }
 
-/** `/omp-config-autoupdate on|off|conflicts …`: write one switch field, then say when it applies. */
-function setSwitch(pi: ExtensionAPI, ctx: ExtensionCommandContext, patch: Partial<SwitchValue>, en: string, zh: string): void {
+/** `/omp-config-autoupdate on|off|conflicts …`: write one switch setting, then say when it applies. */
+async function setSwitch(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	write: () => Promise<void>,
+	en: string,
+	zh: string,
+): Promise<void> {
 	try {
-		writeSwitch(patch);
+		await write();
 	} catch (error) {
 		pi.logger.warn("omp-config: cannot write auto-update switch", { error: errorText(error) });
 		ctx.ui.notify(
@@ -442,8 +444,8 @@ function setSwitch(pi: ExtensionAPI, ctx: ExtensionCommandContext, patch: Partia
 	ctx.ui.notify(tr(`${en} (${switchLocation()})`, `${zh}（${switchLocation()}）`), "info");
 }
 
-function showStatus(ctx: ExtensionCommandContext): void {
-	const state = readSwitch();
+async function showStatus(ctx: ExtensionCommandContext): Promise<void> {
+	const state = await readSwitch();
 	switch (state.kind) {
 		case "on":
 		case "off": {
@@ -525,10 +527,10 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 						return;
 					case "on":
 					case "off":
-						setSwitch(
+						await setSwitch(
 							pi,
 							ctx,
-							{ enabled: action === "on" },
+							() => writeSetting("omp-config-autoupdate.enabled", action === "on"),
 							`omp-config: auto-update ${action}; takes effect from the next OMP start`,
 							`omp-config：自动更新已${action === "on" ? "开启" : "关闭"}；将从下次 OMP 启动时生效`,
 						);
@@ -536,17 +538,17 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 					case "conflicts notify":
 					case "conflicts agent": {
 						const mode: ConflictMode = action === "conflicts agent" ? "agent" : "notify";
-						setSwitch(
+						await setSwitch(
 							pi,
 							ctx,
-							{ conflicts: mode },
+							() => writeSetting("omp-config-autoupdate.conflicts", mode),
 							`omp-config: conflicts ${mode === "agent" ? "start the adaptation agent" : "are only notified"} from the next OMP start`,
 							`omp-config：从下次 OMP 启动起，冲突时${mode === "agent" ? "自动启动适配 agent" : "只通知"}`,
 						);
 						return;
 					}
 					case "status":
-						showStatus(ctx);
+						await showStatus(ctx);
 						return;
 					default:
 						ctx.ui.notify(
@@ -727,6 +729,74 @@ function showUpdates(ctx: ExtensionContext, rows: readonly UpdateRow[], restart:
 	ctx.setTimeout(() => ctx.ui.setWidget(WIDGET_KEY, undefined), WIDGET_MS);
 }
 
+const MANIFEST = join(import.meta.dir, "../_shared/package.json");
+/** Projects whose leftover or blocked sections were already named in this process. */
+const namedProjects = new Set<string>();
+
+const keptText = (kept: readonly Kept[]): string => kept.map(({ section, reason }) => `${section} (${reason})`).join("; ");
+
+/**
+ * Move the omp-config sections of `ctx.cwd`'s `.omp/omomp.*` into that project.
+ * A notice names the files before and after a move that writes; sections that
+ * cannot move are named once per process with the reason, and nothing is announced.
+ */
+function settleProject(pi: ExtensionAPI, ctx: ExtensionContext, warn: (ctx: ExtensionContext, en: string, zh: string) => void): void {
+	const work = planProject(ctx.cwd, parseManifest(readFileSync(MANIFEST, "utf8"), MANIFEST));
+	const nameOnce = (en: string, zh: string): void => {
+		if (namedProjects.has(ctx.cwd)) return;
+		namedProjects.add(ctx.cwd);
+		warn(ctx, en, zh);
+	};
+	switch (work.kind) {
+		case "none":
+			return;
+		case "blocked":
+			nameOnce(
+				`omp-config: this project's omomp sections were not moved: ${work.reason}`,
+				`omp-config：本项目的 omomp 段未迁移：${work.reason}`,
+			);
+			return;
+		case "stuck":
+			nameOnce(
+				`omp-config: ${work.path} keeps sections omp-config did not move: ${keptText(work.kept)}`,
+				`omp-config：${work.path} 中的段未迁移：${keptText(work.kept)}`,
+			);
+			return;
+		case "ready":
+			break;
+		default: {
+			const exhaustive: never = work;
+			throw new Error(`unknown project plan ${String(exhaustive)}`);
+		}
+	}
+	const files = work.files.join(", ");
+	pi.logger.info(`omp-config: moving project omomp sections: ${files}`);
+	if (ctx.hasUI)
+		ctx.ui.notify(
+			tr(
+				`omp-config: moving this project's omp-config sections out of ${work.path}; changing ${files}`,
+				`omp-config：正在把本项目 ${work.path} 中的 omp-config 段迁出；将改动 ${files}`,
+			),
+			"info",
+		);
+	const result = migrateProject(work);
+	const changed = [...result.written, ...result.deleted.map((path) => `${path} (deleted)`)];
+	pi.logger.info("omp-config: project omomp sections moved", { changed, kept: result.kept, notes: result.notes });
+	if (changed.length > 0 && ctx.hasUI)
+		ctx.ui.notify(
+			tr(
+				`omp-config: changed ${changed.join(", ")} in this project; review and commit them (omp-config does not commit)`,
+				`omp-config：已改动本项目的 ${changed.join("、")}；请检查并提交（omp-config 不会代为提交）`,
+			),
+			"info",
+		);
+	if (result.kept.length > 0)
+		nameOnce(
+			`omp-config: sections left in this project's omomp file: ${keptText(result.kept)}`,
+			`omp-config：本项目 omomp 文件中保留的段：${keptText(result.kept)}`,
+		);
+}
+
 export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 	registerAutoupdateCommand(pi);
 
@@ -735,11 +805,21 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 		pi.logger.warn(en);
 	};
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		try {
-			if (started || ctx.agent.kind !== "main") return;
+			if (ctx.agent.kind !== "main") return;
+			try {
+				settleProject(pi, ctx, warn);
+			} catch (error) {
+				warn(
+					ctx,
+					`omp-config: moving this project's omomp sections failed: ${errorText(error)}`,
+					`omp-config：迁移本项目的 omomp 段失败：${errorText(error)}`,
+				);
+			}
+			if (started) return;
 			started = true;
-			const state = readSwitch();
+			const state = await readSwitch();
 			if (state.kind === "invalid")
 				warn(
 					ctx,

@@ -8,17 +8,9 @@ import {
 	TextJudge,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
-import { AgentRegistry, type ExtensionContext, logger, z } from "@oh-my-pi/pi-coding-agent";
+import { AgentRegistry, type ExtensionContext, logger } from "@oh-my-pi/pi-coding-agent";
 import { type JudgeDeps, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "@oh-my-pi/pi-coding-agent/judgment";
-import { defineSharedOmompSection, loadOmompSection } from "./omomp.ts";
-import { modelLabel, type RoleModel, roleModels, roleName } from "./roles.ts";
-
-const configSchema = z.object({
-	/** OMP model role (`tiny`, `smol`, … or `@tiny`) whose model chain answers when the judge role chain cannot. */
-	fallbackRole: z.string().min(1),
-});
-
-const omompSection = defineSharedOmompSection(import.meta.path, configSchema);
+import { modelLabel, type RoleModel, roleModels } from "./roles.ts";
 
 export type JudgeOpen = { readonly kind: "ready"; readonly judge: Judge } | { readonly kind: "inactive" };
 
@@ -27,20 +19,17 @@ export type JudgeOpen = { readonly kind: "ready"; readonly judge: Judge } | { re
  * telemetry label and the name of an OMP model role (`@lang-nag`, …).
  *
  * When `@<purpose>` resolves chat models, they answer as prompted judges
- * (one-hot probabilities), in chain order, followed by the chat models of the
- * `fallbackRole` of the `judge` section of omomp.*; OMP's judge-role chain is
- * not consulted, so no native or on-device judgment model answers that purpose.
+ * (one-hot probabilities), in chain order; OMP's judge-role chain is not
+ * consulted, so no native or on-device judgment model answers that purpose.
  *
- * Otherwise first OMP's own judge-role chain (`modelRoles.judge`, then
+ * Otherwise OMP's own judge-role chain answers (`modelRoles.judge`, then
  * `retry.fallbackChains.judge` or OMP's built-in defaults), walked in order on
  * missing credentials and provider errors, with OMP's account-rejection
  * cooldown, session usage ledger, pricing and shared answer cache; the session
- * model is never added to it. When that chain fails for any reason but abort or
- * timeout, or resolves no candidate, the `fallbackRole` chat models answer as
- * prompted judges. Without a `judge` section there is no fallback.
+ * model is never added to it.
  *
- * Roles and the `judge` section are resolved on every call. Inactive only when
- * no path resolves a model.
+ * Roles are resolved on every call. Inactive only when `@<purpose>` resolves
+ * no chat model and the judge-role chain has no primary model.
  */
 export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 	const session = AgentRegistry.global()
@@ -57,9 +46,9 @@ export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 		telemetry: session.agent.telemetry,
 		cache: sharedJudgmentCache(),
 	};
-	const fallbackRole = configuredFallbackRole(ctx);
-	const prompted = roleModels(ctx, fallbackRole === null ? [purpose] : [purpose, fallbackRole]);
-	if (prompted.some((entry) => entry.role === purpose)) {
+	// `@<purpose>` models answer as prompted judges; the host judge chain is not consulted.
+	const prompted = roleModels(ctx, [purpose]);
+	if (prompted.length > 0) {
 		return {
 			kind: "ready",
 			judge: {
@@ -69,52 +58,16 @@ export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 			},
 		};
 	}
-	// `@<purpose>` resolved nothing, so `prompted` holds only the fallback role's models.
 	const chain = resolveJudge(deps);
-	const hasChain = chain.primaryModel() !== undefined;
-	if (!hasChain && prompted.length === 0) return { kind: "inactive" };
+	if (chain.primaryModel() === undefined) return { kind: "inactive" };
 	return {
 		kind: "ready",
 		judge: {
 			label: chain.label,
-			async judge<Q extends Questions>(request: JudgmentRequest<Q>, options: JudgeOptions = {}): Promise<JudgmentResult<Q>> {
-				let chainError: unknown = new Error("judgment: judge role chain resolves no candidate");
-				if (hasChain) {
-					try {
-						return await chain.judge(request, options);
-					} catch (error) {
-						if (options.signal?.aborted || isAbortOrTimeout(error)) throw error;
-						chainError = error;
-					}
-				}
-				if (prompted.length === 0) throw chainError;
-				logger.warn("judgment judge role chain failed; falling back to role", {
-					purpose,
-					role: fallbackRole,
-					candidates: prompted.map((entry) => modelLabel(entry.model)),
-					error: chainError instanceof Error ? chainError.message : String(chainError),
-				});
-				return judgeWithChat(deps, prompted, request, options);
-			},
+			judge: <Q extends Questions>(request: JudgmentRequest<Q>, options: JudgeOptions = {}) => chain.judge(request, options),
 		},
 	};
 }
-
-/** The `fallbackRole` of the `judge` section, or null without one. */
-function configuredFallbackRole(ctx: ExtensionContext): string | null {
-	const config = loadOmompSection(omompSection, ctx.cwd);
-	switch (config.kind) {
-		case "none":
-			return null;
-		case "found":
-			return roleName(config.value.fallbackRole);
-		default: {
-			const exhaustive: never = config;
-			return exhaustive;
-		}
-	}
-}
-
 // @upstream adapted @oh-my-pi/pi-coding-agent@18.12.6 src/judgment/index.ts#ChainJudge.#withCandidate
 // Chat candidates only; no rejection cooldown, image or box handling, or telemetry span.
 async function judgeWithChat<Q extends Questions>(

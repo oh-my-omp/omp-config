@@ -6,34 +6,33 @@
 
 配置文件承载用户可以按自己工作方式调整的选择。仓库随附的规则和值是一组可运行的示例：加载且满足适用条件时，在配置的范围内决定行为，也可以通过支持的配置接口修改或替换。各节说明作用域和加载方式；[更新归属](operations.zh-CN.md#文件归属与同步规则)说明后续更新怎样保留或合并本机修改。
 
-| 序号 | 扩展目录 | 所在章节 | 作用域 | 轻量模式 | 配置来源（`omomp.yml` 段或同目录文件） | 用户可定制内容 |
+| 序号 | 扩展目录 | 所在章节 | 作用域 | 轻量模式 | 配置来源（`omp-config` 插件设置或同目录文件） | 用户可定制内容 |
 |---|---|---|---|---|---|---|
 | 1 | `system-prompt-replace` | [提示词与上下文](prompts-and-context.zh-CN.md#system-prompt-replace) | 按规则（默认主 + 子） | 是 | `REPLACE-SYSTEM-*.yml`（仓库示例、本机或项目文件） | 修改或添加所需的措辞规则及会话条件；OMP 升级后核对匹配原文 |
 | 2 | `append-system-model` | [提示词与上下文](prompts-and-context.zh-CN.md#append-system-model) | 主 + 子 | 是 | `APPEND-SYSTEM-*.md`（仓库示例、本机或项目文件） | 修改或添加指令片段，选择适用会话、项目、模型和模式 |
 | 3 | `repo-rules` | [提示词与上下文](prompts-and-context.zh-CN.md#repo-rules) | 主 + 子 | 是 | 已发现目录中的规则文件 | 在 `.claude/rules`、`.agents/rules`、`.pi/rules` 或 `~/.claude/rules` 编写自己的规则及 `paths` 条件 |
 | 4 | `fork-task` | [提示词与上下文](prompts-and-context.zh-CN.md#fork-task) | 主 + 子 | 否 | 无扩展配置文件 | 每次调用选择来源会话和目标角色；模型沿用当前会话或目标 agent 的绑定 |
-| 5 | `model-compaction` | [提示词与上下文](prompts-and-context.zh-CN.md#model-compaction) | 主写 / 子读 | 是 | `omomp.yml#model-compaction`（本机或项目） | 按自己的模型和项目设置阈值；项目段整段取代本机段 |
+| 5 | `model-compaction` | [提示词与上下文](prompts-and-context.zh-CN.md#model-compaction) | 主写 / 子读 | 是 | `COMPACTION-*.md`（本机或项目） | 按自己的模型和项目每个文件写一条阈值规则；项目规则在前，本机规则全部在后作回退 |
 | 6 | `user-prompt-inject` | [子代理](agents.zh-CN.md#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库示例或本机文件） | 修改或添加模板，选择目标角色及其接收的用户原话和回答 |
 | 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | 主 + 子 | 否 | 无配置文件 | 在 task 调用中显式设置 `isolated`，选择共享只读工作或隔离写入 |
-| 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check` | 选择回退角色与 `agents` 列表（`split` 覆盖的 worker 名），将 `@task-split-check` 或 `modelRoles.smol` 绑定到自己的可用模型 |
-| 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | 声明 `completionJudge: true` 的子代理 | 否 | `omomp.yml#task-completion-judge` | 在 agent 定义中声明 `completionJudge: true`，选择回退角色，将 `@task-completion-judge` 或 `modelRoles.smol` 绑定到自己的可用模型 |
-| 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `omomp.yml#tool-policy-nag` 与 `INTENT-policy.md` | 按工作方式调整检测模式、提醒措辞与频率、意图及风险设置和终端路由通道 |
+| 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | 声明 `splitCheck: true` 的 agent 定义 | 给 `split` 应覆盖的 agent 定义加 `splitCheck: true`；将 `@task-split-check` 绑定到自己的可用模型 |
+| 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | 声明 `completionJudge: true` 的子代理 | 否 | 声明 `completionJudge: true` 的 agent 定义 | 在 agent 定义中声明 `completionJudge: true`；将 `@task-completion-judge` 绑定到自己的可用模型 |
+| 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `tool-policy-nag.*` 设置与 `INTENT-policy.md` | 按工作方式调整检测模式、提醒措辞与频率、意图及风险设置和终端路由通道 |
 | 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子，按文件条件 | 否 | `WATCHDOG-*.md`（本机或项目） | 定义审阅内容、目标会话、间隔和投递方式；存在匹配文件后运行 |
 | 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子，按文件条件 | 否 | `TURN-JUDGE-*.md`（仓库示例或本机文件） | 编写判定问题、触发规则、提醒和会话条件，绑定适合的判定或聊天模型 |
-| 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `omomp.yml#lang-nag` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
-| 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局，仅 macOS | 是 | `omomp.yml#child-memory-warning` | 在本机或项目中按自己的硬件和负载选择告警阈值 |
-| 15 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `omomp.yml#input-polish` | 选择快捷键、改写指令和回退角色，绑定 `@input-polish` 或 `modelRoles.smol` |
-| 16 | `doc-polish` | [doc-polish](#doc-polish) | 主 + 子 | 否 | `omomp.yml#doc-polish`（本机） | 选择回退角色、并发数和 `@doc-polish.*` 模型绑定 |
+| 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `lang-nag.language`、`lang-nag.instruction` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
+| 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局，仅 macOS | 是 | `child-memory-warning.thresholdGiB` | 在本机或项目中按自己的硬件和负载选择告警阈值 |
+| 15 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `input-polish.key`、`input-polish.instruction` | 选择快捷键和改写指令；将 `@input-polish` 绑定到自己的可用模型 |
+| 16 | `doc-polish` | [doc-polish](#doc-polish) | 主 + 子 | 否 | `doc-polish.concurrency` | 选择并发数和 `@doc-polish.*` 模型绑定 |
 | 17 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
 | 18 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
-+| 19 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
-+| 20 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | agent 目录的 `omomp.yml#omomp-lang` 或环境变量 | 在本机段选择界面语言，或用 `OMOMP_LANG` 覆盖 |
-+| 21 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明与专题，重启 OMP 后加载 |
-+| 22 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection` | 在本机或项目中选择工具参数匹配及专题；空规则列表关闭注入 |
-+| 23 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无配置文件或开关 | 选择字面删除路径；默认可恢复，永久删除需要明确确认 |
-+| 24 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
-+| 25 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
-+| 26 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
+| 19 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omp-config-autoupdate.enabled`、`.conflicts`、`.exclude` | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
+| 20 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | `omomp-lang.language` 或环境变量 | 在本机设置中选择界面语言，或用 `OMOMP_LANG` 覆盖 |
+| 21 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明、专题与 `inject` 投递规则，重启 OMP 后加载 |
+| 22 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无配置文件或开关 | 选择字面删除路径；默认可恢复，永久删除需要明确确认 |
+| 23 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
+| 24 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
+| 25 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
 
 ---
 
@@ -51,15 +50,15 @@
 
 在 `tool_call` 阶段检查 `task` 与 `fork_task`。整批共用 25 秒超时，各任务项并发判定，同一项的全部适用是非检查合在一次模型请求中提问，任一项不通过即拦截整次调用：
 
-- **判定模型**：先取 OMP 模型角色 `@task-split-check`（在 `/model` 中配置，保存在本机 `modelRoles`），再取 `omomp.yml#task-split-check.fallbackRole`（仓库配置 `smol`），每次调用实时解析。角色条目未带 `:level` 后缀时使用 `medium` 推理强度；遇到 provider 错误时换链中的下一个模型。
-- **split 覆盖范围**：`omomp.yml#task-split-check.agents` 列出 `split` 检查覆盖的 `agent` 名。仓库默认值覆盖仓库的 worker 档位（`task:low`、`task:free`、`task:mid`）；更新器只在本机缺少时写入一次，此后归本机。`report-limit` 检查与此列表无关，对所有 `task:*` 生效。
-- **失败处理**：配置缺失或无效时仅移除配置的回退角色；`@task-split-check` 能解析出模型时仍继续判定。没有可用模型或有效结论（包括请求报错、超时或答案无法解析）时放行。每次完成判定记一条 `task-split-check verdicts` 日志。
+- **判定模型**：先取 OMP 模型角色 `@task-split-check`（在 `/model` 中配置，保存在本机 `modelRoles`），再取 `default` 角色链，每次调用实时解析。角色条目未带 `:level` 后缀时使用 `medium` 推理强度；遇到 provider 错误时换链中的下一个模型。
+- **split 覆盖范围**：`split` 检查覆盖 `task` 项中 `agent` 定义 frontmatter 声明 `splitCheck: true` 的项（仓库自带的 `task:low`、`task:free`、`task:mid` 定义声明了它；用与 task 工具派生预检相同的查找解析）。`report-limit` 检查与此无关，对所有 `task:*` 生效。
+- **失败处理**：没有可用模型或有效结论（包括请求报错、超时或答案无法解析）时放行。每次完成判定记一条 `task-split-check verdicts` 日志。
 
 重试身份由共享 `context` 与该项 `task` 各自去除首尾空白后渲染的提示词决定；要复用结论，二者都必须保持不变。
 
 | 检查项 | 适用范围 | 判定问题 | 缓存与重试行为 |
 |---|---|---|---|
-| `split` | 主会话 `task` 调用中 `agent` 列在 `omomp.yml#task-split-check.agents` 的项 | 只看该项的 `task` 文本（共享 `context` 仅作背景）：是否把多个互不相关的主题塞进了同一个子代理（按主题而非文件数判断）？ | 缓存所有结论（`pass-repeats`）：单主题边界可能存在判断分歧，被拦后若主会话确认属于同一主题，并保持共享 `context` 和该项 `task` 不变重发，第二次调用放行。 |
+| `split` | 主会话 `task` 调用中 `agent` 定义声明 `splitCheck: true` 的项 | 只看该项的 `task` 文本（共享 `context` 仅作背景）：是否把多个互不相关的主题塞进了同一个子代理（按主题而非文件数判断）？ | 缓存所有结论（`pass-repeats`）：单主题边界可能存在判断分歧，被拦后若主会话确认属于同一主题，并保持共享 `context` 和该项 `task` 不变重发，第二次调用放行。 |
 | `report-limit` | 任意会话 `task` 与 `fork_task` 中派给 `task:*` 或未填 `agent` 的项 | 同时看共享 `context` 与该项 `task`：是否限制了子代理返回报告的长度（字数、行数、段落数、token 数或“简短汇报”；对写入仓库文件的交付物限制长度不算）？ | 只缓存通过结论（`skip-clear`）：限制报告长度会截断父会话验收所需的证据，必须删掉字数限制（长报告可写到 `local://<name>.md`），原样重发继续拦截。 |
 
 ### task-completion-judge
@@ -69,7 +68,7 @@
 在 frontmatter 声明 `completionJudge: true` 的子代理调用终止性结构化 `yield` 时运行（仓库自带的 `task:free`、`task:mid`、`task:low` 声明了该键；其他子代理、主会话、报错 `yield` 与增量提交不拦截）：
 
 - **输入内容（60k token 预算）**：读取当前分支最后一条 `session_init` 中的任务说明（忽略 `fork_task` 继承的前置历史）、system prompt 中的共享背景、子代理 Todo 的 `goal`、本次 `yield` 提交内容（最多 6,000 字符），以及 `session_init` 之后从最新一条往前能装入剩余预算的连续工具调用与结果（单条参数和结果各最多 800 字符，超长保留前 60% + 后 40%；按 ASCII 字符 1 token、非 ASCII 字符 2 token 估算）。
-- **判定模型与标准**：先取 `@task-completion-judge`，再取 `omomp.yml#task-completion-judge.fallbackRole`（仓库配置 `smol`），每次判定实时解析，未带 `:level` 时使用 `low` 推理强度，超时 25 秒，provider 报错时换链中下一个模型，返回 `DONE` 或 `NOT_DONE`。若子代理的 Todo `goal` 缩小了派工范围、`goal` 中声明的验证方式未在工具调用中出现，或未达到 `doneWhen`（包括报告 blocker），均判为 `NOT_DONE`。
+- **判定模型与标准**：先取 `@task-completion-judge`，再取 `default` 角色链，每次判定实时解析，未带 `:level` 时使用 `low` 推理强度，超时 25 秒，provider 报错时换链中下一个模型，返回 `DONE` 或 `NOT_DONE`。若子代理的 Todo `goal` 缩小了派工范围、`goal` 中声明的验证方式未在工具调用中出现，或未达到 `doneWhen`（包括报告 blocker），均判为 `NOT_DONE`。
 - **退回规则**：
   1. 首次判为 `NOT_DONE` 时拦截 `yield` 并返回原因，要求子代理继续完成并验证。
   2. 判为 `DONE` 后，同步触发 `omp-todo-more:read` 读取最新 Todo 列表；若仍有 `pending` 或 `in_progress` 项（`blocked` 项不计），再拦截一次并列出这些项的说明，要求先更新 Todo 状态。
@@ -79,7 +78,7 @@
 
 源码：`agent/extensions/subagent-usage/`。人类侧 `/usage` 在 AI 侧的对应物：只读工具 `subagent_usage`（无参数；主会话与子会话、完整与轻量模式）估算每个可用子代理在其首位绑定模型的供应商额度耗尽前还能派发几次。仓库不带任何校准数据；每台机器只在人工授权后，用自己的会话与用量历史校准。
 
-- **授权**：agent 目录下 `omomp.yml#subagent-usage` 的 `{ enabled: true }`（项目 `.omp/omomp.*` 不能授权；属于 `LOCAL_OMOMP_SECTIONS`），只由人工命令 `/subagent-usage on|off|status|recalibrate|reset` 写入。`on` 即同意读取本机会话记录与用量历史，并在后台开始首次校准。未授权时什么都不读，工具保持未激活；每次校准开始前、写入结果前以及每次工具调用都会重新检查授权。`off` 停止正在进行的扫描，保留数据但不再使用；`reset` 删除数据；`status` 只读已存数据的元信息。全程不调用任何模型，校准是确定性代码。
+- **授权**：`omp-config` 插件的机器级 `subagent-usage.enabled` 设置（`/settings → Plugins → omp-config` 或 `omp plugin config` 读写；项目级覆盖不能授权），只由人工命令 `/subagent-usage on|off|status|recalibrate|reset` 写入。`on` 即同意读取本机会话记录与用量历史，并在后台开始首次校准。未授权时什么都不读，工具保持未激活；每次校准开始前、写入结果前以及每次工具调用都会重新检查授权。`off` 停止正在进行的扫描，保留数据但不再使用；`reset` 删除数据；`status` 只读已存数据的元信息。全程不调用任何模型，校准是确定性代码。
 - **校准**：一个 Bun Worker 读取会话根目录下的全部会话文件，每行只看前 256 字节决定是否需要，只解码需要的条目，并维护按文件大小与修改时间索引的逐文件聚合缓存（`<agentDir>/cache/subagent-usage/transcripts.json`），之后只读新增或改动的文件。本机首次全量扫描 28,237 个会话文件耗时 59 秒，内存峰值 262 MB；有缓存时重扫耗时 0.6 秒。随后主线程原子写入 `<agentDir>/subagent-usage/calibration.json`：
   - **单次派发均值**，在 `on` 与 `recalibrate` 时计算：本机已结束派发按 agent + 模型 + 思考强度、以及按模型 + 思考强度分组的平均 USD（至少 3 次；合格派发须完全运行在其 `session_init` 解析出的模型上、没有回退记录，并写过 `session_exit` 或已 30 分钟未修改），以及 ln 成本的合并离散度 $\sigma$。
   - **额度换算常量**，取最近 21 天，超过一天后在工具调用内重算，因此套餐或额度变化会随窗口滚动淘汰：按账号与额度窗口计算（键由供应商、usage history 账号键的无盐 SHA-256 前 16 位十六进制、额度 id 与窗口 id 组成；文件里没有原始账号键、邮箱或凭据，但这个指纹是稳定的，且账号键可能含邮箱，因此可被猜出），用该额度经供应商策略适用的模型在本机的花费，除以该额度已用比例的增量，只计入该账号这个额度有同一重置周期内快照对、且该供应商其他账号空闲的小时；取该比值与每日比值 25 分位数（变动至少 5% 的天，至少 3 天）中的较小者。历史不足的额度记录原因，不给常量。同一账号换套餐不会被立即识别：新旧套餐的天数同在窗口内时较小者占优，所以升级后最长 21 天内数字偏低，降级后几天内即降到新水平。
@@ -95,10 +94,10 @@
 
 `turn-judge`、`tool-policy-nag` 的 `intent` 通道（`detector: jev` 时）、`watchdog-agent` 的选项模式与 `lang-nag` 以自身扩展名作为 purpose 调用 `agent/extensions/_shared/judge.ts` 中的 `openJudge`。purpose 既是用量记录的标签，也是该扩展自己的模型角色名（`@turn-judge`、`@tool-policy-nag`、`@watchdog-agent`、`@lang-nag`，登记在 `agent/config.yml` 的 `modelTags`）：
 
-1. `@<purpose>` 解析出聊天模型时（在 `/model` 中配置，保存在本机 `modelRoles`），按链顺序由这些模型以提示式判定（`TextJudge`）作答，之后接 `omomp.yml#judge.fallbackRole` 的聊天模型。此时跳过 OMP 的 judge 角色链，该 purpose 不会由原生或本地判定模型作答。`judge` 模型答不好某个扩展的问题时绑定该角色，例如原生判定模型把英文回复判成中文时绑定 `@lang-nag`。
+1. `@<purpose>` 解析出聊天模型时（在 `/model` 中配置，保存在本机 `modelRoles`），按链顺序由这些模型以提示式判定（`TextJudge`）作答。此时跳过 OMP 的 judge 角色链，该 purpose 不会由原生或本地判定模型作答。`judge` 模型答不好某个扩展的问题时绑定该角色，例如原生判定模型把英文回复判成中文时绑定 `@lang-nag`。
 2. 否则先走 OMP 的 judge 角色链（`resolveJudge`：`modelRoles.judge` → `retry.fallbackChains.judge` → OMP 内置默认链）。跳过无凭据候选，遇到 provider 错误换下一个（401/402/403 使该候选冷却 5 分钟），遇到中止或超时立即停止。从链中第一个原生判定 API 模型起只保留原生候选，`openJudge` 不把当前会话模型加入链中。
-3. 当上述链因中止、超时以外的原因失败，或未解析出任何模型时，改用 `omomp.yml#judge.fallbackRole`（仓库配置 `tiny`，即 `@tiny`：`modelRoles.tiny` → `retry.fallbackChains.tiny`，跳过本地 `local` 模型）中的聊天模型，以提示式判定（`TextJudge`）作答。未配置 `judge` 段则不回退。
-4. 提示式判定的概率为 one-hot（选中项为 1），低于 1 的阈值只看选中项。每次请求都以 purpose 记入会话用量账本，提示式请求另记作答模型所属的角色。相同的原生请求复用 OMP 判定缓存，提示式请求不复用。角色设置与 `omomp.yml#judge` 在每次触发时重读。
+3. 没有聊天回退：链解析不出任何模型时 `openJudge` 报 inactive，候选失败时判定失败，由调用方扩展自己的失败策略处理。聊天回退的表达方式是绑定 `@<purpose>` 本身。
+4. 提示式判定的概率为 one-hot（选中项为 1），低于 1 的阈值只看选中项。每次请求都以 purpose 记入会话用量账本，提示式请求另记作答模型所属的角色。相同的原生请求复用 OMP 判定缓存，提示式请求不复用。角色绑定在每次触发时重读。
 
 ### tool-policy-nag
 
@@ -106,32 +105,16 @@
 
 检查宿主 `bash`、`bash_bg`（含写往 `xd://bash`、`xd://bash_bg` 的调用）和 `eval`；所有通道都忽略插件调用。`pty` 通道在 `tool_call` 阶段、执行前拒绝。`form`、`intent`、`risk` 通道不拦截：它们在 `tool_result` 阶段、调用执行完之后判定，把提醒作为这次结果的 `additionalContext` 返回，提醒随这次调用的结果送达模型，而不是 steer 正在运行的这一轮（steer 会把同一轮里仍在运行的其他 `bash` 调用转到后台）。提醒通道将长会话中违反宿主工具路由的调用作为偏离静态 system prompt 的信号：`form.prompt` 不是系统通知，而是以直接观察的措辞写成。启发式检测刻意不压低误报率：观察到的误报仅增加少量自检思考 token，未产生其他负面副作用。
 
-每次调用重读 `omomp.yml#tool-policy-nag`（项目 `.omp/omomp.*` 优先于 agent 目录 `omomp.*`；无有效配置段时不运行）：
+每次被检查的调用重读 `omp-config` 的 `tool-policy-nag.*` 设置（项目 `.omp/plugin-overrides.json` 优先于机器值；读不出有效值时不运行）。manifest `agent/extensions/_shared/package.json` 提供默认值：`detector: heuristic`；`form.prompt` `你为什么不遵守system prompt，反思自己以后继续。`、`form.afterHits` `3`、`form.maxNags` `3`；`intent.threshold` `0.5`；`risk.enabled`、`risk.minCommands` `4`、`risk.minChars` `600`、`risk.minPrograms` `3`；`pty.enabled`。
 
-```yaml
-tool-policy-nag:
-  detector: heuristic
-  form:
-    prompt: 你为什么不遵守system prompt，反思自己以后继续。
-    afterHits: 3
-    maxNags: 3
-  intent:
-    threshold: 0.5
-  risk:
-    minCommands: 4
-    minChars: 600
-    minPrograms: 3
-  pty: {}
-```
-
-- **`pty` 通道（`pty.ts`，阻断，主会话与子会话，不调模型）**：在 `tool_call` 中最先运行，与 `detector` 取值无关；只有配置段里有 `pty` 对象、且发起调用的会话的活动工具（`pi.getActiveTools()`）包含 `exec_command` 时才运行，否则一律放行。它在任何进程启动前拒绝运行以下各类命令的 `bash` 调用（直接调用、写往 `xd://bash`——在外层 `write` 上拒绝——或经 eval 的 `tool.bash` 桥；`pty: true` 不豁免）和 eval cell：
+- **`pty` 通道（`pty.ts`，阻断，主会话与子会话，不调模型）**：在 `tool_call` 中最先运行，与 `detector` 取值无关；只有 `pty.enabled` 开启、且发起调用的会话的活动工具（`pi.getActiveTools()`）包含 `exec_command` 时才运行，否则一律放行。它在任何进程启动前拒绝运行以下各类命令的 `bash` 调用（直接调用、写往 `xd://bash`——在外层 `write` 上拒绝——或经 eval 的 `tool.bash` 桥；`pty: true` 不豁免）和 eval cell：
   - **passthrough**：命令交给另一台机器、另一个容器、另一个用户或另一个 shell 解释：`ssh`（`-G`/`-V`/`-O` 除外）、`mosh`、`vagrant ssh`、`gcloud compute ssh`、`aws ssm start-session`、`docker`/`podman`/`nerdctl` 的 `exec`/`run`、`docker compose`/`docker-compose` 的 `exec`/`run`、`kubectl` 的 `exec`/`run`/`debug`/`attach`、`incus`/`lxc` 的 `exec`/`shell`、`pct exec`/`enter`、`qm guest exec`/`terminal`、带 `-m` 或 `run`/`shell` 或无参数的 `orb`/`orbctl`、`limactl shell`、`multipass exec`/`shell`、`distrobox enter`、`nsenter`、`su`、`bash`/`zsh`/`sh`/`dash`/`ksh`/`fish -c`、`pwsh`/`powershell -c`/`-Command`；
   - **terminal**：需要终端或会停在交互提示上：stdin 没有输入的裸 `bash`/`zsh`/`sh`/`fish`/`python`/`python3`/`node`/`irb`/`ghci`；没有查询、文件或 stdin 的 `psql`/`mysql`/`mariadb`/`redis-cli`/`sqlite3`/`mongosh`；`vim`/`vi`/`nvim`/`nano`/`emacs`（`--batch`/`--headless` 除外）、`htop`、`btop`、`top`（`-b`/`-l` 除外）、`lazygit`、`lazydocker`、`tig`、`k9s`；`git rebase -i`、`git add -p`/`-i`、不带 `-m`/`-F`/`-C`/`--no-edit` 的 `git commit`；`expect`、`script`、`unbuffer`；可能要密码的 `sudo`/`doas`/`run0`（`sudo -n`/`-S`、`doas -n` 只判定它们后面的命令）；`passwd`；不带 `--with-token` 的 `gh auth login`；Python cell 里的 `pexpect`、`pty.spawn`/`pty.fork`；
   - **open-ended**：不会自己结束或在等外部条件：`tail -f`/`-F`、`journalctl -f`、`docker`/`podman logs -f`、`docker compose logs -f`、`kubectl logs -f`、`kubectl get -w`、`watch`、`gh run watch`、不带 `-c` 的 `ping`、不带 `-d`/`--wait` 的 `docker compose up`、`nohup`、`setsid`、以单个 `&` 结尾的管道、`while`/`until`/`for` 循环体里的 `sleep`。
 
   一行里任一简单命令命中即拒绝——管道每段、`$(…)`、`;`/`&&`/`||` 链与 shell 包装器后面的命令——类别取首个命中。eval 只检查自身名字与字面参数的启动：Python `subprocess.run`/`call`/`check_call`/`check_output`/`Popen`、`os.system`、`os.popen`、`!cmd`、`%%bash`；JS 不含 `${}` 的 `Bun.$`、`Bun.spawn`/`spawnSync`、child_process `exec`/`execSync`/`spawn`/`spawnSync`/`execFile`/`execFileSync`。读不出、非字面或改名的启动放行；本通道不检查 `xargs`、`find -exec`、`parallel` 与 shell `eval`。拒绝信息仅含简短原因（程序、类别、规则）与一行 `xd://exec_command` 指针，不含插件用法。被拒调用不进入其他通道，不计数、提醒、判定或记标记；所有通道都不解析或判定插件调用。闭合规则表是 `pty.ts` 的 `RULES`，命中与不命中样例见 `ci/tool-policy-nag-pty.test.ts`。轻量模式停用整个扩展。
-- **`detector: heuristic`**：要求配置 `form`，忽略 `intent`（不发 JUDGE 请求，不读 `INTENT-policy.md`）。每次检查前在主会话运行时设置层写入 `bashInterceptor.enabled = false`（子代理透读主会话设置，同样关闭拦截器），切换 detector 或 `session_shutdown` 时清除该覆盖。
-- **`detector: jev`**：要求 `intent`，保持 `config.yml` 的 `bashInterceptor.enabled`（拦截器开启时，`form`、`intent`、`risk` 跳过 `bash`，仍检查 `bash_bg` 与 `eval`；`pty` 先于该跳过运行）。可选 `form` 同步计数，仅在 `intent` 无法运行时提醒（spec 缺失、无效、停用或没有判定模型）；判定失败或 90 秒超时只按原因警告一次，不触发 `form`。
+- **`detector: heuristic`**：使用 `form.*` 设置，忽略 `intent.*`（不发 JUDGE 请求，不读 `INTENT-policy.md`）。每次检查前在主会话运行时设置层写入 `bashInterceptor.enabled = false`（子代理透读主会话设置，同样关闭拦截器），切换 detector 或 `session_shutdown` 时清除该覆盖。
+- **`detector: jev`**：使用 `intent.*` 设置，保持 `config.yml` 的 `bashInterceptor.enabled`（拦截器开启时，`form`、`intent`、`risk` 跳过 `bash`，仍检查 `bash_bg` 与 `eval`；`pty` 先于该跳过运行）。`form.*` 设置同步计数，仅在 `intent` 无法运行时提醒（spec 缺失、无效、停用或没有判定模型）；判定失败或 90 秒超时只按原因警告一次，不触发 `form`。
 - **提醒通道依据的事实**：执行到结束的前台 `bash` 调用带有 pi-shell 的执行轨迹（`details.trace`，omp 18.17.0 起；由 `trace.ts` 解析）。对这类调用，`form` 通道判定实际执行过的命令——展开后的 argv，包括函数体和 `eval` 内容，不包括被 `&&`/`||` 短路或未进入的分支——只有当它所在管道的输出到达了结果时，列目录、读文件、搜索才计数；重定向仍取自每条命令自己的源文本，因为轨迹不记录重定向。结束前就转到后台的调用（`async: true`、自动转后台、steer）、`bash_bg`、`eval` cell，以及没有完整轨迹的调用，仍按下面的文本规则判定。超时的调用由 `form` 按它留下的轨迹判定。
 - **`form` 通道（命令语法解析与计数）**：
   - 解析管道、`;`/`&&`/`||`、引号、heredoc、`$(…)`/反引号与重定向（含 `>|`、`&>`），剥离 `NAME=value` 前缀、保留字（`if`/`elif`/`while`/`until`/`do`/`then`/`else`/`!`/`{`）及包装命令（`timeout`、`env`、`nice`、`stdbuf`、`time`、`nohup`、`command`、`exec`、`builtin`、`xargs`）；跳过 `sudo`/`doas`/`su`/`ssh`，对字面量 `bash|sh|zsh|dash -c '…'`、`eval '…'` 与 `find -exec … ;` 的内部命令直接分析。
@@ -139,7 +122,7 @@ tool-policy-nag:
   - 豁免项：结果用于 `$(…)` 捕获、仅经 stdin 过滤器传给 `wc`/`uniq -c`/`grep -c`、传给 `xargs`、作为 `if`/`while` 条件的 `grep -q`；目标是 `/dev/*`；以及 `tail -f`、`locate`、带 `-delete`/`-exec rm` 的 `find`、`git ls-files`、读管道 stdin 的无路径 `grep`。
   - 前 `form.afterHits`（`3`）次只计数；超出后每次把 `form.prompt` 附在这次调用的结果上并弹 UI 警告，每个上下文最多 `form.maxNags`（`3`）次，直到下次 compaction、`/clear` 或 `branch_summary`（调高 `maxNags` 立即恢复）。计数保存在会话自定义条目 `mouriya.omp.tool-policy-nag.state` 中。
 - **`intent` 通道（`INTENT-policy.md`）**：每次调用在 `tool_call` 阶段发起一次 JUDGE `choice` 请求，与调用并行（选项：`list`、`read`、`search`、`edit`、`write`、`move`、`eval`、`ast`、`shell`、`mixed`、`none`）。当 shell 调用选中非 `none`（或 `eval` 选中非 `eval`/`none`）且概率 $\ge$ `threshold`（`0.5`）时，提醒标出意图名称、应改用的内置工具与原调用。调用结果最多等待判定 20 秒并附上提醒；更晚到达的判定随下一个被检查调用的结果送达，会话空闲时则直接开启一轮。命令该走哪个 shell 入口由 `pty` 通道判定，不是这里的选项。
-- **`risk` 通道（仅检查 shell，不调模型）**：配置了 `risk` 时运行。
+- **`risk` 通道（仅检查 shell，不调模型）**：`risk.enabled` 开启时运行。
   - 对有轨迹的前台 `bash` 调用：至少执行了两步，且其中一步静默失败时提醒。静默失败指：退出码非零，且没有被任何东西检查（不是 `if`/`elif`/`while`/`until` 的条件，没有被 `!` 取反，不是 `&&`/`||` 的非末尾操作数，不在 `$(…)` 里，也没有被下一条命令以 `$?` 读取），不是管道非末段的 SIGPIPE（141），自己也没有任何输出。函数调用、`eval`、`source`、`.` 由其内部步骤代为判定。长度、程序数和写操作不再计入：任意长度的全成功链不算风险，`command -v x || echo missing`、`command -v x; echo "$?"`、`yes | head -1` 不算，`git status; command -v x; echo done` 算。提醒列出每个静默失败步骤展开后的 argv 和退出码。
   - 被截断的调用（超时、取消）不判定。
   - 其他 shell 调用（转后台、`bash_bg`、无轨迹）沿用文本门槛：简单命令段数 $\ge$ `minCommands`（`4`）或总字符数 $\ge$ `minChars`（`600`）；排除 shell 内置命令（`cd`、`echo`、`printf`、`export`、`source`、`test`、`mkdir` 等）后调用的不同外部程序数 $\ge$ `minPrograms`（`3`）；且包含写入动作（重定向/`tee`/就地编辑，`rm`/`cp`/`mv`/`chmod`/`dd`/`tar -c|-x`/`rsync`/`scp`/`make`/`install`/`patch`，或 `git`、`gh`、`docker`、`kubectl`、`orb`、`npm`/`pnpm`/`yarn`/`bun`、`tofu`/`terraform`、`curl`、`wget` 的写子命令）。命中时发一条提醒列出段数、字符数、外部程序和写步骤。
@@ -197,7 +180,7 @@ cwd: /absolute/path/to/leader-checkout
 
 源码：`agent/extensions/lang-nag/`。仅在主会话运行。
 
-在 `agent_end` 取最后一条非空回复最后一段的前 200 个字符，通过 `openJudge` 判断是否主要使用 `omomp.yml#lang-nag.language`（仓库配置 `language: 中文`、`instruction: 说中文`，会话开始或切换时读取）。若不符，在用户下一条输入前加上 `"说中文\n\n"`（斜杠命令会清除待发标记；用户发送时若判定仍未返回则直接中止判定并原样发出）。
+在 `agent_end` 取最后一条非空回复最后一段的前 200 个字符，通过 `openJudge` 判断是否主要使用 `lang-nag.language` 设置的语言（`omp-config`；manifest 默认 `language: 中文`、`instruction: 说中文`，会话开始或切换时读取；项目覆盖优先于机器值）。若不符，在用户下一条输入前加上配置的 instruction（斜杠命令会清除待发标记；用户发送时若判定仍未返回则直接中止判定并原样发出）。
 
 ---
 
@@ -242,14 +225,14 @@ cwd: /absolute/path/to/leader-checkout
 首个主会话在 `session_start` 通过 Bun FFI 打开系统 `libproc`/`sysctl`，启动每 2 秒一次的采样定时器（非 Darwin 平台记一条 `未启用` info 日志；主会话关闭时先清定时器再关闭句柄）：
 
 - 读取 `proc_pid_rusage` 的 `ri_phys_footprint`（含压缩与换出内存），用 `PID + 内核启动时间` 标识进程。追踪当前 OMP 进程归属的后代 OS 子进程及由后代组长创建的进程组；父进程退出后变成孤儿（`PPID === 1`）的已观测后代继续追踪至退出。在进程内运行的子代理——主线程，或在并发子代理超过 8 个且 `task.workerThreads` 大于 0 时进入 worker 线程——与 OMP 进程共享内存，不在监控范围内。
-- 每次采样重读 `omomp.yml#child-memory-warning.thresholdGiB`（仓库配置 `4`；主会话 cwd 下 `.omp/omomp.*` 优先于 agent 目录 `omomp.*`）。配置缺失或无效时继续追踪进程但暂停告警，每种新配置问题记一次 warning。
+- 每次采样重读 `child-memory-warning.thresholdGiB` 设置（`omp-config`；manifest 默认 `4`；项目 `.omp/plugin-overrides.json` 的同名项优先于机器值）。值读不出或无效时继续追踪进程但暂停告警，每种新配置问题记一次 warning。
 - 任一归属进程的 `phys_footprint` 超过阈值时，按进程身份告警一次（弹主 UI warning，并向主会话发一条含 PID、PPID、是否孤儿、GiB/bytes、阈值与 240 字命令行的 `attribution: "agent"` 消息），不发信号杀进程。
 
 ### input-polish
 
 源码：`agent/extensions/input-polish/`。仅在主会话交互式 TUI 运行。
 
-在输入框按下 `omomp.yml#input-polish.key`（默认 `ctrl+enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可改配 `alt+enter`）时，用 `@input-polish` 及回退角色 `fallbackRole`（仓库配置 `smol`，`instruction: 在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`）在 `taskDepth: 1` 无工具内存会话中改写草稿，流式显示在输入框上方的只读浮层中（输入框内原草稿不变）：
+在输入框按下 `input-polish.key` 设置（`omp-config`；默认 `ctrl+enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可设 `alt+enter`）时，用 `@input-polish` 及 `default` 角色链（改写指令取 `input-polish.instruction`，manifest 默认 `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`；项目覆盖优先于机器值）在 `taskDepth: 1` 无工具内存会话中改写草稿，流式显示在输入框上方的只读浮层中（输入框内原草稿不变）：
 
 - 生成完成后按 `Enter` 用改写稿替换输入框内容并提交；按 `Esc` 或 `Ctrl+C` 取消并关闭浮层。
 - 空白草稿及以 `/`、`!`、`$` 开头的草稿不处理。若改写结果改变了 `[Paste #N …]` 或 `[Image #N …]` 占位符的数量或内容，直接报错并显示在浮层中。
@@ -261,13 +244,7 @@ cwd: /absolute/path/to/leader-checkout
 在不改变原意的前提下重排、润色 `.md` 与 `.txt` 文档。不修改源文件，输出写在 `/tmp/doc-polish/<时间戳>-<文件名>/` 下（源文件副本、`split.json` 和对照报告 `review.md`）：
 
 - 各阶段运行 `taskDepth: 1`、禁加载扩展的内存子代理：**拆分（Split）**（仅持 `[read, write]`，读取原文并写出起止行号与术语表 `split.json`）→ **润色（Polish）**（无工具，并发改写各批次，通常每批不超过 5,000 码点；超长段落单独成批，不截断；再用并查集按 `sourceIndices` 归并跨段合并块）→ **校验（Check）**（无工具，逐组检查是否保持原意）。
-- 模型分别取自 `@doc-polish.split`、`@doc-polish.polish`、`@doc-polish.check`（在 `/model` 中配置；`check` 未配模型时复用 `split` 链），各自后接本机 `omomp.*` 中 `doc-polish` 段的 `fallbackRole`（默认并发 `6`）：
-
-```yaml
-doc-polish:
-  fallbackRole: default
-  concurrency: 8
-```
+- 模型分别取自 `@doc-polish.split`、`@doc-polish.polish`、`@doc-polish.check`（在 `/model` 中配置；`check` 未配模型时复用 `split` 链），各自后接 `default` 角色链。每份文档的并发润色与校验请求数取 `doc-polish.concurrency` 设置（`omp-config`；manifest 默认 `6`；项目覆盖优先于机器值）。
 
 - 拆分或润色角色解析不出模型时直接报错退出，不创建 `/tmp/doc-polish/` 目录；无法解析的批次保留原文。工具在 execute 边界捕获失败、记 warning 并返回错误结果，不向 OMP 抛出异常。返回结果要求主代理亲自完整阅读每份 `review.md`，不得转交子代理或截断。
 
@@ -312,41 +289,14 @@ Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-
 
 源码：`agent/extensions/tool-topics/`（`tool://` handler 在其 `registry.ts`；哪些专题由谁提供见[工具专题](operations.zh-CN.md#工具专题)）。
 
-渐进式工具说明。被覆盖的工具在 system prompt 里的说明只保留常用调用说明，末尾附 `Topics` 索引；详细调用说明是按需读取的专题 `tool://<tool>/<topic>`（支持行选择器；`read tool://<tool>` 列出该工具的专题及读取条件；对 `tool://` 执行 `grep`/`find` 可检索全部专题）。`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题；[tool-topic-injection](#tool-topic-injection) 另在只读工具调用后补送专题。
+渐进式工具说明。被覆盖的工具在 system prompt 里的说明只保留常用调用说明，末尾附 `Topics` 索引；详细调用说明是按需读取的专题 `tool://<tool>/<topic>`（支持行选择器；`read tool://<tool>` 列出该工具的专题及读取条件；对 `tool://` 执行 `grep`/`find` 可检索全部专题）。`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题；`TOPIC` 文件的 `inject` 条目另在只读工具调用后补送专题。
 
-- **文件**：`TOPIC-<tool>-<name>.md` 带严格 YAML 头（`tool`、`name`、`title`、`when`、`upstream`）和 Markdown 正文；`SURFACE-<tool>.md`（头为 `tool`、`upstream`）整段替换该工具的说明。专题写调用说明——参数、语法、取值、前置条件、结果、出错后的改法——不写实现细节。`when` 是索引显示的一行（“before …”“when …”）。`upstream` 记录核对时依据的 OMP 版本与来源。
+- **文件**：`TOPIC-<tool>-<name>.md` 带严格 YAML 头（`tool`、`name`、`title`、`when`、`upstream`，可选 `inject`）和 Markdown 正文；`SURFACE-<tool>.md`（头为 `tool`、`upstream`）整段替换该工具的说明。专题写调用说明——参数、语法、取值、前置条件、结果、出错后的改法——不写实现细节。`when` 是索引显示的一行（“before …”“when …”）。`upstream` 记录核对时依据的 OMP 版本与来源。
 - **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 用 `{{native:Available Agents}}` 嵌入原生的 `# Available Agents` 段）；`ast_grep`、`ast_edit`（经 [ast-top-level](#ast-top-level) 留在顶层）也有表层文件，只写哪类代码工作该交给它们而不是 `grep` 或 `edit`，以及路径要写成代码 glob（裸目录会把 Markdown 文件也带进来，其段落会匹配代码 pattern 并被改写）；pattern 语法在各自的 `patterns` 专题。有专题的工具：read、bash（含等待外部条件）、edit（hashline 模式）、eval、grep、find、task、write、OMP 内置 ask、ast_grep、ast_edit，设备 debug、github、checkpoint。简单工具 `wait`、`glob`、`web_search`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。从扩展或插件文件注册的工具保留自己的说明与专题索引，即使它以同名替换了内置工具（如 `omp-ask-more` 的 `ask`），本扩展也不向它添加表层说明或索引。插件工具说明：`xd://<tool>`。
 - **生命周期**：扩展加载时读取一次文件，把专题以 `tool://` 挂到 router 上，并替换之前加载（子代理、隔离子代理）留下的 handler；改文件需重启。每次 `before_agent_start`（主会话与子代理、完整与轻量模式）按工具名在 OMP 渲染格式中定位所覆盖的 OMP 自有工具——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段——把说明换成表层文本（或保留原生文本）再加索引，每行一个专题及其完整 `tool://` URL。没有 `read` 的会话保留原生说明。
+- **注入**：`TOPIC` 头可列 `inject` 条目 `{id, tool, parameter, pattern}`：某次 `tool_result` 的具名字符串参数（支持点分路径）匹配 JavaScript 正则 `pattern` 后，该文件自己的 `tool://<tool>/<name>` 在每个真实上下文中作为可信 `additionalContext` 投递一次（主会话与子会话、含失败的调用，在工具批次结束后、下一次模型调用前）。投递身份是 `omp-config/tool-topic-injection` + 条目 id；id 在整个目录内唯一，规则不变时保持稳定，因此会话里已送达的标记仍能去重。compact 移除标记后该规则可再次注入；共享 `_shared/context-delivery.ts` 守卫在活动叶节点重建的真实模型上下文里检查 developer 消息，压缩摘要与兄弟分支不会被误认为已送达。仓库自带规则只覆盖不改动任何东西、重来没有代价的调用（read、grep），外加 eval/bash 里 `ssh … cat` 的误用提醒；`task`、`fork_task`、`edit`、`write` 和会改动状态的设备没有规则，它们的专题要在调用前读。
+
 - **失败处理**：逐个跳过格式错误或不可读的文件并记 warning，其他文件仍继续加载。找不到工具格式或 `{{native:…}}` 段时，该工具保留原生说明，记 warning，主会话按工具与原因各提示一次。OMP 或其他 handler 已占用 `tool://` 时，所有工具都不显示索引。
-
-### tool-topic-injection
-
-源码：`agent/extensions/tool-topic-injection/`；可复用规则引擎位于 `_shared/tool-topic-injection.ts`。主会话、子代理及完整/轻量模式均加载。扩展监听 `tool_result`，不阻塞或修改工具执行；在工具批次结束后、下一次模型调用前，将命中的专题作为可信 developer 上下文注入。工具报错时也会提供说明。
-
-仓库规则存于 `omomp.yml`，每次工具结果到达时重读（项目 `.omp/omomp.*` 优先于 agent 目录的 `omomp.*`）。没有有效配置段时不运行；无效副本记 warning 并跳过。设置空 `rules` 数组可关闭注入：
-
-```yaml
-tool-topic-injection:
-  rules:
-    - id: read-ssh
-      tool: read
-      parameter: path
-      pattern: '^ssh://'
-      topic: tool://read/ssh
-    - id: read-sqlite
-      tool: read
-      parameter: path
-      pattern: '\.(sqlite3?|db3?)(:|\?|$)'
-      topic: tool://read/sqlite
-    # … read-archives、read-json、read-documents、read-forge、read-runtime、read-web、
-    #   grep-regex、grep-scopes、eval-ssh-cat、bash-ssh-cat
-```
-
-仓库规则只覆盖不改动任何东西、重来没有代价的调用（read、grep），外加 eval/bash 里 `ssh … cat` 的误用提醒：调用后送达的专题用于改进下一次调用。`task`、`fork_task`、`edit`、`write` 和会改动状态的设备没有规则：调用之后再送专题已经晚了，它们的专题要在调用前读。
-
-`tool` 精确匹配工具名；`parameter` 指定字符串参数名，也支持点分属性路径。`pattern` 是不带斜杠定界符和 flags 的 JavaScript 正则源码，只匹配文本，不解释 shell 语义。参数缺失或不是字符串时不匹配。`topic` 指向 [tool-topics](#tool-topics) 提供的 `tool://<tool>/<topic>` 正文。规则 id 在同一 owner 内须唯一且稳定。
-
-每条规则在活动叶节点重建的真实模型上下文中保有自身标记时只注入一次。共享 `_shared/context-delivery.ts` 也服务 `repo-rules`；临时集合只覆盖当前 turn 中宿主尚未持久化 developer 消息的窗口。compact 移除标记后，该规则可再次注入；若标记仍在保留尾部，则不重复注入。resume 和树导航按当前分支判断，不扫描整份历史。指向同一专题的多条规则各自保有注入资格。专题缺失、为空或加载失败时记 warning，不消耗资格，也不妨碍其他规则执行。
 
 ### omomp-lang
 
@@ -354,7 +304,7 @@ tool-topic-injection:
 
 设置本地扩展与 OMP 插件所有面向人的界面文字语言（`en` 或 `zh`）：通知、widget、状态栏、对话框、浮层、命令与快捷键说明、工具标签和渲染器。发给模型的文本（prompt、steer、工具说明、工具结果）与日志保持原文。
 
-- 从 agent 目录的 `omomp.*` 读取 `omomp.yml#omomp-lang.language`（仓库配置 `zh`；不读项目 `.omp/` 副本，修改后下次启动生效）。
+- 读取 `omomp-lang.language` 设置（`omp-config`；manifest 默认 `zh`），仅机器级——语言属于进程，不读项目覆盖，修改后下次启动生效。
 - 模块加载时将 `process.env.OMOMP_LANG` 设为该值，但若启动环境已设置（如 `OMOMP_LANG=en omp`）则保留环境值。
-- `_shared/i18n.ts` 的 `tr(en, zh)` 在每次生成文字时按 `OMOMP_LANG` → `omomp-lang` 配置段 → `LC_ALL` / `LC_MESSAGES` / `LANG`（`zh*` 为中文）→ 英文 的顺序解析，并直接读取配置段，使早于 `omomp-lang` 加载的扩展也能拿到配置语言。
-- `omomp-lang` 段归 omp-config 所有，OMP 插件在共享的语言发现顺序中读取该段。将它导出为 `OMOMP_LANG` 也为仅读环境变量的使用方与子进程提供语言。插件自有行为见[插件参考](plugins-and-modes.zh-CN.md)。
+- `_shared/i18n.ts` 的 `tr(en, zh)` 在每次生成文字时按 `OMOMP_LANG` → `omomp-lang.language` 设置（每进程读一次）→ `LC_ALL` / `LC_MESSAGES` / `LANG`（`zh*` 为中文）→ 英文 的顺序解析，并直接读取设置，使早于 `omomp-lang` 加载的扩展也能拿到配置语言。
+- `omomp-lang.language` 归 omp-config 所有，OMP 插件在共享的语言发现顺序中读取该设置。将它导出为 `OMOMP_LANG` 也为仅读环境变量的使用方与子进程提供语言。插件自有行为见[插件参考](plugins-and-modes.zh-CN.md)。
