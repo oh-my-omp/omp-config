@@ -58,6 +58,9 @@
 //
 // Relies on omp internals (AgentRegistry, the executor's session-file path and
 // hook ordering, session entry types); re-verify after every omp upgrade.
+// Parent and child must share this module instance, so `config.yml` sets
+// `task.workerThreads: 0`: a child OMP places in a subagent worker thread loads
+// its own copy of this module, finds no replica and fails before its first turn.
 // ============================================================================
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -215,7 +218,7 @@ const FORK_AGENT = "fork:self";
 
 /**
  * Replicas by child session file. Child sessions rebind this module's factory
- * in the same process, so the parent's write is visible to the child. Entries
+ * in the same thread (`task.workerThreads: 0`), so the parent's write is visible to the child. Entries
  * live until the parent session shuts down, so a revived child keeps its
  * replicated contract. A replica holds plain request data and at most a
  * borrowed `ask` tool, never the source session, so it keeps no parked
