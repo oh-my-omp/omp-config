@@ -42,6 +42,20 @@ describe("nested PowerShell and cmd from brush", () => {
 		"pwsh -NoProfile -Command '. Remove-Item -LiteralPath /tmp/p'",
 		"pwsh -c 'if ($a) { Write-Output a } Remove-Item x'",
 		String.raw`cmd /c 'start "" /b /wait /d C:\omp-dg cmd /c del C:\omp-dg\d\f'`,
+		'cmd /c "del x 2>nul"',
+		'cmd /c "2>nul del x"',
+		'cmd /c "1>&2 del x"',
+		'cmd /c ">nul del x"',
+		'cmd /c "<in.txt del x"',
+		'cmd /c "@2>nul del x"',
+		'cmd /c "if exist x 2>nul del x"',
+		'cmd /c "(2>nul del x)"',
+		'cmd /c "cmd /c 2>nul del x"',
+		'cmd /c "0<nul del x"',
+		'cmd /c "12>f.txt del x"',
+		'cmd /c "echo a&2>nul del x"',
+		'cmd /c "echo a|2>nul del x"',
+		'cmd /c "@>nul del x"',
 	])("blocks deletion: %p", (command) => {
 		expect(ruleOf(command)).toBe("delete");
 	});
@@ -67,6 +81,7 @@ describe("nested PowerShell and cmd from brush", () => {
 		"echo del x | cmd",
 		"pwsh -c 'Write-Output hi >'",
 		"pwsh -c 'Write-Output hi 2>'",
+		"cmd /c %X%2>nul del x",
 	])("blocks non-literal: %p", (command) => {
 		expect(ruleOf(command)).toBe("nonLiteral");
 	});
@@ -90,6 +105,10 @@ describe("nested PowerShell and cmd from brush", () => {
 		"pwsh -c '$n = Get-Date'",
 		String.raw`cmd /c start "" /d C:\tmp notepad`,
 		"cmd /c constructor",
+		"cmd /c '\"2\">nul del x'",
+		'cmd /c "^2>nul del x"',
+		`cmd /c 'cmd 2>nul /c "echo hi"'`,
+		'cmd /c "foo2>x.txt"',
 		"pwsh -c 'constructor'",
 	])("allows: %p", (command) => {
 		expect(ruleOf(command)).toBe("allow");

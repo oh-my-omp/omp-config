@@ -62,7 +62,15 @@ function splitCmd(text: string): CmdCommand[] {
 			continue;
 		}
 		if (ch === ">" || ch === "<") {
-			flushWord();
+			// A bare digit word glued to the operator is a descriptor (`2>nul`), not a command name.
+			// A `@` prefix, quotes or `^` escapes keep it a word (`@2` is still bare; `"2"` and `^2` differ).
+			if (inWord && /^@?[0-9]+$/.test(raw)) {
+				word = "";
+				raw = "";
+				inWord = false;
+			} else {
+				flushWord();
+			}
 			while (text.charAt(i + 1) === ">" || text.charAt(i + 1) === "&") i++;
 			while (text.charAt(i + 1) === " ") i++;
 			let target = "";
