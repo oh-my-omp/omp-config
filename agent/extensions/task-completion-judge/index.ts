@@ -336,7 +336,7 @@ const parseAnswer = (text: string): Verdict => {
 };
 
 const judge = async (ctx: ExtensionContext, prompt: string, signal: AbortSignal): Promise<Verdict> => {
-	const reply = await completeRoleChain(ctx, [ROLE, "default"], SYSTEM_PROMPT, prompt, EFFORT, signal, { kind: "whole" });
+	const reply = await completeRoleChain(ctx, [ROLE, "default"], SYSTEM_PROMPT, prompt, EFFORT, signal, { kind: "whole" }, () => true);
 	switch (reply.kind) {
 		case "text":
 			return parseAnswer(reply.text);

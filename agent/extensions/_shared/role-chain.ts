@@ -6,14 +6,28 @@ import { textOf } from "./messages.ts";
 import { modelLabel, type RoleModel, roleModels } from "./roles.ts";
 
 /**
+ * The provider stop reasons a caller may accept as an answer. `error` and
+ * `aborted` never reach the caller: they are handled here (a failure line, or
+ * the pass ends under `whole`).
+ */
+export type AnswerStopReason = "stop" | "length" | "toolUse";
+
+/**
  * Outcome of one pass over a role chain. `deadline` means the caller's signal
  * aborted; `aborted` means the provider replied with `stopReason: "aborted"`
  * under the `whole` budget. The caller maps each variant to its own wording and
- * verdict. `failures` holds one `provider/id: reason` line per model that failed
- * before the answer (or, for `all-failed`, every model tried).
+ * verdict. `text` carries the provider's stop reason so the caller can see how
+ * the answer ended. `failures` holds one `provider/id: reason` line per model
+ * that failed before the answer (or, for `all-failed`, every model tried).
  */
 export type RoleChainReply =
-	| { readonly kind: "text"; readonly text: string; readonly model: RoleModel; readonly failures: readonly string[] }
+	| {
+			readonly kind: "text";
+			readonly text: string;
+			readonly stopReason: AnswerStopReason;
+			readonly model: RoleModel;
+			readonly failures: readonly string[];
+	  }
 	| { readonly kind: "no-model" }
 	| { readonly kind: "deadline" }
 	| { readonly kind: "aborted" }
@@ -33,12 +47,14 @@ export type AttemptBudget = { readonly kind: "whole" } | { readonly kind: "split
 /**
  * Ask the chat models of `roles` (resolved via {@link roleModels} at call time)
  * one system prompt and one user prompt, in chain order, and return the first
- * text answer. A provider `stopReason: "error"` or a thrown error that is not
- * the caller's deadline records a failure line and moves to the next model. The
- * signal aborting ends the pass at once; so does a provider `stopReason: "aborted"`
- * under `whole`. A reply that ends `length` or `toolUse` is never parsed as an answer:
- * it records a failure line and moves to the next model, like `error`. `effort` is the reasoning level for chain entries without a
- * `:level` suffix; an entry at level `off` runs with `disableReasoning`.
+ * answer `accepts` takes. A provider `stopReason: "error"` or a thrown error that
+ * is not the caller's deadline records a failure line and moves to the next model.
+ * A provider reply whose stop reason `accepts` rejects records a failure line
+ * `<model>: <stopReason>` and moves to the next model; the caller alone decides
+ * which stop reasons are answers. The signal aborting ends the pass at once; so
+ * does a provider `stopReason: "aborted"` under `whole`. `effort` is the reasoning
+ * level for chain entries without a `:level` suffix; an entry at level `off` runs
+ * with `disableReasoning`.
  */
 export async function completeRoleChain(
 	ctx: ExtensionContext,
@@ -48,6 +64,7 @@ export async function completeRoleChain(
 	effort: (typeof THINKING_EFFORTS)[number],
 	signal: AbortSignal,
 	budget: AttemptBudget,
+	accepts: (stopReason: AnswerStopReason) => boolean,
 ): Promise<RoleChainReply> {
 	const failures: string[] = [];
 	try {
@@ -70,9 +87,17 @@ export async function completeRoleChain(
 				);
 				switch (reply.stopReason) {
 					case "stop":
-						return { kind: "text", text: textOf(reply.content), model: candidate, failures };
 					case "length":
 					case "toolUse":
+						if (accepts(reply.stopReason)) {
+							return {
+								kind: "text",
+								text: textOf(reply.content),
+								stopReason: reply.stopReason,
+								model: candidate,
+								failures,
+							};
+						}
 						failures.push(`${modelLabel(model)}: ${reply.stopReason}`);
 						continue;
 					case "error":

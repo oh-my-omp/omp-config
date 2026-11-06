@@ -201,7 +201,17 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		signal: AbortSignal,
 		budget: AttemptBudget,
 	): Promise<Reply> => {
-		const reply = await completeRoleChain(ctx, [ROLE, "default"], systemPrompt, prompt, EFFORT, signal, budget);
+		// A reply cut off by `length` or ending in `toolUse` is not a verdict: the attempt fails and the chain moves on.
+		const reply = await completeRoleChain(
+			ctx,
+			[ROLE, "default"],
+			systemPrompt,
+			prompt,
+			EFFORT,
+			signal,
+			budget,
+			(stopReason) => stopReason === "stop",
+		);
 		switch (reply.kind) {
 			case "text":
 				pi.logger.info("task-split-check answered", { model: modelLabel(reply.model.model), failures: reply.failures });
