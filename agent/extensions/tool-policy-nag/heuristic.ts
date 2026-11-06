@@ -12,6 +12,7 @@ import {
 	type StreamRole,
 	type ViolationCategory,
 } from "./shell-programs.ts";
+import type { ExecutedTrace } from "./trace.ts";
 
 /** Library entry points the eval tool's `code` uses to reimplement `read`/`glob`. */
 type EvalApi =
@@ -137,7 +138,52 @@ const COUNTABLE: ReadonlySet<ViolationCategory> = new Set(["list", "read", "sear
  * capture, a count, `xargs` arguments — is not counted.
  */
 export function detectShellViolations(command: string): ShellViolation[] {
-	const commands = splitSimpleCommands(command);
+	return detectViolations(splitSimpleCommands(command), () => true);
+}
+
+/**
+ * The same judgment over what a traced run actually executed: each step's
+ * expanded argv (with the redirections of its own source, which the trace
+ * does not record), its real pipeline, its test position, and whether any
+ * output of its pipeline reached the result. Steps that did not run are not
+ * there; function, `eval` and `source` calls are judged through their bodies.
+ */
+export function detectTraceViolations(trace: ExecutedTrace): ShellViolation[] {
+	const steps = trace.steps.filter((step) => !step.wrapsBody);
+	const pipelines = new Map<string, number>();
+	const commands: SimpleCommand[] = steps.map((step, index) => {
+		let pipelineId = index + steps.length;
+		if (step.pipeline !== null) {
+			pipelineId = pipelines.get(step.pipeline) ?? index;
+			pipelines.set(step.pipeline, pipelineId);
+		}
+		// A test position becomes a leading `!`, which the resolver reads as a condition word.
+		const tokens: CommandToken[] = step.test ? [{ kind: "word", text: "!", dynamic: false }] : [];
+		for (const text of step.argv) tokens.push({ kind: "word", text, dynamic: false });
+		const source = splitSimpleCommands(step.source)[0]?.tokens ?? [];
+		for (let at = 0; at < source.length; at++) {
+			const token = source[at];
+			if (token === undefined || token.kind === "word") continue;
+			tokens.push(token);
+			const target = source[at + 1];
+			if (target?.kind === "word") {
+				tokens.push(target);
+				at++;
+			}
+		}
+		return { tokens, pipelineId, piped: step.stage > 0, captured: step.captured, background: false, loopBody: false };
+	});
+	// A pipeline's bytes reach the result through its last stage; nothing attributed anywhere in it means they did not.
+	const reached = (index: number): boolean => {
+		const step = steps[index];
+		if (step === undefined) return false;
+		if (step.pipeline === null) return step.output;
+		return steps.some((other, at) => at >= index && other.pipeline === step.pipeline && other.output);
+	};
+	return detectViolations(commands, reached);
+}
+
+function detectViolations(commands: readonly SimpleCommand[], reached: (index: number) => boolean): ShellViolation[] {
 	const stages: Stage[] = [];
 	for (const [index, simple] of commands.entries()) {
 		stages.push(analyzeTokens(simple.tokens, simple.piped, provenanceOf(commands, stages, index)));
@@ -146,7 +192,7 @@ export function detectShellViolations(command: string): ShellViolation[] {
 	for (const [index, stage] of stages.entries()) {
 		const { findings, nested } = stage.analysis;
 		if (findings.length === 0 && nested.length === 0) continue;
-		const consumed = commands[index]?.captured === true || outputConsumed(commands, stages, index);
+		const consumed = commands[index]?.captured === true || outputConsumed(commands, stages, index) || !reached(index);
 		if (!consumed) {
 			violations.push(...stageViolation(stage, findings), ...nested);
 			continue;

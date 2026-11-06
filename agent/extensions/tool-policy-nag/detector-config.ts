@@ -4,12 +4,13 @@
  * copies warn and fall through), read at every watched call.
  *
  * `detector` picks how tool-routing violations are caught; `risk` is a third,
- * independent lane that asks whether the call's side effects can be read off
- * the call at all:
+ * independent lane that asks whether the call's outcome can be read off its
+ * result at all:
  *
  * - `detector: heuristic` — the deterministic string lane (`heuristic.ts`):
- *   parses the command, counts the operations a built-in tool covers and, once
- *   the hits exceed `form.afterHits`, sends `form.prompt`, at most
+ *   reads the commands (from the run's trace when it left one, else from the
+ *   text), counts the operations a built-in tool covers and, once the hits
+ *   exceed `form.afterHits`, reminds with `form.prompt`, at most
  *   `form.maxNags` times per context. `form` is required; an `intent` block is ignored, so no
  *   JUDGE request is made and `INTENT-*.md` is not read. OMP's bash
  *   interceptor is overridden off for the session while this detector is set.
@@ -17,9 +18,10 @@
  *   one `choice` question about what the call is trying to accomplish, worded
  *   by `INTENT-*.md`. `intent` is required; an optional `form` block is the
  *   fallback sender when the intent lane cannot run.
- * - `risk` — the risk lane (`risk.ts`): flags a long chain that both reads and
- *   writes, whose side-effect surface is unreadable. No judge. Missing or
- *   `null` leaves it off.
+ * - `risk` — the risk lane (`risk.ts`): on a traced run, flags a step that
+ *   failed silently; without a complete trace, flags a long chain of many
+ *   programs that writes, by the `minCommands`/`minChars`/`minPrograms`
+ *   thresholds. No judge. Missing or `null` leaves it off.
  * - `pty` — the pty lane (`pty.ts`): refuses, before they run, `bash` and eval
  *   calls that belong in an `exec_command` PTY session. An object (`{}`) turns
  *   it on under either detector; missing or `null` leaves it off.
@@ -52,7 +54,7 @@ export type IntentLane = {
 	readonly threshold: number;
 };
 
-/** The risk lane: deterministic, for calls whose side-effect surface is unreadable. */
+/** The risk lane: deterministic, for calls whose outcome cannot be read off their result. */
 type RiskLane = { readonly kind: "risk" } & RiskConfig;
 
 /** The pty lane: deterministic, blocking; it has no settings. */
