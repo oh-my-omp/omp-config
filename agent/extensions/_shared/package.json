@@ -1,0 +1,137 @@
+{
+	"name": "omp-config",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Settings of the omp-config extensions; the extensions themselves load from config.yml and the extensions directory.",
+	"omp": {
+		"settings": {
+			"omomp-lang.language": {
+				"type": "enum",
+				"values": ["en", "zh"],
+				"default": "zh",
+				"description": "Language of person-facing text; exported as OMOMP_LANG at the next OMP start unless the launch environment sets it"
+			},
+			"lang-nag.language": {
+				"type": "string",
+				"default": "中文",
+				"description": "Language the main agent's replies are checked against"
+			},
+			"lang-nag.instruction": {
+				"type": "string",
+				"default": "说中文",
+				"description": "Reminder sent when a reply is not in lang-nag.language"
+			},
+			"input-polish.key": {
+				"type": "enum",
+				"values": ["ctrl+enter", "alt+enter"],
+				"default": "ctrl+enter",
+				"description": "Shortcut that rewrites the input draft (next OMP start)"
+			},
+			"input-polish.instruction": {
+				"type": "string",
+				"default": "在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。",
+				"description": "How input-polish rewrites the draft"
+			},
+			"tool-policy-nag.detector": {
+				"type": "enum",
+				"values": ["heuristic", "jev"],
+				"default": "heuristic",
+				"description": "heuristic: count built-in-tool operations in shell calls; jev: ask the judge about each watched call"
+			},
+			"tool-policy-nag.form.prompt": {
+				"type": "string",
+				"default": "你为什么不遵守system prompt，反思自己以后继续。",
+				"description": "Reminder the heuristic lane (and the jev fallback) sends"
+			},
+			"tool-policy-nag.form.afterHits": {
+				"type": "number",
+				"default": 3,
+				"min": 0,
+				"step": 1,
+				"description": "Violations recorded silently before the first reminder"
+			},
+			"tool-policy-nag.form.maxNags": {
+				"type": "number",
+				"default": 3,
+				"min": 1,
+				"step": 1,
+				"description": "Reminders per context before the lane goes quiet"
+			},
+			"tool-policy-nag.intent.threshold": {
+				"type": "number",
+				"default": 0.5,
+				"min": 0.01,
+				"max": 1,
+				"step": 0.01,
+				"description": "jev: probability at which a judged violation counts"
+			},
+			"tool-policy-nag.risk.enabled": {
+				"type": "boolean",
+				"default": true,
+				"description": "Flag shell calls whose outcome cannot be read off their result"
+			},
+			"tool-policy-nag.risk.minCommands": {
+				"type": "number",
+				"default": 4,
+				"min": 1,
+				"step": 1,
+				"description": "Untraced chains: commands needed to flag"
+			},
+			"tool-policy-nag.risk.minChars": {
+				"type": "number",
+				"default": 600,
+				"min": 1,
+				"step": 1,
+				"description": "Untraced chains: characters needed to flag"
+			},
+			"tool-policy-nag.risk.minPrograms": {
+				"type": "number",
+				"default": 3,
+				"min": 1,
+				"step": 1,
+				"description": "Untraced chains: distinct programs needed to flag"
+			},
+			"tool-policy-nag.pty.enabled": {
+				"type": "boolean",
+				"default": true,
+				"description": "Refuse bash and eval calls that belong in an exec_command PTY session"
+			},
+			"child-memory-warning.thresholdGiB": {
+				"type": "number",
+				"default": 4,
+				"min": 0.1,
+				"step": 0.5,
+				"description": "Resident memory of one child process that raises an alert"
+			},
+			"doc-polish.concurrency": {
+				"type": "number",
+				"default": 6,
+				"min": 1,
+				"step": 1,
+				"description": "Parallel polish and check requests per document"
+			},
+			"omp-config-autoupdate.enabled": {
+				"type": "boolean",
+				"default": false,
+				"description": "Apply GitHub main at OMP start (next start)"
+			},
+			"omp-config-autoupdate.conflicts": {
+				"type": "enum",
+				"values": ["notify", "agent"],
+				"default": "notify",
+				"description": "notify: report conflicts at start; agent: also start the adaptation after an update"
+			},
+			"omp-config-autoupdate.exclude": {
+				"type": "string",
+				"default": "",
+				"description": "Whitespace-separated items the updater never writes: agent-dir paths or globs, or config.yml:<dotted.path>"
+			},
+			"subagent-usage.enabled": {
+				"type": "boolean",
+				"default": false,
+				"description": "Consent to read this machine's session transcripts for subagent_usage; machine-wide only"
+			}
+		}
+	}
+}
