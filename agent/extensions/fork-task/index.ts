@@ -2,8 +2,8 @@
 // fork_task — native `task` subagents that start from a copy of the caller's
 // conversation, or of another agent's named by an item's `from`.
 //
-// Registers fork_task plus before_subagent_spawn, before_agent_start and
-// session_start (main only), session_shutdown hooks in main and sub sessions, and one BroadcastChannel
+// Registers fork_task plus before_subagent_spawn, before_agent_start, session_start
+// (main only) and session_shutdown hooks in main and sub sessions, and one BroadcastChannel
 // listener per thread (source-channel.ts). Reads the source agent's persisted
 // session; writes temporary JSONL under the OS temp directory and moves it
 // into the caller's artifact store; writes each child's replica copy under
@@ -11,10 +11,12 @@
 // start under `<tmp>/omp-fork-task/starts/<pid>/`, a parked session's latest
 // request under `<tmp>/omp-fork-task/parked/<pid>/` and a
 // `workspace: "source"` child's inherited changes under
-// `<tmp>/omp-fork-task/overlays/<pid>/`, deleting all four at main-session
-// shutdown, and at main-session startup sweeping the `parked/` and `starts/`
-// directories of processes that no longer exist (sweep.ts) (park disposes a sub session too, so a sub shutdown never deletes
-// what its fork children still need); the overlay is consumed at the child's
+// `<tmp>/omp-fork-task/overlays/<pid>/`. Main-session shutdown deletes all four
+// of this process's directories (park disposes a sub session too, so a sub
+// shutdown never deletes what its fork children still need). Main-session
+// startup sweeps the `replicas/`, `overlays/`, `parked/` and `starts/`
+// directories of processes that no longer exist (sweep.ts); live processes'
+// directories stay. The overlay is consumed at the child's
 // first turn (workspace.ts). Inherited changes that do not apply stop the
 // child before its first model call; a failed start record only warns.
 // Execution failures warn and return tool errors; user aborts reject for host
@@ -752,13 +754,17 @@ async function beforeAgentStart(
 }
 
 /**
- * On main-session startup remove the `parked/` and `starts/` directories of
- * processes that no longer exist (the main session of a crashed or killed omp
- * never reached its shutdown). Live processes' directories stay.
+ * On main-session startup remove the `replicas/`, `overlays/`, `parked/` and
+ * `starts/` directories of processes that no longer exist (the main session of
+ * a crashed or killed omp never reached its shutdown). Live processes'
+ * directories stay.
  */
 async function sessionStart(rt: ForkTaskRuntime, _event: SessionStartEvent, ctx: ExtensionContext): Promise<void> {
 	if (ctx.agent.kind !== "main") return;
-	await sweepDeadProcessDirs([path.dirname(parkedRoot()), path.dirname(startsRoot())], rt.warn);
+	await sweepDeadProcessDirs(
+		[replicasRoot(), overlaysRoot(), parkedRoot(), startsRoot()].map((dir) => path.dirname(dir)),
+		rt.warn,
+	);
 }
 
 /**

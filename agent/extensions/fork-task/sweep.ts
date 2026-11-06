@@ -1,11 +1,11 @@
-// Startup sweep of the per-process record directories. `parked/<pid>/` and
-// `starts/<pid>/` belong to the OMP process with that pid; the main session
-// removes its own roots at shutdown, so a directory whose pid names no live
-// process is residue of a crash or kill that never reached session_shutdown.
-// The main session sweeps those at startup (index.ts). Records of live
-// processes are kept, and entries not named by a pid are left alone: their
-// ownership cannot be decided by pid. Sweep failures warn; the session still
-// starts.
+// Startup sweep of the per-process record directories. `replicas/<pid>/`,
+// `overlays/<pid>/`, `parked/<pid>/` and `starts/<pid>/` belong to the OMP
+// process with that pid; the main session removes its own roots at shutdown,
+// so a directory whose pid names no live process is residue of a crash or kill
+// that never reached session_shutdown. The main session sweeps those at startup
+// (index.ts). Records of live processes are kept, and entries not named by a
+// pid are left alone: their ownership cannot be decided by pid. Sweep failures
+// warn; the session still starts.
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
