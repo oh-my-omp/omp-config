@@ -12,7 +12,8 @@
  *
  * RULES. `RULES` is the closed registry: one entry per rule id, each with its
  * category; every entry has a hit and a miss fixture in CI. A line is a hit
- * when any of its simple commands — every pipeline stage, `$(…)` body, `;`/
+ * when any of its simple commands — every pipeline stage, `$(…)` or `${ …; }`
+ * body, `;`/
  * `&&`/`||` link, the command behind `env`/`timeout`/`nice`/`nohup`/`stdbuf`/
  * `time`/`command`/`exec`, and the command after a non-interactive
  * `sudo -n`/`sudo -S`/`doas -n`/`run0 --no-ask-password` — matches a rule;
