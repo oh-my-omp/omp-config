@@ -1,9 +1,10 @@
 // tool-topics — progressive instructions for tools omp-config does not own (OMP's built-in tools):
-// a short surface plus a topic index in each tool's description, with the detailed call
-// instructions served on demand as tool://<tool>/<topic>. Tools a plugin or another extension
-// registers serve their own topics as xd://<tool>/<topic> through `docTopics()` and list them in
-// their own description; this extension neither indexes nor rewrites them, including a plugin
-// tool that replaces a built-in under the same name (OMP reports a filesystem source path for it).
+// a short surface plus a topic index per tool, delivered as a delta message beside OMP's system
+// prompt, which keeps the native descriptions, with the detailed call instructions served on
+// demand as tool://<tool>/<topic>. Tools a plugin or another extension registers serve their own
+// topics as xd://<tool>/<topic> through `docTopics()` and list them in their own description;
+// this extension neither indexes nor describes them, including a plugin tool that replaces a
+// built-in under the same name (OMP reports a filesystem source path for it).
 //
 // FILES. Authored beside this module (repo-managed): `TOPIC-*.md` (header: tool, name, title,
 // when, upstream, optional inject) and `SURFACE-*.md` (header: tool, upstream). Loaded once at factory time;
@@ -24,23 +25,30 @@
 // `tool://`, no tool gets an index and injection is off, so nothing points at or injects topics
 // this extension does not serve.
 //
-// PROMPT. On every `before_agent_start` (main and sub, full and light), when the session has
-// `read`, each tool with authored docs that the prompt renders gets its description replaced by
-// its surface (or kept native when it has none) followed by its index. `{{native:<Heading>}}` in
-// a surface splices that native `# Heading` section, for content OMP generates per session
-// (task's agent list). Sessions without `read` keep the native descriptions: they could not read
-// the topics. The tool is located by name in OMP's rendered layout (prompt.ts), not by wording;
-// when a rendered tool cannot be rewritten (layout change, missing native section), its native
-// description stays and a warning is logged, and shown once in the main session.
+// PROMPT. At every prompt (`before_agent_start`, from the prompt it is handed) and after every
+// tool call (`tool_result`, from `ctx.getSystemPrompt()`), main and sub, full and light: when the
+// session has `read`, every OMP-owned tool with authored docs whose description the system prompt
+// renders gets a `<tool>` element — its surface replacing that description (`description="replaced"`)
+// or none (`"kept"`), then its index. `{{native:<Heading>}}` in a surface becomes a reference to
+// that `# Heading` section of the rendered description, for content OMP generates per session
+// (task's agent list). The elements form one delta of `_shared/context-delta.ts` with source
+// `omp-config/tool-topics`, sent only when it differs from the source's effective delta in the
+// current context; a session without `read` gets none, or a retraction of an earlier one, since
+// it could not read the topics. The system prompt is only read: prompt.ts finds each tool by name
+// in OMP's rendered layout, not by wording. A revive's `before_agent_start` is skipped, because
+// OMP discards its result.
 //
 // FAILURE. A malformed or unreadable file — including a bad `inject` entry or a duplicate id — is
-// skipped with one warning each; the rest still load. Hooks never throw into omp.
+// skipped with one warning each; the rest still load. An active tool whose description cannot be
+// found, or whose `{{native:…}}` section is missing, is left out of the delta, with a log warning
+// and one main-session notice per tool and reason. Hooks never throw into omp.
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { createDeltaStream, type Delta } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { type Catalog, loadCatalog, type ToolDocs } from "./catalog.ts";
 import { installToolTopicInjection } from "./injection.ts";
-import { composeDescription, renderIndex, rewriteTool } from "./prompt.ts";
+import { promptLines, renderDelta, renderedDescription, toolEntry } from "./prompt.ts";
 import { publishTopics } from "./registry.ts";
 
 /** Drift already reported, per tool and reason, for the life of the process. */
@@ -87,33 +95,42 @@ function fileRegistered(pi: ExtensionAPI): ReadonlySet<string> {
 	);
 }
 
-function rewritePrompt(pi: ExtensionAPI, ctx: ExtensionContext, blocks: string[], docsList: readonly ToolDocs[], indexed: boolean) {
-	let current = blocks;
-	let changed = false;
+/** The `<tool>` elements for every covered tool `systemPrompt` renders, as one delta. */
+function toolsDelta(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	systemPrompt: readonly string[],
+	docsList: readonly ToolDocs[],
+	indexed: boolean,
+): Delta {
+	const active = pi.getActiveTools();
+	if (!active.includes("read")) return { kind: "none" };
+	const prompt = promptLines(systemPrompt);
 	const foreign = fileRegistered(pi);
+	const entries: string[] = [];
 	for (const docs of docsList) {
 		if (foreign.has(docs.tool)) continue;
-		const index = indexed && docs.topics.length > 0 ? renderIndex(docs.tool, docs.topics) : undefined;
-		if (docs.surface === undefined && index === undefined) continue;
-		const result = rewriteTool(current, docs.tool, (native) => composeDescription(native, docs, index));
-		switch (result.kind) {
-			case "rewritten":
-				current = result.blocks;
-				changed = true;
+		const rendered = renderedDescription(prompt, docs.tool);
+		switch (rendered.kind) {
+			case "found": {
+				const entry = toolEntry(rendered.native, docs, indexed);
+				if (entry?.kind === "ok") entries.push(entry.text);
+				else if (entry?.kind === "drift") report(pi, ctx, docs.tool, entry.reason);
 				break;
+			}
 			case "drift":
-				report(pi, ctx, docs.tool, result.reason);
+				report(pi, ctx, docs.tool, rendered.reason);
 				break;
 			case "absent":
-				if (pi.getActiveTools().includes(docs.tool)) report(pi, ctx, docs.tool, "its description was not found in the rendered prompt");
+				if (active.includes(docs.tool)) report(pi, ctx, docs.tool, "its description was not found in the rendered prompt");
 				break;
 			default: {
-				const unreachable: never = result;
+				const unreachable: never = rendered;
 				return unreachable;
 			}
 		}
 	}
-	return changed ? current : undefined;
+	return entries.length === 0 ? { kind: "none" } : { kind: "text", body: renderDelta(entries) };
 }
 
 export default function toolTopics(pi: ExtensionAPI): void {
@@ -139,13 +156,21 @@ export default function toolTopics(pi: ExtensionAPI): void {
 		});
 	}
 
+	const deltas = createDeltaStream(pi, "tool-topics");
 	pi.on("before_agent_start", (event, ctx) => {
+		// OMP discards the result of a revive.
+		if (event.reason === "revive") return;
 		try {
-			if (!pi.getActiveTools().includes("read")) return;
-			const systemPrompt = rewritePrompt(pi, ctx, event.systemPrompt, docsList, indexed);
-			if (systemPrompt) return { systemPrompt };
+			return deltas.atPrompt(ctx, toolsDelta(pi, ctx, event.systemPrompt, docsList, indexed));
 		} catch (error) {
-			pi.logger.warn("tool-topics: before_agent_start failed", { error: errorText(error) });
+			pi.logger.warn("tool-topics: cannot deliver tool descriptions", { error: errorText(error) });
+		}
+	});
+	pi.on("tool_result", (_event, ctx) => {
+		try {
+			return deltas.afterTools(ctx, toolsDelta(pi, ctx, ctx.getSystemPrompt(), docsList, indexed));
+		} catch (error) {
+			pi.logger.warn("tool-topics: cannot deliver tool descriptions", { error: errorText(error) });
 		}
 	});
 }
