@@ -11,12 +11,6 @@ modelTags:
     name: Task completion judge
   task-split-check:
     name: Task split check
-  doc-polish.split:
-    name: Doc polish split
-  doc-polish.polish:
-    name: Doc polish polish
-  doc-polish.check:
-    name: Doc polish check
   lang-nag:
     name: Language nag judge
   tool-policy-nag:

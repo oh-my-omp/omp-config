@@ -51,16 +51,17 @@ const LEGACY_SOURCES: Partial<Record<Section, readonly string[]>> = {
 /**
  * The model roles each section's `fallbackRole` followed: the migration binds
  * each one that is still unassigned to `@<fallbackRole>`. `judge` binds none:
- * an unassigned `@<purpose>` uses OMP's judge role chain. doc-polish's check
- * stage is left out: unassigned, it already uses the split stage's chain.
+ * an unassigned `@<purpose>` uses OMP's judge role chain.
  */
 const FALLBACK_ROLES: Partial<Record<Section, readonly string[]>> = {
 	judge: [],
 	"input-polish": ["input-polish"],
 	"task-completion-judge": ["task-completion-judge"],
 	"task-split-check": ["task-split-check"],
-	"doc-polish": ["doc-polish.split", "doc-polish.polish"],
 };
+
+/** Sections of retired extensions: nothing reads their values, so a move drops them whole. */
+const RETIRED: readonly Section[] = ["doc-polish"];
 
 /** `modelRoles.<role>` set to `value`, a role reference such as `@smol`. */
 export type RoleBinding = { readonly role: string; readonly value: string };
@@ -281,6 +282,10 @@ const MACHINE_ONLY: readonly Section[] = ["omomp-lang", "omp-config-autoupdate",
 
 function translate(section: Section, value: unknown, manifest: Manifest, scope: TranslateScope): Translation {
 	const invalid = (reason: string): Translation => ({ kind: "invalid", reason });
+	if (RETIRED.includes(section)) {
+		const notes = [`${section} section dropped: the ${section} extension is retired`];
+		return { kind: "ok", settings: new Map(), files: [], splitAgents: [], bindings: [], notes };
+	}
 	if (!isMapping(value)) return invalid("not a mapping");
 	if (scope.kind === "project" && MACHINE_ONLY.includes(section))
 		return invalid("OMP never read this section from a project; set it in /settings → Plugins → omp-config, then delete it here");

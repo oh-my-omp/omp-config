@@ -46,10 +46,10 @@ Set up translation using the [omp-thinking-translator README](https://github.com
 | Appended system prompt | `agent/APPEND_SYSTEM.md` | `agent/APPEND_SYSTEM_LIGHT.md` (empty) |
 | `OMOMP_MODE` environment variable | Unset (`full`) | `light`; [`append-system-model`](prompts-and-context.md#append-system-model) fragments select on it with `mode` / `exclude.mode`, so the shipped decision-support fragment (`mode: full`) is not injected |
 | `task.eager` | `preferred` | `default` |
-| `disabledExtensions` | None | Disables these extensions: `doc-polish`, `fork-task`, `isolation-nudge`, `lang-nag`, `task-completion-judge`, `task-split-check`, `tool-policy-nag`, `turn-judge`, `user-prompt-inject`, `watchdog-agent` |
+| `disabledExtensions` | None | Disables these extensions: `fork-task`, `isolation-nudge`, `lang-nag`, `task-completion-judge`, `task-split-check`, `tool-policy-nag`, `turn-judge`, `user-prompt-inject`, `watchdog-agent` |
 | `config.yml` `extensions` path list | Loads `extensions-last/system-prompt-replace` | `config-light.yml` overrides `extensions` with a list that loads `extensions-last/system-prompt-replace` last too (its `REPLACE-SYSTEM-*.yml` rules select modes with `mode` / `exclude.mode`; the shipped rules say `mode: full`); `omp-light.ts` reads the machine's `config.yml` and passes any non-`/extensions-last/` entries (such as `~/.claude`) back via `-e` |
 | Remaining local extensions | Loaded | Loaded: `append-system-model`, `argon-long-output`, `ast-top-level`, `child-memory-warning`, `delete-guard`, `harness-restart`, `input-polish`, `model-compaction`, `omomp-lang`, `omp-config-autoupdate`, `repo-rules`, `subagent-usage`, `tool-topics`, `wt-tool` (OMP-owned tool descriptions still get their surfaces and `Topics` indexes in light mode; plugin tools keep their own descriptions) |
 | Installed plugins | All loaded | All loaded: the shipped `agent/config-light.yml` disable list names only local extensions |
-| Local tools removed in light mode | — | `polish_doc`, `fork_task` |
+| Local tools removed in light mode | — | `fork_task` |
 
 **Launcher installation**: `/update-omp` and startup auto-update install `agent/omp-light.ts` beside the resolved `omp` binary on `PATH` (executable `omp-light` on POSIX/macOS/Linux; `omp-light.ts` plus `omp-light.cmd` on Windows). `omp-light` reads `config-light.yml` and `APPEND_SYSTEM_LIGHT.md` from `PI_CODING_AGENT_DIR` (or `~/.omp/agent`), exits if either file is missing, and forwards all CLI arguments to `omp`.

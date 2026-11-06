@@ -40,7 +40,7 @@
 
 - **模板扫描**：扫描 `~/.omp/agent/extensions/user-prompt-inject/PROMPT-INJECT-*.md` 以及 `cwd` 至 git 根各层的 `<dir>/PROMPT-INJECT-*.md` 与 `<dir>/.omp/PROMPT-INJECT-*.md`。仓库自带并同步 `PROMPT-INJECT-user-goal.md`（`target: mentor:default, discuss:steady, discuss:divergent`、`name: user-goal`、`enabled: true`，正文用 `{{user_prompt[0:e]}}` 注入全部用户输入、用 `{{ask_answers}}` 注入用户在 ask 中的回答）。
 - **占位符语法**：`{{user_prompt[0]}}`（第一条）、`{{user_prompt[-1]}}`（最新一条）、`{{user_prompt[a:e]}}`（左闭右开切片，支持负数下标，每条渲染为 `<user_prompt index="N">…</user_prompt>`）。`{{ask_answers}}` 按时间顺序渲染根分支上每次已作答的 `ask` 调用，每次一个 `<ask_answer index="N">…</ask_answer>`，内含每个已作答问题一行 `问题 → 答案`（取消或被拒的 ask 不渲染，没有时渲染为空），让顾问看到用户在 ask 中作的决定，并与用户打字的请求区分开。其他 `{{user_prompt…}}` / `{{ask_answers…}}` 写法会记一条 warning 并跳过该文件。
-- **扩展消息的 `attribution: "agent"`**：`pi.sendUserMessage` 不传 `attribution` 时默认为 `"user"`。本仓库所有发送 user 角色消息的扩展（`watchdog-agent`、`turn-judge`、`tool-policy-nag`、`doc-polish`、`wt-tool`、`harness-restart`、`child-memory-warning`）均显式传 `attribution: "agent"`，避免把扩展消息当成用户输入注入给顾问。
+- **扩展消息的 `attribution: "agent"`**：`pi.sendUserMessage` 不传 `attribution` 时默认为 `"user"`。本仓库所有发送 user 角色消息的扩展（`watchdog-agent`、`turn-judge`、`tool-policy-nag`、`wt-tool`、`harness-restart`、`child-memory-warning`）均显式传 `attribution: "agent"`，避免把扩展消息当成用户输入注入给顾问。
 
 ## 派发规则与并行写入隔离
 
