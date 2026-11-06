@@ -36,16 +36,27 @@
 // commit, plugins by version) and disappears after 5 s. Up to date, a busy
 // lock and an offline fetch only log; failures warn. None of them affect the
 // session.
+//
+// PROJECT SECTIONS. OMP once read omp-config sections from a project's
+// `.omp/omomp.*` before the machine's. When a main session starts in such a
+// project, its sections move into that project (see project-migration.ts):
+// scalars into `.omp/plugin-overrides.json`, model-compaction rules into
+// `.omp/COMPACTION-rule-NN.md`. The files belong to the project's repository,
+// so a notice names them before and after the move and asks the user to commit
+// them; nothing is committed here. Sections that cannot move are named once per
+// process and stay.
 // ============================================================================
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getAgentDir, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { defineSettings, readSettings, writeSetting } from "../_shared/plugin-settings.ts";
+import { parseManifest } from "./omomp-migration.ts";
+import { type Kept, migrateProject, planProject } from "./project-migration.ts";
 
 const SCRIPT = "omp-config-update.ts";
 const REPORT_TYPE = "omp-config-update";
@@ -718,6 +729,71 @@ function showUpdates(ctx: ExtensionContext, rows: readonly UpdateRow[], restart:
 	ctx.setTimeout(() => ctx.ui.setWidget(WIDGET_KEY, undefined), WIDGET_MS);
 }
 
+const MANIFEST = join(import.meta.dir, "../_shared/package.json");
+/** Projects whose leftover or blocked sections were already named in this process. */
+const namedProjects = new Set<string>();
+
+const keptText = (kept: readonly Kept[]): string => kept.map(({ section, reason }) => `${section} (${reason})`).join("; ");
+
+/** Move the omp-config sections of `ctx.cwd`'s `.omp/omomp.*` into that project, telling the user before and after. */
+function settleProject(pi: ExtensionAPI, ctx: ExtensionContext, warn: (ctx: ExtensionContext, en: string, zh: string) => void): void {
+	const work = planProject(ctx.cwd, parseManifest(readFileSync(MANIFEST, "utf8"), MANIFEST));
+	const nameOnce = (en: string, zh: string): void => {
+		if (namedProjects.has(ctx.cwd)) return;
+		namedProjects.add(ctx.cwd);
+		warn(ctx, en, zh);
+	};
+	switch (work.kind) {
+		case "none":
+			return;
+		case "blocked":
+			nameOnce(
+				`omp-config: this project's omomp sections were not moved: ${work.reason}`,
+				`omp-config：本项目的 omomp 段未迁移：${work.reason}`,
+			);
+			return;
+		case "ready":
+			break;
+		default: {
+			const exhaustive: never = work;
+			throw new Error(`unknown project plan ${String(exhaustive)}`);
+		}
+	}
+	if (work.files.length === 0) {
+		nameOnce(
+			`omp-config: ${work.plan.file.path} keeps sections omp-config cannot move: ${keptText(work.plan.kept)}`,
+			`omp-config：${work.plan.file.path} 中有无法迁移的段：${keptText(work.plan.kept)}`,
+		);
+		return;
+	}
+	const files = work.files.join(", ");
+	pi.logger.info(`omp-config: moving project omomp sections: ${files}`);
+	if (ctx.hasUI)
+		ctx.ui.notify(
+			tr(
+				`omp-config: moving this project's omp-config sections out of ${work.plan.file.path}; changing ${files}`,
+				`omp-config：正在把本项目 ${work.plan.file.path} 中的 omp-config 段迁出；将改动 ${files}`,
+			),
+			"info",
+		);
+	const result = migrateProject(work);
+	const changed = [...result.written, ...result.deleted.map((path) => `${path} (deleted)`)];
+	pi.logger.info("omp-config: project omomp sections moved", { changed, kept: result.kept, notes: result.notes });
+	if (changed.length > 0 && ctx.hasUI)
+		ctx.ui.notify(
+			tr(
+				`omp-config: changed ${changed.join(", ")} in this project; review and commit them (omp-config does not commit)`,
+				`omp-config：已改动本项目的 ${changed.join("、")}；请检查并提交（omp-config 不会代为提交）`,
+			),
+			"info",
+		);
+	if (result.kept.length > 0)
+		nameOnce(
+			`omp-config: sections left in this project's omomp file: ${keptText(result.kept)}`,
+			`omp-config：本项目 omomp 文件中保留的段：${keptText(result.kept)}`,
+		);
+}
+
 export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 	registerAutoupdateCommand(pi);
 
@@ -728,7 +804,17 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		try {
-			if (started || ctx.agent.kind !== "main") return;
+			if (ctx.agent.kind !== "main") return;
+			try {
+				settleProject(pi, ctx, warn);
+			} catch (error) {
+				warn(
+					ctx,
+					`omp-config: moving this project's omomp sections failed: ${errorText(error)}`,
+					`omp-config：迁移本项目的 omomp 段失败：${errorText(error)}`,
+				);
+			}
+			if (started) return;
 			started = true;
 			const state = await readSwitch();
 			if (state.kind === "invalid")

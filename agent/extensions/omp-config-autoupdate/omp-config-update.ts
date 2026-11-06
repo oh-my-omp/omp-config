@@ -82,9 +82,12 @@
 // agents → `splitCheck: true` in agents/*.md, model-compaction rules →
 // `extensions/model-compaction/COMPACTION-rule-NN.md`, tool-topic-injection
 // rules → dropped only when equal to what the repo shipped, since the TOPIC
-// files carry them); `fallbackRole` keys are dropped with a note naming the
-// role to assign. A section leaves the file only after OMP lists each of its
-// values; sections of other owners (omp-unified-exec) stay, and the file is
+// files carry them); `judge.fallbackRole` is dropped and every other
+// `fallbackRole` becomes `modelRoles.<role>: "@<fallbackRole>"` in config.yml
+// for each role it backed that the machine left unassigned. The `omp plugin`
+// CLI runs from `/`, so a project's plugin-overrides.json never hides the
+// machine's values. A section leaves the file only after OMP lists each of its
+// values and config.yml holds each binding; sections of other owners (omp-unified-exec) stay, and the file is
 // deleted once nothing is left in it. Invalid, ambiguous or blocked sections
 // stay with a note; nothing here stops the apply. `--check` and
 // `--no-plugins` never ask OMP to change anything and only report the move.
@@ -245,6 +248,7 @@ import {
 	planOmompMigration,
 	pluginState as queryPluginState,
 	REPLACEMENT_SECTION,
+	type RoleBinding,
 	removeYamlSections,
 	type SectionMove,
 	setPluginSetting,
@@ -1805,8 +1809,21 @@ function describeMove(move: SectionMove): string {
 		...[...move.settings].map(([key, value]) => `${key}=${JSON.stringify(value)}`),
 		...move.files.map((file) => file.rel.slice("agent/".length)),
 		...move.splitAgents.map((name) => `splitCheck: true in ${name}`),
+		...move.bindings.map((binding) => `modelRoles.${binding.role}=${binding.value} unless assigned`),
 	];
 	return `${move.section}${parts.length === 0 ? " (nothing to keep)" : `: ${parts.join(", ")}`}`;
+}
+
+const CONFIG_REL = "agent/config.yml";
+
+/** The machine's `modelRoles` in config.yml; a missing file or block has none. */
+function machineRoles(agentDir: string): Mapping {
+	const target = targetOf(CONFIG_REL, agentDir);
+	if (!existsSync(target)) return {};
+	const roles = valueAt(parseStructured(readFileSync(target, "utf8"), "yaml"), ["modelRoles"]);
+	if (roles === undefined) return {};
+	if (!isMapping(roles)) throw new Error(`${target}: modelRoles is not a mapping`);
+	return roles;
 }
 
 /** `--check` and `--no-plugins`: say what the settings step would do. */
@@ -1914,6 +1931,27 @@ function moveSection(
 			}
 		}
 	}
+	const bindings: RoleBinding[] = [];
+	if (move.bindings.length > 0) {
+		const config = targetOf(CONFIG_REL, opts.agentDir);
+		if (
+			plainRelExcluded(CONFIG_REL, exclusions) ||
+			move.bindings.some((binding) => fieldExcluded(CONFIG_REL, ["modelRoles", binding.role], exclusions))
+		) {
+			report.skipped.push({ path: `${config}:modelRoles`, reason: EXCLUDED_REASON });
+			return { kind: "skipped" };
+		}
+		if (isAppManaged(config)) return { kind: "kept", reason: `${config} is app-managed` };
+		const roles = machineRoles(opts.agentDir);
+		for (const binding of move.bindings) {
+			const current = roles[binding.role];
+			if (current === undefined) bindings.push(binding);
+			else
+				report.notes.push(
+					`modelRoles.${binding.role} already assigned (${JSON.stringify(current)}); ${move.section}.fallbackRole ${binding.value} not applied`,
+				);
+		}
+	}
 	for (const [key, value] of move.settings) {
 		if (Object.hasOwn(stored, key)) {
 			if (stored[key] !== value)
@@ -1929,6 +1967,14 @@ function moveSection(
 		const target = targetOf(write.rel, opts.agentDir);
 		atomicWrite(target, write.content);
 		report.written.push(target);
+	}
+	if (bindings.length > 0) {
+		const target = targetOf(CONFIG_REL, opts.agentDir);
+		const config: Mapping = existsSync(target) ? parseStructured(readFileSync(target, "utf8"), "yaml") : {};
+		for (const binding of bindings) setAt(config, ["modelRoles", binding.role], binding.value);
+		atomicWrite(target, serialize(config, "yaml"));
+		if (!report.written.includes(target)) report.written.push(target);
+		for (const binding of bindings) report.notes.push(`${move.section}.fallbackRole became modelRoles.${binding.role}: ${binding.value}`);
 	}
 	report.notes.push(...move.notes);
 	return { kind: "moved" };
@@ -1993,9 +2039,19 @@ function settleSettings(
 		return;
 	}
 	stored = after.settings;
+	let roles: Mapping;
+	try {
+		roles = machineRoles(opts.agentDir);
+	} catch (error) {
+		report.notes.push(`omomp sections left in place: modelRoles could not be read back (${errorText(error)})`);
+		return;
+	}
 	const confirmed = moved.filter((move) => {
-		const missing = [...move.settings.keys()].filter((key) => !Object.hasOwn(stored ?? {}, key));
-		if (missing.length > 0) report.notes.push(`omomp section ${move.section} left in place: OMP does not list ${missing.join(", ")}`);
+		const missing = [
+			...[...move.settings.keys()].filter((key) => !Object.hasOwn(stored ?? {}, key)),
+			...move.bindings.filter((binding) => roles[binding.role] === undefined).map((binding) => `modelRoles.${binding.role}`),
+		];
+		if (missing.length > 0) report.notes.push(`omomp section ${move.section} left in place: not stored: ${missing.join(", ")}`);
 		return missing.length === 0;
 	});
 	for (const move of confirmed)

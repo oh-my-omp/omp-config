@@ -11,8 +11,9 @@
 // nothing else. Files come from the extension's own directory (machine rules)
 // plus every directory between cwd and its git root and each one's `.omp`
 // (project rules); re-discovered and re-read every main prompt. Project files
-// rule before extension files; inside each group, filename order; for each
-// model the first matching rule wins. Example:
+// rule before extension files, and a project file hides the extension file of
+// the same name; inside each group, filename order; for each model the first
+// matching rule wins. Example:
 //
 //   ---
 //   provider: ^anthropic$
@@ -67,7 +68,7 @@
 // ============================================================================
 
 import { readFileSync } from "node:fs";
-import { sep } from "node:path";
+import { basename, sep } from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { AgentRegistry, type ExtensionAPI, type ExtensionContext, type Settings } from "@oh-my-pi/pi-coding-agent";
 import { cfgCompactionModelThresholds, cfgExtendedContext } from "@oh-my-pi/pi-coding-agent/session/context-settings";
@@ -164,14 +165,15 @@ function parseRuleFile(path: string): RuleParse {
 /**
  * Rules from every `COMPACTION-*.md` in scope: project files (cwd up to the git
  * root, each with its `.omp`) before the extension's own directory, each group
- * in discovery order. An invalid file is skipped with a problem; the others apply.
+ * in discovery order; an extension file named like a project file is hidden by
+ * it. An invalid file is skipped with a problem; the others apply.
  */
 function loadRules(cwd: string): LoadedRules {
 	const discovered = discoverSpecFiles(FILE_PATTERN, import.meta.dir, cwd);
-	const files = [
-		...discovered.filter((path) => !path.startsWith(import.meta.dir + sep)),
-		...discovered.filter((path) => path.startsWith(import.meta.dir + sep)),
-	];
+	const ownDir = import.meta.dir + sep;
+	const project = discovered.filter((path) => !path.startsWith(ownDir));
+	const projectNames = new Set(project.map((path) => basename(path)));
+	const files = [...project, ...discovered.filter((path) => path.startsWith(ownDir) && !projectNames.has(basename(path)))];
 	const rules: Rule[] = [];
 	const problems: string[] = [];
 	for (const file of files) {

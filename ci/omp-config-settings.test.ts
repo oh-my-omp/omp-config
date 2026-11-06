@@ -10,7 +10,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { isMapping } from "../agent/extensions/omp-config-autoupdate/merge.ts";
+import { parseManifest } from "../agent/extensions/omp-config-autoupdate/omomp-migration.ts";
 import { type ApplyReport, applySnapshot } from "../agent/extensions/omp-config-autoupdate/omp-config-update.ts";
+import { migrateProject, planProject } from "../agent/extensions/omp-config-autoupdate/project-migration.ts";
 
 const UPDATER = join(import.meta.dir, "../agent/extensions/omp-config-autoupdate/omp-config-update.ts");
 const MANIFEST = readFileSync(join(import.meta.dir, "../agent/extensions/_shared/package.json"), "utf8");
@@ -185,10 +187,15 @@ const HOST_OMOMP = [
 const AGENT = "---\nname: task:free1\ndescription: worker\ncompletionJudge: true\n---\nBody.\n";
 
 describe("settings move", () => {
-	test("omp-config sections move into plugin settings and md files; other owners' sections stay; a rerun changes nothing", () => {
+	test("omp-config sections move into plugin settings, md files and unassigned roles; other owners' sections stay; a rerun changes nothing", () => {
 		const src = repo({ "agent/PERSONALITY.md": "repo\n" });
 		const agentDir = temp("omp-settings-agent-");
-		writeTree(agentDir, { "omomp.yml": HOST_OMOMP, "agents/free1.md": AGENT, "PERSONALITY.md": "mine\n" });
+		writeTree(agentDir, {
+			"omomp.yml": HOST_OMOMP,
+			"agents/free1.md": AGENT,
+			"PERSONALITY.md": "mine\n",
+			"config.yml": "modelRoles:\n  default: x/main\n  task-split-check: x/pinned:medium\n",
+		});
 		const omp = fakeOmp();
 		const report = applyCli(src, agentDir, omp.env);
 		expect(report.errors).toEqual([]);
@@ -211,7 +218,14 @@ describe("settings move", () => {
 		expect(readFileSync(join(agentDir, "agents/free1.md"), "utf8")).toBe(
 			"---\nname: task:free1\ndescription: worker\ncompletionJudge: true\nsplitCheck: true\n---\nBody.\n",
 		);
-		expect(report.notes).toContain("input-polish.fallbackRole (smol) dropped: assign @input-polish in /model, or it uses the default role");
+		// fallbackRole becomes a reference to that role, only where the machine assigned none.
+		expect(Bun.YAML.parse(readFileSync(join(agentDir, "config.yml"), "utf8"))).toEqual({
+			modelRoles: { default: "x/main", "task-split-check": "x/pinned:medium", "input-polish": "@smol" },
+		});
+		expect(report.notes).toContain("input-polish.fallbackRole became modelRoles.input-polish: @smol");
+		expect(report.notes).toContain(
+			'modelRoles.task-split-check already assigned ("x/pinned:medium"); task-split-check.fallbackRole @smol not applied',
+		);
 		expect(report.notes).toContain("judge.fallbackRole (tiny) dropped: an unassigned @<purpose> role now uses OMP's judge role chain");
 		expect(report.notes).toContain(
 			"task-split-check.agents names task:gone, which no agents/*.md defines; add splitCheck: true to its definition",
@@ -336,5 +350,66 @@ describe("settings move", () => {
 		expect(offline.notes.some((note) => note.startsWith("omomp sections left in place without plugin steps"))).toBe(true);
 		expect(readFileSync(join(agentDir, "omomp.yml"), "utf8")).toBe(HOST_OMOMP);
 		expect(readFileSync(join(agentDir, "agents/free1.md"), "utf8")).toBe(AGENT);
+	});
+});
+
+// A project's `.omp/omomp.*`: moved into the project itself when a main session starts there.
+describe("project sections move", () => {
+	const manifest = parseManifest(MANIFEST, "package.json");
+	const PROJECT_OMOMP = [
+		"# Project omomp sections; each replaces the machine's section of the same name.",
+		"model-compaction:",
+		"  rules:",
+		'    - model: "argon"',
+		"      thresholdTokens: 350000",
+		'    - model: ".*"',
+		"      thresholdTokens: 450000",
+		"lang-nag:",
+		"  instruction: project voice",
+		"input-polish:",
+		"  fallbackRole: smol",
+		"omomp-lang:",
+		"  language: en",
+		"",
+	].join("\n");
+
+	test("scalars become project overrides and rules project COMPACTION files; sections with no project-level place stay", () => {
+		const project = temp("omp-project-");
+		writeTree(project, {
+			".omp/omomp.yml": PROJECT_OMOMP,
+			".omp/plugin-overrides.json": JSON.stringify({ disabled: ["other"], settings: { "omp-config": { "lang-nag.language": "English" } } }),
+		});
+		const work = planProject(project, manifest);
+		if (work.kind !== "ready") throw new Error(`expected a ready plan, got ${work.kind}`);
+		expect(work.files.toSorted()).toEqual(
+			[".omp/COMPACTION-rule-01.md", ".omp/COMPACTION-rule-02.md", ".omp/omomp.yml", ".omp/plugin-overrides.json"].map((rel) =>
+				join(project, rel),
+			),
+		);
+		const result = migrateProject(work);
+		expect(result.kept.map((entry) => entry.section).toSorted()).toEqual(["input-polish", "omomp-lang"]);
+		expect(JSON.parse(readFileSync(join(project, ".omp/plugin-overrides.json"), "utf8"))).toEqual({
+			disabled: ["other"],
+			settings: { "omp-config": { "lang-nag.language": "English", "lang-nag.instruction": "project voice" } },
+		});
+		expect(readFileSync(join(project, ".omp/COMPACTION-rule-01.md"), "utf8")).toBe("---\nmodel: argon\nthresholdTokens: 350000\n---\n");
+		expect(readFileSync(join(project, ".omp/COMPACTION-rule-02.md"), "utf8")).toBe("---\nmodel: .*\nthresholdTokens: 450000\n---\n");
+		expect(Bun.YAML.parse(readFileSync(join(project, ".omp/omomp.yml"), "utf8"))).toEqual({
+			"input-polish": { fallbackRole: "smol" },
+			"omomp-lang": { language: "en" },
+		});
+		const again = planProject(project, manifest);
+		expect(again.kind === "ready" && again.files).toEqual([]);
+	});
+
+	test("a file left with nothing is deleted; a project without omomp sections has nothing to move", () => {
+		const project = temp("omp-project-");
+		writeTree(project, { ".omp/omomp.yml": PROJECT_OMOMP.split("lang-nag:")[0]! });
+		const work = planProject(project, manifest);
+		if (work.kind !== "ready") throw new Error(`expected a ready plan, got ${work.kind}`);
+		const result = migrateProject(work);
+		expect(result.deleted).toEqual([join(project, ".omp/omomp.yml")]);
+		expect(existsSync(join(project, ".omp/plugin-overrides.json"))).toBe(false);
+		expect(planProject(project, manifest).kind).toBe("none");
 	});
 });

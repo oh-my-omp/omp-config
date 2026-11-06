@@ -1,9 +1,11 @@
 // One-time move of the omp-config sections of a machine's omomp file into the
 // settings of the local OMP plugin `omp-config` (the manifest
-// `extensions/_shared/package.json`) and, for list data, into the md files
-// that now describe it. Planned read-only at preflight; carried out by the
-// updater after its file operations, once the plugin is registered. Talks to
-// OMP only through the `omp plugin` CLI (this script runs outside OMP).
+// `extensions/_shared/package.json`), for list data into the md files that now
+// describe it, and for `fallbackRole` into `modelRoles` role references.
+// Planned read-only at preflight; carried out by the updater after its file
+// operations, once the plugin is registered. Talks to OMP only through the
+// `omp plugin` CLI (this script runs outside OMP). `planProjectMigration`
+// plans the same move for a project's `.omp/omomp.*` (project-migration.ts).
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -46,14 +48,22 @@ const LEGACY_SOURCES: Partial<Record<Section, readonly string[]>> = {
 	"omp-config-autoupdate": ["extensions/omp-config-autoupdate/omp-config-autoupdate.json", "omp-config-autoupdate.json"],
 };
 
-/** Keys that chose a model; the `@<extension>` role replaces them. */
-const MODEL_KEYS: Partial<Record<Section, string>> = {
-	judge: "fallbackRole",
-	"input-polish": "fallbackRole",
-	"task-completion-judge": "fallbackRole",
-	"task-split-check": "fallbackRole",
-	"doc-polish": "fallbackRole",
+/**
+ * The model roles each section's `fallbackRole` followed: the migration binds
+ * each one that is still unassigned to `@<fallbackRole>`. `judge` binds none:
+ * an unassigned `@<purpose>` uses OMP's judge role chain. doc-polish's check
+ * stage is left out: unassigned, it already uses the split stage's chain.
+ */
+const FALLBACK_ROLES: Partial<Record<Section, readonly string[]>> = {
+	judge: [],
+	"input-polish": ["input-polish"],
+	"task-completion-judge": ["task-completion-judge"],
+	"task-split-check": ["task-split-check"],
+	"doc-polish": ["doc-polish.split", "doc-polish.polish"],
 };
+
+/** `modelRoles.<role>` set to `value`, a role reference such as `@smol`. */
+export type RoleBinding = { readonly role: string; readonly value: string };
 
 export type Scalar = string | number | boolean;
 
@@ -144,7 +154,7 @@ function checkSetting(
 /** A file this migration writes: agent-dir relative `rel` (`agent/…`) and its content. */
 export type PlannedFile = { readonly rel: string; readonly content: string };
 
-/** One section that can move: its settings (values that differ from the manifest default), files and agent flags. */
+/** One section that can move: its settings (values that differ from the manifest default), files, agent flags and role bindings. */
 export type SectionMove = {
 	readonly section: string;
 	/** Where the values came from: the omomp file, or an old standalone JSON (`agent/…`) deleted after the move. */
@@ -153,6 +163,8 @@ export type SectionMove = {
 	readonly files: readonly PlannedFile[];
 	/** Agent names whose definitions get `splitCheck: true`. */
 	readonly splitAgents: readonly string[];
+	/** `modelRoles` entries written while the role is unassigned. */
+	readonly bindings: readonly RoleBinding[];
 	readonly notes: readonly string[];
 };
 
@@ -191,6 +203,7 @@ type Translation =
 			readonly settings: ReadonlyMap<string, Scalar>;
 			readonly files: readonly PlannedFile[];
 			readonly splitAgents: readonly string[];
+			readonly bindings: readonly RoleBinding[];
 			readonly notes: readonly string[];
 	  }
 	| { readonly kind: "invalid"; readonly reason: string };
@@ -221,7 +234,8 @@ function policyLanes(value: Mapping): Mapping | string {
 	};
 }
 
-function compactionFile(rule: unknown, index: number): PlannedFile | string {
+/** Rule `index` as a COMPACTION file under `dir` (`agent/extensions/model-compaction` or a project's `.omp`). */
+function compactionFile(rule: unknown, index: number, dir: string): PlannedFile | string {
 	if (!isMapping(rule) || Object.keys(rule).some((key) => !["provider", "model", "thresholdTokens"].includes(key)))
 		return `rule ${index + 1} has keys other than provider, model, thresholdTokens`;
 	const lines: string[] = [];
@@ -246,52 +260,81 @@ function compactionFile(rule: unknown, index: number): PlannedFile | string {
 		return `rule ${index + 1}: thresholdTokens must be a positive integer`;
 	lines.push(`thresholdTokens: ${tokens}`);
 	return {
-		rel: `agent/extensions/model-compaction/COMPACTION-rule-${String(index + 1).padStart(2, "0")}.md`,
+		rel: `${dir}/COMPACTION-rule-${String(index + 1).padStart(2, "0")}.md`,
 		content: `---\n${lines.join("\n")}\n---\n`,
 	};
 }
 
-function translate(section: Section, value: unknown, input: PlanInput): Translation {
+/**
+ * Where a section's values go. `machine`: the agent dir, plugin settings that
+ * differ from the manifest default, role bindings in `modelRoles`. `project`:
+ * `<project>/.omp`, every value as a project override (it replaced the
+ * machine's section, defaults included); data with no project-level place
+ * keeps the section.
+ */
+export type TranslateScope =
+	| { readonly kind: "machine"; readonly shipped: (section: string, value: unknown) => boolean }
+	| { readonly kind: "project" };
+
+/** Sections OMP only ever read from the agent dir; a project copy never applied. */
+const MACHINE_ONLY: readonly Section[] = ["omomp-lang", "omp-config-autoupdate", "subagent-usage"];
+
+function translate(section: Section, value: unknown, manifest: Manifest, scope: TranslateScope): Translation {
 	const invalid = (reason: string): Translation => ({ kind: "invalid", reason });
 	if (!isMapping(value)) return invalid("not a mapping");
+	if (scope.kind === "project" && MACHINE_ONLY.includes(section))
+		return invalid("OMP never read this section from a project; set it in /settings → Plugins → omp-config, then delete it here");
 	const notes: string[] = [];
+	const bindings: RoleBinding[] = [];
 	let rest: Mapping = { ...value };
-	const modelKey = MODEL_KEYS[section];
-	if (modelKey !== undefined && Object.hasOwn(rest, modelKey)) {
-		const { [modelKey]: role, ...others } = rest;
+	const roles = FALLBACK_ROLES[section];
+	if (roles !== undefined && Object.hasOwn(rest, "fallbackRole")) {
+		const { fallbackRole, ...others } = rest;
 		rest = others;
-		notes.push(
-			section === "judge"
-				? `judge.fallbackRole (${String(role)}) dropped: an unassigned @<purpose> role now uses OMP's judge role chain`
-				: `${section}.${modelKey} (${String(role)}) dropped: assign @${section} in /model, or it uses the default role`,
-		);
+		if (typeof fallbackRole !== "string" || fallbackRole.trim().replace(/^@/, "") === "")
+			return invalid("fallbackRole must be a role name");
+		const target = `@${fallbackRole.trim().replace(/^@/, "")}`;
+		if (roles.length === 0)
+			notes.push(`${section}.fallbackRole (${fallbackRole.trim()}) dropped: an unassigned @<purpose> role now uses OMP's judge role chain`);
+		else if (scope.kind === "project")
+			return invalid(
+				`fallbackRole has no project-level place: assign ${roles.map((role) => `@${role}`).join(", ")} in /model, then delete it here`,
+			);
+		bindings.push(...roles.map((role) => ({ role, value: target })));
 	}
 	const files: PlannedFile[] = [];
 	const splitAgents: string[] = [];
+	const lists = (): Translation => ({ kind: "ok", settings: new Map(), files, splitAgents, bindings, notes });
 	switch (section) {
 		case "tool-topic-injection":
-			if (!input.shipped(section, value))
+			if (scope.kind === "project")
+				return invalid(
+					"injection rules have no project-level place: move them into a TOPIC-*.md inject list by hand, then delete the section",
+				);
+			if (!scope.shipped(section, value))
 				return invalid(
 					"customized rules: move them into the inject list of the matching extensions/tool-topics/TOPIC-*.md by hand, then delete the section",
 				);
-			return { kind: "ok", settings: new Map(), files, splitAgents, notes };
+			return lists();
 		case "model-compaction": {
 			const { rules, ...unknown } = rest;
 			if (Object.keys(unknown).length > 0 || !Array.isArray(rules)) return invalid("expected only a rules list");
 			for (const [index, rule] of rules.entries()) {
-				const file = compactionFile(rule, index);
+				const file = compactionFile(rule, index, scope.kind === "project" ? ".omp" : "agent/extensions/model-compaction");
 				if (typeof file === "string") return invalid(file);
 				files.push(file);
 			}
-			return { kind: "ok", settings: new Map(), files, splitAgents, notes };
+			return lists();
 		}
 		case "task-split-check": {
 			const { agents, ...unknown } = rest;
 			if (Object.keys(unknown).length > 0) return invalid(`unknown keys ${Object.keys(unknown).join(", ")}`);
 			if (agents !== undefined && (!Array.isArray(agents) || !agents.every((name) => typeof name === "string" && name.trim() !== "")))
 				return invalid("agents must be a list of agent names");
+			if (agents !== undefined && scope.kind === "project")
+				return invalid("agents have no project-level place: add splitCheck: true to their agent definitions, then delete it here");
 			if (agents !== undefined) splitAgents.push(...agents.map((name: string) => name.trim()));
-			return { kind: "ok", settings: new Map(), files, splitAgents, notes };
+			return lists();
 		}
 		case "omp-config-autoupdate": {
 			const { exclude, ...others } = rest;
@@ -319,11 +362,11 @@ function translate(section: Section, value: unknown, input: PlanInput): Translat
 	if (problem !== undefined) return invalid(problem);
 	const settings = new Map<string, Scalar>();
 	for (const [key, leaf] of leaves) {
-		const checked = checkSetting(input.manifest, key, leaf);
+		const checked = checkSetting(manifest, key, leaf);
 		if (checked.kind === "bad") return invalid(checked.reason);
-		if (checked.value !== input.manifest.get(key)?.default) settings.set(key, checked.value);
+		if (scope.kind === "project" || checked.value !== manifest.get(key)?.default) settings.set(key, checked.value);
 	}
-	return { kind: "ok", settings, files, splitAgents, notes };
+	return { kind: "ok", settings, files, splitAgents, bindings, notes };
 }
 
 function parseOmomp(path: string, text: string): Mapping {
@@ -409,7 +452,7 @@ export function planOmompMigration(input: PlanInput): OmompPlan {
 			from = { kind: "legacy", rel: `agent/${rel}` };
 		}
 		if (section === "omp-config-autoupdate") pendingExclude = excludeOf(value, from.kind === "omomp" ? (file?.path ?? "") : from.rel);
-		const translation = translate(section, value, input);
+		const translation = translate(section, value, input.manifest, { kind: "machine", shipped: input.shipped });
 		switch (translation.kind) {
 			case "invalid":
 				kept.push({ section, reason: translation.reason });
@@ -425,6 +468,63 @@ export function planOmompMigration(input: PlanInput): OmompPlan {
 	}
 	if (file === undefined && moves.length === 0 && kept.length === 0) return { kind: "none" };
 	return { kind: "ready", file, moves, kept, pendingExclude };
+}
+
+export type ProjectPlan =
+	| { readonly kind: "none" }
+	| { readonly kind: "blocked"; readonly reason: string }
+	| {
+			readonly kind: "ready";
+			readonly file: OmompFile;
+			readonly moves: readonly SectionMove[];
+			readonly kept: readonly { readonly section: string; readonly reason: string }[];
+	  };
+
+/**
+ * A project's `<projectDir>/.omp/omomp.*`: what moves into its own
+ * `.omp/plugin-overrides.json` and `.omp/COMPACTION-*.md`; never writes. OMP
+ * skipped a project location holding several omomp files, so that is left
+ * alone; a TOML file cannot be rewritten.
+ */
+export function planProjectMigration(projectDir: string, manifest: Manifest): ProjectPlan {
+	const dir = join(projectDir, ".omp");
+	const holders: OmompFile[] = [];
+	for (const name of OMOMP_FILES) {
+		const path = join(dir, name);
+		if (!existsSync(path)) continue;
+		const text = readFileSync(path, "utf8");
+		let root: Mapping;
+		try {
+			root = parseOmomp(path, text);
+		} catch (error) {
+			return { kind: "blocked", reason: `${path}: ${error instanceof Error ? error.message : String(error)}` };
+		}
+		if (holdsOwnedSection(root)) holders.push({ path, text, root, format: path.endsWith(".json") ? "json" : "yaml" });
+	}
+	if (holders.length > 1)
+		return { kind: "blocked", reason: `several omomp files in ${dir}: ${holders.map((file) => file.path).join(", ")}` };
+	const [file] = holders;
+	if (file === undefined) return { kind: "none" };
+	if (file.path.endsWith(".toml")) return { kind: "blocked", reason: `${file.path}: a TOML file cannot be rewritten here` };
+	const moves: SectionMove[] = [];
+	const kept: { section: string; reason: string }[] = [];
+	for (const section of SECTIONS) {
+		if (!Object.hasOwn(file.root, section)) continue;
+		const translation = translate(section, file.root[section], manifest, { kind: "project" });
+		switch (translation.kind) {
+			case "invalid":
+				kept.push({ section, reason: translation.reason });
+				break;
+			case "ok":
+				moves.push({ section, from: { kind: "omomp" }, ...translation });
+				break;
+			default: {
+				const unreachable: never = translation;
+				return unreachable;
+			}
+		}
+	}
+	return { kind: "ready", file, moves, kept };
 }
 
 // --- rewriting --------------------------------------------------------------
