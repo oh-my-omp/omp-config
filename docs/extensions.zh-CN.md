@@ -26,15 +26,14 @@
 | 16 | `doc-polish` | [doc-polish](#doc-polish) | 主 + 子 | 否 | `omomp.yml#doc-polish`（本机） | 选择回退角色、并发数和 `@doc-polish.*` 模型绑定 |
 | 17 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
 | 18 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
-| 19 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话，以及每个子代理 worker 线程的第一个会话；按线程的表 | 是 | 提供商报告的模型元数据 | 有凭据时从 Antigravity 刷新输出容量；无本地策略文件 |
-| 20 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
-| 21 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | agent 目录的 `omomp.yml#omomp-lang` 或环境变量 | 在本机段选择界面语言，或用 `OMOMP_LANG` 覆盖 |
-| 22 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明与专题，重启 OMP 后加载 |
-| 23 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection` | 在本机或项目中选择工具参数匹配及专题；空规则列表关闭注入 |
-| 24 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无配置文件或开关 | 选择字面删除路径；默认可恢复，永久删除需要明确确认 |
-| 25 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
-| 26 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
-| 27 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
++| 19 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
++| 20 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | agent 目录的 `omomp.yml#omomp-lang` 或环境变量 | 在本机段选择界面语言，或用 `OMOMP_LANG` 覆盖 |
++| 21 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明与专题，重启 OMP 后加载 |
++| 22 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | 主 + 子 | 是 | `omomp.yml#tool-topic-injection` | 在本机或项目中选择工具参数匹配及专题；空规则列表关闭注入 |
++| 23 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无配置文件或开关 | 选择字面删除路径；默认可恢复，永久删除需要明确确认 |
++| 24 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
++| 25 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
++| 26 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
 
 ---
 
@@ -282,14 +281,6 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 源码：`agent/extensions/harness-restart/`。仅在主会话交互式 TUI 启用（轻量模式同样启用）。
 
 使用与 `wt-tool` 相同的空闲队列机制与武装条件触发 `InteractiveMode.restart()`。在调用 `restart()` 前向当前分支写入自定义条目 `mouriya.omp.harness-restart.request`（记录 `reason` 与时间戳）；新进程恢复会话时，在 `session_start` 读到该条目并发送 `"Harness restart completed（<时间>）。Reason was: <原因>。Continue what you were doing."`（`attribution: "agent"`）。
-
-### antigravity-wire-profiles
-
-源码：`agent/extensions/antigravity-wire-profiles/`。
-
-OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（`@oh-my-pi/pi-catalog/wire/gemini-headers`）中已有的 wire id 替换调用方的 `maxTokens`；表抓包之后新增的 id（如 `gemini-4-argon-*`）不在其中，导致 compaction 的 512 token 摘要请求原样发出，额度被 thinking 耗尽并报错 `thought-only response without final output`。
-
-在根会话 `session_start`（最多等待 20 秒，`before_agent_start` 等待同一次加载）时，扩展用当前会话凭据和本机已存的全部 Antigravity 账号调用 `POST <baseUrl>/v1internal:fetchAvailableModels`，合并非 internal、非 disabled 且 `maxOutputTokens` 为正整数的条目，原地更新 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（只新增或覆盖，不删除条目）。这张表按线程存在：子代理 worker 线程（`task.workerThreads`）加载自己的一份 provider 模块，所以 OMP 放进每个 worker 的第一个会话会为该线程执行同样的加载。若所有账号均获取失败，则保留原表内容，记日志并弹一次主 UI 警告，下次根会话（或 worker 中的会话）启动时重试。
 
 ### argon-long-output
 
