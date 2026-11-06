@@ -179,7 +179,8 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 	// Frames stream to disk as they arrive: a long session's deltas do not fit in memory.
 	const sink = Bun.file(eventsPath).writer();
 	const started = new Map<string, unknown>();
-	const calls: Call[] = [];
+	// Keyed by toolCallId in dispatch (start-frame) order; null until the call ends. Concurrent calls can end out of order.
+	const dispatched = new Map<string, Call | null>();
 	const replies: Mapping[] = [];
 	let ready = false;
 	let promptStatus: string | null = null;
@@ -203,8 +204,9 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 			send({ id: "prompt", type: "prompt", message: prompt });
 		} else if (frame.type === "tool_execution_start" && typeof frame.toolCallId === "string") {
 			started.set(frame.toolCallId, frame.args);
+			dispatched.set(frame.toolCallId, null);
 		} else if (frame.type === "tool_execution_end" && typeof frame.toolCallId === "string" && typeof frame.toolName === "string") {
-			calls.push({
+			dispatched.set(frame.toolCallId, {
 				tool: frame.toolName,
 				input: started.get(frame.toolCallId) ?? null,
 				isError: frame.isError === true,
@@ -238,7 +240,16 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 	const exitCode = await proc.exited;
 	clearTimeout(timer);
 	await sink.end();
-	return { ready, promptStatus, sessionFile, calls, replies, timedOut, exitCode, stderr: (await stderr).trim() };
+	return {
+		ready,
+		promptStatus,
+		sessionFile,
+		calls: [...dispatched.values()].filter((call): call is Call => call !== null),
+		replies,
+		timedOut,
+		exitCode,
+		stderr: (await stderr).trim(),
+	};
 }
 
 function classify(model: string, session: Session, failures: readonly string[]): Outcome {
