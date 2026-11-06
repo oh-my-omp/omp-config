@@ -51,11 +51,7 @@
 // clears the human's draft. The outcome goes back as a custom message
 // (`attribution: "agent"`) that starts a turn.
 //
-// The extension API has no handle on InteractiveMode. `ctx.ui.setEditorComponent`
-// in the TUI forwards to `InteractiveMode#setEditorComponent` with the live
-// instance as `this`, so the prototype method is swapped for a recorder for
-// that one synchronous call and restored before anything else runs; the real
-// editor swap never happens.
+// The live InteractiveMode is read through `captureInteractiveMode` in `_shared/interactive-mode.ts`.
 //
 // Relies on omp internals (InteractiveMode's prototype and public members,
 // the extension UI context forwarding, `executeBuiltinSlashCommand`, the
@@ -74,7 +70,8 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { applyActiveTools } from "../_shared/active-tools.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { captureInteractiveMode, describeShown, runSlashCommand } from "./interactive.ts";
+import { captureInteractiveMode, type InteractiveModeFailure } from "../_shared/interactive-mode.ts";
+import { describeShown, runSlashCommand } from "./interactive.ts";
 import { formatCheck, git, inspect, parsePorcelain, realpathOr, recheck, type WorktreeCheck } from "./worktree.ts";
 
 const CREATE_TOOL = "wt";
@@ -132,6 +129,19 @@ type ToolResult = { content: { type: "text"; text: string }[]; isError?: true };
 
 function unexpected(value: never): never {
 	throw new Error(`Unexpected wt state: ${String(value)}`);
+}
+
+function captureFailureText(failure: InteractiveModeFailure): string {
+	switch (failure.kind) {
+		case "missing-setEditorComponent":
+			return "InteractiveMode" + ".prototype.setEditorComponent is missing (omp internals changed).";
+		case "unreachable":
+			return "the interactive TUI instance is not reachable from this session.";
+		case "other-session":
+			return "the interactive TUI is attached to a different session.";
+		default:
+			return unexpected(failure);
+	}
 }
 
 function reset(runtime: Runtime, ctx: ExtensionContext): void {
@@ -216,9 +226,10 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 	try {
 		if (ctx.sessionManager.getSessionId() !== request.sessionId) return;
 		const capture = captureInteractiveMode(ctx);
-		if (capture.kind === "error") {
-			runtime.pi.logger.warn("wt: queued request not run", { kind: request.kind, reason: capture.reason });
-			report(runtime.pi, `The queued ${requestLabel(request)} did not run: ${capture.reason}`, { triggerTurn: true });
+		if (capture.kind !== "ok") {
+			const reason = captureFailureText(capture);
+			runtime.pi.logger.warn("wt: queued request not run", { kind: request.kind, reason });
+			report(runtime.pi, `The queued ${requestLabel(request)} did not run: ${reason}`, { triggerTurn: true });
 			return;
 		}
 		let outcome: string;
@@ -274,7 +285,7 @@ function queueBlocker(runtime: Runtime, ctx: ExtensionContext, tool: string): st
 			return unexpected(runtime.state);
 	}
 	const capture = captureInteractiveMode(ctx);
-	if (capture.kind === "error") return `${tool}: ${capture.reason}`;
+	if (capture.kind !== "ok") return `${tool}: ${captureFailureText(capture)}`;
 	if (capture.mode.collabGuest) return `${tool}: session moves are host-only during a collab session.`;
 	return undefined;
 }

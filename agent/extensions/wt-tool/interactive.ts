@@ -1,40 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
-import { type ExtensionContext, InteractiveMode } from "@oh-my-pi/pi-coding-agent";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { errorText } from "../_shared/errors.ts";
-
-type Capture = { readonly kind: "ok"; readonly mode: InteractiveModeContext } | { readonly kind: "error"; readonly reason: string };
-
-/** Live InteractiveMode behind ctx.ui, read through one recorded setEditorComponent call. */
-export function captureInteractiveMode(ctx: ExtensionContext): Capture {
-	const proto = InteractiveMode.prototype;
-	const original = Object.getOwnPropertyDescriptor(proto, "setEditorComponent");
-	if (typeof original?.value !== "function") {
-		return { kind: "error", reason: "InteractiveMode.prototype.setEditorComponent is missing (omp internals changed)." };
-	}
-	let captured: unknown;
-	Object.defineProperty(proto, "setEditorComponent", {
-		...original,
-		value: function (this: unknown): void {
-			captured = this;
-		},
-	});
-	try {
-		ctx.ui.setEditorComponent(undefined);
-	} finally {
-		Object.defineProperty(proto, "setEditorComponent", original);
-	}
-	if (!(captured instanceof InteractiveMode)) {
-		return { kind: "error", reason: "the interactive TUI instance is not reachable from this session." };
-	}
-	// The host's private InteractiveMode members hide its runtime structural context; instanceof proves the live instance.
-	const mode = captured as unknown as InteractiveModeContext;
-	if (mode.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) {
-		return { kind: "error", reason: "the interactive TUI is attached to a different session." };
-	}
-	return { kind: "ok", mode };
-}
 
 /** Shadow a member only for one operation, restoring the original own-property descriptor. */
 function shadow<T extends object, K extends keyof T>(target: T, key: K, value: T[K]): () => void {
