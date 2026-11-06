@@ -43,7 +43,17 @@ Then the container installs the latest `@oh-my-pi/pi-coding-agent`, runs the `/r
 
 ### Credentials
 
-The credential copy is used as it is: nothing is rewritten, refreshed or filtered, and model bindings stay as configured on the host. A model whose calls fail in the sandbox is recorded as untested; the sandbox does not investigate why. A provider that rotates refresh tokens may invalidate the host's copy when a session in the sandbox refreshes it; the sandbox does not guard against this.
+The credential copy is used as it is: `apiKey` and every other field of `models.yml` stay as they are on the host, and model bindings stay as configured. The one change to that copy is the provider `baseUrl` values, which point at the recorder below. A model whose calls fail in the sandbox is recorded as untested; the sandbox does not investigate why. A provider that rotates refresh tokens may invalidate the host's copy when a session in the sandbox refreshes it; the sandbox does not guard against this.
+
+### Model request recorder
+
+Every model request of every omp session in the container passes through a recorder that runs inside the container (`sandbox/recorder.ts`, started by `sandbox.ts` after the copy of `~/.omp/agent`). `setup` gives each provider that declares a `baseUrl` a loopback URL (`http://127.0.0.1:9400`, `9401`, …) in the container's `models.yml`, and writes the mapping to `/sandbox/recorder-targets.json`. It re-parses the rewritten file and fails the build unless every provider equals its original in all fields except `baseUrl`. Providers without a `baseUrl` (such as one that only sets `modelOverrides`) are not changed.
+
+`serve` listens on each port. For each request it first appends one line to the evidence file, then forwards the request to the recorded upstream with its method, path, query, headers and body unchanged, and streams the response back. The evidence line is `{"seq", "provider", "tools", "body"}`: `tools` lists each `tools[]` entry's `name`, or its `function.name`, and is `[]` when the body has no `tools`. Request headers are never recorded, since they carry credentials. If the line cannot be written the request gets a 500 and is not forwarded, so no request reaches the provider unrecorded.
+
+The driver names the current scenario's `<name>.requests.jsonl` to the recorder for the length of a session through `/sandbox/.requests-sink`, and clears the pointer afterwards; requests made outside a driver session (`hold`, interactive `omp`) go to `/evidence/interactive.requests.jsonl` in the container, which `matrix` does not copy. The driver refuses to start a session when `/sandbox/recorder.ready` is missing.
+
+Helper sessions created inside an extension (for example `runHelperPrompt`, which does not go through RPC) use the same providers and so appear in the same file. The `seq` numbers count every request the recorder received, so a gap means a request was not recorded.
 
 ## Scenarios and the RPC driver
 
@@ -70,7 +80,7 @@ Each run of a scenario for a model ends with a result:
 | `untested` | omp does not know the model (`Model "…" not found`), or every assistant reply failed at the provider and no tool ran |
 | `harness-error` | `init` failed, omp exited before its ready frame for another reason, the prompt was rejected, the session hit the 600 s limit, omp exited nonzero, or omp reported no session file |
 
-Evidence lands in `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`. The normal report is `<name>.driver.json` (result, every tool call with its input, `isError` and the first 400 characters of its result, the final-assertion output, and the first 1,000 characters of the last reply). `<name>.events.jsonl` (every RPC frame) is created when the RPC session starts; `<name>.session.jsonl` is copied only if omp reports a session file that exists. If `init` fails, only the driver report is written. The host copies whichever of these evidence files exist for each model; `agent.db` and `models.yml` never leave the container. Events and session files contain whatever the model saw, so a scenario must not read credential files.
+Evidence lands in `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`. The normal report is `<name>.driver.json` (result, every tool call with its input, `isError` and the first 400 characters of its result, the final-assertion output, and the first 1,000 characters of the last reply). `<name>.events.jsonl` (every RPC frame) is created when the RPC session starts; `<name>.session.jsonl` is copied only if omp reports a session file that exists. `<name>.requests.jsonl` holds one line per model request of the session, helper sessions included (see the recorder above); it exists, empty if no request was made, whenever the driver starts a session. If `init` fails, only the driver report is written. The host copies whichever of these evidence files exist for each model; `agent.db` and `models.yml` never leave the container. Events, session files and request bodies contain whatever the model saw, so a scenario must not read credential files.
 
 ## Prompt-cache report
 
@@ -96,4 +106,4 @@ A SIGKILLed holder leaves the row at 进行中 and its resources in place; `down
 
 - The container isolates the host's files, not remote services: sessions run with real credentials and outbound network access. Do not write scenarios that act on remote systems or accounts they must not change.
 - One run, one sandbox: runs are not reused. The run id is the build time in base 36.
-- Keep `sandbox/*.ts` self-contained: `/sandbox` in the container holds a copy of this directory, and `driver.ts`, `cache.ts`, `db.ts` and `autoupdate-off.ts` run there with Bun alone.
+- Keep `sandbox/*.ts` self-contained: `/sandbox` in the container holds a copy of this directory, and `driver.ts`, `cache.ts`, `db.ts`, `autoupdate-off.ts` and `recorder.ts` run there with Bun alone.

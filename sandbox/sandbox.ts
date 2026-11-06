@@ -1,6 +1,8 @@
 // omp test sandbox (#71): a throwaway Linux container on the local OrbStack with the latest omp,
 // a copy of this machine's ~/.omp configuration and credentials, and the omp-config working tree
-// under test. Commands (`bun sandbox/sandbox.ts …`):
+// under test. Every model request of the container's omp sessions goes through a recorder inside
+// the container (#146); the provider baseUrl values in the container's copy of models.yml point at
+// it. Commands (`bun sandbox/sandbox.ts …`):
 //   hold [--target] [--repo DIR]                          build a sandbox, keep it until SIGINT/SIGTERM, then remove it
 //   run  [--target] [--repo DIR] SCENARIO_JSON MODEL...   build, run the scenario for each model, remove
 //   matrix RUN SCENARIO_JSON MODEL...                     run a scenario inside a held sandbox
@@ -99,6 +101,21 @@ function parseCommand(argv: readonly string[]): Command {
 	}
 }
 
+/**
+ * Rewrites the container's models.yml to the recorder's loopback URLs and starts the recorder
+ * detached in the container; returns once every listener is bound. Container removal stops it.
+ */
+async function startRecorder(container: string, home: string): Promise<void> {
+	await must(["docker", "exec", container, "bun", "/sandbox/recorder.ts", "setup", join(home, ".omp", "agent", "models.yml")]);
+	await must(["docker", "exec", "-d", container, "sh", "-c", "exec bun /sandbox/recorder.ts serve >/evidence/recorder.log 2>&1"]);
+	const deadline = Date.now() + 15_000;
+	while ((await exec(["docker", "exec", container, "test", "-f", "/sandbox/recorder.ready"])).code !== 0) {
+		if (Date.now() > deadline)
+			throw new Error("the model request recorder did not become ready within 15s (container /evidence/recorder.log)");
+		await Bun.sleep(250);
+	}
+}
+
 /** Creates network, sandbox and optional target, checking `signal` between steps. */
 async function build(names: Names, options: BuildOptions, signal: AbortSignal): Promise<void> {
 	const step = async <T>(title: string, action: () => Promise<T>): Promise<T> => {
@@ -155,6 +172,7 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 	});
 	await step("apt packages", () => installTools(names.container));
 	await step("~/.omp/agent and ~/.omp/plugins", () => copyOmpDir(names.container, HOME));
+	await step("model request recorder", () => startRecorder(names.container, HOME));
 	const tables = await step("agent.db", () => copyAgentDb(names.container, HOME));
 	const differ = tables.filter((check) => check.kind === "differ");
 	for (const check of tables)
@@ -223,7 +241,7 @@ async function matrix(names: Names, scenarioPath: string, models: readonly strin
 		const driven = await exec(["docker", "exec", names.container, "bun", "/sandbox/driver.ts", inContainer, model, `/evidence/${slug}`]);
 		process.stdout.write(driven.stdout);
 		if (driven.stderr.trim() !== "") process.stderr.write(driven.stderr);
-		for (const suffix of ["driver.json", "events.jsonl", "session.jsonl"]) {
+		for (const suffix of ["driver.json", "events.jsonl", "session.jsonl", "requests.jsonl"]) {
 			const file = `/evidence/${slug}/${scenario.name}.${suffix}`;
 			if ((await exec(["docker", "exec", names.container, "test", "-f", file])).code === 0) {
 				await must(["docker", "cp", `${names.container}:${file}`, join(hostDir, `${scenario.name}.${suffix}`)]);

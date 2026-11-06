@@ -1,0 +1,10 @@
+{
+	"name": "request-recorder-helper",
+	"init": "printf '%s\\n' '---' 'target: main' 'tools: read, grep, glob' 'every: 1' '---' 'Review the main session reply. Advise only if it is wrong.' > WATCHDOG-recorder.md && printf '%s\\n' '# 设置说明' '' '本段说明配置项的含义。' > helper-doc.md",
+	"prompt": "Read helper-doc.md with the read tool, then reply with its first line.",
+	"finalAssertion": "test -f WATCHDOG-recorder.md",
+	"calls": {
+		"expect": [{ "tool": "read", "isError": false, "inputPattern": "helper-doc" }]
+	},
+	"replyIncludes": ["设置说明"]
+}
