@@ -735,7 +735,11 @@ const namedProjects = new Set<string>();
 
 const keptText = (kept: readonly Kept[]): string => kept.map(({ section, reason }) => `${section} (${reason})`).join("; ");
 
-/** Move the omp-config sections of `ctx.cwd`'s `.omp/omomp.*` into that project, telling the user before and after. */
+/**
+ * Move the omp-config sections of `ctx.cwd`'s `.omp/omomp.*` into that project.
+ * A notice names the files before and after a move that writes; sections that
+ * cannot move are named once per process with the reason, and nothing is announced.
+ */
 function settleProject(pi: ExtensionAPI, ctx: ExtensionContext, warn: (ctx: ExtensionContext, en: string, zh: string) => void): void {
 	const work = planProject(ctx.cwd, parseManifest(readFileSync(MANIFEST, "utf8"), MANIFEST));
 	const nameOnce = (en: string, zh: string): void => {
@@ -752,6 +756,12 @@ function settleProject(pi: ExtensionAPI, ctx: ExtensionContext, warn: (ctx: Exte
 				`omp-config：本项目的 omomp 段未迁移：${work.reason}`,
 			);
 			return;
+		case "stuck":
+			nameOnce(
+				`omp-config: ${work.path} keeps sections omp-config did not move: ${keptText(work.kept)}`,
+				`omp-config：${work.path} 中的段未迁移：${keptText(work.kept)}`,
+			);
+			return;
 		case "ready":
 			break;
 		default: {
@@ -759,20 +769,13 @@ function settleProject(pi: ExtensionAPI, ctx: ExtensionContext, warn: (ctx: Exte
 			throw new Error(`unknown project plan ${String(exhaustive)}`);
 		}
 	}
-	if (work.files.length === 0) {
-		nameOnce(
-			`omp-config: ${work.plan.file.path} keeps sections omp-config cannot move: ${keptText(work.plan.kept)}`,
-			`omp-config：${work.plan.file.path} 中有无法迁移的段：${keptText(work.plan.kept)}`,
-		);
-		return;
-	}
 	const files = work.files.join(", ");
 	pi.logger.info(`omp-config: moving project omomp sections: ${files}`);
 	if (ctx.hasUI)
 		ctx.ui.notify(
 			tr(
-				`omp-config: moving this project's omp-config sections out of ${work.plan.file.path}; changing ${files}`,
-				`omp-config：正在把本项目 ${work.plan.file.path} 中的 omp-config 段迁出；将改动 ${files}`,
+				`omp-config: moving this project's omp-config sections out of ${work.path}; changing ${files}`,
+				`omp-config：正在把本项目 ${work.path} 中的 omp-config 段迁出；将改动 ${files}`,
 			),
 			"info",
 		);

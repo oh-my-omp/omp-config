@@ -56,7 +56,10 @@ function source(...snapshots: Record<string, string | null>[]): string {
 	return dir;
 }
 
-/** Stand-in for the four `omp plugin` commands the updater uses; state and calls in $FAKE_OMP_STATE. Like OMP, `config list` lays the cwd's `.omp/plugin-overrides.json` over the machine's settings. */
+/**
+ * Stand-in for the four `omp plugin` commands the updater uses; state and calls in $FAKE_OMP_STATE. Like OMP, `config list` lays the cwd's `.omp/plugin-overrides.json` over the machine's settings.
+ * With `clobber`, `config list` also plays another writer of the agent dir's `config.yml`, rebinding a `"@smol"` `input-polish` role to `x/other`.
+ */
 const FAKE_OMP = `#!/usr/bin/env bun
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -78,6 +81,10 @@ if (command === "list") {
 } else if (command === "config" && rest[0] === "list") {
 	if (state.path === null) fail('Plugin "omp-config" not found');
 	save();
+	if (state.clobber) {
+		const config = join(state.path, "..", "..", "config.yml");
+		if (existsSync(config)) writeFileSync(config, readFileSync(config, "utf8").replace(/^(  input-polish: ).*@smol.*$/m, "$1x/other"));
+	}
 	const overrides = join(process.cwd(), ".omp", "plugin-overrides.json");
 	const project = existsSync(overrides) ? (JSON.parse(readFileSync(overrides, "utf8")).settings?.["omp-config"] ?? {}) : {};
 	console.log(JSON.stringify({ settings: { ...state.settings, ...project }, schema: {} }));
@@ -93,7 +100,7 @@ if (command === "list") {
 } else fail("unsupported");
 `;
 
-type FakeState = { path: string | null; settings: Record<string, unknown>; calls: string[]; refuse: string[] };
+type FakeState = { path: string | null; settings: Record<string, unknown>; calls: string[]; refuse: string[]; clobber?: boolean };
 
 function fakeOmp(initial: Partial<FakeState> = {}): { readonly env: Record<string, string>; readonly state: () => FakeState } {
 	const bin = temp("omp-fake-bin-");
@@ -280,6 +287,24 @@ describe("settings move", () => {
 		expect(existsSync(join(agentDir, "omomp.yml"))).toBe(false);
 	});
 
+	test("a role binding that reads back with another value keeps its section", () => {
+		const src = repo();
+		const agentDir = temp("omp-settings-agent-");
+		writeTree(agentDir, {
+			"omomp.yml": "input-polish:\n  fallbackRole: smol\n",
+			"config.yml": "modelRoles:\n  default: x/main\n",
+		});
+		const omp = fakeOmp({ clobber: true });
+		const report = applyCli(src, agentDir, omp.env);
+		expect(report.errors).toEqual([]);
+		expect(report.notes).toContain("input-polish.fallbackRole became modelRoles.input-polish: @smol");
+		expect(Bun.YAML.parse(readFileSync(join(agentDir, "config.yml"), "utf8"))).toEqual({
+			modelRoles: { default: "x/main", "input-polish": "x/other" },
+		});
+		expect(report.notes).toContain('omomp section input-polish left in place: not stored: modelRoles.input-polish as "@smol"');
+		expect(readFileSync(join(agentDir, "omomp.yml"), "utf8")).toBe("input-polish:\n  fallbackRole: smol\n");
+	});
+
 	test("invalid, customized, refused and excluded sections stay with a note while the rest moves", () => {
 		const src = repo();
 		const agentDir = temp("omp-settings-agent-");
@@ -398,8 +423,9 @@ describe("project sections move", () => {
 			"input-polish": { fallbackRole: "smol" },
 			"omomp-lang": { language: "en" },
 		});
+		// Only sections with no project-level place are left: nothing to write, so nothing to announce.
 		const again = planProject(project, manifest);
-		expect(again.kind === "ready" && again.files).toEqual([]);
+		expect(again.kind === "stuck" && again.kept.map((entry) => entry.section).toSorted()).toEqual(["input-polish", "omomp-lang"]);
 	});
 
 	test("a file left with nothing is deleted; a project without omomp sections has nothing to move", () => {
@@ -411,5 +437,55 @@ describe("project sections move", () => {
 		expect(result.deleted).toEqual([join(project, ".omp/omomp.yml")]);
 		expect(existsSync(join(project, ".omp/plugin-overrides.json"))).toBe(false);
 		expect(planProject(project, manifest).kind).toBe("none");
+	});
+
+	const LANG_ONLY = "lang-nag:\n  instruction: project voice\n";
+	const snapshot = (project: string, rels: readonly string[]): Record<string, string | null> =>
+		Object.fromEntries(rels.map((rel) => [rel, existsSync(join(project, rel)) ? readFileSync(join(project, rel), "utf8") : null]));
+
+	test("a key the project overrides already holds with the same value needs no write; the section leaves", () => {
+		const project = temp("omp-project-");
+		const overrides = JSON.stringify({ settings: { "omp-config": { "lang-nag.instruction": "project voice" } } });
+		writeTree(project, { ".omp/omomp.yml": LANG_ONLY, ".omp/plugin-overrides.json": overrides });
+		const work = planProject(project, manifest);
+		if (work.kind !== "ready") throw new Error(`expected a ready plan, got ${work.kind}`);
+		expect(work.files).toEqual([join(project, ".omp/omomp.yml")]);
+		const result = migrateProject(work);
+		expect(result).toEqual({ written: [], deleted: [join(project, ".omp/omomp.yml")], kept: [], notes: [] });
+		expect(readFileSync(join(project, ".omp/plugin-overrides.json"), "utf8")).toBe(overrides);
+	});
+
+	test("a key the project overrides with another value keeps the whole section, naming the key; nothing is written", () => {
+		const project = temp("omp-project-");
+		const overrides = JSON.stringify({ settings: { "omp-config": { "lang-nag.instruction": "override voice" } } });
+		writeTree(project, { ".omp/omomp.yml": `${LANG_ONLY}  language: English\n`, ".omp/plugin-overrides.json": overrides });
+		const before = snapshot(project, [".omp/omomp.yml", ".omp/plugin-overrides.json"]);
+		const work = planProject(project, manifest);
+		expect(work).toEqual({
+			kind: "stuck",
+			path: join(project, ".omp/omomp.yml"),
+			kept: [
+				{
+					section: "lang-nag",
+					reason: `${join(project, ".omp/plugin-overrides.json")} conflicts: lang-nag.instruction is "override voice" there, "project voice" here; keep one value and delete the other`,
+				},
+			],
+		});
+		expect(snapshot(project, [".omp/omomp.yml", ".omp/plugin-overrides.json"])).toEqual(before);
+	});
+
+	test("an unreadable overrides file or a rule file with other content keeps those sections and plans no write", () => {
+		const project = temp("omp-project-");
+		const rules = PROJECT_OMOMP.split("lang-nag:")[0]!;
+		writeTree(project, {
+			".omp/omomp.yml": `${rules}${LANG_ONLY}`,
+			".omp/plugin-overrides.json": "{ not json",
+			".omp/COMPACTION-rule-01.md": "---\nmodel: mine\nthresholdTokens: 1000\n---\n",
+		});
+		const work = planProject(project, manifest);
+		if (work.kind !== "stuck") throw new Error(`expected a stuck plan, got ${work.kind}`);
+		expect(work.kept.map((entry) => entry.section)).toEqual(["lang-nag", "model-compaction"]);
+		expect(work.kept[1]?.reason).toBe(`${join(project, ".omp/COMPACTION-rule-01.md")} already exists with other content`);
+		expect(work.kept[0]?.reason).toStartWith(`${join(project, ".omp/plugin-overrides.json")}: `);
 	});
 });

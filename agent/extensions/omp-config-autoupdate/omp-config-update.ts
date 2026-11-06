@@ -1886,7 +1886,11 @@ function ensurePlugin(opts: ApplyOptions, report: ApplyReport, omp: string, befo
 	}
 }
 
-type MoveOutcome = { readonly kind: "moved" } | { readonly kind: "kept"; readonly reason: string } | { readonly kind: "skipped" };
+/** `moved` carries the role bindings this run wrote, which the read-back must find with their values. */
+type MoveOutcome =
+	| { readonly kind: "moved"; readonly bindings: readonly RoleBinding[] }
+	| { readonly kind: "kept"; readonly reason: string }
+	| { readonly kind: "skipped" };
 
 /** One section: settings the machine has not set yet, then its files and agent flags. Writes nothing before every check passed. */
 function moveSection(
@@ -1977,13 +1981,14 @@ function moveSection(
 		for (const binding of bindings) report.notes.push(`${move.section}.fallbackRole became modelRoles.${binding.role}: ${binding.value}`);
 	}
 	report.notes.push(...move.notes);
-	return { kind: "moved" };
+	return { kind: "moved", bindings };
 }
 
 /**
  * SETTINGS step, after every file operation: link the plugin, then move the
  * omomp sections (planned again from disk, since this apply may have rewritten
- * the file). A section leaves the file only after OMP lists each of its values;
+ * the file). A section leaves the file only after OMP lists each of its values
+ * and `config.yml` reads back each role binding it wrote with the written value;
  * anything that cannot move stays with a note. The file goes once nothing is
  * left in it; the omomp base record goes once no omp-config section is.
  */
@@ -2015,7 +2020,7 @@ function settleSettings(
 		return;
 	}
 	for (const { section, reason } of plan.kept) report.notes.push(`omomp section ${section} left in place: ${reason}`);
-	const moved: SectionMove[] = [];
+	const moved: { readonly move: SectionMove; readonly bindings: readonly RoleBinding[] }[] = [];
 	for (const move of plan.moves) {
 		if (fieldExcluded(OMOMP_REL, [move.section], exclusions)) {
 			report.skipped.push({ path: `${targetOf(OMOMP_REL, opts.agentDir)}:${move.section}`, reason: EXCLUDED_REASON });
@@ -2028,7 +2033,7 @@ function settleSettings(
 			outcome = { kind: "kept", reason: errorText(error) };
 		}
 		if (outcome.kind === "kept") report.notes.push(`omomp section ${move.section} left in place: ${outcome.reason}`);
-		if (outcome.kind === "moved") moved.push(move);
+		if (outcome.kind === "moved") moved.push({ move, bindings: outcome.bindings });
 	}
 	if (moved.length === 0) return;
 	const after = queryPluginState(omp, pluginDirOf(opts.agentDir));
@@ -2046,14 +2051,18 @@ function settleSettings(
 		report.notes.push(`omomp sections left in place: modelRoles could not be read back (${errorText(error)})`);
 		return;
 	}
-	const confirmed = moved.filter((move) => {
-		const missing = [
-			...[...move.settings.keys()].filter((key) => !Object.hasOwn(stored ?? {}, key)),
-			...move.bindings.filter((binding) => roles[binding.role] === undefined).map((binding) => `modelRoles.${binding.role}`),
-		];
-		if (missing.length > 0) report.notes.push(`omomp section ${move.section} left in place: not stored: ${missing.join(", ")}`);
-		return missing.length === 0;
-	});
+	const confirmed = moved
+		.filter(({ move, bindings }) => {
+			const missing = [
+				...[...move.settings.keys()].filter((key) => !Object.hasOwn(stored ?? {}, key)),
+				...bindings
+					.filter((binding) => roles[binding.role] !== binding.value)
+					.map((binding) => `modelRoles.${binding.role} as ${JSON.stringify(binding.value)}`),
+			];
+			if (missing.length > 0) report.notes.push(`omomp section ${move.section} left in place: not stored: ${missing.join(", ")}`);
+			return missing.length === 0;
+		})
+		.map(({ move }) => move);
 	for (const move of confirmed)
 		if (move.from.kind === "legacy") {
 			const target = targetOf(move.from.rel, opts.agentDir);
