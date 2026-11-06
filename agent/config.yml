@@ -152,6 +152,8 @@ retry:
 inlineToolDescriptors: "on"
 tools:
   xdevDocs: inline
+generate_image:
+  enabled: true
 checkpoint:
   enabled: true
 eval:

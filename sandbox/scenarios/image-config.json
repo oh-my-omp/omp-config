@@ -1,0 +1,14 @@
+{
+	"name": "image-config",
+	"init": "true",
+	"prompt": "Run `omp config list --json | jq -c '{gen: .[\"generate_image.enabled\"].value, imageChain: .[\"retry.fallbackChains\"].value.image}'` via bash and reply with the single output line.",
+	"finalAssertion": "test \"$(omp config list --json | jq -r '.[\"generate_image.enabled\"].value')\" = 'true'; test \"$(omp config list --json | jq -c '.[\"retry.fallbackChains\"].value.image')\" = 'null'",
+	"calls": {
+		"expect": [
+			{
+				"tool": "bash",
+				"inputPattern": "config list"
+			}
+		]
+	}
+}

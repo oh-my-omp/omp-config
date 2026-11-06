@@ -16,7 +16,6 @@ Independent plugins are installed into `~/.omp/plugins/` via `install-plugins.sh
 | [`https://github.com/oh-my-omp/omp-unified-exec`](https://github.com/oh-my-omp/omp-unified-exec) | `omp-unified-exec` | Required (GitHub fork) | Native launch is disabled (`agent/config.yml` `launch.enabled: false`); the local bash surface routes to `xd://exec_command`. |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | Required (GitHub fork) | `agent/config.yml` includes a `bansos/...` model in the `task:free` binding. |
 | [`https://github.com/oh-my-omp/omp-thinking-translator`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | Required (GitHub) | Plugin-owned configuration is excluded from updater and sync writes; see [Thinking translation](#thinking-translation). |
-| [`https://github.com/oh-my-omp/omp-codex-image-gen`](https://github.com/oh-my-omp/omp-codex-image-gen) | `omp-codex-image-gen` | Required (GitHub) | — |
 | `pi-package-search` | `pi-package-search` | Required (npm) | — |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | Required (npm) | — |
 | [`https://github.com/oh-my-omp/omp-playbooks`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | Required (GitHub) | — |

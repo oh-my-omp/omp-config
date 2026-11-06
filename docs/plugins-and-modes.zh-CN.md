@@ -16,7 +16,6 @@
 | [`https://github.com/oh-my-omp/omp-unified-exec`](https://github.com/oh-my-omp/omp-unified-exec) | `omp-unified-exec` | 必装（GitHub fork） | 原生 launch 已关闭（`agent/config.yml` 中 `launch.enabled: false`）；本地 bash 表层说明指向 `xd://exec_command`。 |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | 必装（GitHub fork） | `agent/config.yml` 的 `task:free` 绑定中包含 `bansos/...` 模型。 |
 | [`https://github.com/oh-my-omp/omp-thinking-translator`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | 必装（GitHub） | 插件拥有的配置不由更新器或同步操作写入；见 [思考翻译](#思考翻译)。 |
-| [`https://github.com/oh-my-omp/omp-codex-image-gen`](https://github.com/oh-my-omp/omp-codex-image-gen) | `omp-codex-image-gen` | 必装（GitHub） | — |
 | `pi-package-search` | `pi-package-search` | 必装（npm） | — |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | 必装（npm） | — |
 | [`https://github.com/oh-my-omp/omp-playbooks`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | 必装（GitHub） | — |
