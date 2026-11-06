@@ -51,8 +51,10 @@
 // `powershell|pwsh` (`.exe`, any path) with `-Command`/`-c` or a positional
 // script is classified in the PowerShell dialect (`powershell.ts`):
 // `Remove-Item` and its aliases `rm`, `ri`, `del`, `erase`, `rd`, `rmdir`,
-// `[System.IO.File]::Delete`, `[IO.Directory]::Delete` and any `.Delete(`
-// call are deletions; `& $cmd`, `Invoke-Expression`/`iex`,
+// `Delete`, `DeleteFile`, `DeleteDirectory` and `DeleteFolder` method calls
+// (`[System.IO.File]::Delete`, `[IO.Directory]::Delete`, `.Delete(`) are
+// deletions; `& $cmd`, `Invoke-Expression`/`iex`, `[scriptblock]::Create(`
+// (short or `[System.Management.Automation.ScriptBlock]` full name),
 // `-EncodedCommand` and a script read from stdin are non-literal; `-File`
 // runs a script file and passes. The command after `=` (`$x=Remove-Item`),
 // `return`/`throw`/`exit`, `&` or `.` is classified like any other, and a
