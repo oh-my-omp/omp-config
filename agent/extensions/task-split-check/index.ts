@@ -36,22 +36,24 @@
  */
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import { completeSimple } from "@oh-my-pi/pi-ai";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { declaresFlag } from "../_shared/agent-definition.ts";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
-import { textOf } from "../_shared/messages.ts";
-import { modelLabel, roleModels } from "../_shared/roles.ts";
+import { type AttemptBudget, completeRoleChain } from "../_shared/role-chain.ts";
+import { modelLabel } from "../_shared/roles.ts";
 
 /** The OMP model role this extension's model comes from: the extension's own name. */
 const ROLE = basename(import.meta.dir);
 /** Frontmatter key an agent definition sets to opt into split checking. */
 const SPLIT_CHECK_KEY = "splitcheck";
 /** Effort when the role entry has no `:level` suffix. */
-const EFFORT = THINKING_EFFORTS.find((effort) => effort === "medium");
-if (EFFORT === undefined) throw new Error("task-split-check: host does not recognize medium reasoning effort");
+const EFFORT =
+	THINKING_EFFORTS.find((effort) => effort === "medium") ??
+	(() => {
+		throw new Error("task-split-check: host does not recognize medium reasoning effort");
+	})();
 const DEADLINE_MS = 25_000;
 
 const taskItemSchema = z
@@ -197,53 +199,27 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		systemPrompt: string,
 		prompt: string,
 		signal: AbortSignal,
-		deadlineAt: number,
+		budget: AttemptBudget,
 	): Promise<Reply> => {
-		const failures: string[] = [];
-		try {
-			const models = roleModels(ctx, [ROLE, "default"]);
-			if (models.length === 0) {
-				return {
-					kind: "failed",
-					why: `no model: assign @${ROLE} or the default role in /model`,
-				};
+		const reply = await completeRoleChain(ctx, [ROLE, "default"], systemPrompt, prompt, EFFORT, signal, budget);
+		switch (reply.kind) {
+			case "text":
+				pi.logger.info("task-split-check answered", { model: modelLabel(reply.model.model), failures: reply.failures });
+				return { kind: "text", text: reply.text };
+			case "no-model":
+				return { kind: "failed", why: `no model: assign @${ROLE} or the default role in /model` };
+			case "deadline":
+				return { kind: "failed", why: "deadline" };
+			case "aborted":
+				return { kind: "failed", why: "aborted" };
+			case "all-failed":
+				return { kind: "failed", why: `every model failed: ${reply.failures.join("; ")}` };
+			case "error":
+				return { kind: "failed", why: errorText(reply.error) };
+			default: {
+				const unreachable: never = reply;
+				return unreachable;
 			}
-			for (const [position, { model, level }] of models.entries()) {
-				if (signal.aborted) return { kind: "failed", why: "deadline" };
-				// An attempt's timeout is the remaining overall budget split over the models
-				// not yet tried (this one included), so a hanging model costs only its own
-				// share and the chain keeps moving until the whole deadline is spent.
-				const attempt = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, (deadlineAt - Date.now()) / (models.length - position)))]);
-				try {
-					const reply = await completeSimple(
-						model,
-						{
-							systemPrompt: [systemPrompt],
-							messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-						},
-						level === "off"
-							? { apiKey: ctx.modelRegistry.resolver(model), disableReasoning: true, signal: attempt }
-							: { apiKey: ctx.modelRegistry.resolver(model), reasoning: level ?? EFFORT, signal: attempt },
-					);
-					if (reply.stopReason === "aborted") {
-						if (signal.aborted) return { kind: "failed", why: "deadline" };
-						failures.push(`${modelLabel(model)}: attempt timeout`);
-						continue;
-					}
-					if (reply.stopReason === "error") {
-						failures.push(`${modelLabel(model)}: ${reply.errorMessage ?? "error"}`);
-						continue;
-					}
-					pi.logger.info("task-split-check answered", { model: modelLabel(model), failures });
-					return { kind: "text", text: textOf(reply.content) };
-				} catch (error) {
-					if (signal.aborted) return { kind: "failed", why: "deadline" };
-					failures.push(`${modelLabel(model)}: ${errorText(error)}`);
-				}
-			}
-			return { kind: "failed", why: `every model failed: ${failures.join("; ")}` };
-		} catch (error) {
-			return { kind: "failed", why: signal.aborted ? "deadline" : errorText(error) };
 		}
 	};
 
@@ -253,7 +229,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		checks: readonly Check[],
 		prompt: string,
 		signal: AbortSignal,
-		deadlineAt: number,
+		budget: AttemptBudget,
 	): Promise<ReadonlyMap<Check, Verdict>> => {
 		const hash = createHash("sha256").update(prompt).digest("hex");
 		const keyOf = (check: Check): string => `${check.id}:${hash}`;
@@ -266,7 +242,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		}
 		if (pending.length === 0) return verdicts;
 
-		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal, deadlineAt);
+		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal, budget);
 		for (const check of pending) {
 			const verdict: Verdict = reply.kind === "text" ? parseAnswer(reply.text, check) : { kind: "unknown", why: reply.why };
 			memorize(check, keyOf(check), verdict);
@@ -283,7 +259,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		const call = parseTaskCall(input);
 		if (call === null) return null;
 		const deadline = AbortSignal.timeout(DEADLINE_MS);
-		const deadlineAt = Date.now() + DEADLINE_MS;
+		const budget: AttemptBudget = { kind: "split", deadlineAt: Date.now() + DEADLINE_MS };
 		const judged: ItemVerdicts[] = (
 			await Promise.all(
 				call.items.map(async (item, index): Promise<ItemVerdicts | undefined> => {
@@ -292,7 +268,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 					if (covered.length === 0) return undefined;
 					return {
 						label: itemLabel(item, index),
-						verdicts: await judgeItem(ctx, covered, renderPrompt(call.context, item), deadline, deadlineAt),
+						verdicts: await judgeItem(ctx, covered, renderPrompt(call.context, item), deadline, budget),
 					};
 				}),
 			)

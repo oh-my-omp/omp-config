@@ -39,7 +39,6 @@
  */
 
 import { basename } from "node:path";
-import { completeSimple } from "@oh-my-pi/pi-ai";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -47,7 +46,7 @@ import { declaresFlag } from "../_shared/agent-definition.ts";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
-import { modelLabel, roleModels } from "../_shared/roles.ts";
+import { completeRoleChain } from "../_shared/role-chain.ts";
 
 /** The OMP model role this extension's judge model comes from: the extension's own name. */
 const ROLE = basename(import.meta.dir);
@@ -337,42 +336,24 @@ const parseAnswer = (text: string): Verdict => {
 };
 
 const judge = async (ctx: ExtensionContext, prompt: string, signal: AbortSignal): Promise<Verdict> => {
-	const failures: string[] = [];
-	try {
-		const models = roleModels(ctx, [ROLE, "default"]);
-		if (models.length === 0) {
-			return {
-				kind: "unknown",
-				why: `no model: assign @${ROLE} or the default role in /model`,
-			};
+	const reply = await completeRoleChain(ctx, [ROLE, "default"], SYSTEM_PROMPT, prompt, EFFORT, signal, { kind: "whole" });
+	switch (reply.kind) {
+		case "text":
+			return parseAnswer(reply.text);
+		case "no-model":
+			return { kind: "unknown", why: `no model: assign @${ROLE} or the default role in /model` };
+		case "deadline":
+			return { kind: "unknown", why: "deadline" };
+		case "aborted":
+			return { kind: "unknown", why: "aborted" };
+		case "all-failed":
+			return { kind: "unknown", why: `every model failed: ${reply.failures.join("; ")}` };
+		case "error":
+			return { kind: "unknown", why: errorText(reply.error) };
+		default: {
+			const unreachable: never = reply;
+			return unreachable;
 		}
-		for (const { model, level } of models) {
-			if (signal.aborted) return { kind: "unknown", why: "deadline" };
-			try {
-				const reply = await completeSimple(
-					model,
-					{
-						systemPrompt: [SYSTEM_PROMPT],
-						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-					},
-					level === "off"
-						? { apiKey: ctx.modelRegistry.resolver(model), disableReasoning: true, signal }
-						: { apiKey: ctx.modelRegistry.resolver(model), reasoning: level ?? EFFORT, signal },
-				);
-				if (reply.stopReason === "aborted") return { kind: "unknown", why: "aborted" };
-				if (reply.stopReason === "error") {
-					failures.push(`${modelLabel(model)}: ${reply.errorMessage ?? "error"}`);
-					continue;
-				}
-				return parseAnswer(textOf(reply.content));
-			} catch (error) {
-				if (signal.aborted) return { kind: "unknown", why: "deadline" };
-				failures.push(`${modelLabel(model)}: ${errorText(error)}`);
-			}
-		}
-		return { kind: "unknown", why: `every model failed: ${failures.join("; ")}` };
-	} catch (error) {
-		return { kind: "unknown", why: signal.aborted ? "deadline" : errorText(error) };
 	}
 };
 
