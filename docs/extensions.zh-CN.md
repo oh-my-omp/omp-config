@@ -105,7 +105,7 @@
 
 源码：`agent/extensions/tool-policy-nag/`。`form`、`intent`、`risk` 通道只在主会话运行；`pty` 通道在主会话和子会话都运行。
 
-在 `tool_call` 阶段检查宿主 `bash`、`bash_bg`（含写往 `xd://bash`、`xd://bash_bg` 的调用）和 `eval`；所有通道都忽略插件调用。`pty` 通道在执行前拒绝；提醒通道不拦截。提醒通道将长会话中违反宿主工具路由的调用作为偏离静态 system prompt 的信号：`form.prompt` 不是系统通知，而是以直接观察措辞发送的 user 角色 steer。启发式检测刻意不压低误报率：观察到的误报仅增加少量自检思考 token，未产生其他负面副作用。
+检查宿主 `bash`、`bash_bg`（含写往 `xd://bash`、`xd://bash_bg` 的调用）和 `eval`；所有通道都忽略插件调用。`pty` 通道在 `tool_call` 阶段、执行前拒绝。`form`、`intent`、`risk` 通道不拦截：它们在 `tool_result` 阶段、调用执行完之后判定，把提醒作为这次结果的 `additionalContext` 返回，提醒随这次调用的结果送达模型，而不是 steer 正在运行的这一轮（steer 会把同一轮里仍在运行的其他 `bash` 调用转到后台）。提醒通道将长会话中违反宿主工具路由的调用作为偏离静态 system prompt 的信号：`form.prompt` 不是系统通知，而是以直接观察的措辞写成。启发式检测刻意不压低误报率：观察到的误报仅增加少量自检思考 token，未产生其他负面副作用。
 
 每次调用重读 `omomp.yml#tool-policy-nag`（项目 `.omp/omomp.*` 优先于 agent 目录 `omomp.*`；无有效配置段时不运行）：
 
@@ -133,13 +133,17 @@ tool-policy-nag:
   一行里任一简单命令命中即拒绝——管道每段、`$(…)`、`;`/`&&`/`||` 链与 shell 包装器后面的命令——类别取首个命中。eval 只检查自身名字与字面参数的启动：Python `subprocess.run`/`call`/`check_call`/`check_output`/`Popen`、`os.system`、`os.popen`、`!cmd`、`%%bash`；JS 不含 `${}` 的 `Bun.$`、`Bun.spawn`/`spawnSync`、child_process `exec`/`execSync`/`spawn`/`spawnSync`/`execFile`/`execFileSync`。读不出、非字面或改名的启动放行；本通道不检查 `xargs`、`find -exec`、`parallel` 与 shell `eval`。拒绝信息仅含简短原因（程序、类别、规则）与一行 `xd://exec_command` 指针，不含插件用法。被拒调用不进入其他通道，不计数、提醒、判定或记标记；所有通道都不解析或判定插件调用。闭合规则表是 `pty.ts` 的 `RULES`，命中与不命中样例见 `ci/tool-policy-nag-pty.test.ts`。轻量模式停用整个扩展。
 - **`detector: heuristic`**：要求配置 `form`，忽略 `intent`（不发 JUDGE 请求，不读 `INTENT-policy.md`）。每次检查前在主会话运行时设置层写入 `bashInterceptor.enabled = false`（子代理透读主会话设置，同样关闭拦截器），切换 detector 或 `session_shutdown` 时清除该覆盖。
 - **`detector: jev`**：要求 `intent`，保持 `config.yml` 的 `bashInterceptor.enabled`（拦截器开启时，`form`、`intent`、`risk` 跳过 `bash`，仍检查 `bash_bg` 与 `eval`；`pty` 先于该跳过运行）。可选 `form` 同步计数，仅在 `intent` 无法运行时提醒（spec 缺失、无效、停用或没有判定模型）；判定失败或 90 秒超时只按原因警告一次，不触发 `form`。
+- **提醒通道依据的事实**：执行到结束的前台 `bash` 调用带有 pi-shell 的执行轨迹（`details.trace`，omp 18.17.0 起；由 `trace.ts` 解析）。对这类调用，`form` 通道判定实际执行过的命令——展开后的 argv，包括函数体和 `eval` 内容，不包括被 `&&`/`||` 短路或未进入的分支——只有当它所在管道的输出到达了结果时，列目录、读文件、搜索才计数；重定向仍取自每条命令自己的源文本，因为轨迹不记录重定向。结束前就转到后台的调用（`async: true`、自动转后台、steer）、`bash_bg`、`eval` cell，以及没有完整轨迹的调用，仍按下面的文本规则判定。超时的调用由 `form` 按它留下的轨迹判定。
 - **`form` 通道（命令语法解析与计数）**：
   - 解析管道、`;`/`&&`/`||`、引号、heredoc、`$(…)`/反引号与重定向（含 `>|`、`&>`），剥离 `NAME=value` 前缀、保留字（`if`/`elif`/`while`/`until`/`do`/`then`/`else`/`!`/`{`）及包装命令（`timeout`、`env`、`nice`、`stdbuf`、`time`、`nohup`、`command`、`exec`、`builtin`、`xargs`）；跳过 `sudo`/`doas`/`su`/`ssh`，对字面量 `bash|sh|zsh|dash -c '…'`、`eval '…'` 与 `find -exec … ;` 的内部命令直接分析。
   - 统计以下 shell 调用类别：列目录（`ls`、`tree`、`fd`、无动作 `find`、`rg --files`、`ag -g`）、读文件（`cat`/`bat`/`nl`/`head`/`tail`/`less`/`more`/`zcat`、`sed -n`、awk 行号与 `/start/,/end/` 区间、单文件 `jq`、单条只读 `sqlite3` 查询与 `.tables`/`.schema`、`tar -t`/`-xO`、`unzip -l`/`-p`）、搜索（带文件或 `-r` 的 `grep`、非管道输入的 `rg`/`ag`/`ack`、awk `/re/`、工作区 `git grep`）、编辑（`sed -i`、`perl -i`、`awk -i inplace`、`mv`）、写入字面内容（`echo`/`printf`/heredoc `cat` 重定向到文件或管道给 `tee`）、内联脚本（`node`/`bun`/`deno`/`python`/`ruby` 带 `-e`/`-c`/`-p`/`--eval` 或 `-` 读 stdin）；另计 `eval` 中的本地文件调用（`Path.read_text`、`open`、`glob`、`os.listdir`、`readFileSync`、`Bun.file`、`readdir`、`Bun.Glob`）。
   - 豁免项：结果用于 `$(…)` 捕获、仅经 stdin 过滤器传给 `wc`/`uniq -c`/`grep -c`、传给 `xargs`、作为 `if`/`while` 条件的 `grep -q`；目标是 `/dev/*`；以及 `tail -f`、`locate`、带 `-delete`/`-exec rm` 的 `find`、`git ls-files`、读管道 stdin 的无路径 `grep`。
-  - 前 `form.afterHits`（`3`）次只计数；超出后每次以 steer 发送 `form.prompt` 并弹 UI 警告，每个上下文最多发 `form.maxNags`（`3`）次，直到下次 compaction、`/clear` 或 `branch_summary`（调高 `maxNags` 立即恢复）。计数保存在会话自定义条目 `mouriya.omp.tool-policy-nag.state` 中。
-- **`intent` 通道（`INTENT-policy.md`）**：每次调用并发发起一次不阻塞命令的 JUDGE `choice` 请求（选项：`list`、`read`、`search`、`edit`、`write`、`move`、`eval`、`ast`、`shell`、`mixed`、`none`）。当 shell 调用选中非 `none`（或 `eval` 选中非 `eval`/`none`）且概率 $\ge$ `threshold`（`0.5`）时，在下一个 step 边界插入 `aside` 提醒，标出意图名称、应改用的内置工具与原调用。命令该走哪个 shell 入口由 `pty` 通道判定，不是这里的选项。
-- **`risk` 通道（仅检查 shell，不调模型）**：配置了 `risk` 时在 `tool_call` 内同步执行。同时满足以下条件时触发：简单命令段数 $\ge$ `minCommands`（`4`）或总字符数 $\ge$ `minChars`（`600`）；排除 shell 内置命令（`cd`、`echo`、`printf`、`export`、`source`、`test`、`mkdir` 等）后调用的不同外部程序数 $\ge$ `minPrograms`（`3`）；且包含写入动作（重定向/`tee`/就地编辑，`rm`/`cp`/`mv`/`chmod`/`dd`/`tar -c|-x`/`rsync`/`scp`/`make`/`install`/`patch`，或 `git`、`gh`、`docker`、`kubectl`、`orb`、`npm`/`pnpm`/`yarn`/`bun`、`tofu`/`terraform`、`curl`、`wget` 的写子命令）。命中时发一条提醒列出段数、字符数、外部程序和写步骤。
+  - 前 `form.afterHits`（`3`）次只计数；超出后每次把 `form.prompt` 附在这次调用的结果上并弹 UI 警告，每个上下文最多 `form.maxNags`（`3`）次，直到下次 compaction、`/clear` 或 `branch_summary`（调高 `maxNags` 立即恢复）。计数保存在会话自定义条目 `mouriya.omp.tool-policy-nag.state` 中。
+- **`intent` 通道（`INTENT-policy.md`）**：每次调用在 `tool_call` 阶段发起一次 JUDGE `choice` 请求，与调用并行（选项：`list`、`read`、`search`、`edit`、`write`、`move`、`eval`、`ast`、`shell`、`mixed`、`none`）。当 shell 调用选中非 `none`（或 `eval` 选中非 `eval`/`none`）且概率 $\ge$ `threshold`（`0.5`）时，提醒标出意图名称、应改用的内置工具与原调用。调用结果最多等待判定 20 秒并附上提醒；更晚到达的判定随下一个被检查调用的结果送达，会话空闲时则直接开启一轮。命令该走哪个 shell 入口由 `pty` 通道判定，不是这里的选项。
+- **`risk` 通道（仅检查 shell，不调模型）**：配置了 `risk` 时运行。
+  - 对有轨迹的前台 `bash` 调用：至少执行了两步，且其中一步静默失败时提醒。静默失败指：退出码非零，且没有被任何东西检查（不是 `if`/`elif`/`while`/`until` 的条件，没有被 `!` 取反，不是 `&&`/`||` 的非末尾操作数，不在 `$(…)` 里），不是管道非末段的 SIGPIPE（141），自己也没有任何输出。函数调用、`eval`、`source`、`.` 由其内部步骤代为判定。长度、程序数和写操作不再计入：任意长度的全成功链不算风险，`command -v x || echo missing`、`yes | head -1` 不算，`git status; command -v x; echo done` 算。提醒列出每个静默失败步骤展开后的 argv 和退出码。
+  - 被截断的调用（超时、取消）不判定。
+  - 其他 shell 调用（转后台、`bash_bg`、无轨迹）沿用文本门槛：简单命令段数 $\ge$ `minCommands`（`4`）或总字符数 $\ge$ `minChars`（`600`）；排除 shell 内置命令（`cd`、`echo`、`printf`、`export`、`source`、`test`、`mkdir` 等）后调用的不同外部程序数 $\ge$ `minPrograms`（`3`）；且包含写入动作（重定向/`tee`/就地编辑，`rm`/`cp`/`mv`/`chmod`/`dd`/`tar -c|-x`/`rsync`/`scp`/`make`/`install`/`patch`，或 `git`、`gh`、`docker`、`kubectl`、`orb`、`npm`/`pnpm`/`yarn`/`bun`、`tofu`/`terraform`、`curl`、`wget` 的写子命令）。命中时发一条提醒列出段数、字符数、外部程序和写步骤。
 
 ### watchdog-agent
 

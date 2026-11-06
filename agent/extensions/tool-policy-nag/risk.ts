@@ -1,28 +1,34 @@
 /**
- * Risk lane of tool-policy-nag: flags a watched shell call whose outcome cannot
- * be read off the call itself — one line that is long, runs many different
- * programs, and mostly talks to software outside the shell, so what it will do
- * (and what it will touch) cannot be predicted from reading it.
+ * Risk lane of tool-policy-nag: flags a shell call whose outcome the agent
+ * cannot read off the result it got back. A call can be a tool violation, a
+ * risk, both or neither; which built-in tool should have done the work is the
+ * intent lane's question.
  *
- * This is NOT tool routing: which built-in tool should have done the work is the
- * intent lane's question. A call can be a tool violation, a risk, both or
- * neither, and a short call that writes is not a risk.
+ * DETECTION is deterministic, never judged, and depends on what the run left:
  *
- * DETECTION is deterministic, never judged:
+ * - A foreground `bash` run with its whole execution trace (`trace.ts`) is
+ *   judged on what ran: it is a risk when at least two steps ran and one of
+ *   them failed silently — a non-zero exit status that nothing tested (not an
+ *   `if`/`elif`/`while`/`until` test, not negated by `!`, not a non-final
+ *   `&&`/`||` operand, not inside a substitution), that is not a pipeline
+ *   stage's SIGPIPE (141) before a later stage, and that wrote no output of
+ *   its own. Function calls, `eval`, `source` and `.` stand for their bodies,
+ *   whose steps are judged instead. Length, breadth and writes do not matter.
+ * - A call that went to the background before it ended has no complete trace
+ *   and is judged from its text, as before the trace existed:
  *   size — at least `minCommands` simple commands, or `minChars` characters;
  *   breadth — at least `minPrograms` distinct programs that are not shell
- *   plumbing, i.e. real programs interacting with other software;
- *   effect — at least one step that writes (a redirect or `tee`, an in-place
- *   edit, a program that writes by its own job, or a subcommand that writes).
- * A call that only reads is the intent lane's business, and one that only writes
- * a file the agent authored is the `write` rule's.
+ *   plumbing; effect — at least one step that writes (a redirect or `tee`, an
+ *   in-place edit, a program that writes by its own job, or a subcommand that
+ *   writes). The same text rule covers any other call without a usable trace.
+ * - A run cut short (timed out, cancelled) is not judged.
  *
- * REMINDER. One attributed message naming the length, the programs and the
- * writing steps, then the call. Nothing is blocked, nothing counts, and the same
- * call is reported once. Failures are logged, never thrown.
+ * REMINDER. One attributed message naming what was found, then the call.
+ * Nothing is blocked, nothing counts, and the same call is reported once.
  */
 import { detectShellViolations } from "./heuristic.ts";
 import { splitSimpleCommands } from "./shell-parser.ts";
+import type { ExecutedTrace, TraceStep } from "./trace.ts";
 
 /** Limits a call must exceed to be worth a risk reminder. */
 export type RiskConfig = {
@@ -265,6 +271,35 @@ export function riskReminder(tool: string, command: string, finding: RiskFinding
 				"、",
 			)}${finding.programs.length > 8 ? "…" : ""}），其中 ${finding.writes.map((program) => `\`${program}\``).join("、")} 会写入。`,
 		"它太长、牵涉太多别的软件，执行结果没法只从这一行看出来：拆成几条分开跑，或先确认它到底会改动什么。",
+		"",
+		"这次调用：",
+		`\`\`\`sh\n${command}\n\`\`\``,
+	].join("\n");
+}
+
+/** SIGPIPE: a stage stops writing because a later stage closed the pipe. */
+const SIGPIPE_STATUS = 141;
+
+/** The steps that failed where nothing in the call or its output shows it. */
+export function inspectMaskedFailure(trace: ExecutedTrace): readonly TraceStep[] | null {
+	const steps = trace.steps.filter((step) => step.resolved !== "none" && !step.wrapsBody);
+	if (steps.length < 2) return null;
+	const masked = steps.filter(
+		(step) => step.status !== 0 && !step.statusUsed && !step.output && !(step.status === SIGPIPE_STATUS && !step.lastStage),
+	);
+	return masked.length === 0 ? null : masked;
+}
+
+/** The silent failures, why they matter, and the call itself. */
+export function maskedFailureReminder(tool: string, command: string, masked: readonly TraceStep[]): string {
+	const shown = (step: TraceStep): string => {
+		const text = step.argv.join(" ");
+		return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+	};
+	return [
+		`你这次 \`${tool}\` 调用里有步骤失败了，但返回结果里看不出来：`,
+		...masked.map((step) => `- \`${shown(step)}\` 退出码 ${step.status}，没有任何输出，也没有被 \`if\`/\`&&\`/\`||\`/\`!\` 检查。`),
+		"后面的步骤照常执行了，整条调用的输出不能说明每一步都成功。先确认这一步为什么失败、对后续步骤有没有影响：把它单独运行，或用 `&&` 串联让失败停住整条命令。",
 		"",
 		"这次调用：",
 		`\`\`\`sh\n${command}\n\`\`\``,

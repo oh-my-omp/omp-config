@@ -1,21 +1,34 @@
 /**
- * Watches host shell commands and eval code at `tool_call`; plugin calls are
- * ignored. Four lanes, each with its own scope and effect:
+ * Watches host shell commands and eval code; plugin calls are ignored. Four
+ * lanes, each with its own scope, hook and effect:
  *
- * - `pty` (`pty.ts`) — main AND sub sessions, BLOCKING. A `bash` call (direct,
- *   or a write to `xd://bash`; `pty: true` does not exempt it) or an eval cell
- *   that starts a passthrough, terminal or open-ended command is refused
- *   before any process starts, with a short reason and one
- *   `xd://exec_command` pointer. Runs only when
- *   the section has `pty` and the calling session's active tools include
- *   `exec_command`. Runs first: a refused call reaches no other lane (no
- *   count, no reminder, no judge request, no nested-device marker).
- *   Entry routing, not risk judgment; no lane inspects plugin calls.
+ * - `pty` (`pty.ts`) — main AND sub sessions, BLOCKING, at `tool_call`. A
+ *   `bash` call (direct, or a write to `xd://bash`; `pty: true` does not
+ *   exempt it) or an eval cell that starts a passthrough, terminal or
+ *   open-ended command is refused before any process starts, with a short
+ *   reason and one `xd://exec_command` pointer. Runs only when the section
+ *   has `pty` and the calling session's active tools include `exec_command`.
+ *   A refused call reaches no other lane (no count, no reminder, no judge
+ *   request, no nested-device marker). Entry routing, not risk judgment.
  * - `form`/`intent` (tool routing) and `risk` — main session only,
- *   REMINDERS ONLY: no call is ever blocked by them, and a working call is
- *   left alone. They catch work the built-in tools own (`APPEND_SYSTEM.md`)
- *   done through the shell or the eval kernel, and inject an attributed
- *   reminder.
+ *   REMINDERS ONLY, judged at `tool_result` once the call has run: no call is
+ *   ever blocked by them. They catch work the built-in tools own
+ *   (`APPEND_SYSTEM.md`) done through the shell or the eval kernel, and calls
+ *   whose outcome the agent cannot read off their result.
+ *
+ * FACTS. A foreground `bash` call that ran to its end carries pi-shell's
+ * execution trace (`details.trace`, read by `trace.ts`): the lanes judge the
+ * commands that actually ran, with their expanded argv; commands that did not
+ * run are not there. A call that went to the background before it ended, an
+ * eval cell and any call without a usable trace are judged from their text,
+ * as before the trace existed. A run cut short (timeout, cancel) is not
+ * judged for risk.
+ *
+ * DELIVERY. Reminders are returned as the result's `additionalContext`, so
+ * they reach the model with that call's result and never steer the running
+ * turn (a steer pushes the turn's other running bash calls to the
+ * background). An intent verdict that lands after its call's result rides on
+ * the next watched result, or starts a turn when the session is idle.
  *
  * CONFIGURED in the `tool-policy-nag` section of omomp.* (project copy first,
  * then the agent dir; re-read at every watched call, so edits apply to the next
@@ -25,28 +38,31 @@
  * - `heuristic` — the deterministic string lane (`shell-parser.ts` splits the
  *   line, `shell-command.ts` resolves each command through wrappers to the
  *   program it runs, `shell-programs.ts` judges each program, `heuristic.ts`
- *   applies pipeline policy): counts every operation a built-in tool covers
- *   whose output reaches the agent, and once the hits exceed `form.afterHits` sends `form.prompt`
- *   as a steer, at most `form.maxNags` times per context, then goes quiet until a boundary that
- *   replaces the context (compaction, `/clear`, a branch summary). Branch and
- *   tree navigation rebuild the branch's own state; it does not reset it. No
- *   JUDGE request is made and `INTENT-*.md` is not read.
+ *   applies pipeline policy; on a traced run the commands come from the trace
+ *   instead of the split): counts every operation a built-in tool covers
+ *   whose output reaches the agent, and once the hits exceed `form.afterHits`
+ *   reminds with `form.prompt`, at most `form.maxNags` times per context,
+ *   then goes quiet until a boundary that replaces the context (compaction,
+ *   `/clear`, a branch summary). Branch and tree navigation rebuild the
+ *   branch's own state; it does not reset it. No JUDGE request is made and
+ *   `INTENT-*.md` is not read.
  * - `jev` — the intent lane (`intent.ts`): asks a judgment model one `choice`
  *   question per watched call — what is this call trying to accomplish and
- *   which built-in tool does that intent belong to — and injects a reminder
- *   naming the intent and the required tool. The question, its options and
- *   their cases come from the spec beside this extension (`INTENT-*.md`), read
- *   per call. No counting, no cap: one reminder per offending call. A failed
- *   judge request warns once per reason and reminds nothing. An optional
- *   `form` block makes the string lane count beside it and send its prompt
- *   only while the intent lane cannot run (no valid enabled spec, or no judge
- *   model at all); a failed judge request does not fall back.
+ *   which built-in tool does that intent belong to — started at `tool_call`
+ *   so it runs beside the call, and reminds naming the intent and the
+ *   required tool. The question, its options and their cases come from the
+ *   spec beside this extension (`INTENT-*.md`), read per call. No counting,
+ *   no cap: one reminder per offending call. A failed judge request warns
+ *   once per reason and reminds nothing. An optional `form` block makes the
+ *   string lane count beside it and remind only while the intent lane cannot
+ *   run (no valid enabled spec, or no judge model at all); a failed judge
+ *   request does not fall back.
  *
- * `risk` — the risk lane (`risk.ts`): no judge, no counting. A shell call that
- * is long, runs many different programs and writes something has an outcome
- * nobody can read off the call; it gets one reminder naming the length, the
- * programs and the writing steps. Deterministic and independent of
- * `detector`: a call can be a tool violation, a risk, both, or neither.
+ * `risk` — the risk lane (`risk.ts`): no judge, no counting. On a traced run
+ * it reminds when a step failed silently (a non-zero status nothing tested,
+ * no output of its own); a text-judged call keeps the size, breadth and write
+ * thresholds. Independent of `detector`: a call can be a tool violation, a
+ * risk, both, or neither.
  *
  * BASH INTERCEPTOR. While `detector` is `heuristic`, every watched main-session
  * call that the pty lane let through first puts a runtime-only override
@@ -60,11 +76,11 @@
  * routing violations before they run; `bash_bg` and eval stay watched.
  * The pty lane runs before this skip.
  *
- * Registers session lifecycle and tool_call hooks; appends counter entries to
- * the session branch, overrides one OMP setting at runtime, injects
- * attributed user reminders and returns pty refusals as tool-call blocks.
- * Hook failures are logged and do not escape into omp; a pty lane failure
- * lets the call run.
+ * Registers session lifecycle, tool_call and tool_result hooks; appends
+ * counter entries to the session branch, overrides one OMP setting at
+ * runtime, returns reminders as tool-result context and pty refusals as
+ * tool-call blocks. Hook failures are logged and do not escape into omp; a
+ * pty lane failure lets the call run.
  */
 import type { Judge } from "@oh-my-pi/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
@@ -75,10 +91,12 @@ import { openJudge } from "../_shared/judge.ts";
 import { sessionSettings } from "../_shared/settings.ts";
 import { type WatchedCall, watchedCallOf } from "../_shared/tool-calls.ts";
 import { type FormLane, type IntentLane, type Lanes, type LaneWarning, loadLanes } from "./detector-config.ts";
-import { detectEvalViolations, detectShellViolations } from "./heuristic.ts";
+import { detectEvalViolations, detectShellViolations, detectTraceViolations } from "./heuristic.ts";
 import { type IntentSpec, intentReminder, intentViolation, JUDGE_TIMEOUT_MS, judgeIntent, loadIntentSpec } from "./intent.ts";
 import { ptyEvalHit, ptyRefusal, ptyShellHit } from "./pty.ts";
-import { inspectRisk, riskReminder } from "./risk.ts";
+import { inspectMaskedFailure, inspectRisk, maskedFailureReminder, riskReminder } from "./risk.ts";
+import type { ShellViolation } from "./shell-programs.ts";
+import { type ShellOutcome, shellOutcome } from "./trace.ts";
 
 const STATE_ENTRY_TYPE = "mouriya.omp.tool-policy-nag.state";
 /** The intent spec is read from beside this extension, not from the agent root. */
@@ -128,19 +146,33 @@ function rebuildState(ctx: ExtensionContext): NagState {
 	return state;
 }
 
+/**
+ * How long a result waits for its call's intent verdict; below the host's
+ * 30 s handler budget. A later verdict is delivered with the next result.
+ */
+const INTENT_WAIT_MS = 20_000;
+
+/** The tool-routing violations of a watched call, from its trace when the run left a usable one. */
+function violationsOf(call: WatchedCall, outcome: ShellOutcome | null): ReturnType<typeof detectEvalViolations> | ShellViolation[] {
+	if (call.kind === "eval") return detectEvalViolations(call.language, call.code);
+	if (outcome?.kind === "traced") return detectTraceViolations(outcome.trace);
+	if (outcome?.kind === "timedOut" && outcome.trace !== null) return detectTraceViolations(outcome.trace);
+	return detectShellViolations(call.command);
+}
+
+/** Counts a call's violations; past the threshold returns `form.prompt` when `deliver`, else null. */
 function heuristicCheck(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	call: WatchedCall,
+	violations: ReturnType<typeof violationsOf>,
 	form: FormLane,
 	state: NagState,
 	commit: (next: NagState) => void,
 	deliver: boolean,
-): void {
+): string | null {
 	// The configured cap decides, so raising `maxNags` re-arms an exhausted context.
-	if (state.nagsSent >= form.maxNags) return;
-	const violations = call.kind === "shell" ? detectShellViolations(call.command) : detectEvalViolations(call.language, call.code);
-	if (violations.length === 0) return;
+	if (state.nagsSent >= form.maxNags) return null;
+	if (violations.length === 0) return null;
 
 	// Every offending command counts, so four `cat`s batched into one bash
 	// call are four hits rather than one.
@@ -159,7 +191,7 @@ function heuristicCheck(
 			detectorArmed: true,
 		});
 		commit({ kind: "watching", hits, nagsSent: state.nagsSent });
-		return;
+		return null;
 	}
 	const nagsSent = state.nagsSent + 1;
 	const detectorArmed = nagsSent < form.maxNags;
@@ -174,8 +206,7 @@ function heuristicCheck(
 		delivering: deliver,
 	});
 	commit(detectorArmed ? { kind: "watching", hits, nagsSent } : { kind: "exhausted", hits, nagsSent });
-	if (!deliver) return;
-	pi.sendUserMessage(form.prompt, { deliverAs: "steer", attribution: "agent" });
+	if (!deliver) return null;
 	ctx.ui.notify(
 		tr(
 			`Shell policy nag ${nagsSent}/${form.maxNags} sent for hit #${hits} (${programs.join(", ")}) — detector ${
@@ -187,7 +218,58 @@ function heuristicCheck(
 		),
 		"warning",
 	);
+	return form.prompt;
 }
+
+/** The risk reminder for a watched shell call, judged from its trace or, without one, from its text. */
+function riskCheck(
+	ctx: ExtensionContext,
+	lanes: Lanes,
+	call: Extract<WatchedCall, { kind: "shell" }>,
+	outcome: ShellOutcome,
+	log: (finding: object) => void,
+): string | null {
+	if (lanes.risk === null) return null;
+	switch (outcome.kind) {
+		case "traced": {
+			const masked = inspectMaskedFailure(outcome.trace);
+			if (masked === null) return null;
+			log({ rule: "maskedFailure", steps: masked.map((step) => ({ argv: step.argv, status: step.status })) });
+			if (ctx.hasUI)
+				ctx.ui.notify(
+					tr(
+						`tool-policy-nag risk: ${call.tool}, silent failure in ${masked.map((step) => step.argv[0]).join(", ")}`,
+						`tool-policy-nag 风险：${call.tool} 有静默失败的步骤 ${masked.map((step) => step.argv[0]).join("、")}`,
+					),
+					"warning",
+				);
+			return maskedFailureReminder(call.tool, call.command, masked);
+		}
+		case "timedOut":
+		case "interrupted":
+			return null;
+		case "background":
+		case "untraced": {
+			const finding = inspectRisk(call.command, lanes.risk);
+			if (finding === null) return null;
+			log({ rule: "size", limits: lanes.risk, ...finding });
+			if (ctx.hasUI)
+				ctx.ui.notify(
+					tr(
+						`tool-policy-nag risk: ${call.tool}, ${finding.commands} command segments / ${finding.programs.length} programs, writes ${finding.writes.join(", ")}`,
+						`tool-policy-nag 风险：${call.tool} ${finding.commands} 段 / ${finding.programs.length} 个程序，会写 ${finding.writes.join("、")}`,
+					),
+					"warning",
+				);
+			return riskReminder(call.tool, call.command, finding);
+		}
+		default: {
+			const unreachable: never = outcome;
+			return unreachable;
+		}
+	}
+}
+
 async function runForMainSession(pi: ExtensionAPI, ctx: ExtensionContext, handler: () => void | Promise<void>): Promise<void> {
 	if (ctx.agent.kind !== "main") return;
 	try {
@@ -232,6 +314,14 @@ async function ptyRefusalFor(pi: ExtensionAPI, lanes: Lanes, call: WatchedCall):
 	}
 }
 
+/** An intent judgment started at `tool_call`, collected at the call's `tool_result`. */
+type IntentJob = {
+	readonly epoch: number;
+	/** Whether the intent lane can run at all; the form fallback reminds only when it cannot. */
+	readonly available: Promise<boolean>;
+	readonly reminder: Promise<string | null>;
+};
+
 export default function toolPolicyNag(pi: ExtensionAPI): void {
 	let state: NagState = WATCHING;
 	const nestedDeviceCalls = new Set<string>();
@@ -239,6 +329,10 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 	let epoch = 0;
 	/** Config, spec and judge failures already reported, so a broken setup warns once per process. */
 	const warned = new Set<string>();
+	/** Intent judgments in flight, by tool call id. */
+	const intentJobs = new Map<string, IntentJob>();
+	/** Intent reminders whose call's result had already gone out; they ride on the next watched result. */
+	const lateReminders: string[] = [];
 
 	const commit = (next: NagState): void => {
 		state = next;
@@ -253,6 +347,8 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 
 	const restore = (reason: string, ctx: ExtensionContext): void => {
 		epoch += 1;
+		intentJobs.clear();
+		lateReminders.length = 0;
 		state = rebuildState(ctx);
 		pi.logger.info("Tool-policy nag state restored", { reason, state });
 	};
@@ -293,9 +389,14 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		return opened.kind === "inactive" ? null : { judge: opened.judge, spec: loaded.spec };
 	};
 
-	/** Runs beside the tool call; the verdict lands after it, so the reminder goes out as an aside. */
-	const intentCheck = async (ctx: ExtensionContext, judge: Judge, lane: IntentLane, spec: IntentSpec, call: WatchedCall): Promise<void> => {
-		const startedAt = epoch;
+	/** The intent reminder for a call, or null when the verdict does not fire. */
+	const intentCheck = async (
+		ctx: ExtensionContext,
+		judge: Judge,
+		lane: IntentLane,
+		spec: IntentSpec,
+		call: WatchedCall,
+	): Promise<string | null> => {
 		const verdict = await judgeIntent(judge, spec, call, AbortSignal.timeout(JUDGE_TIMEOUT_MS));
 		switch (verdict.kind) {
 			case "failed":
@@ -303,7 +404,7 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 					en: `tool-policy-nag: intent judgment failed (${verdict.reason})`,
 					zh: `tool-policy-nag：意向判定失败（${verdict.reason}）`,
 				});
-				return;
+				return null;
 			case "ok":
 				break;
 			default: {
@@ -325,29 +426,48 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 			violation,
 			fired,
 		});
-		if (!fired) return;
+		if (!fired) return null;
 		const option = spec.options.find((candidate) => candidate.label === verdict.label);
-		if (option === undefined) return;
-		const summary = {
-			en: `tool-policy-nag intent: ${tool} → ${verdict.label} ${verdict.probability.toFixed(2)} (${option.title})`,
-			zh: `tool-policy-nag 意向：${tool} → ${verdict.label} ${verdict.probability.toFixed(2)}（${option.title}）`,
-		};
-		if (epoch !== startedAt) {
-			if (ctx.hasUI)
-				ctx.ui.notify(
-					tr(
-						`${summary.en}; session switched before judgment returned; reminder not sent`,
-						`${summary.zh}；判断返回前会话已切换，未发送提醒`,
-					),
-					"info",
-				);
-			return;
-		}
-		pi.sendUserMessage(
-			intentReminder(call, option),
-			ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "aside", attribution: "agent" },
-		);
-		if (ctx.hasUI) ctx.ui.notify(tr(summary.en, summary.zh), "warning");
+		if (option === undefined) return null;
+		if (ctx.hasUI)
+			ctx.ui.notify(
+				tr(
+					`tool-policy-nag intent: ${tool} → ${verdict.label} ${verdict.probability.toFixed(2)} (${option.title})`,
+					`tool-policy-nag 意向：${tool} → ${verdict.label} ${verdict.probability.toFixed(2)}（${option.title}）`,
+				),
+				"warning",
+			);
+		return intentReminder(call, option);
+	};
+
+	/** Starts the intent judgment beside the call; the result collects it. */
+	const startIntent = (ctx: ExtensionContext, lane: IntentLane, call: WatchedCall): IntentJob => {
+		const prepared = prepareIntent(ctx).catch((error) => {
+			warnOnce(ctx, {
+				en: `tool-policy-nag: JUDGE preparation failed (${errorText(error)})`,
+				zh: `tool-policy-nag: JUDGE 准备失败（${errorText(error)}）`,
+			});
+			return null;
+		});
+		const reminder = prepared.then((intent) => (intent === null ? null : intentCheck(ctx, intent.judge, lane, intent.spec, call)));
+		return { epoch, available: prepared.then((intent) => intent !== null), reminder };
+	};
+
+	/** Waits briefly for a verdict; one that lands later is held for the next result, or sent when idle. */
+	const collectIntent = async (ctx: ExtensionContext, job: IntentJob): Promise<string | null> => {
+		const settled = await Promise.race([
+			job.reminder.then((reminder) => ({ kind: "ready", reminder }) as const),
+			Bun.sleep(INTENT_WAIT_MS).then(() => ({ kind: "late" }) as const),
+		]);
+		if (settled.kind === "ready") return job.epoch === epoch ? settled.reminder : null;
+		void job.reminder
+			.then((reminder) => {
+				if (reminder === null || job.epoch !== epoch) return;
+				if (ctx.isIdle()) pi.sendUserMessage(reminder, { attribution: "agent" });
+				else lateReminders.push(reminder);
+			})
+			.catch((error) => pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) }));
+		return null;
 	};
 
 	/** Settings carrying this extension's interceptor override; only this override is ever cleared. */
@@ -375,6 +495,10 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		pi.logger.info("Tool-policy bash interceptor overridden off", { detector: "heuristic" });
 		return settings;
 	};
+
+	/** The interceptor already refuses routing violations of `bash` before they run. */
+	const interceptorOwns = (call: WatchedCall, settings: Settings): boolean =>
+		call.kind === "shell" && call.tool === "bash" && cfgBashInterceptorEnabled.get(settings) === true;
 
 	pi.on("session_start", (_event, ctx) => runForMainSession(pi, ctx, () => restore("session_start", ctx)));
 	pi.on("session_switch", (_event, ctx) => runForMainSession(pi, ctx, () => restore("session_switch", ctx)));
@@ -408,58 +532,67 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		const refusal = await ptyRefusalFor(pi, lanes, call);
 		if (refusal !== null) return { block: true, reason: refusal };
 		if (event.toolName === "write") nestedDeviceCalls.add(event.toolCallId);
-		await runForMainSession(pi, ctx, async () => {
+		await runForMainSession(pi, ctx, () => {
 			for (const warning of warnings) warnOnce(ctx, warning);
 			// The tool runs after this hook, so the override reaches this very call.
 			const settings = syncInterceptor(ctx, lanes);
-			if (call.kind === "shell" && call.tool === "bash" && cfgBashInterceptorEnabled.get(settings) === true) return;
-			if (lanes.risk !== null && call.kind === "shell") {
-				const finding = inspectRisk(call.command, lanes.risk);
-				if (finding !== null) {
-					pi.logger.info("Tool-policy risk", { limits: lanes.risk, ...finding });
-					pi.sendUserMessage(
-						riskReminder(call.tool, call.command, finding),
-						ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "aside", attribution: "agent" },
-					);
-					if (ctx.hasUI) {
-						ctx.ui.notify(
-							tr(
-								`tool-policy-nag risk: ${call.tool}, ${finding.commands} command segments / ${finding.programs.length} programs, writes ${finding.writes.join(", ")}`,
-								`tool-policy-nag 风险：${call.tool} ${finding.commands} 段 / ${finding.programs.length} 个程序，会写 ${finding.writes.join("、")}`,
-							),
-							"warning",
-						);
-					}
-				}
+			if (interceptorOwns(call, settings)) return;
+			if (lanes.tool?.detector === "jev") intentJobs.set(event.toolCallId, startIntent(ctx, lanes.tool.intent, call));
+		});
+	});
+
+	pi.on("tool_result", async (event, ctx) => {
+		if (ctx.agent.kind !== "main") return;
+		// A device write's payload ran as a nested call with the same id; its own result carries the facts.
+		if (event.toolName === "write") return;
+		const call = watchedCallOf(event.toolName, event.input);
+		if (call === null) return;
+		const job = intentJobs.get(event.toolCallId);
+		intentJobs.delete(event.toolCallId);
+		const reminders = lateReminders.splice(0);
+		try {
+			const { lanes } = loadLanes(ctx.cwd);
+			const settings = sessionSettings(ctx);
+			if (settings !== undefined && interceptorOwns(call, settings)) return context(reminders);
+			const outcome = call.kind === "shell" ? shellOutcome(event.details, event.isError) : null;
+			if (call.kind === "shell" && outcome !== null) {
+				const risk = riskCheck(ctx, lanes, call, outcome, (finding) =>
+					pi.logger.info("Tool-policy risk", { tool: call.tool, outcome: outcome.kind, ...finding }),
+				);
+				if (risk !== null) reminders.push(risk);
 			}
 			const tool = lanes.tool;
-			if (tool === null) return;
+			if (tool === null) return context(reminders);
 			switch (tool.detector) {
-				case "heuristic":
-					heuristicCheck(pi, ctx, call, tool.form, state, commit, true);
-					return;
+				case "heuristic": {
+					const nag = heuristicCheck(pi, ctx, violationsOf(call, outcome), tool.form, state, commit, true);
+					if (nag !== null) reminders.push(nag);
+					break;
+				}
 				case "jev": {
-					const startedAt = epoch;
-					const intent = await prepareIntent(ctx).catch((error) => {
-						warnOnce(ctx, {
-							en: `tool-policy-nag: JUDGE preparation failed (${errorText(error)})`,
-							zh: `tool-policy-nag: JUDGE 准备失败（${errorText(error)}）`,
-						});
-						return null;
-					});
-					if (epoch !== startedAt) return;
-					if (tool.fallback !== null) heuristicCheck(pi, ctx, call, tool.fallback, state, commit, intent === null);
-					if (intent === null) return;
-					void intentCheck(ctx, intent.judge, tool.intent, intent.spec, call).catch((error) => {
-						pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) });
-					});
-					return;
+					const available = job === undefined ? false : await job.available;
+					if (tool.fallback !== null) {
+						const nag = heuristicCheck(pi, ctx, violationsOf(call, outcome), tool.fallback, state, commit, !available);
+						if (nag !== null) reminders.push(nag);
+					}
+					if (job === undefined || !available) break;
+					const intent = await collectIntent(ctx, job);
+					if (intent !== null) reminders.push(intent);
+					break;
 				}
 				default: {
 					const unreachable: never = tool;
 					return unreachable;
 				}
 			}
-		});
+		} catch (error) {
+			pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) });
+		}
+		return context(reminders);
 	});
+}
+
+/** Reminders ride on the call's result as context for the next model request. */
+function context(reminders: readonly string[]): { additionalContext: string } | undefined {
+	return reminders.length === 0 ? undefined : { additionalContext: reminders.join("\n\n") };
 }
