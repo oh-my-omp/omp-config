@@ -133,7 +133,7 @@ thresholdTokens: 150000
 ---
 ```
 
-For each model in `ctx.models.list()`, the first matching rule — project files before extension files, filename order inside each group, and an extension file named like a project file hidden by it — writes `"<provider>/<id>": "f<thresholdTokens>"` into the main session's runtime settings layer (`config.yml` on disk is not modified; `/model` switches, retry fallbacks, and subagents reading the main session's settings pick up their model's threshold). The repository ships no rule files.
+For each model in `ctx.models.list()`, the first matching valid rule — every project rule before every machine rule of the extension's directory, whatever the file names, and inside each layer the discovery order (cwd upward, filename order in each directory) — writes `"<provider>/<id>": "f<thresholdTokens>"` into the main session's runtime settings layer (`config.yml` on disk is not modified; `/model` switches, retry fallbacks, and subagents reading the main session's settings pick up their model's threshold). The repository ships no rule files.
 
 Because a native `f<N>` threshold can switch a model between its standard and extended context window, a rule whose `thresholdTokens` would change a model's current context-window tier is refused for that model with a warning. Unknown keys and a non-empty body are errors, so a misspelled key cannot widen a rule; an unreadable or invalid file is skipped with a warning and the other files still apply, and with no valid file no rules apply. Existing runtime entries from other sources are preserved and restored when no rules match or at `session_shutdown`; if another writer modifies the runtime map during the session, the extension warns once and stops updating it.
 

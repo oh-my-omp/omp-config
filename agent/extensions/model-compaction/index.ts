@@ -10,10 +10,11 @@
 // FILE. One rule per `COMPACTION-<label>.md` file: `---`-fenced frontmatter,
 // nothing else. Files come from the extension's own directory (machine rules)
 // plus every directory between cwd and its git root and each one's `.omp`
-// (project rules); re-discovered and re-read every main prompt. Project files
-// rule before extension files, and a project file hides the extension file of
-// the same name; inside each group, filename order; for each model the first
-// matching rule wins. Example:
+// (project rules); re-discovered and re-read every main prompt. The rules are
+// layered like scalar settings: every project rule comes first, every machine
+// rule after it as the fallback, whatever the file names; inside each layer,
+// discovery order (filename order per directory); for each model the first
+// matching valid rule wins. Example:
 //
 //   ---
 //   provider: ^anthropic$
@@ -68,13 +69,13 @@
 // ============================================================================
 
 import { readFileSync } from "node:fs";
-import { basename, sep } from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { AgentRegistry, type ExtensionAPI, type ExtensionContext, type Settings } from "@oh-my-pi/pi-coding-agent";
 import { cfgCompactionModelThresholds, cfgExtendedContext } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+import { layerRuleFiles } from "./rule-files.ts";
 
 type MatchField = "provider" | "model";
 
@@ -163,17 +164,12 @@ function parseRuleFile(path: string): RuleParse {
 }
 
 /**
- * Rules from every `COMPACTION-*.md` in scope: project files (cwd up to the git
- * root, each with its `.omp`) before the extension's own directory, each group
- * in discovery order; an extension file named like a project file is hidden by
- * it. An invalid file is skipped with a problem; the others apply.
+ * Rules from every `COMPACTION-*.md` in scope, project rules (cwd up to the
+ * git root, each with its `.omp`) before every machine rule of the extension's
+ * own directory. An invalid file is skipped with a problem; the others apply.
  */
 function loadRules(cwd: string): LoadedRules {
-	const discovered = discoverSpecFiles(FILE_PATTERN, import.meta.dir, cwd);
-	const ownDir = import.meta.dir + sep;
-	const project = discovered.filter((path) => !path.startsWith(ownDir));
-	const projectNames = new Set(project.map((path) => basename(path)));
-	const files = [...project, ...discovered.filter((path) => path.startsWith(ownDir) && !projectNames.has(basename(path)))];
+	const files = layerRuleFiles(discoverSpecFiles(FILE_PATTERN, import.meta.dir, cwd), import.meta.dir);
 	const rules: Rule[] = [];
 	const problems: string[] = [];
 	for (const file of files) {
