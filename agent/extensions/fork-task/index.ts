@@ -3,7 +3,7 @@
 // conversation, or of another agent's named by an item's `from`.
 //
 // Registers fork_task plus before_subagent_spawn, before_agent_start and
-// session_shutdown hooks in main and sub sessions, and one BroadcastChannel
+// session_start (main only), session_shutdown hooks in main and sub sessions, and one BroadcastChannel
 // listener per thread (source-channel.ts). Reads the source agent's persisted
 // session; writes temporary JSONL under the OS temp directory and moves it
 // into the caller's artifact store; writes each child's replica copy under
@@ -12,13 +12,15 @@
 // request under `<tmp>/omp-fork-task/parked/<pid>/` and a
 // `workspace: "source"` child's inherited changes under
 // `<tmp>/omp-fork-task/overlays/<pid>/`, deleting all four at main-session
-// shutdown (park disposes a sub session too, so a sub shutdown never deletes
+// shutdown, and at main-session startup sweeping the `parked/` and `starts/`
+// directories of processes that no longer exist (sweep.ts) (park disposes a sub session too, so a sub shutdown never deletes
 // what its fork children still need); the overlay is consumed at the child's
 // first turn (workspace.ts). Inherited changes that do not apply stop the
 // child before its first model call; a failed start record only warns.
 // Execution failures warn and return tool errors; user aborts reject for host
 // cancellation accounting. Spawn preparation failures block the child and warn,
-// while park-record and shutdown cleanup failures warn without rejecting.
+// while park-record, startup-sweep and shutdown cleanup failures warn without
+// rejecting.
 //
 // Every item replicates its source's actual model request: the caller's, or
 // that of the agent `from` names, live or parked. replica.ts captures each session's
@@ -74,7 +76,8 @@
 // copy file instead of `replicas`. A `from` source this thread does not host
 // is asked over source-channel.ts, and its own thread answers with its latest
 // request; a parked source's kept request is a file every thread of the
-// process reads, deleted when the main session shuts down.
+// process reads, removed at main-session shutdown or swept by a later
+// main session's startup once its process is gone (sweep.ts).
 // ============================================================================
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -94,6 +97,7 @@ import {
 	type ExtensionContext,
 	SessionManager,
 	type SessionShutdownEvent,
+	type SessionStartEvent,
 	type TaskItem,
 	type ToolDefinition,
 	z,
@@ -122,6 +126,7 @@ import {
 } from "./replica.ts";
 import { parkedRoot, readReplicaFile, replicaFilePath, replicasRoot, STAGING_ROOT, writeReplicaFile } from "./replica-file.ts";
 import { askSource, serveSources } from "./source-channel.ts";
+import { sweepDeadProcessDirs } from "./sweep.ts";
 import { forkTaskTopics, TOPIC_POINTERS } from "./topics.ts";
 import {
 	applyOverlay,
@@ -747,6 +752,16 @@ async function beforeAgentStart(
 }
 
 /**
+ * On main-session startup remove the `parked/` and `starts/` directories of
+ * processes that no longer exist (the main session of a crashed or killed omp
+ * never reached its shutdown). Live processes' directories stay.
+ */
+async function sessionStart(rt: ForkTaskRuntime, _event: SessionStartEvent, ctx: ExtensionContext): Promise<void> {
+	if (ctx.agent.kind !== "main") return;
+	await sweepDeadProcessDirs([path.dirname(parkedRoot()), path.dirname(startsRoot())], rt.warn);
+}
+
+/**
  * On main-session shutdown remove this process's replica copies, overlays,
  * parked-source and workspace-start records; on any session shutdown drop the
  * staged conversations of the forks that parent spawned. A sub session's park
@@ -913,6 +928,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 
 	pi.on("before_subagent_spawn", beforeSubagentSpawn.bind(null, rt));
 	pi.on("before_agent_start", beforeAgentStart.bind(null, rt));
+	pi.on("session_start", sessionStart.bind(null, rt));
 	pi.on("session_shutdown", sessionShutdown.bind(null, rt));
 
 	// `docTopics` serves xd://fork_task/<topic>; OMP keeps it on the tool object, though ToolDefinition does not declare it.
