@@ -104,13 +104,6 @@
 				"step": 0.5,
 				"description": "Resident memory of one child process that raises an alert"
 			},
-			"doc-polish.concurrency": {
-				"type": "number",
-				"default": 6,
-				"min": 1,
-				"step": 1,
-				"description": "Parallel polish and check requests per document"
-			},
 			"omp-config-autoupdate.enabled": {
 				"type": "boolean",
 				"default": false,

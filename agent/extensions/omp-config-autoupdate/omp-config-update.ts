@@ -84,7 +84,8 @@
 // rules → dropped only when equal to what the repo shipped, since the TOPIC
 // files carry them); `judge.fallbackRole` is dropped and every other
 // `fallbackRole` becomes `modelRoles.<role>: "@<fallbackRole>"` in config.yml
-// for each role it backed that the machine left unassigned. The `omp plugin`
+// for each role it backed that the machine left unassigned. A section of a
+// retired extension (doc-polish) is dropped whole with a note. The `omp plugin`
 // CLI runs from `/`, so a project's plugin-overrides.json never hides the
 // machine's values. A section leaves the file only after OMP lists each of its
 // values and config.yml holds each binding; sections of other owners (omp-unified-exec) stay, and the file is
@@ -353,7 +354,6 @@ const CTX_RETIREMENTS: readonly string[] = [
 const SUPERSEDED: readonly { readonly from: string; readonly by: string }[] = [
 	...[
 		"append-system-model",
-		"doc-polish",
 		"fork-task",
 		"input-polish",
 		"isolation-nudge",
@@ -1811,7 +1811,8 @@ function describeMove(move: SectionMove): string {
 		...move.splitAgents.map((name) => `splitCheck: true in ${name}`),
 		...move.bindings.map((binding) => `modelRoles.${binding.role}=${binding.value} unless assigned`),
 	];
-	return `${move.section}${parts.length === 0 ? " (nothing to keep)" : `: ${parts.join(", ")}`}`;
+	if (parts.length > 0) return `${move.section}: ${parts.join(", ")}`;
+	return `${move.section} (${move.notes.length > 0 ? move.notes.join("; ") : "nothing to keep"})`;
 }
 
 const CONFIG_REL = "agent/config.yml";

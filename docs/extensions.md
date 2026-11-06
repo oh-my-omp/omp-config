@@ -23,16 +23,15 @@ Configuration files expose choices users can adapt to their own work. Shipped ru
 | 13 | `lang-nag` | [lang-nag](#lang-nag) | Main | No | `lang-nag.language`, `lang-nag.instruction` | Choose reply language and reminder wording at machine or project scope; bind `@lang-nag` when a dedicated chat judge is useful |
 | 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | Process-wide, macOS only | Yes | `child-memory-warning.thresholdGiB` | Choose an alert threshold for your hardware and workloads at machine or project scope |
 | 15 | `input-polish` | [input-polish](#input-polish) | Main TUI | Yes | `input-polish.key`, `input-polish.instruction` | Choose shortcut and rewrite instruction; bind `@input-polish` to your available models |
-| 16 | `doc-polish` | [doc-polish](#doc-polish) | Main + Sub | No | `doc-polish.concurrency` | Choose concurrency and `@doc-polish.*` model bindings |
-| 17 | `wt-tool` | [wt-tool](#wt-tool) | Main TUI | Yes | No config file | Choose the worktree branch and review removal state through the tools |
-| 18 | `harness-restart` | [harness-restart](#harness-restart) | Main TUI | Yes | No config file | Request a restart with a reason; the session resumes after it |
-| 19 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omp-config-autoupdate.enabled`, `.conflicts`, `.exclude` | Choose startup updates and conflict handling through `/omp-config-autoupdate`; adapt conflicts when needed |
-| 20 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide | Yes | `omomp-lang.language` or environment | Choose interface language in the machine setting or override with `OMOMP_LANG` |
-| 21 | `tool-topics` | [tool-topics](#tool-topics) | Main + Sub; process-wide router | Yes | Sibling `TOPIC-*.md` and `SURFACE-*.md` | Edit or add OMP-owned tool instructions, topics and `inject` delivery rules; reload them by restarting OMP |
-| 22 | `delete-guard` | [delete-guard](#delete-guard) | Main + Sub | Yes | No config file or switch | Choose literal deletion paths; recoverable deletion is the default, permanent deletion requires explicit confirmation |
-| 23 | `subagent-usage` | [subagent-usage](#subagent-usage) | Main + Sub | Yes | Machine consent; local calibration data | A human enables or disables history access through `/subagent-usage`; project files cannot grant consent |
-| 24 | `argon-long-output` | [argon-long-output](#argon-long-output) | Main + Sub | Yes | `ARGON_PROMPT.md` and supported stream-timeout settings | Customize long-output instructions and explicit timeout budgets for the matching models |
-| 25 | `ast-top-level` | [ast-top-level](#ast-top-level) | Process-wide + Main + Sub | Yes | No extension config file | OMP owns the syntax-tool settings; this extension keeps enabled tools directly visible, and disabling it requires a restart |
+| 16 | `wt-tool` | [wt-tool](#wt-tool) | Main TUI | Yes | No config file | Choose the worktree branch and review removal state through the tools |
+| 17 | `harness-restart` | [harness-restart](#harness-restart) | Main TUI | Yes | No config file | Request a restart with a reason; the session resumes after it |
+| 18 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omp-config-autoupdate.enabled`, `.conflicts`, `.exclude` | Choose startup updates and conflict handling through `/omp-config-autoupdate`; adapt conflicts when needed |
+| 19 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide | Yes | `omomp-lang.language` or environment | Choose interface language in the machine setting or override with `OMOMP_LANG` |
+| 20 | `tool-topics` | [tool-topics](#tool-topics) | Main + Sub; process-wide router | Yes | Sibling `TOPIC-*.md` and `SURFACE-*.md` | Edit or add OMP-owned tool instructions, topics and `inject` delivery rules; reload them by restarting OMP |
+| 21 | `delete-guard` | [delete-guard](#delete-guard) | Main + Sub | Yes | No config file or switch | Choose literal deletion paths; recoverable deletion is the default, permanent deletion requires explicit confirmation |
+| 22 | `subagent-usage` | [subagent-usage](#subagent-usage) | Main + Sub | Yes | Machine consent; local calibration data | A human enables or disables history access through `/subagent-usage`; project files cannot grant consent |
+| 23 | `argon-long-output` | [argon-long-output](#argon-long-output) | Main + Sub | Yes | `ARGON_PROMPT.md` and supported stream-timeout settings | Customize long-output instructions and explicit timeout budgets for the matching models |
+| 24 | `ast-top-level` | [ast-top-level](#ast-top-level) | Process-wide + Main + Sub | Yes | No extension config file | OMP owns the syntax-tool settings; this extension keeps enabled tools directly visible, and disabling it requires a restart |
 
 ---
 
@@ -236,17 +235,6 @@ Intercepts the `input-polish.key` shortcut (`omp-config`; default `ctrl+enter`, 
 
 - `Enter` after completion replaces the draft with the rewrite and submits it; `Esc` or `Ctrl+C` cancels and closes the overlay.
 - Blank drafts and drafts starting with `/`, `!`, or `$` are ignored. Rewrites that alter `[Paste #N …]` or `[Image #N …]` placeholders are rejected with an error in the overlay.
-
-### doc-polish
-
-Source: `agent/extensions/doc-polish/`. Registers `polish_doc` and `/polish-doc <path…>`.
-
-Polishes `.md` and `.txt` files for readability without modifying the source file. Writes outputs to `/tmp/doc-polish/<timestamp>-<filename>/`: a copy of the original file, `split.json`, and `review.md`:
-
-- Runs `taskDepth: 1` in-memory subagent stages with extensions disabled: **Split** (`[read, write]` tools; writes line-range blocks and a keyword glossary to `split.json`) → **Polish** (no tools; rewrites batches in parallel, keeping each within 5,000 code points unless an oversized paragraph must go alone, untruncated; regroups merged blocks via union-find) → **Check** (no tools; verifies meaning preservation per group).
-- Models come from `@doc-polish.split`, `@doc-polish.polish`, and `@doc-polish.check` (assigned in `/model`; `check` falls back to `split`'s chain), each followed by the `default` role chain. The number of parallel polish and check requests per document is the `doc-polish.concurrency` setting (`omp-config`; manifest default `6`; a project override wins over the machine value).
-
-- Fails before writing `/tmp/doc-polish/` if split or polish resolves no model. Unparseable polish batches keep the original text. The tool catches failures at its execute boundary, logs a warning and returns an error result instead of throwing into OMP. The returned prompt requires the main agent to read every `review.md` in full without delegating or truncating.
 
 ### wt-tool
 

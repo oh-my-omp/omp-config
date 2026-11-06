@@ -305,14 +305,14 @@ describe("settings move", () => {
 		expect(readFileSync(join(agentDir, "omomp.yml"), "utf8")).toBe("input-polish:\n  fallbackRole: smol\n");
 	});
 
-	test("invalid, customized, refused and excluded sections stay with a note while the rest moves", () => {
+	test("invalid, customized, refused and excluded sections stay with a note while the rest moves and retired ones drop", () => {
 		const src = repo();
 		const agentDir = temp("omp-settings-agent-");
 		const customRules = HOST_RULES.replace("^ssh://", "^sftp://");
 		writeTree(agentDir, {
-			"omomp.yml": `tool-policy-nag:\n  detector: other\nchild-memory-warning:\n  thresholdGiB: 8\ndoc-polish:\n  concurrency: 2\nsubagent-usage:\n  enabled: true\nomp-config-autoupdate:\n  enabled: false\n  exclude:\n    - omomp.yml:subagent-usage\n${customRules}`,
+			"omomp.yml": `tool-policy-nag:\n  detector: other\nchild-memory-warning:\n  thresholdGiB: 8\nlang-nag:\n  language: German\ndoc-polish:\n  concurrency: 2\n  fallbackRole: smol\nsubagent-usage:\n  enabled: true\nomp-config-autoupdate:\n  enabled: false\n  exclude:\n    - omomp.yml:subagent-usage\n${customRules}`,
 		});
-		const omp = fakeOmp({ refuse: ["doc-polish.concurrency"] });
+		const omp = fakeOmp({ refuse: ["lang-nag.language"] });
 		const report = applyCli(src, agentDir, omp.env);
 		expect(report.errors).toEqual([]);
 		expect(omp.state().settings).toEqual({
@@ -321,7 +321,7 @@ describe("settings move", () => {
 		});
 		const left: unknown = Bun.YAML.parse(readFileSync(join(agentDir, "omomp.yml"), "utf8"));
 		expect(isMapping(left) && Object.keys(left).toSorted()).toEqual([
-			"doc-polish",
+			"lang-nag",
 			"subagent-usage",
 			"tool-policy-nag",
 			"tool-topic-injection",
@@ -330,8 +330,10 @@ describe("settings move", () => {
 			report.notes.some((note) => note.startsWith("omomp section tool-policy-nag left in place: tool-policy-nag.detector must be one of")),
 		).toBe(true);
 		expect(report.notes.some((note) => note.startsWith("omomp section tool-topic-injection left in place: customized rules"))).toBe(true);
-		expect(report.notes.some((note) => note.startsWith("omomp section doc-polish left in place: omp plugin config set: refused"))).toBe(
-			true,
+		expect(report.notes.some((note) => note.startsWith("omomp section lang-nag left in place: omp plugin config set: refused"))).toBe(true);
+		expect(report.notes).toContain("doc-polish section dropped: the doc-polish extension is retired");
+		expect(existsSync(join(agentDir, "config.yml")) && readFileSync(join(agentDir, "config.yml"), "utf8").includes("doc-polish")).toBe(
+			false,
 		);
 		expect(report.skipped).toContainEqual({
 			path: `${join(agentDir, "omomp.yml")}:subagent-usage`,

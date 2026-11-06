@@ -23,16 +23,15 @@
 | 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `lang-nag.language`、`lang-nag.instruction` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
 | 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局，仅 macOS | 是 | `child-memory-warning.thresholdGiB` | 在本机或项目中按自己的硬件和负载选择告警阈值 |
 | 15 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `input-polish.key`、`input-polish.instruction` | 选择快捷键和改写指令；将 `@input-polish` 绑定到自己的可用模型 |
-| 16 | `doc-polish` | [doc-polish](#doc-polish) | 主 + 子 | 否 | `doc-polish.concurrency` | 选择并发数和 `@doc-polish.*` 模型绑定 |
-| 17 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
-| 18 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
-| 19 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omp-config-autoupdate.enabled`、`.conflicts`、`.exclude` | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
-| 20 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | `omomp-lang.language` 或环境变量 | 在本机设置中选择界面语言，或用 `OMOMP_LANG` 覆盖 |
-| 21 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明、专题与 `inject` 投递规则，重启 OMP 后加载 |
-| 22 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无配置文件或开关 | 选择字面删除路径；默认可恢复，永久删除需要明确确认 |
-| 23 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
-| 24 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
-| 25 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
+| 16 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
+| 17 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
+| 18 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omp-config-autoupdate.enabled`、`.conflicts`、`.exclude` | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
+| 19 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | `omomp-lang.language` 或环境变量 | 在本机设置中选择界面语言，或用 `OMOMP_LANG` 覆盖 |
+| 20 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明、专题与 `inject` 投递规则，重启 OMP 后加载 |
+| 21 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无配置文件或开关 | 选择字面删除路径；默认可恢复，永久删除需要明确确认 |
+| 22 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
+| 23 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
+| 24 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
 
 ---
 
@@ -236,17 +235,6 @@ cwd: /absolute/path/to/leader-checkout
 
 - 生成完成后按 `Enter` 用改写稿替换输入框内容并提交；按 `Esc` 或 `Ctrl+C` 取消并关闭浮层。
 - 空白草稿及以 `/`、`!`、`$` 开头的草稿不处理。若改写结果改变了 `[Paste #N …]` 或 `[Image #N …]` 占位符的数量或内容，直接报错并显示在浮层中。
-
-### doc-polish
-
-源码：`agent/extensions/doc-polish/`。注册 `polish_doc` 工具与 `/polish-doc <path…>` 命令。
-
-在不改变原意的前提下重排、润色 `.md` 与 `.txt` 文档。不修改源文件，输出写在 `/tmp/doc-polish/<时间戳>-<文件名>/` 下（源文件副本、`split.json` 和对照报告 `review.md`）：
-
-- 各阶段运行 `taskDepth: 1`、禁加载扩展的内存子代理：**拆分（Split）**（仅持 `[read, write]`，读取原文并写出起止行号与术语表 `split.json`）→ **润色（Polish）**（无工具，并发改写各批次，通常每批不超过 5,000 码点；超长段落单独成批，不截断；再用并查集按 `sourceIndices` 归并跨段合并块）→ **校验（Check）**（无工具，逐组检查是否保持原意）。
-- 模型分别取自 `@doc-polish.split`、`@doc-polish.polish`、`@doc-polish.check`（在 `/model` 中配置；`check` 未配模型时复用 `split` 链），各自后接 `default` 角色链。每份文档的并发润色与校验请求数取 `doc-polish.concurrency` 设置（`omp-config`；manifest 默认 `6`；项目覆盖优先于机器值）。
-
-- 拆分或润色角色解析不出模型时直接报错退出，不创建 `/tmp/doc-polish/` 目录；无法解析的批次保留原文。工具在 execute 边界捕获失败、记 warning 并返回错误结果，不向 OMP 抛出异常。返回结果要求主代理亲自完整阅读每份 `review.md`，不得转交子代理或截断。
 
 ### wt-tool
 
