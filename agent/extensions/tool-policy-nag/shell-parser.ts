@@ -14,6 +14,13 @@ export type CommandToken =
 const isOperatorChar = (ch: string): boolean =>
 	ch === "|" || ch === "&" || ch === ";" || ch === "\n" || ch === "(" || ch === ")" || ch === "`";
 
+/**
+ * `${` opens a Bash 5.3 function substitution only when whitespace or `|`
+ * follows: `${ …; }` and `${| …; }`. The `|` belongs to the opener, not a pipeline.
+ */
+const isFunctionSubstitutionOpener = (ch: string | undefined): boolean =>
+	ch === " " || ch === "\t" || ch === "\r" || ch === "\n" || ch === "|";
+
 type HereDocument = { readonly delimiter: string; readonly stripTabs: boolean };
 
 const skipHereDocument = (command: string, start: number, document: HereDocument): number => {
@@ -80,12 +87,14 @@ function parseRedirect(command: string, index: number, ch: "<" | ">", fdPrefix: 
 /**
  * Splits a shell line into simple commands, keeping only what the detector needs:
  * command-position words, and whether a word is a redirection target. Quotes are
- * consumed (their content stays a single word), `$(`/backtick substitutions and
- * control operators end the current command, so `echo $(cat f)` still exposes
- * `cat f` as its own simple command. Here-document bodies are opaque.
+ * consumed (their content stays a single word), `$(`/backtick/`${ …; }`
+ * substitutions and control operators end the current command, so
+ * `echo $(cat f)` and `echo ${ cat f; }` still expose `cat f` as its own
+ * simple command. A `${` opens a body only before whitespace or `|`, so
+ * `${var}` parameter expansion stays a word. Here-document bodies are opaque.
  * `piped`: the command is a later stage of a `|`/`|&` pipeline, so its stdin is
  * the previous stage's stdout. `captured`: the command runs inside a `$(…)` or
- * backtick substitution, so its stdout becomes words of the enclosing command.
+ * backtick or `${ …; }` substitution, so its stdout becomes words of the enclosing command.
  * `background`: its pipeline ends in a lone `&` (not `&&`), so the shell does
  * not wait for it. `loopBody`: it runs between a `while`/`until`/`for` loop's
  * `do` and `done` (the `do` command included), so it repeats; the loop's
@@ -121,7 +130,7 @@ function markLoops(commands: readonly ParsedCommand[], background: ReadonlySet<n
 	});
 }
 
-/** `unterminated`: a quote or `$(`/backtick substitution never closes, so the shell would refuse the line. */
+/** `unterminated`: a quote or `$(`/backtick/`${ …; }` substitution never closes, so the shell would refuse the line. */
 type ShellParse = { readonly kind: "complete"; readonly commands: SimpleCommand[] } | { readonly kind: "unterminated" };
 
 /** The simple commands of a line, best effort: an unterminated line yields what was read. */
@@ -147,7 +156,7 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 	let wordDynamic = false;
 	let piped = false;
 	let quote: '"' | "'" | null = null;
-	const substitutions: Array<{ readonly delimiter: "$(" | "`"; readonly resumeQuote: '"' | null }> = [];
+	const substitutions: Array<{ readonly delimiter: "$(" | "`" | "${"; readonly resumeQuote: '"' | null }> = [];
 	const suspendedCommands: Array<{ readonly current: CommandToken[]; readonly pipelineId: number; readonly piped: boolean }> = [];
 	const hereDocuments: HereDocument[] = [];
 	let expectingHereDocumentDelimiter: HereDocument | null = null;
@@ -180,7 +189,7 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 		piped = false;
 		pipelineId = nextPipelineId++;
 	};
-	const beginSubstitution = (delimiter: "$(" | "`", resumeQuote: '"' | null): void => {
+	const beginSubstitution = (delimiter: "$(" | "`" | "${", resumeQuote: '"' | null): void => {
 		// The word fragment before the substitution and any fragment glued after it are dynamic.
 		wordDynamic = true;
 		flushWord();
@@ -218,6 +227,12 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 			} else if (quote === '"' && ch === "`") {
 				beginSubstitution("`", '"');
 				quote = null;
+			} else if (quote === '"' && ch === "$" && command[i + 1] === "{" && isFunctionSubstitutionOpener(command[i + 2])) {
+				// `"${ …; }"` runs its body like `"$(…)"`; `|` of `${|` is consumed with the opener.
+				beginSubstitution("${", '"');
+				quote = null;
+				i++;
+				if (command[i + 1] === "|") i++;
 			} else {
 				if (quote === '"' && ch === "$") wordDynamic = true;
 				word += ch;
@@ -242,6 +257,12 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 			i++;
 			continue;
 		}
+		if (ch === "$" && command[i + 1] === "{" && isFunctionSubstitutionOpener(command[i + 2])) {
+			beginSubstitution("${", null);
+			i++;
+			if (command[i + 1] === "|") i++;
+			continue;
+		}
 		if (ch === "`") {
 			const substitution = substitutions[substitutions.length - 1];
 			if (substitution?.delimiter === "`") finishSubstitution();
@@ -249,6 +270,12 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 			continue;
 		}
 		if (ch === ")" && substitutions[substitutions.length - 1]?.delimiter === "$(") {
+			finishSubstitution();
+			continue;
+		}
+		// `}` closes a `${ …; }` body only where the shell reads it as a reserved
+		// word: first word of a simple command. A `}` glued to a word stays literal.
+		if (ch === "}" && wordStart === null && current.length === 0 && substitutions[substitutions.length - 1]?.delimiter === "${") {
 			finishSubstitution();
 			continue;
 		}

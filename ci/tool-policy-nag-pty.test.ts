@@ -81,6 +81,23 @@ describe("pty shell structure", () => {
 		expect(ruleOf("nohup sleep 100")).toBe("detach");
 	});
 
+	test("a Bash function-substitution body decides like a $(…) body; parameter expansion stays inert", () => {
+		expect(ruleOf(`echo \${ ssh host; }`)).toBe("ssh");
+		expect(ruleOf(`echo \${| ssh host; }`)).toBe("ssh");
+		expect(ruleOf(`echo "\${ ssh host; }"`)).toBe("ssh");
+		expect(ruleOf(`x=\${ ssh host; }`)).toBe("ssh");
+		expect(ruleOf(`echo \${HOME}/x`)).toBeNull();
+		expect(ruleOf(`echo \${ ssh host`)).toBeNull();
+	});
+
+	test("a function-substitution body closes only at a } the shell reads as a reserved word", () => {
+		expect(ruleOf(`echo \${ ssh host; } x`)).toBe("ssh");
+		expect(ruleOf(`echo \${ echo a }`)).toBeNull();
+		expect(ruleOf(`echo \${ ssh host; >f }`)).toBeNull();
+		expect(ruleOf(`echo '\${ ssh host; }'`)).toBeNull();
+		expect(ruleOf(`echo \\\${ ssh host; }`)).toBeNull();
+	});
+
 	test("the first hit in source order names the rule", () => {
 		expect(ptyShellHit("sudo ls; ssh host true")?.category).toBe("terminal");
 		expect(ptyShellHit("ssh host true & sleep 1")?.rule).toBe("ssh");
