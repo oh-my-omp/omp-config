@@ -4,8 +4,10 @@
 //   hold [--target] [--repo DIR]                          build a sandbox, keep it until SIGINT/SIGTERM, then remove it
 //   run  [--target] [--repo DIR] SCENARIO_JSON MODEL...   build, run the scenario for each model, remove
 //   matrix RUN SCENARIO_JSON MODEL...                     run a scenario inside a held sandbox
+//   cache RUN                                             export the prompt-cache report of a held sandbox now
 //   down RUN                                              remove a run whose holder was killed without cleanup
-// Behavior, contracts and failure policy: sandbox/README.md.
+// hold and run also export the prompt-cache report before teardown. Behavior, contracts and
+// failure policy: sandbox/README.md.
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -35,12 +37,14 @@ type Command =
 	| { readonly kind: "hold"; readonly options: BuildOptions }
 	| { readonly kind: "run"; readonly options: BuildOptions; readonly scenario: string; readonly models: readonly string[] }
 	| { readonly kind: "matrix"; readonly run: string; readonly scenario: string; readonly models: readonly string[] }
+	| { readonly kind: "cache"; readonly run: string }
 	| { readonly kind: "down"; readonly run: string };
 
 const USAGE = `usage:
   sandbox.ts hold [--target] [--repo DIR]
   sandbox.ts run [--target] [--repo DIR] SCENARIO_JSON MODEL...
   sandbox.ts matrix RUN SCENARIO_JSON MODEL...
+  sandbox.ts cache RUN
   sandbox.ts down RUN`;
 
 class UsageError extends Error {}
@@ -86,6 +90,8 @@ function parseCommand(argv: readonly string[]): Command {
 			if (scenario === undefined || models.length === 0) throw new UsageError("matrix needs RUN, SCENARIO_JSON and at least one MODEL");
 			return { kind: "matrix", run: parseRunId(run), scenario: resolve(scenario), models };
 		}
+		case "cache":
+			return { kind: "cache", run: parseRunId(positional[0]) };
 		case "down":
 			return { kind: "down", run: parseRunId(positional[0]) };
 		default:
@@ -138,7 +144,7 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 			names.container,
 			"mkdir",
 			"-p",
-			join(HOME, ".omp"),
+			join(HOME, ".omp", "agent", "sessions"),
 			join(HOME, ".claude"),
 			"/repo",
 			"/work",
@@ -244,7 +250,33 @@ function resultKind(driverJson: string): string {
 	}
 }
 
-/** hold and run: ledger row, build, the middle step, and teardown in `finally`. */
+/**
+ * Runs `cache.ts` over every session the sandbox ran and copies its report to the host as
+ * `<out>/cache.json`. False after printing why the export failed.
+ */
+async function exportCache(names: Names): Promise<boolean> {
+	const inContainer = "/evidence/cache.json";
+	const exported = await exec([
+		"docker",
+		"exec",
+		names.container,
+		"bun",
+		"/sandbox/cache.ts",
+		join(HOME, ".omp", "agent", "sessions"),
+		inContainer,
+	]);
+	process.stdout.write(exported.stdout);
+	const hostFile = join(names.out, "cache.json");
+	const copied = exported.code === 0 ? await exec(["docker", "cp", `${names.container}:${inContainer}`, hostFile]) : exported;
+	if (copied.code !== 0) {
+		console.error(`cache export failed (exit ${copied.code}): ${copied.stderr.trim()}`);
+		return false;
+	}
+	console.log(`cache: ${hostFile}`);
+	return true;
+}
+
+/** hold and run: ledger row, build, the middle step, the cache export, and teardown in `finally`. */
 async function withSandbox(
 	options: BuildOptions,
 	purpose: string,
@@ -261,6 +293,7 @@ async function withSandbox(
 	try {
 		await build(names, options, controller.signal);
 		code = await middle(names, controller.signal);
+		await exportCache(names);
 	} catch (error) {
 		console.error(`sandbox ${names.container}: ${error instanceof Error ? error.message : String(error)}`);
 		code = 1;
@@ -279,6 +312,7 @@ async function hold(names: Names, signal: AbortSignal): Promise<number> {
   interactive:  docker exec -it -w /work ${names.container} omp --model <provider>/<model>
   batch:        bun ${join(import.meta.dir, "sandbox.ts")} matrix ${names.run} SCENARIO_JSON MODEL...
   evidence:     ${join(names.out, "evidence")}
+  cache:        bun ${join(import.meta.dir, "sandbox.ts")} cache ${names.run}   (also exported before teardown)
   stop:         Ctrl-C or SIGTERM to this process, then let it finish removing the sandbox (a few seconds; never SIGKILL)`);
 	const { promise, resolve: stopped } = Promise.withResolvers<void>();
 	if (signal.aborted) stopped();
@@ -304,6 +338,8 @@ async function main(argv: readonly string[]): Promise<number> {
 		}
 		case "matrix":
 			return matrix(namesOf(command.run), command.scenario, command.models);
+		case "cache":
+			return (await exportCache(namesOf(command.run))) ? 0 : 1;
 		case "down": {
 			const names = namesOf(command.run);
 			const { clean, evidence } = await teardown(names);

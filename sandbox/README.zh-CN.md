@@ -12,12 +12,13 @@
 bun sandbox/sandbox.ts hold [--target] [--repo DIR]                          # 建好后保持，收到 SIGINT/SIGTERM 时删除
 bun sandbox/sandbox.ts run [--target] [--repo DIR] SCENARIO_JSON MODEL...   # 建好，对每个模型跑一遍场景，删除
 bun sandbox/sandbox.ts matrix RUN SCENARIO_JSON MODEL...                     # 在保持中的沙箱里跑场景
+bun sandbox/sandbox.ts cache RUN                                             # 立即导出保持中沙箱的提示缓存报告
 bun sandbox/sandbox.ts down RUN                                              # 删除持有进程被杀后遗留的运行
 ```
 
 - `--repo` 默认是 `sandbox/` 所在的 checkout。`--target` 增加 ssh 目标机。
 - `hold` 打印运行 id 与接入命令，然后等待。omp 启动前先准备会话工作区：文件、仓库等测试素材经 `docker exec omp-sandbox-<run> sh -c '…'` 放到 `/work` 下。交互会话用 `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`；agent 经 `exec_command` 驱动这条命令。用 Ctrl-C 或 SIGTERM 结束持有进程并等它退出：清理需要几秒。持有进程跑在 `exec_command` 会话里时，发送 Ctrl-C（`write_stdin` 发 `\u0003`），不要用 `kill_session`：它 2 秒后升级为 SIGKILL，会打断清理。
-- `run` 在每个模型都通过或未测时退出 0，否则退出 1。`matrix` 相同。
+- `run` 在每个模型都通过或未测时退出 0，否则退出 1。`matrix` 相同。`cache` 在报告到达宿主机时退出 0，否则退出 1。
 - `down` 只用于没有走到 `finally` 就退出的持有进程（SIGKILL、宿主机崩溃），删除带该运行标签的全部资源。
 
 ## 一次运行包含什么
@@ -71,9 +72,23 @@ bun sandbox/sandbox.ts down RUN                                              # �
 
 证据写到 `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`。通常会生成 `<name>.driver.json` 报告（结果、每次工具调用的输入、`isError` 与结果前 400 字符、终态断言输出，以及最后一条回复的前 1,000 字符）。`<name>.events.jsonl`（每个 RPC 帧）在 RPC 会话启动时创建；只有 omp 报告了存在的会话文件时，才复制为 `<name>.session.jsonl`。若 `init` 失败，只写驱动报告。宿主机对每个模型只复制实际存在的上述证据文件；`agent.db` 与 `models.yml` 不离开容器。事件与会话文件包含模型看到的一切，所以场景不得读取凭据文件。
 
+## 提示缓存报告
+
+`hold` 与 `run` 在中间步骤之后、清理之前导出报告，所以报告覆盖本次运行启动的全部会话，包括交互会话；`cache RUN` 可随时从保持中的沙箱导出。每次导出覆盖宿主机上的 `/tmp/omp-sandbox-<run>/cache.json`，并以 Markdown 打印两张汇总表。导出失败时打印原因，不改变 `hold` 或 `run` 的退出码。
+
+`sandbox/cache.ts` 在容器内读取 `~/.omp/agent/sessions` 下的全部 `*.jsonl`：主会话，以及嵌套在其目录里的子代理记录。复制 `~/.omp/agent` 时不含 `sessions/`，所以这个目录起始为空。一次模型调用是一条助手 `message` 条目（`source.kind` 为 `turn`，即 agent 循环的一轮）或一条 `model_usage` 条目（`aux`，附 omp 记下的 `purpose`，如 `job-caption`）。没有被任何记录写下的调用不在报告里。
+
+| `cache.json` 字段 | 内容 |
+|---|---|
+| `calls` | 按记录顺序每次调用一行：`transcript`（`sessions/` 下的路径）、`line`、`at`、`source`、`provider`、`model`、`stopReason`、`input`、`cacheRead`、`cacheWrite`、`output`、`hitRate` |
+| `byTranscript`、`byModel` | 按记录文件与按 `provider/model` 的汇总：`calls`、`callsWithRead`（`cacheRead` > 0 的调用数）、四项 token 之和，以及按 token 加权的 `hitRate` |
+| `skipped` | 不是 JSON 对象的行，例如仍在写入的会话被截断的最后一行 |
+
+token 数取 omp 归一化后的用量，其中 `input` 不含缓存 token。一次调用的提示是 `input + cacheRead + cacheWrite`，`hitRate` 是 `cacheRead / 提示`；提示为 0 时为 `null`，例如在服务商处失败的调用。报告只含数字、模型名、purpose 与时间戳，不含消息文本。
+
 ## 生命周期与台账
 
-OrbStack 台账是目录 `~/Ext/work/orbstack/`；沙箱运行在其中有自己的文件 `omp-sandbox.md`。`hold` 与 `run` 在创建任何资源之前写入本次运行的一行（状态「进行中」），台账目录不存在时拒绝启动。构建、场景或等待信号都在 `try` 中进行；`finally` 尝试删除本次运行的容器与网络，再用按 `name=omp-sandbox-<run>` 过滤的 `docker ps -a` 与 `docker network ls` 检查残留。随后原地改写同一行：「已完成、已清理」并附删除记录与空的列表结果，或「清理失败」并附残留或 Docker 命令失败详情，包括无法列出资源的情况（命令随后以 1 退出）。`down` 以同样方式改写该行。
+OrbStack 台账是目录 `~/Ext/work/orbstack/`；沙箱运行在其中有自己的文件 `omp-sandbox.md`。`hold` 与 `run` 在创建任何资源之前写入本次运行的一行（状态「进行中」），台账目录不存在时拒绝启动。构建、场景或等待信号，以及随后的提示缓存导出，都在 `try` 中进行；`finally` 尝试删除本次运行的容器与网络，再用按 `name=omp-sandbox-<run>` 过滤的 `docker ps -a` 与 `docker network ls` 检查残留。随后原地改写同一行：「已完成、已清理」并附删除记录与空的列表结果，或「清理失败」并附残留或 Docker 命令失败详情，包括无法列出资源的情况（命令随后以 1 退出）。`down` 以同样方式改写该行。
 
 被 SIGKILL 的持有进程会让该行停在「进行中」、资源留在原处；`down <run>` 删除它们。
 
@@ -81,4 +96,4 @@ OrbStack 台账是目录 `~/Ext/work/orbstack/`；沙箱运行在其中有自己
 
 - 容器隔离的是宿主机文件，不是远端服务：会话持有真实凭据并可以出网。不要写会作用于不该被改动的远端系统或账号的场景。
 - 一次运行一个沙箱，运行不复用。运行 id 是构建时间的 36 进制表示。
-- `sandbox/*.ts` 保持自包含：容器内的 `/sandbox` 是本目录的副本，`driver.ts`、`db.ts` 与 `autoupdate-off.ts` 只靠 Bun 在那里运行。
+- `sandbox/*.ts` 保持自包含：容器内的 `/sandbox` 是本目录的副本，`driver.ts`、`cache.ts`、`db.ts` 与 `autoupdate-off.ts` 只靠 Bun 在那里运行。

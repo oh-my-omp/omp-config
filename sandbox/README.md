@@ -12,12 +12,13 @@ The sandbox runs on macOS with OrbStack (or another Docker engine) and needs `bu
 bun sandbox/sandbox.ts hold [--target] [--repo DIR]                          # build, keep until SIGINT/SIGTERM, remove
 bun sandbox/sandbox.ts run [--target] [--repo DIR] SCENARIO_JSON MODEL...   # build, run the scenario per model, remove
 bun sandbox/sandbox.ts matrix RUN SCENARIO_JSON MODEL...                     # run a scenario inside a held sandbox
+bun sandbox/sandbox.ts cache RUN                                             # export the prompt-cache report of a held sandbox now
 bun sandbox/sandbox.ts down RUN                                              # remove a run whose holder was killed
 ```
 
 - `--repo` defaults to the checkout that contains `sandbox/`. `--target` adds the ssh target.
 - `hold` prints the run id and the commands that attach to it, then waits. Prepare the session's workspace before omp starts: files, repositories and other fixtures go under `/work` through `docker exec omp-sandbox-<run> sh -c '…'`. Interactive sessions use `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`; an agent drives that command through `exec_command`. Stop the holder with Ctrl-C or SIGTERM and let it exit: teardown takes a few seconds. For a holder running in an `exec_command` session, send Ctrl-C (`write_stdin` with `\u0003`), not `kill_session`, which escalates to SIGKILL after 2 s and cuts the teardown short.
-- `run` exits 0 when every model passes or is untested, 1 otherwise. `matrix` exits the same way.
+- `run` exits 0 when every model passes or is untested, 1 otherwise. `matrix` exits the same way. `cache` exits 0 when the report reached the host, 1 otherwise.
 - `down` is only for a holder that died without its `finally` (SIGKILL, a crashed host). It removes every resource labelled with the run.
 
 ## What a run contains
@@ -71,9 +72,23 @@ Each run of a scenario for a model ends with a result:
 
 Evidence lands in `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`. The normal report is `<name>.driver.json` (result, every tool call with its input, `isError` and the first 400 characters of its result, the final-assertion output, and the first 1,000 characters of the last reply). `<name>.events.jsonl` (every RPC frame) is created when the RPC session starts; `<name>.session.jsonl` is copied only if omp reports a session file that exists. If `init` fails, only the driver report is written. The host copies whichever of these evidence files exist for each model; `agent.db` and `models.yml` never leave the container. Events and session files contain whatever the model saw, so a scenario must not read credential files.
 
+## Prompt-cache report
+
+`hold` and `run` export the report after the middle step and before teardown, so it covers every session the run started, the interactive ones included; `cache RUN` exports it from a held sandbox at any time. Each export overwrites `/tmp/omp-sandbox-<run>/cache.json` on the host and prints its two totals tables as Markdown. A failed export prints its reason and does not change the exit code of `hold` or `run`.
+
+`sandbox/cache.ts` runs in the container over every `*.jsonl` under `~/.omp/agent/sessions`: the main sessions and the subagent transcripts nested in their directories. That directory starts empty, because the copy of `~/.omp/agent` leaves out `sessions/`. A model call is an assistant `message` entry (`source.kind` `turn`, a turn of the agent loop) or a `model_usage` entry (`aux`, with the `purpose` omp recorded, such as `job-caption`). Calls that no transcript records are not in the report.
+
+| Field of `cache.json` | Contents |
+|---|---|
+| `calls` | One row per call in transcript order: `transcript` (path under `sessions/`), `line`, `at`, `source`, `provider`, `model`, `stopReason`, `input`, `cacheRead`, `cacheWrite`, `output`, `hitRate` |
+| `byTranscript`, `byModel` | Totals per transcript and per `provider/model`: `calls`, `callsWithRead` (calls with `cacheRead` > 0), the four token sums and the token-weighted `hitRate` |
+| `skipped` | Lines that are not JSON objects, such as the torn last line of a session still being written |
+
+Token counts are omp's normalized usage, in which `input` excludes cached tokens. A call's prompt is `input + cacheRead + cacheWrite` and its `hitRate` is `cacheRead / prompt`; it is `null` when the prompt is 0, as for a call that failed at the provider. Only numbers, model names, purposes and timestamps enter the report, never message text.
+
 ## Lifecycle and the ledger
 
-The OrbStack ledger is the directory `~/Ext/work/orbstack/`; sandbox runs have their own file there, `omp-sandbox.md`. `hold` and `run` write the run's row (state 进行中) before creating anything and refuse to start when the ledger directory is missing. The build, the scenario or the wait for a signal run inside `try`; the `finally` attempts to remove the run's containers and network and checks for leftovers with `docker ps -a` and `docker network ls` filtered by `name=omp-sandbox-<run>`. It rewrites the same row with the result: 已完成、已清理 with the removal and the empty listings, or 清理失败 with remaining resources or failed Docker command details, including a failure to list resources (the command then exits 1). `down` rewrites the row the same way.
+The OrbStack ledger is the directory `~/Ext/work/orbstack/`; sandbox runs have their own file there, `omp-sandbox.md`. `hold` and `run` write the run's row (state 进行中) before creating anything and refuse to start when the ledger directory is missing. The build, the scenario or the wait for a signal, and then the prompt-cache export, run inside `try`; the `finally` attempts to remove the run's containers and network and checks for leftovers with `docker ps -a` and `docker network ls` filtered by `name=omp-sandbox-<run>`. It rewrites the same row with the result: 已完成、已清理 with the removal and the empty listings, or 清理失败 with remaining resources or failed Docker command details, including a failure to list resources (the command then exits 1). `down` rewrites the row the same way.
 
 A SIGKILLed holder leaves the row at 进行中 and its resources in place; `down <run>` removes them.
 
@@ -81,4 +96,4 @@ A SIGKILLed holder leaves the row at 进行中 and its resources in place; `down
 
 - The container isolates the host's files, not remote services: sessions run with real credentials and outbound network access. Do not write scenarios that act on remote systems or accounts they must not change.
 - One run, one sandbox: runs are not reused. The run id is the build time in base 36.
-- Keep `sandbox/*.ts` self-contained: `/sandbox` in the container holds a copy of this directory, and `driver.ts`, `db.ts` and `autoupdate-off.ts` run there with Bun alone.
+- Keep `sandbox/*.ts` self-contained: `/sandbox` in the container holds a copy of this directory, and `driver.ts`, `cache.ts`, `db.ts` and `autoupdate-off.ts` run there with Bun alone.
