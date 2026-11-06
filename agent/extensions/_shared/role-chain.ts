@@ -28,9 +28,7 @@ export type RoleChainReply =
  * costs only its own share; an attempt that times out records a failure line and
  * the chain moves on.
  */
-export type AttemptBudget =
-	| { readonly kind: "whole" }
-	| { readonly kind: "split"; readonly deadlineAt: number };
+export type AttemptBudget = { readonly kind: "whole" } | { readonly kind: "split"; readonly deadlineAt: number };
 
 /**
  * Ask the chat models of `roles` (resolved via {@link roleModels} at call time)
