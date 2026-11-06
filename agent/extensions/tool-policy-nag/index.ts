@@ -88,7 +88,17 @@
  * pty lane failure lets the call run.
  */
 import type { Judge } from "@oh-my-pi/pi-ai";
-import { type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
+import {
+	type AutoCompactionEndEvent,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type Settings,
+	type ToolCallEvent,
+	type ToolCallEventResult,
+	type ToolResultEvent,
+	type ToolResultEventResult,
+	z,
+} from "@oh-my-pi/pi-coding-agent";
 import { cfgBashInterceptorEnabled } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -327,272 +337,311 @@ type IntentJob = {
 	readonly reminder: Promise<string | null>;
 };
 
-export default function toolPolicyNag(pi: ExtensionAPI): void {
-	let state: NagState = WATCHING;
-	const nestedDeviceCalls = new Set<string>();
+/** The factory-owned runtime state the closures used to share by capture, now passed to each hook. */
+type Nag = {
+	readonly pi: ExtensionAPI;
+	state: NagState;
+	readonly nestedDeviceCalls: Set<string>;
 	/** Bumped by every session move; an intent verdict from an older epoch is shown, never sent. */
-	let epoch = 0;
+	epoch: number;
 	/** Config, spec and judge failures already reported, so a broken setup warns once per process. */
-	const warned = new Set<string>();
+	readonly warned: Set<string>;
 	/** Intent judgments in flight, by tool call id. */
-	const intentJobs = new Map<string, IntentJob>();
+	readonly intentJobs: Map<string, IntentJob>;
 	/** Intent reminders whose call's result had already gone out; they ride on the next watched result. */
-	const lateReminders: string[] = [];
+	readonly lateReminders: string[];
+	/** Settings carrying this extension's interceptor override; only this override is ever cleared. */
+	interceptorOff: Settings | null;
+};
 
-	const commit = (next: NagState): void => {
-		state = next;
-		pi.appendEntry(STATE_ENTRY_TYPE, next);
-	};
+function commit(nag: Nag, next: NagState): void {
+	nag.state = next;
+	nag.pi.appendEntry(STATE_ENTRY_TYPE, next);
+}
 
-	const rearm = (reason: string): void => {
-		if (state.kind === "watching" && state.hits === 0 && state.nagsSent === 0) return;
-		pi.logger.info("Tool-policy nag re-armed", { reason, previous: state });
-		commit(WATCHING);
-	};
+function rearm(nag: Nag, reason: string): void {
+	if (nag.state.kind === "watching" && nag.state.hits === 0 && nag.state.nagsSent === 0) return;
+	nag.pi.logger.info("Tool-policy nag re-armed", { reason, previous: nag.state });
+	commit(nag, WATCHING);
+}
 
-	const restore = (reason: string, ctx: ExtensionContext): void => {
-		epoch += 1;
-		intentJobs.clear();
-		lateReminders.length = 0;
-		state = rebuildState(ctx);
-		pi.logger.info("Tool-policy nag state restored", { reason, state });
-	};
+function restore(nag: Nag, reason: string, ctx: ExtensionContext): void {
+	nag.epoch += 1;
+	nag.intentJobs.clear();
+	nag.lateReminders.length = 0;
+	nag.state = rebuildState(ctx);
+	nag.pi.logger.info("Tool-policy nag state restored", { reason, state: nag.state });
+}
 
-	const warnOnce = (ctx: ExtensionContext, warning: LaneWarning): void => {
-		if (warned.has(warning.en)) return;
-		warned.add(warning.en);
-		pi.logger.warn(warning.en);
-		if (ctx.hasUI) ctx.ui.notify(tr(warning.en, warning.zh), "warning");
-	};
+function warnOnce(nag: Nag, ctx: ExtensionContext, warning: LaneWarning): void {
+	if (nag.warned.has(warning.en)) return;
+	nag.warned.add(warning.en);
+	nag.pi.logger.warn(warning.en);
+	if (ctx.hasUI) ctx.ui.notify(tr(warning.en, warning.zh), "warning");
+}
 
-	/** Resolve all activation inputs once, before deciding which tool lane owns delivery. */
-	const prepareIntent = async (ctx: ExtensionContext): Promise<{ readonly judge: Judge; readonly spec: IntentSpec } | null> => {
-		const loaded = await loadIntentSpec(SPEC_DIR);
-		switch (loaded.kind) {
-			case "missing":
-				warnOnce(ctx, {
-					en: `tool-policy-nag: intent spec missing (${SPEC_DIR}/INTENT-*.md); intent lane will not remind`,
-					zh: `tool-policy-nag：意向 spec 缺失（${SPEC_DIR}/INTENT-*.md），意向通道不提醒`,
-				});
-				return null;
-			case "invalid":
-				warnOnce(ctx, {
-					en: `tool-policy-nag: invalid intent spec (${loaded.reason}); intent lane will not remind`,
-					zh: `tool-policy-nag：意向 spec 无效（${loaded.reason}），意向通道不提醒`,
-				});
-				return null;
-			case "disabled":
-				return null;
-			case "found":
-				break;
-			default: {
-				const unreachable: never = loaded;
-				return unreachable;
-			}
-		}
-		const opened = openJudge(ctx, "tool-policy-nag");
-		return opened.kind === "inactive" ? null : { judge: opened.judge, spec: loaded.spec };
-	};
-
-	/** The intent reminder for a call, or null when the verdict does not fire. */
-	const intentCheck = async (
-		ctx: ExtensionContext,
-		judge: Judge,
-		lane: IntentLane,
-		spec: IntentSpec,
-		call: WatchedCall,
-	): Promise<string | null> => {
-		const verdict = await judgeIntent(judge, spec, call, AbortSignal.timeout(JUDGE_TIMEOUT_MS));
-		switch (verdict.kind) {
-			case "failed":
-				warnOnce(ctx, {
-					en: `tool-policy-nag: intent judgment failed (${verdict.reason})`,
-					zh: `tool-policy-nag：意向判定失败（${verdict.reason}）`,
-				});
-				return null;
-			case "ok":
-				break;
-			default: {
-				const unreachable: never = verdict;
-				return unreachable;
-			}
-		}
-		const tool = call.kind === "shell" ? call.tool : "eval";
-		const violation = intentViolation(call, verdict.label);
-		const fired = violation && verdict.probability >= lane.threshold;
-		pi.logger.info("Tool-policy intent verdict", {
-			tool,
-			spec: spec.path,
-			threshold: lane.threshold,
-			choice: verdict.label,
-			probability: verdict.probability,
-			confidence: verdict.confidence,
-			options: spec.options.length,
-			violation,
-			fired,
-		});
-		if (!fired) return null;
-		const option = spec.options.find((candidate) => candidate.label === verdict.label);
-		if (option === undefined) return null;
-		if (ctx.hasUI)
-			ctx.ui.notify(
-				tr(
-					`tool-policy-nag intent: ${tool} → ${verdict.label} ${verdict.probability.toFixed(2)} (${option.title})`,
-					`tool-policy-nag 意向：${tool} → ${verdict.label} ${verdict.probability.toFixed(2)}（${option.title}）`,
-				),
-				"warning",
-			);
-		return intentReminder(call, option);
-	};
-
-	/** Starts the intent judgment beside the call; the result collects it. */
-	const startIntent = (ctx: ExtensionContext, lane: IntentLane, call: WatchedCall): IntentJob => {
-		const prepared = prepareIntent(ctx).catch((error) => {
-			warnOnce(ctx, {
-				en: `tool-policy-nag: JUDGE preparation failed (${errorText(error)})`,
-				zh: `tool-policy-nag: JUDGE 准备失败（${errorText(error)}）`,
+/** Resolve all activation inputs once, before deciding which tool lane owns delivery. */
+async function prepareIntent(nag: Nag, ctx: ExtensionContext): Promise<{ readonly judge: Judge; readonly spec: IntentSpec } | null> {
+	const loaded = await loadIntentSpec(SPEC_DIR);
+	switch (loaded.kind) {
+		case "missing":
+			warnOnce(nag, ctx, {
+				en: `tool-policy-nag: intent spec missing (${SPEC_DIR}/INTENT-*.md); intent lane will not remind`,
+				zh: `tool-policy-nag：意向 spec 缺失（${SPEC_DIR}/INTENT-*.md），意向通道不提醒`,
 			});
 			return null;
-		});
-		const reminder = prepared.then((intent) => (intent === null ? null : intentCheck(ctx, intent.judge, lane, intent.spec, call)));
-		return { epoch, available: prepared.then((intent) => intent !== null), reminder };
-	};
+		case "invalid":
+			warnOnce(nag, ctx, {
+				en: `tool-policy-nag: invalid intent spec (${loaded.reason}); intent lane will not remind`,
+				zh: `tool-policy-nag：意向 spec 无效（${loaded.reason}），意向通道不提醒`,
+			});
+			return null;
+		case "disabled":
+			return null;
+		case "found":
+			break;
+		default: {
+			const unreachable: never = loaded;
+			return unreachable;
+		}
+	}
+	const opened = openJudge(ctx, "tool-policy-nag");
+	return opened.kind === "inactive" ? null : { judge: opened.judge, spec: loaded.spec };
+}
 
-	/** Waits briefly for a verdict; one that lands later is held for the next result, or sent when idle. */
-	const collectIntent = async (ctx: ExtensionContext, job: IntentJob): Promise<string | null> => {
-		const settled = await Promise.race([
-			job.reminder.then((reminder) => ({ kind: "ready", reminder }) as const),
-			Bun.sleep(INTENT_WAIT_MS).then(() => ({ kind: "late" }) as const),
-		]);
-		if (settled.kind === "ready") return job.epoch === epoch ? settled.reminder : null;
-		void job.reminder
-			.then((reminder) => {
-				if (reminder === null || job.epoch !== epoch) return;
-				if (ctx.isIdle()) pi.sendUserMessage(reminder, { attribution: "agent" });
-				else lateReminders.push(reminder);
-			})
-			.catch((error) => pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) }));
+/** The intent reminder for a call, or null when the verdict does not fire. */
+async function intentCheck(
+	nag: Nag,
+	ctx: ExtensionContext,
+	judge: Judge,
+	lane: IntentLane,
+	spec: IntentSpec,
+	call: WatchedCall,
+): Promise<string | null> {
+	const verdict = await judgeIntent(judge, spec, call, AbortSignal.timeout(JUDGE_TIMEOUT_MS));
+	switch (verdict.kind) {
+		case "failed":
+			warnOnce(nag, ctx, {
+				en: `tool-policy-nag: intent judgment failed (${verdict.reason})`,
+				zh: `tool-policy-nag：意向判定失败（${verdict.reason}）`,
+			});
+			return null;
+		case "ok":
+			break;
+		default: {
+			const unreachable: never = verdict;
+			return unreachable;
+		}
+	}
+	const tool = call.kind === "shell" ? call.tool : "eval";
+	const violation = intentViolation(call, verdict.label);
+	const fired = violation && verdict.probability >= lane.threshold;
+	nag.pi.logger.info("Tool-policy intent verdict", {
+		tool,
+		spec: spec.path,
+		threshold: lane.threshold,
+		choice: verdict.label,
+		probability: verdict.probability,
+		confidence: verdict.confidence,
+		options: spec.options.length,
+		violation,
+		fired,
+	});
+	if (!fired) return null;
+	const option = spec.options.find((candidate) => candidate.label === verdict.label);
+	if (option === undefined) return null;
+	if (ctx.hasUI)
+		ctx.ui.notify(
+			tr(
+				`tool-policy-nag intent: ${tool} → ${verdict.label} ${verdict.probability.toFixed(2)} (${option.title})`,
+				`tool-policy-nag 意向：${tool} → ${verdict.label} ${verdict.probability.toFixed(2)}（${option.title}）`,
+			),
+			"warning",
+		);
+	return intentReminder(call, option);
+}
+
+/** Starts the intent judgment beside the call; the result collects it. */
+function startIntent(nag: Nag, ctx: ExtensionContext, lane: IntentLane, call: WatchedCall): IntentJob {
+	const prepared = prepareIntent(nag, ctx).catch((error) => {
+		warnOnce(nag, ctx, {
+			en: `tool-policy-nag: JUDGE preparation failed (${errorText(error)})`,
+			zh: `tool-policy-nag：JUDGE 准备失败（${errorText(error)}）`,
+		});
 		return null;
-	};
+	});
+	const reminder = prepared.then((intent) => (intent === null ? null : intentCheck(nag, ctx, intent.judge, lane, intent.spec, call)));
+	return { epoch: nag.epoch, available: prepared.then((intent) => intent !== null), reminder };
+}
 
-	/** Settings carrying this extension's interceptor override; only this override is ever cleared. */
-	let interceptorOff: Settings | null = null;
+/** Waits briefly for a verdict; one that lands later is held for the next result, or sent when idle. */
+async function collectIntent(nag: Nag, ctx: ExtensionContext, job: IntentJob): Promise<string | null> {
+	const settled = await Promise.race([
+		job.reminder.then((reminder) => ({ kind: "ready", reminder }) as const),
+		Bun.sleep(INTENT_WAIT_MS).then(() => ({ kind: "late" }) as const),
+	]);
+	if (settled.kind === "ready") return job.epoch === nag.epoch ? settled.reminder : null;
+	void job.reminder
+		.then((reminder) => {
+			if (reminder === null || job.epoch !== nag.epoch) return;
+			if (ctx.isIdle()) nag.pi.sendUserMessage(reminder, { attribution: "agent" });
+			else nag.lateReminders.push(reminder);
+		})
+		.catch((error) => nag.pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) }));
+	return null;
+}
 
-	const releaseInterceptor = (reason: string): void => {
-		if (interceptorOff === null) return;
-		cfgBashInterceptorEnabled.clearOverride(interceptorOff);
-		interceptorOff = null;
-		pi.logger.info("Tool-policy bash interceptor override cleared", { reason });
-	};
+function releaseInterceptor(nag: Nag, reason: string): void {
+	if (nag.interceptorOff === null) return;
+	cfgBashInterceptorEnabled.clearOverride(nag.interceptorOff);
+	nag.interceptorOff = null;
+	nag.pi.logger.info("Tool-policy bash interceptor override cleared", { reason });
+}
 
-	/** Under the heuristic detector the interceptor is off whatever config says; otherwise config decides. */
-	const syncInterceptor = (ctx: ExtensionContext, lanes: Lanes): Settings => {
-		const settings = sessionSettings(ctx);
-		if (settings === undefined) throw new Error("tool-policy-nag: current OMP session is not registered");
-		if (lanes.tool?.detector !== "heuristic") {
-			releaseInterceptor("detector is not heuristic");
-			return settings;
-		}
-		if (interceptorOff !== settings) releaseInterceptor("session settings changed");
-		if (interceptorOff === settings && cfgBashInterceptorEnabled.get(settings) === false) return settings;
-		cfgBashInterceptorEnabled.override(settings, false);
-		interceptorOff = settings;
-		pi.logger.info("Tool-policy bash interceptor overridden off", { detector: "heuristic" });
+/** Under the heuristic detector the interceptor is off whatever config says; otherwise config decides. */
+function syncInterceptor(nag: Nag, ctx: ExtensionContext, lanes: Lanes): Settings {
+	const settings = sessionSettings(ctx);
+	if (settings === undefined) throw new Error("tool-policy-nag: current OMP session is not registered");
+	if (lanes.tool?.detector !== "heuristic") {
+		releaseInterceptor(nag, "detector is not heuristic");
 		return settings;
+	}
+	if (nag.interceptorOff !== settings) releaseInterceptor(nag, "session settings changed");
+	if (nag.interceptorOff === settings && cfgBashInterceptorEnabled.get(settings) === false) return settings;
+	cfgBashInterceptorEnabled.override(settings, false);
+	nag.interceptorOff = settings;
+	nag.pi.logger.info("Tool-policy bash interceptor overridden off", { detector: "heuristic" });
+	return settings;
+}
+
+/** The interceptor already refuses routing violations of `bash` before they run. */
+function interceptorOwns(call: WatchedCall, settings: Settings): boolean {
+	return call.kind === "shell" && call.tool === "bash" && cfgBashInterceptorEnabled.get(settings) === true;
+}
+
+function onSessionMove(nag: Nag, reason: string, ctx: ExtensionContext): Promise<void> {
+	return runForMainSession(nag.pi, ctx, () => restore(nag, reason, ctx));
+}
+
+function onSessionCompact(nag: Nag, ctx: ExtensionContext): Promise<void> {
+	return runForMainSession(nag.pi, ctx, () => rearm(nag, "session_compact"));
+}
+
+function onAutoCompactionEnd(nag: Nag, event: AutoCompactionEndEvent, ctx: ExtensionContext): Promise<void> {
+	return runForMainSession(nag.pi, ctx, () => {
+		if (event.aborted || event.skipped === true || event.result === undefined) return;
+		rearm(nag, `auto_compaction_end:${event.action}`);
+	});
+}
+
+function onSessionShutdown(nag: Nag, ctx: ExtensionContext): Promise<void> {
+	return runForMainSession(nag.pi, ctx, () => releaseInterceptor(nag, "session_shutdown"));
+}
+
+async function onToolCall(nag: Nag, event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> {
+	// The device re-dispatches its payload as a nested tool call with the same id;
+	// the outer write already went through every lane.
+	if (event.toolName !== "write" && nag.nestedDeviceCalls.delete(event.toolCallId)) return;
+	const call = watchedCallOf(event.toolName, event.input);
+	if (call === null) return;
+	let loaded: { lanes: Lanes; warnings: readonly LaneWarning[] };
+	try {
+		loaded = await loadLanes(ctx.cwd);
+	} catch (error) {
+		nag.pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) });
+		return;
+	}
+	const { lanes, warnings } = loaded;
+	// Main and sub sessions: a refused call is stopped before every other lane, so nothing counts or reminds.
+	const refusal = await ptyRefusalFor(nag.pi, lanes, call);
+	if (refusal !== null) return { block: true, reason: refusal };
+	if (event.toolName === "write") nag.nestedDeviceCalls.add(event.toolCallId);
+	await runForMainSession(nag.pi, ctx, () => {
+		for (const warning of warnings) warnOnce(nag, ctx, warning);
+		// The tool runs after this hook, so the override reaches this very call.
+		const settings = syncInterceptor(nag, ctx, lanes);
+		if (interceptorOwns(call, settings)) return;
+		if (lanes.tool?.detector === "jev") nag.intentJobs.set(event.toolCallId, startIntent(nag, ctx, lanes.tool.intent, call));
+	});
+}
+
+async function onToolResult(nag: Nag, event: ToolResultEvent, ctx: ExtensionContext): Promise<ToolResultEventResult | undefined> {
+	if (ctx.agent.kind !== "main") return;
+	// A device write's payload ran as a nested call with the same id; its own result carries the facts.
+	if (event.toolName === "write") return;
+	const call = watchedCallOf(event.toolName, event.input);
+	if (call === null) return;
+	const job = nag.intentJobs.get(event.toolCallId);
+	nag.intentJobs.delete(event.toolCallId);
+	const reminders = nag.lateReminders.splice(0);
+	try {
+		const { lanes } = await loadLanes(ctx.cwd);
+		const settings = sessionSettings(ctx);
+		if (settings !== undefined && interceptorOwns(call, settings)) return context(reminders);
+		const outcome = call.kind === "shell" ? shellOutcome(event.details, event.isError) : null;
+		if (call.kind === "shell" && outcome !== null) {
+			const risk = riskCheck(ctx, lanes, call, outcome, (finding) =>
+				nag.pi.logger.info("Tool-policy risk", { tool: call.tool, outcome: outcome.kind, ...finding }),
+			);
+			if (risk !== null) reminders.push(risk);
+		}
+		const tool = lanes.tool;
+		if (tool === null) return context(reminders);
+		switch (tool.detector) {
+			case "heuristic": {
+				const reminder = heuristicCheck(nag.pi, ctx, violationsOf(call, outcome), tool.form, nag.state, (next) => commit(nag, next), true);
+				if (reminder !== null) reminders.push(reminder);
+				break;
+			}
+			case "jev": {
+				const available = job === undefined ? false : await job.available;
+				const reminder = heuristicCheck(
+					nag.pi,
+					ctx,
+					violationsOf(call, outcome),
+					tool.fallback,
+					nag.state,
+					(next) => commit(nag, next),
+					!available,
+				);
+				if (reminder !== null) reminders.push(reminder);
+				if (job === undefined || !available) break;
+				const intent = await collectIntent(nag, ctx, job);
+				if (intent !== null) reminders.push(intent);
+				break;
+			}
+			default: {
+				const unreachable: never = tool;
+				return unreachable;
+			}
+		}
+	} catch (error) {
+		nag.pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) });
+	}
+	return context(reminders);
+}
+
+export default function toolPolicyNag(pi: ExtensionAPI): void {
+	const nag: Nag = {
+		pi,
+		state: WATCHING,
+		nestedDeviceCalls: new Set(),
+		epoch: 0,
+		warned: new Set(),
+		intentJobs: new Map(),
+		lateReminders: [],
+		interceptorOff: null,
 	};
 
-	/** The interceptor already refuses routing violations of `bash` before they run. */
-	const interceptorOwns = (call: WatchedCall, settings: Settings): boolean =>
-		call.kind === "shell" && call.tool === "bash" && cfgBashInterceptorEnabled.get(settings) === true;
-
-	pi.on("session_start", (_event, ctx) => runForMainSession(pi, ctx, () => restore("session_start", ctx)));
-	pi.on("session_switch", (_event, ctx) => runForMainSession(pi, ctx, () => restore("session_switch", ctx)));
-	pi.on("session_branch", (_event, ctx) => runForMainSession(pi, ctx, () => restore("session_branch", ctx)));
-	pi.on("session_tree", (_event, ctx) => runForMainSession(pi, ctx, () => restore("session_tree", ctx)));
-	pi.on("session_compact", (_event, ctx) => runForMainSession(pi, ctx, () => rearm("session_compact")));
-	pi.on("auto_compaction_end", (event, ctx) =>
-		runForMainSession(pi, ctx, () => {
-			if (event.aborted || event.skipped === true || event.result === undefined) return;
-			rearm(`auto_compaction_end:${event.action}`);
-		}),
-	);
-
-	pi.on("session_shutdown", (_event, ctx) => runForMainSession(pi, ctx, () => releaseInterceptor("session_shutdown")));
-
-	pi.on("tool_call", async (event, ctx) => {
-		// The device re-dispatches its payload as a nested tool call with the same id;
-		// the outer write already went through every lane.
-		if (event.toolName !== "write" && nestedDeviceCalls.delete(event.toolCallId)) return;
-		const call = watchedCallOf(event.toolName, event.input);
-		if (call === null) return;
-		let loaded: { lanes: Lanes; warnings: readonly LaneWarning[] };
-		try {
-			loaded = await loadLanes(ctx.cwd);
-		} catch (error) {
-			pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) });
-			return;
-		}
-		const { lanes, warnings } = loaded;
-		// Main and sub sessions: a refused call is stopped before every other lane, so nothing counts or reminds.
-		const refusal = await ptyRefusalFor(pi, lanes, call);
-		if (refusal !== null) return { block: true, reason: refusal };
-		if (event.toolName === "write") nestedDeviceCalls.add(event.toolCallId);
-		await runForMainSession(pi, ctx, () => {
-			for (const warning of warnings) warnOnce(ctx, warning);
-			// The tool runs after this hook, so the override reaches this very call.
-			const settings = syncInterceptor(ctx, lanes);
-			if (interceptorOwns(call, settings)) return;
-			if (lanes.tool?.detector === "jev") intentJobs.set(event.toolCallId, startIntent(ctx, lanes.tool.intent, call));
-		});
-	});
-
-	pi.on("tool_result", async (event, ctx) => {
-		if (ctx.agent.kind !== "main") return;
-		// A device write's payload ran as a nested call with the same id; its own result carries the facts.
-		if (event.toolName === "write") return;
-		const call = watchedCallOf(event.toolName, event.input);
-		if (call === null) return;
-		const job = intentJobs.get(event.toolCallId);
-		intentJobs.delete(event.toolCallId);
-		const reminders = lateReminders.splice(0);
-		try {
-			const { lanes } = await loadLanes(ctx.cwd);
-			const settings = sessionSettings(ctx);
-			if (settings !== undefined && interceptorOwns(call, settings)) return context(reminders);
-			const outcome = call.kind === "shell" ? shellOutcome(event.details, event.isError) : null;
-			if (call.kind === "shell" && outcome !== null) {
-				const risk = riskCheck(ctx, lanes, call, outcome, (finding) =>
-					pi.logger.info("Tool-policy risk", { tool: call.tool, outcome: outcome.kind, ...finding }),
-				);
-				if (risk !== null) reminders.push(risk);
-			}
-			const tool = lanes.tool;
-			if (tool === null) return context(reminders);
-			switch (tool.detector) {
-				case "heuristic": {
-					const nag = heuristicCheck(pi, ctx, violationsOf(call, outcome), tool.form, state, commit, true);
-					if (nag !== null) reminders.push(nag);
-					break;
-				}
-				case "jev": {
-					const available = job === undefined ? false : await job.available;
-					const nag = heuristicCheck(pi, ctx, violationsOf(call, outcome), tool.fallback, state, commit, !available);
-					if (nag !== null) reminders.push(nag);
-					if (job === undefined || !available) break;
-					const intent = await collectIntent(ctx, job);
-					if (intent !== null) reminders.push(intent);
-					break;
-				}
-				default: {
-					const unreachable: never = tool;
-					return unreachable;
-				}
-			}
-		} catch (error) {
-			pi.logger.warn("Tool-policy nag hook failed", { error: errorText(error) });
-		}
-		return context(reminders);
-	});
+	pi.on("session_start", (_event, ctx) => onSessionMove(nag, "session_start", ctx));
+	pi.on("session_switch", (_event, ctx) => onSessionMove(nag, "session_switch", ctx));
+	pi.on("session_branch", (_event, ctx) => onSessionMove(nag, "session_branch", ctx));
+	pi.on("session_tree", (_event, ctx) => onSessionMove(nag, "session_tree", ctx));
+	pi.on("session_compact", (_event, ctx) => onSessionCompact(nag, ctx));
+	pi.on("auto_compaction_end", (event, ctx) => onAutoCompactionEnd(nag, event, ctx));
+	pi.on("session_shutdown", (_event, ctx) => onSessionShutdown(nag, ctx));
+	pi.on("tool_call", (event, ctx) => onToolCall(nag, event, ctx));
+	pi.on("tool_result", (event, ctx) => onToolResult(nag, event, ctx));
 }
 
 /** Reminders ride on the call's result as context for the next model request. */
