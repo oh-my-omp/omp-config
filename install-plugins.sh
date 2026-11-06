@@ -13,7 +13,6 @@ plugins=(
   'pi-package-search'
   'pi-pretty-codeblocks'
   'https://github.com/oh-my-omp/omp-thinking-translator'
-  'https://github.com/oh-my-omp/omp-codex-image-gen'
   'https://github.com/oh-my-omp/omp-playbooks'
   'https://github.com/oh-my-omp/omp-ask-more'
   'https://github.com/oh-my-omp/omp-peers'

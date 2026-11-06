@@ -149,9 +149,13 @@ retry:
       - openai-codex/gpt-5.5
       - xai-oauth/grok-4.5
       - web/ollama
+    image:
+      - openai-codex/gpt-image-2
 inlineToolDescriptors: "on"
 tools:
   xdevDocs: inline
+generate_image:
+  enabled: true
 checkpoint:
   enabled: true
 eval:
