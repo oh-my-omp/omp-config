@@ -167,7 +167,17 @@ function scanDirs(cwd: string): ScanDir[] {
 	return dirs;
 }
 
-function markdownFiles(dir: string): string[] {
+function markdownFiles(dir: string, visited = new Set<string>()): string[] {
+	// Each real directory is expanded once per traversal: a symlink that points back at an
+	// already-expanded directory contributes nothing, which bounds the walk on symlink loops.
+	let realDir: string;
+	try {
+		realDir = fs.realpathSync(dir);
+	} catch {
+		return [];
+	}
+	if (visited.has(realDir)) return [];
+	visited.add(realDir);
 	let entries: fs.Dirent[];
 	try {
 		entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -191,7 +201,7 @@ function markdownFiles(dir: string): string[] {
 				continue;
 			}
 		}
-		if (isDirectory) out = out.concat(markdownFiles(full));
+		if (isDirectory) out = out.concat(markdownFiles(full, visited));
 		else if (isFile && (entry.name.endsWith(".md") || entry.name.endsWith(".mdc"))) out.push(full);
 	}
 	return out.sort((a, b) => a.localeCompare(b));
