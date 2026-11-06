@@ -2090,26 +2090,29 @@ function settleSettings(
 
 // --- apply ------------------------------------------------------------------
 
-export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
-	const report = newReport();
-	let ops: Op[];
-	let declared: string[];
-	let todoRequired: boolean;
-	let base: BaseRecord;
-	let ctxReady = false;
-	// Planned with the rest so blocked ownership stops the apply before plugins install; used only once the plugin carries src/ctx.
-	let ctxRetirements: Op[] = [];
-	let history: RepoHistory;
-	let settings: SettingsPreflight;
-	let exclusions: Exclusions;
+/**
+ * Mutable apply state produced by `planApply` and carried through the plugin
+ * gate and the op execution: the planning fields are the `PlanContext` it is
+ * built from. The gate may set `ctxReady`, which merges `ctxRetirements`.
+ */
+interface ApplyState extends PlanContext {
+	readonly settings: SettingsPreflight;
+	/** Planned with the rest so blocked ownership stops the apply before plugins install; used only once the plugin carries src/ctx. */
+	readonly ctxRetirements: readonly Op[];
+	readonly ops: readonly Op[];
+	ctxReady: boolean;
+}
+
+/** Preflight and op plan; a throw becomes a report error and aborts the apply before anything runs. */
+function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 	try {
-		base = BaseRecord.load(opts.agentDir);
-		history = new RepoHistory(opts.source, !opts.check);
-		settings = settingsPreflight(opts, base, history);
-		exclusions = exclusionsOf(settings, opts.agentDir);
+		const base = BaseRecord.load(opts.agentDir);
+		const history = new RepoHistory(opts.source, !opts.check);
+		const settings = settingsPreflight(opts, base, history);
+		const exclusions = exclusionsOf(settings, opts.agentDir);
 		const sources = parseSources(opts, report);
-		declared = declaredPlugins(opts.source).required;
-		todoRequired = declared.includes(TODO_PLUGIN_URL);
+		const declared = declaredPlugins(opts.source).required;
+		const todoRequired = declared.includes(TODO_PLUGIN_URL);
 		const replacementMigration = planReplacementMigration(opts, report, base, history, exclusions);
 		const ctx: PlanContext = {
 			opts,
@@ -2127,34 +2130,43 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 			...planStructured(ctx, sources),
 			...(todoRequired ? planRetirements(ctx, TODO_RETIREMENTS) : []),
 		];
-		ctxRetirements = todoRequired ? planRetirements(ctx, CTX_RETIREMENTS) : [];
+		const ctxRetirements = todoRequired ? planRetirements(ctx, CTX_RETIREMENTS) : [];
 		report.notes.push(...history.notes);
 		if (opts.check || !opts.plugins) report.notes.push(...reportPendingSettings(opts, settings));
 		// Moves first, managed writes next, deletions after them, base records last; Todo retirement requires all preceding operations to succeed.
 		const rank: Record<Op["kind"], number> = { move: 0, split: 0, "migrate-replacements": 0, write: 1, delete: 2, base: 3 };
-		ops = groupReplacementMigration(opts, replacementMigration, planned).toSorted((a, b) => rank[a.kind] - rank[b.kind]);
+		const ops = groupReplacementMigration(opts, replacementMigration, planned).toSorted((a, b) => rank[a.kind] - rank[b.kind]);
 		assertNoExcludedOps(ctx, ops);
+		return { ...ctx, settings, ctxRetirements, ops, ctxReady: false };
 	} catch (error) {
 		report.errors.push(errorText(error));
-		return report;
+		return null;
 	}
-	if (report.errors.length > 0 && !opts.check) return report;
-	const before = todoRequired ? todoPluginReadiness() : undefined;
+}
+
+/**
+ * The Todo gate: owner-catalog readiness before plugin sync, `syncPlugins`,
+ * then the confirmation switch that sets `ctxReady`. Returns "stop" when a
+ * real apply must end before running ops.
+ */
+function applyTodoGate(state: ApplyState): "stop" | undefined {
+	const { opts, report } = state;
+	const before = state.todoRequired ? todoPluginReadiness() : undefined;
 	if (before?.kind === "invalid") {
 		report.errors.push(before.message);
-		if (!opts.check) return report;
+		if (!opts.check) return "stop";
 	}
-	syncPlugins(opts, report, declared);
+	syncPlugins(opts, report, declaredPlugins(opts.source).required);
 	if (!opts.check && report.errors.length > 0) {
-		if (report.restartNeeded) report.notes.push("Cutover incomplete; do not restart OMP. Resolve errors and rerun apply.");
-		return report;
+		cutoverNote(state);
+		return "stop";
 	}
-	if (todoRequired) {
+	if (state.todoRequired) {
 		const ready = opts.check ? before : todoPluginReadiness();
 		switch (ready?.kind) {
 			case "ready":
 				report.notes.push("Todo plugin prerequisite confirmed by OMP owner catalog.");
-				ctxReady = ready.ctx;
+				state.ctxReady = ready.ctx;
 				break;
 			case "missing":
 				report.errors.push(
@@ -2172,11 +2184,23 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 			}
 		}
 		if (!opts.check && report.errors.length > 0) {
-			if (report.restartNeeded) report.notes.push("Cutover incomplete; do not restart OMP. Resolve errors and rerun apply.");
-			return report;
+			cutoverNote(state);
+			return "stop";
 		}
 	}
-	if (ctxReady) ops = [...ops, ...ctxRetirements];
+	return undefined;
+}
+
+/** The do-not-restart warning appended when a real apply leaves work half done. */
+function cutoverNote(state: ApplyState): void {
+	if (state.report.restartNeeded) state.report.notes.push("Cutover incomplete; do not restart OMP. Resolve errors and rerun apply.");
+}
+
+/** Execute the planned ops in order; returns the base changes of the ops that succeeded. */
+function runApplyOps(state: ApplyState): BaseChange[] {
+	const { opts, report } = state;
+	// Ctx retirements only run once the installed plugin carries src/ctx.
+	const ops = state.ctxReady ? [...state.ops, ...state.ctxRetirements] : state.ops;
 	// Base changes of the host operations that succeeded, recorded after all of them.
 	const accepted: BaseChange[] = [];
 	for (const op of ops) {
@@ -2187,80 +2211,106 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 		}
 		const leaf = op.rel.slice("agent/".length);
 		const retirement =
-			op.kind === "delete" && ((todoRequired && TODO_RETIREMENTS.includes(leaf)) || (ctxReady && CTX_RETIREMENTS.includes(leaf)));
+			op.kind === "delete" &&
+			((state.todoRequired && TODO_RETIREMENTS.includes(leaf)) || (state.ctxReady && CTX_RETIREMENTS.includes(leaf)));
 		try {
-			if (!opts.check && retirement) {
-				const current = inspectTodoRetirement(opts.agentDir, op.rel.slice("agent/".length));
-				if (current.kind === "missing") continue;
-				if (current.kind === "blocked") throw new Error(current.message);
-			}
-			switch (op.kind) {
-				case "migrate-replacements":
-					for (const write of op.writes) {
-						if (!opts.check) atomicWrite(write.target, write.content);
-						report.written.push(write.target);
-					}
-					for (const target of op.deletes) {
-						if (!opts.check) unlinkSync(target);
-						report.deleted.push(target);
-					}
-					for (const write of op.writes) if (write.base !== undefined) accepted.push(write.base);
-					accepted.push(...op.changes);
-					break;
-				case "move":
-					if (!opts.check) {
-						mkdirSync(dirname(op.target), { recursive: true });
-						renameSync(op.from, op.target);
-					}
-					report.moved.push({ from: op.from, to: op.target });
-					break;
-				case "split":
-					if (!opts.check) {
-						for (const fragment of op.fragments) atomicWrite(fragment.target, fragment.content);
-						unlinkSync(op.target);
-					}
-					for (const fragment of op.fragments) report.moved.push({ from: op.target, to: fragment.target });
-					if (op.fragments.length === 0) report.deleted.push(op.target);
-					break;
-				case "write":
-					if (!opts.check) atomicWrite(op.target, op.content);
-					report.written.push(op.target);
-					if (op.base !== undefined) accepted.push(op.base);
-					break;
-				case "delete":
-					// Remove the managed entry itself; a symlink's backing file is not ours.
-					if (!opts.check) unlinkSync(op.target);
-					report.deleted.push(op.target);
-					if (op.base !== undefined) accepted.push(op.base);
-					break;
-				default: {
-					const unreachable: never = op;
-					throw new Error(`unknown op ${JSON.stringify(unreachable)}`);
-				}
-			}
-			if (!opts.check && RESTART_SCOPED.test(op.rel) && op.rel !== `agent/${UPDATER_REL}`) report.restartNeeded = true;
+			applyOp(state, op, leaf, retirement, accepted);
 		} catch (error) {
 			report.errors.push(`${op.target}: ${errorText(error)}`);
 			if (retirement) break;
 		}
 	}
+	return accepted;
+}
+
+/**
+ * Run one host op: its retirement probe, the write itself and the report and
+ * base bookkeeping. A missing retirement target returns without recording.
+ */
+function applyOp(state: ApplyState, op: Exclude<Op, { kind: "base" }>, leaf: string, retirement: boolean, accepted: BaseChange[]): void {
+	const { opts, report } = state;
+	if (!opts.check && retirement) {
+		const current = inspectTodoRetirement(opts.agentDir, leaf);
+		if (current.kind === "missing") return;
+		if (current.kind === "blocked") throw new Error(current.message);
+	}
+	switch (op.kind) {
+		case "migrate-replacements":
+			for (const write of op.writes) {
+				if (!opts.check) atomicWrite(write.target, write.content);
+				report.written.push(write.target);
+			}
+			for (const target of op.deletes) {
+				if (!opts.check) unlinkSync(target);
+				report.deleted.push(target);
+			}
+			for (const write of op.writes) if (write.base !== undefined) accepted.push(write.base);
+			accepted.push(...op.changes);
+			break;
+		case "move":
+			if (!opts.check) {
+				mkdirSync(dirname(op.target), { recursive: true });
+				renameSync(op.from, op.target);
+			}
+			report.moved.push({ from: op.from, to: op.target });
+			break;
+		case "split":
+			if (!opts.check) {
+				for (const fragment of op.fragments) atomicWrite(fragment.target, fragment.content);
+				unlinkSync(op.target);
+			}
+			for (const fragment of op.fragments) report.moved.push({ from: op.target, to: fragment.target });
+			if (op.fragments.length === 0) report.deleted.push(op.target);
+			break;
+		case "write":
+			if (!opts.check) atomicWrite(op.target, op.content);
+			report.written.push(op.target);
+			if (op.base !== undefined) accepted.push(op.base);
+			break;
+		case "delete":
+			// Remove the managed entry itself; a symlink's backing file is not ours.
+			if (!opts.check) unlinkSync(op.target);
+			report.deleted.push(op.target);
+			if (op.base !== undefined) accepted.push(op.base);
+			break;
+		default: {
+			const unreachable: never = op;
+			throw new Error(`unknown op ${JSON.stringify(unreachable)}`);
+		}
+	}
+	if (!opts.check && RESTART_SCOPED.test(op.rel) && op.rel !== `agent/${UPDATER_REL}`) report.restartNeeded = true;
+}
+
+/** Record the base of the successful ops, run the settings and launcher steps and append the cutover note. */
+function settleApply(state: ApplyState, accepted: readonly BaseChange[]): void {
+	const { opts, report } = state;
 	if (!opts.check) {
 		try {
-			base.commit(accepted);
+			state.base.commit(accepted);
 		} catch (error) {
 			report.errors.push(`${join(opts.agentDir, BASE_DIR)}: ${errorText(error)}`);
 		}
 		if (report.errors.length === 0) {
 			try {
-				settleSettings(opts, report, settings, exclusions, base, history);
+				settleSettings(opts, report, state.settings, state.exclusions, state.base, state.history);
 			} catch (error) {
 				report.errors.push(`settings: ${errorText(error)}`);
 			}
 		}
 	}
 	installLauncher(opts, report);
-	if (report.errors.length > 0 && !opts.check && (todoRequired || report.restartNeeded))
+	if (report.errors.length > 0 && !opts.check && (state.todoRequired || report.restartNeeded))
 		report.notes.push("Cutover incomplete; do not restart OMP. Resolve errors and rerun apply.");
+}
+
+export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
+	const report = newReport();
+	const state = planApply(opts, report);
+	if (state === null) return report;
+	if (report.errors.length > 0 && !opts.check) return report;
+	if (applyTodoGate(state) === "stop") return report;
+	const accepted = runApplyOps(state);
+	settleApply(state, accepted);
 	return report;
 }
 
