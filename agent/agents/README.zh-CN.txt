@@ -129,3 +129,11 @@ prewalk 清空。调试派发问题时，先确认自己不在 plan mode，否�
 
 观察到每次派发出现两次。按第 12 条它无害，但会成为每次派发都有的永久日志噪声。笔记一律用
 .txt——非 markdown 文件从不被扫描。
+
+
+14. `completionJudge: true` 让该 agent 接受完成度评判
+----------------------------------------------------
+`task-completion-judge` 扩展只拦截 frontmatter 声明了 `completionJudge: true`
+的子代理的终止性结构化 `yield` 调用。宿主会忽略未知的 frontmatter 键，所以加这个键是
+安全的。没有它，子代理的 `yield` 直接放行，不做评判。仓库自带的 `task-free`、
+`task-mid`、`task-low` 声明了它；`task:high` 没有。

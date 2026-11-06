@@ -145,3 +145,12 @@ every discovery pass:
 
 Observed twice per single spawn. Harmless per item 12, but it is permanent log noise
 on every dispatch. Keep notes as .txt — non-markdown files are never scanned.
+
+
+14. `completionJudge: true` opts the agent into completion judging
+------------------------------------------------------------------
+The `task-completion-judge` extension intercepts terminal structured `yield`
+calls only from subagents whose definition file declares `completionJudge: true`
+in its frontmatter. Unknown frontmatter keys are ignored by the host, so the
+key is safe to add. Without it the subagent's yields pass unjudged. The shipped
+`task-free`, `task-mid` and `task-low` declare it; `task:high` does not.
