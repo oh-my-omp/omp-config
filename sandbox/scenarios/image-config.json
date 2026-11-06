@@ -1,1 +1,14 @@
-{"calls": {"expect": [{"tool": "bash", "resultIncludes": "generate_image.enabled"}, {"tool": "bash", "resultIncludes": "openai-codex/gpt-image-2"}]}, "finalAssertion": "true", "init": "true", "name": "image-config", "prompt": "Run `omp config list --json` via bash and tell me the values of generate_image.enabled and retry.fallbackChains.image.", "replyIncludes": ["openai-codex/gpt-image-2"]}
+{
+	"calls": {
+		"expect": [
+			{
+				"inputPattern": "config list",
+				"tool": "bash"
+			}
+		]
+	},
+	"finalAssertion": "test \"$(omp config list --json | jq -r '.[\"generate_image.enabled\"].value')\" = 'true'; test \"$(omp config list --json | jq -c '.[\"retry.fallbackChains\"].value.image')\" = '[\"openai-codex/gpt-image-2\"]'",
+	"init": "true",
+	"name": "image-config",
+	"prompt": "Run `omp config list --json | jq -c '{gen: .[\"generate_image.enabled\"].value, imageChain: .[\"retry.fallbackChains\"].value.image}'` via bash and reply with the single output line."
+}
