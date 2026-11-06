@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import type { RoleModel } from "../agent/extensions/_shared/roles.ts";
 
-type Outcome = "hang" | "error" | "aborted-reply" | "answer";
+type Outcome = "hang" | "error" | "aborted-reply" | "length" | "toolUse" | "answer";
 const outcomes = new Map<string, Outcome>();
 const seen: { id: string; signal: AbortSignal | undefined }[] = [];
 
@@ -19,6 +19,9 @@ mock.module("@oh-my-pi/pi-ai", () => ({
 		}
 		if (outcome === "aborted-reply") return { stopReason: "aborted", content: [] };
 		if (outcome === "error") return { stopReason: "error", errorMessage: "boom", content: [] };
+		if (outcome === "length" || outcome === "toolUse") {
+			return { stopReason: outcome === "length" ? "length" : "toolUse", content: [{ type: "text", text: `cut from ${model.id}` }] };
+		}
 		return { stopReason: "stop", content: [{ type: "text", text: `answer from ${model.id}` }] };
 	},
 }));
@@ -37,6 +40,8 @@ const model = (id: string): RoleModel => ({
 	level: undefined,
 });
 const EFFORT = THINKING_EFFORTS[0] as (typeof THINKING_EFFORTS)[number];
+const ACCEPT_ALL = () => true;
+const ACCEPT_STOP = (stopReason: string) => stopReason === "stop";
 const ctx = { modelRegistry: { resolver: () => undefined } } as never;
 
 beforeEach(() => {
@@ -48,20 +53,38 @@ beforeEach(() => {
 describe("completeRoleChain whole budget", () => {
 	test("a provider aborted reply ends the pass as aborted, without trying the next model", async () => {
 		outcomes.set("a", "aborted-reply");
-		const reply = await completeRoleChain(ctx, ["default"], "sys", "p", EFFORT, new AbortController().signal, { kind: "whole" });
+		const reply = await completeRoleChain(
+			ctx,
+			["default"],
+			"sys",
+			"p",
+			EFFORT,
+			new AbortController().signal,
+			{ kind: "whole" },
+			ACCEPT_ALL,
+		);
 		expect(reply).toEqual({ kind: "aborted" });
 		expect(seen.map((call) => call.id)).toEqual(["a"]);
 	});
 
 	test("an error reply records a failure line and moves on", async () => {
 		outcomes.set("a", "error");
-		const reply = await completeRoleChain(ctx, ["default"], "sys", "p", EFFORT, new AbortController().signal, { kind: "whole" });
+		const reply = await completeRoleChain(
+			ctx,
+			["default"],
+			"sys",
+			"p",
+			EFFORT,
+			new AbortController().signal,
+			{ kind: "whole" },
+			ACCEPT_ALL,
+		);
 		expect(reply).toMatchObject({ kind: "text", text: "answer from b", failures: ["p/a: boom"] });
 	});
 
 	test("attempts run under the caller's signal alone", async () => {
 		const signal = new AbortController().signal;
-		await completeRoleChain(ctx, ["default"], "sys", "p", EFFORT, signal, { kind: "whole" });
+		await completeRoleChain(ctx, ["default"], "sys", "p", EFFORT, signal, { kind: "whole" }, ACCEPT_ALL);
 		expect(seen[0]?.signal).toBe(signal);
 	});
 });
@@ -70,10 +93,19 @@ describe("completeRoleChain split budget", () => {
 	test("a hanging model costs its share of the budget and the chain answers from the next model", async () => {
 		outcomes.set("a", "hang");
 		const started = Date.now();
-		const reply = await completeRoleChain(ctx, ["default"], "sys", "p", EFFORT, new AbortController().signal, {
-			kind: "split",
-			deadlineAt: Date.now() + 300,
-		});
+		const reply = await completeRoleChain(
+			ctx,
+			["default"],
+			"sys",
+			"p",
+			EFFORT,
+			new AbortController().signal,
+			{
+				kind: "split",
+				deadlineAt: Date.now() + 300,
+			},
+			ACCEPT_ALL,
+		);
 		const elapsed = Date.now() - started;
 		expect(reply).toMatchObject({ kind: "text", text: "answer from b", failures: ["p/a: attempt timeout"] });
 		// a gets 300/3 = 100 ms; the whole pass stays near the 300 ms budget.
@@ -86,28 +118,103 @@ describe("completeRoleChain split budget", () => {
 		outcomes.set("b", "hang");
 		outcomes.set("c", "hang");
 		const signal = AbortSignal.timeout(150);
-		const reply = await completeRoleChain(ctx, ["default"], "sys", "p", EFFORT, signal, {
-			kind: "split",
-			deadlineAt: Date.now() + 150,
-		});
+		const reply = await completeRoleChain(
+			ctx,
+			["default"],
+			"sys",
+			"p",
+			EFFORT,
+			signal,
+			{
+				kind: "split",
+				deadlineAt: Date.now() + 150,
+			},
+			ACCEPT_ALL,
+		);
 		expect(reply).toEqual({ kind: "deadline" });
 	});
 
 	test("a provider aborted reply with the outer signal live is an attempt failure, not an abort", async () => {
 		outcomes.set("a", "aborted-reply");
-		const reply = await completeRoleChain(ctx, ["default"], "sys", "p", EFFORT, new AbortController().signal, {
-			kind: "split",
-			deadlineAt: Date.now() + 10_000,
-		});
+		const reply = await completeRoleChain(
+			ctx,
+			["default"],
+			"sys",
+			"p",
+			EFFORT,
+			new AbortController().signal,
+			{
+				kind: "split",
+				deadlineAt: Date.now() + 10_000,
+			},
+			ACCEPT_ALL,
+		);
 		expect(reply).toMatchObject({ kind: "text", text: "answer from b", failures: ["p/a: attempt timeout"] });
 	});
 
 	test("an empty chain is no-model", async () => {
 		chain = [];
-		const reply = await completeRoleChain(ctx, ["default"], "sys", "p", EFFORT, new AbortController().signal, {
-			kind: "split",
-			deadlineAt: Date.now() + 1000,
-		});
+		const reply = await completeRoleChain(
+			ctx,
+			["default"],
+			"sys",
+			"p",
+			EFFORT,
+			new AbortController().signal,
+			{
+				kind: "split",
+				deadlineAt: Date.now() + 1000,
+			},
+			ACCEPT_ALL,
+		);
 		expect(reply).toEqual({ kind: "no-model" });
+	});
+});
+
+describe("completeRoleChain stop reasons", () => {
+	test("the caller that accepts length gets the cut answer with its stop reason", async () => {
+		outcomes.set("a", "length");
+		const reply = await completeRoleChain(
+			ctx,
+			["default"],
+			"sys",
+			"p",
+			EFFORT,
+			new AbortController().signal,
+			{ kind: "whole" },
+			ACCEPT_ALL,
+		);
+		expect(reply).toMatchObject({ kind: "text", text: "cut from a", stopReason: "length", failures: [] });
+		expect(seen.map((call) => call.id)).toEqual(["a"]);
+	});
+
+	test("a rejected length reply records a failure line and moves to the next model", async () => {
+		outcomes.set("a", "length");
+		const reply = await completeRoleChain(
+			ctx,
+			["default"],
+			"sys",
+			"p",
+			EFFORT,
+			new AbortController().signal,
+			{ kind: "whole" },
+			ACCEPT_STOP,
+		);
+		expect(reply).toMatchObject({ kind: "text", text: "answer from b", stopReason: "stop", failures: ["p/a: length"] });
+	});
+
+	test("a rejected toolUse reply records a failure line and moves to the next model", async () => {
+		outcomes.set("a", "toolUse");
+		const reply = await completeRoleChain(
+			ctx,
+			["default"],
+			"sys",
+			"p",
+			EFFORT,
+			new AbortController().signal,
+			{ kind: "whole" },
+			ACCEPT_STOP,
+		);
+		expect(reply).toMatchObject({ kind: "text", text: "answer from b", failures: ["p/a: toolUse"] });
 	});
 });

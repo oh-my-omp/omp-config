@@ -29,8 +29,8 @@
  * role chain, both resolved at every request; the chain's models are tried in order, each attempt
  * limited to the remaining budget divided over the models not yet tried, so a provider failure or
  * a hanging model costs only its own share and the chain moves to the next model.
- * Every failure (no model in either role, provider errors, attempt timeouts, aborted,
- * unparseable answer) is a warning-level note that lets the call run; only `flagged` verdicts block.
+ * Every failure (no model in either role, provider errors, attempt timeouts, aborted, a reply cut off
+ * by `length` or ending in `toolUse`, unparseable answer) is a warning-level note that lets the call run; only `flagged` verdicts block.
  * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise
  * block the call.
  */
@@ -201,7 +201,17 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		signal: AbortSignal,
 		budget: AttemptBudget,
 	): Promise<Reply> => {
-		const reply = await completeRoleChain(ctx, [ROLE, "default"], systemPrompt, prompt, EFFORT, signal, budget);
+		// A reply cut off by `length` or ending in `toolUse` is not a verdict: the attempt fails and the chain moves on.
+		const reply = await completeRoleChain(
+			ctx,
+			[ROLE, "default"],
+			systemPrompt,
+			prompt,
+			EFFORT,
+			signal,
+			budget,
+			(stopReason) => stopReason === "stop",
+		);
 		switch (reply.kind) {
 			case "text":
 				pi.logger.info("task-split-check answered", { model: modelLabel(reply.model.model), failures: reply.failures });

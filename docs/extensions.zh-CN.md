@@ -51,7 +51,7 @@
 
 - **判定模型**：先取 OMP 模型角色 `@task-split-check`（在 `/model` 中配置，保存在本机 `modelRoles`），再取 `default` 角色链，每次调用实时解析。角色条目未带 `:level` 后缀时使用 `medium` 推理强度；链中模型按顺序尝试，每次尝试的时限为剩余预算除以尚未尝试的模型数，provider 错误或模型挂起只消耗它自己的份额，判定随即换到下一个模型。
 - **split 覆盖范围**：`split` 检查覆盖 `task` 项中 `agent` 定义 frontmatter 声明 `splitCheck: true` 的项（仓库自带的 `task:low`、`task:free`、`task:mid` 定义声明了它；用与 task 工具派生预检相同的查找解析）。`report-limit` 检查与此无关，对所有 `task:*` 生效。
-- **失败处理**：没有可用模型或有效结论（包括请求报错、超时或答案无法解析）时放行。每次完成判定记一条 `task-split-check verdicts` 日志。
+- **失败处理**：没有可用模型或有效结论（包括请求报错、超时、以 `length` 截断或以 `toolUse` 结束的答案，以及答案无法解析）时放行。每次完成判定记一条 `task-split-check verdicts` 日志。
 
 重试身份由共享 `context` 与该项 `task` 各自去除首尾空白后渲染的提示词决定；要复用结论，二者都必须保持不变。
 
