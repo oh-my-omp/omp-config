@@ -160,7 +160,7 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 	console.log(`  ${claude.length === 0 ? "nothing to copy" : claude.join(", ")}`);
 	const files = await step(`working tree ${options.repo} -> /repo`, () => copyRepo(names.container, options.repo));
 	console.log(`  ${files} files`);
-	const installed = await step("plugins, latest omp, auto-update off, updater apply from /repo", () => installOmp(names.container, HOME));
+	const installed = await step("plugins, latest omp, updater apply from /repo, auto-update off", () => installOmp(names.container, HOME));
 	console.log(`  ${installed.autoupdate}`);
 	console.log(`  ${installed.version}`);
 	if (options.target)

@@ -79,14 +79,15 @@ export async function copyRepo(container: string, repo: string): Promise<number>
 }
 
 /**
- * Plugin dependencies for linux from the copied lock file, the latest omp, the startup auto-update
- * switched off (the copied host switch would apply GitHub `main` over /repo at the first omp start),
- * then the /repo updater applies the working tree. Returns the omp version and the switch read back.
+ * Plugin dependencies for linux from the copied lock file, the latest omp, the /repo updater applying
+ * the working tree (it links the plugin `omp-config` and moves the copied omomp values into its
+ * settings), then the startup auto-update switched off in those settings (the copied host switch
+ * would apply GitHub `main` over /repo at the first omp start). Returns the omp version and the
+ * switch read back.
  */
 export async function installOmp(container: string, home: string): Promise<{ readonly version: string; readonly autoupdate: string }> {
 	await must(["docker", "exec", "-w", join(home, ".omp", "plugins"), container, "bun", "install"]);
 	await must(["docker", "exec", container, "bun", "install", "-g", "@oh-my-pi/pi-coding-agent"]);
-	const autoupdate = (await must(["docker", "exec", container, "bun", "/sandbox/autoupdate-off.ts", join(home, ".omp", "agent")])).trim();
 	await must([
 		"docker",
 		"exec",
@@ -99,6 +100,7 @@ export async function installOmp(container: string, home: string): Promise<{ rea
 		"--source",
 		"/repo",
 	]);
+	const autoupdate = (await must(["docker", "exec", container, "bun", "/sandbox/autoupdate-off.ts"])).trim();
 	return { version: (await must(["docker", "exec", container, "omp", "--version"])).trim(), autoupdate };
 }
 
