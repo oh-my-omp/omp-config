@@ -16,7 +16,7 @@ bun sandbox/sandbox.ts down RUN                                              # r
 ```
 
 - `--repo` defaults to the checkout that contains `sandbox/`. `--target` adds the ssh target.
-- `hold` prints the run id and the commands that attach to it, then waits. Interactive sessions use `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`; an agent drives that command through `exec_command`. Stop the holder with Ctrl-C or SIGTERM and let it exit: teardown takes a few seconds. For a holder running in an `exec_command` session, send Ctrl-C (`write_stdin` with `\u0003`), not `kill_session`, which escalates to SIGKILL after 2 s and cuts the teardown short.
+- `hold` prints the run id and the commands that attach to it, then waits. Prepare the session's workspace before omp starts: files, repositories and other fixtures go under `/work` through `docker exec omp-sandbox-<run> sh -c '…'`. Interactive sessions use `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`; an agent drives that command through `exec_command`. Stop the holder with Ctrl-C or SIGTERM and let it exit: teardown takes a few seconds. For a holder running in an `exec_command` session, send Ctrl-C (`write_stdin` with `\u0003`), not `kill_session`, which escalates to SIGKILL after 2 s and cuts the teardown short.
 - `run` exits 0 when every model passes or is untested, 1 otherwise. `matrix` exits the same way.
 - `down` is only for a holder that died without its `finally` (SIGKILL, a crashed host). It removes every resource labelled with the run.
 

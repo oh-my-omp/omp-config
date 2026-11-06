@@ -16,7 +16,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 ```
 
 - `--repo` 默认是 `sandbox/` 所在的 checkout。`--target` 增加 ssh 目标机。
-- `hold` 打印运行 id 与接入命令，然后等待。交互会话用 `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`；agent 经 `exec_command` 驱动这条命令。用 Ctrl-C 或 SIGTERM 结束持有进程并等它退出：清理需要几秒。持有进程跑在 `exec_command` 会话里时，发送 Ctrl-C（`write_stdin` 发 `\u0003`），不要用 `kill_session`：它 2 秒后升级为 SIGKILL，会打断清理。
+- `hold` 打印运行 id 与接入命令，然后等待。omp 启动前先准备会话工作区：文件、仓库等测试素材经 `docker exec omp-sandbox-<run> sh -c '…'` 放到 `/work` 下。交互会话用 `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`；agent 经 `exec_command` 驱动这条命令。用 Ctrl-C 或 SIGTERM 结束持有进程并等它退出：清理需要几秒。持有进程跑在 `exec_command` 会话里时，发送 Ctrl-C（`write_stdin` 发 `\u0003`），不要用 `kill_session`：它 2 秒后升级为 SIGKILL，会打断清理。
 - `run` 在每个模型都通过或未测时退出 0，否则退出 1。`matrix` 相同。
 - `down` 只用于没有走到 `finally` 就退出的持有进程（SIGKILL、宿主机崩溃），删除带该运行标签的全部资源。
 

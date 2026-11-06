@@ -146,10 +146,14 @@ Slash commands: `README.md#commands`.
 
 1. `bun run check` and `bun run test` pass; every changed YAML/JSON parses
    (`Bun.YAML.parse` / `JSON.parse`).
-2. Extension, prompt or tool-topic changes: apply with `/update-omp`, restart
-   `omp`, trigger the changed path in a real session and observe its output and
-   side effects. When each item takes effect is in the ownership table of
-   `docs/operations.md`.
-3. `omp config list --json`, `omp plugin list --json`, `git status --short`.
+2. Extension, prompt or tool-topic changes are verified in the OrbStack
+   sandbox (`sandbox/README.md`), never on this machine's `~/.omp`: start
+   `bun sandbox/sandbox.ts hold` in an `exec_command` session, prepare the
+   workspace under `/work` with `docker exec` before omp starts, then drive
+   `docker exec -it -w /work omp-sandbox-<run> omp --model …` through
+   `exec_command`, trigger the changed path and observe its output and side
+   effects. Quit omp and stop the holder with Ctrl-C.
+3. Inside the sandbox: `omp config list --json`, `omp plugin list --json`;
+   on the host: `git status --short`.
 
 Without runtime verification, say so; a clean parse or `cmp` is not proof.
