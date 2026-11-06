@@ -46,14 +46,14 @@ bun sandbox/sandbox.ts down RUN                                              # �
 
 ## 场景与 RPC 驱动
 
-`matrix` 与 `run` 把场景文件复制进容器，并对每个模型在容器内运行一次 `sandbox/driver.ts`：每次一个新的 `omp --mode rpc --no-ui --model <model>` 会话，工作目录在 `/runs/` 下且各不相同。场景文件是 JSON：
+`matrix` 与 `run` 把场景文件复制进容器，并对每个模型在容器内运行一次 `sandbox/driver.ts`：每次一个新的 `omp --mode rpc --no-ui --model <model>` 会话，工作目录是各不相同的 `/runs/<provider>_<model>/<name>-<ms>`。场景的 `init` 与 `finalAssertion` 也在这个目录里执行，所以 `init` 可以为会话准备工作区（git 仓库、文件），`finalAssertion` 可以检查会话留在那里的结果。场景文件是 JSON：
 
 | 字段 | 含义 |
 |---|---|
 | `name` | `[a-z0-9][a-z0-9._-]*`；用作证据文件名 |
-| `init` | 会话前由驱动执行（不经 agent）的 sh 命令，须退出 0；每个模型前都重新执行 |
+| `init` | 会话前由驱动在会话工作目录里执行（不经 agent）的 sh 命令，须退出 0；每个模型前都重新执行 |
 | `prompt` | 唯一的一条用户消息 |
-| `finalAssertion` | 会话结束后执行的 sh 命令；退出 0 即通过 |
+| `finalAssertion` | 会话结束后在会话工作目录里执行的 sh 命令；退出 0 即通过 |
 | `calls.expect` | 必须按此顺序出现在工具调用中的匹配器（子序列） |
 | `calls.forbid` | 任何工具调用都不得满足的匹配器 |
 | `replyIncludes` | 最后一条助手回复必须包含的字面串 |
