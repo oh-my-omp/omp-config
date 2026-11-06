@@ -30,6 +30,10 @@ task-completion-judge:
   fallbackRole: smol
 task-split-check:
   fallbackRole: smol
+  agents:
+    - task:low
+    - task:free
+    - task:mid
 child-memory-warning:
   thresholdGiB: 4
 tool-topic-injection:

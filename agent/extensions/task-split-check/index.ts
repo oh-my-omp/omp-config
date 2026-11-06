@@ -11,8 +11,9 @@
  * item is flagged by any check the whole call is blocked with the reasons of
  * every flagging check. Checks differ only in their definition:
  *
- * - `split`: main session `task` calls, items for `task:low` / `task:free` /
- *   `task:mid`; does the item cover more than one topic. A prompt that got a
+ * - `split`: main session `task` calls, items whose `agent` is one of the
+ *   names in `omomp.*#task-split-check.agents`; does the item cover more than
+ *   one topic. A prompt that got a
  *   verdict passes unchanged the second time, so the main agent can force an
  *   item it judges to be one topic.
  * - `report-limit`: every session, `task` and `fork_task`, every task-series
@@ -24,8 +25,10 @@
  * Memory is per process, keyed by check + sha256 of the item prompt.
  * The model is the OMP model role `@task-split-check` (assign it in `/model`), then the role named by
  * `fallbackRole` in the `task-split-check` section of omomp.*, both resolved at every request; a
- * provider failure moves to the next model of that chain. Every failure (no model in either role,
- * every model failing, unparseable answer, deadline) lets the item pass for the affected checks.
+ * provider failure moves to the next model of that chain. `agents` in the same section names the
+ * `agent` values `split` covers; the repo ships `task:low`/`task:free`/`task:mid`, the updater seeds
+ * it once and it is machine-owned after that. An absent or invalid section (or absent `agents`)
+ * leaves `split` covering no agent, while `report-limit` still applies. Every failure (no model in either role,
  * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise
  * block the call.
  */
@@ -41,6 +44,8 @@ import { modelLabel, roleModels, roleName } from "../_shared/roles.ts";
 const configSchema = z.object({
 	/** OMP model role (`smol`, `@smol`, …) whose models answer when `@task-split-check` resolves none or all of its models fail. */
 	fallbackRole: z.string().min(1).optional(),
+	/** `agent` names the `split` check covers; seeded from the repo, then machine-owned. Absent or invalid → `split` covers nothing. */
+	agents: z.array(z.string().min(1)).optional(),
 });
 const omompSection = defineOmompSection(import.meta.dir, configSchema);
 /** The OMP model role this extension's model comes from: the extension's own name. */
@@ -86,21 +91,19 @@ type Check = {
 	readonly id: string;
 	readonly tools: Readonly<Record<string, true>>;
 	readonly mainSessionOnly: boolean;
-	readonly covers: (agent: string | undefined) => boolean;
+	readonly covers: (agent: string | undefined, splitAgents: ReadonlySet<string>) => boolean;
 	/** The question put to the model; `true` means the item is flagged. */
 	readonly question: string;
 	readonly memory: Memory;
 	readonly reason: (labels: string) => string;
 };
 
-const SPLIT_AGENTS: Record<string, true> = { "task:low": true, "task:free": true, "task:mid": true };
-
 const CHECKS: readonly Check[] = [
 	{
 		id: "split",
 		tools: { task: true },
 		mainSessionOnly: true,
-		covers: (agent) => agent !== undefined && Object.hasOwn(SPLIT_AGENTS, agent),
+		covers: (agent, splitAgents) => agent !== undefined && splitAgents.has(agent),
 		question: [
 			"Does this one assignment cover more than one topic, so that it should have been split into separate assignments for separate workers?",
 			"A topic is one subject: one question to answer, one outcome to deliver, one area to investigate. The number of files, documents, steps, or edits does not matter: one change applied across many files, or several documents written about the same subject, is still one topic.",
@@ -189,9 +192,13 @@ type Reply = { readonly kind: "text"; readonly text: string } | { readonly kind:
 type ItemVerdicts = { readonly label: string; readonly verdicts: ReadonlyMap<Check, Verdict> };
 
 export default function taskSplitCheck(pi: ExtensionAPI): void {
-	const ask = async (ctx: ExtensionContext, systemPrompt: string, prompt: string, signal: AbortSignal): Promise<Reply> => {
-		const config = loadOmompSection(omompSection, ctx.cwd);
-		const fallbackRole = config.kind === "found" ? config.value.fallbackRole : undefined;
+	const ask = async (
+		ctx: ExtensionContext,
+		fallbackRole: string | undefined,
+		systemPrompt: string,
+		prompt: string,
+		signal: AbortSignal,
+	): Promise<Reply> => {
 		const failures: string[] = [];
 		try {
 			const models = roleModels(ctx, fallbackRole === undefined ? [ROLE] : [ROLE, fallbackRole]);
@@ -235,6 +242,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 	const judgeItem = async (
 		ctx: ExtensionContext,
 		checks: readonly Check[],
+		fallbackRole: string | undefined,
 		prompt: string,
 		signal: AbortSignal,
 	): Promise<ReadonlyMap<Check, Verdict>> => {
@@ -249,7 +257,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		}
 		if (pending.length === 0) return verdicts;
 
-		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal);
+		const reply = await ask(ctx, fallbackRole, renderSystemPrompt(pending), prompt, signal);
 		for (const check of pending) {
 			const verdict: Verdict = reply.kind === "text" ? parseAnswer(reply.text, check) : { kind: "unknown", why: reply.why };
 			memorize(check, keyOf(check), verdict);
@@ -265,16 +273,19 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		if (checks.length === 0) return null;
 		const call = parseTaskCall(input);
 		if (call === null) return null;
+		const config = loadOmompSection(omompSection, ctx.cwd);
+		const fallbackRole = config.kind === "found" ? config.value.fallbackRole : undefined;
+		const splitAgents: ReadonlySet<string> = new Set(config.kind === "found" ? config.value.agents : []);
 
 		const deadline = AbortSignal.timeout(DEADLINE_MS);
 		const judged: ItemVerdicts[] = await Promise.all(
 			call.items.flatMap((item, index) => {
-				const covering = checks.filter((check) => check.covers(item.agent));
+				const covering = checks.filter((check) => check.covers(item.agent, splitAgents));
 				if (covering.length === 0) return [];
 				return [
 					(async (): Promise<ItemVerdicts> => ({
 						label: itemLabel(item, index),
-						verdicts: await judgeItem(ctx, covering, renderPrompt(call.context, item), deadline),
+						verdicts: await judgeItem(ctx, covering, fallbackRole, renderPrompt(call.context, item), deadline),
 					}))(),
 				];
 			}),

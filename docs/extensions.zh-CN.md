@@ -15,7 +15,7 @@
 | 5 | `model-compaction` | [提示词与上下文](prompts-and-context.zh-CN.md#model-compaction) | 主写 / 子读 | 是 | `omomp.yml#model-compaction`（本机或项目） | 按自己的模型和项目设置阈值；项目段整段取代本机段 |
 | 6 | `user-prompt-inject` | [子代理](agents.zh-CN.md#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库示例或本机文件） | 修改或添加模板，选择目标角色及其接收的用户原话和回答 |
 | 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | 主 + 子 | 否 | 无配置文件 | 在 task 调用中显式设置 `isolated`，选择共享只读工作或隔离写入 |
-| 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check` | 选择回退角色，将 `@task-split-check` 或 `modelRoles.smol` 绑定到自己的可用模型 |
+| 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check` | 选择回退角色与 `agents` 列表（`split` 覆盖的 worker 名），将 `@task-split-check` 或 `modelRoles.smol` 绑定到自己的可用模型 |
 | 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge` | 选择回退角色，将 `@task-completion-judge` 或 `modelRoles.smol` 绑定到自己的可用模型 |
 | 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `omomp.yml#tool-policy-nag` 与 `INTENT-policy.md` | 按工作方式调整检测模式、提醒措辞与频率、意图及风险设置和终端路由通道 |
 | 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子，按文件条件 | 否 | `WATCHDOG-*.md`（本机或项目） | 定义审阅内容、目标会话、间隔和投递方式；存在匹配文件后运行 |
@@ -53,13 +53,14 @@
 在 `tool_call` 阶段检查 `task` 与 `fork_task`。整批共用 25 秒超时，各任务项并发判定，同一项的全部适用是非检查合在一次模型请求中提问，任一项不通过即拦截整次调用：
 
 - **判定模型**：先取 OMP 模型角色 `@task-split-check`（在 `/model` 中配置，保存在本机 `modelRoles`），再取 `omomp.yml#task-split-check.fallbackRole`（仓库配置 `smol`），每次调用实时解析。角色条目未带 `:level` 后缀时使用 `medium` 推理强度；遇到 provider 错误时换链中的下一个模型。
+- **split 覆盖范围**：`omomp.yml#task-split-check.agents` 列出 `split` 检查覆盖的 `agent` 名。仓库默认值覆盖仓库的 worker 档位（`task:low`、`task:free`、`task:mid`）；更新器只在本机缺少时写入一次，此后归本机。`report-limit` 检查与此列表无关，对所有 `task:*` 生效。
 - **失败处理**：配置缺失或无效时仅移除配置的回退角色；`@task-split-check` 能解析出模型时仍继续判定。没有可用模型或有效结论（包括请求报错、超时或答案无法解析）时放行。每次完成判定记一条 `task-split-check verdicts` 日志。
 
 重试身份由共享 `context` 与该项 `task` 各自去除首尾空白后渲染的提示词决定；要复用结论，二者都必须保持不变。
 
 | 检查项 | 适用范围 | 判定问题 | 缓存与重试行为 |
 |---|---|---|---|
-| `split` | 主会话 `task` 调用中派给 `task:low`、`task:mid`、`task:free` 的项 | 只看该项的 `task` 文本（共享 `context` 仅作背景）：是否把多个互不相关的主题塞进了同一个子代理（按主题而非文件数判断）？ | 缓存所有结论（`pass-repeats`）：单主题边界可能存在判断分歧，被拦后若主会话确认属于同一主题，并保持共享 `context` 和该项 `task` 不变重发，第二次调用放行。 |
+| `split` | 主会话 `task` 调用中 `agent` 列在 `omomp.yml#task-split-check.agents` 的项 | 只看该项的 `task` 文本（共享 `context` 仅作背景）：是否把多个互不相关的主题塞进了同一个子代理（按主题而非文件数判断）？ | 缓存所有结论（`pass-repeats`）：单主题边界可能存在判断分歧，被拦后若主会话确认属于同一主题，并保持共享 `context` 和该项 `task` 不变重发，第二次调用放行。 |
 | `report-limit` | 任意会话 `task` 与 `fork_task` 中派给 `task:*` 或未填 `agent` 的项 | 同时看共享 `context` 与该项 `task`：是否限制了子代理返回报告的长度（字数、行数、段落数、token 数或“简短汇报”；对写入仓库文件的交付物限制长度不算）？ | 只缓存通过结论（`skip-clear`）：限制报告长度会截断父会话验收所需的证据，必须删掉字数限制（长报告可写到 `local://<name>.md`），原样重发继续拦截。 |
 
 ### task-completion-judge
