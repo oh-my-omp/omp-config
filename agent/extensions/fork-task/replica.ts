@@ -1,6 +1,9 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AgentTool, StreamFn } from "@oh-my-pi/pi-agent-core";
 import type { Context, Message, Model, SimpleStreamOptions, Tool } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
+import { parkedFilePath, parsePortableSource, readOptional } from "./replica-file.ts";
 
 /**
  * The last request at the common Context boundary, after all SDK context
@@ -27,6 +30,8 @@ type ObservedRequest = { readonly request: RequestSnapshot; response: number | u
 
 const requests = new WeakMap<AgentSession, ObservedRequest>();
 const observed = new WeakSet<AgentSession>();
+/** Live observed sessions of this thread by session file, for requests from other threads. */
+const liveSessions = new Map<string, AgentSession>();
 
 /**
  * What a fork replicates from its source: the latest request, where the
@@ -42,26 +47,40 @@ export type SourceRequest = {
 	readonly ask: AgentTool | undefined;
 };
 
-/** A source's request kept when its session was disposed, for forking it without reviving it. */
-export type ParkedRequest = Omit<SourceRequest, "response" | "ask"> & { readonly response: number; readonly cwd: string };
+/** A source request as plain data that crosses threads: without the live `ask`, with the source's cwd. */
+export type PortableSource = Omit<SourceRequest, "ask"> & { readonly cwd: string };
 
-/**
- * Copies of each disposed session's latest answered request, by session file.
- * Derived from the session's observed request at dispose (idle park or
- * teardown); a new live generation of the same file drops it when it starts
- * observing, and it is valid only while the transcript still ends at
- * `response` (the caller checks). Lives as long as this thread, like the
- * parked agent's registry row.
- */
-const parkedRequests = new Map<string, ParkedRequest>();
+/** A source's request kept when its session was disposed, for forking it without reviving it. */
+export type ParkedRequest = PortableSource & { readonly response: number };
 
 type SourceRequestResult =
 	| { readonly kind: "ready"; readonly source: SourceRequest }
 	| { readonly kind: "unavailable"; readonly reason: string };
 
-/** The request a parked source sent last, kept when it parked; undefined when this thread kept none. */
-export function parkedRequest(file: string): ParkedRequest | undefined {
-	return parkedRequests.get(file);
+/** What the thread owning a live source answers another thread with. */
+export type SharedSource =
+	| { readonly kind: "ready"; readonly source: PortableSource }
+	| { readonly kind: "unavailable"; readonly reason: string };
+
+/**
+ * The request a parked source sent last, written to `parkedFilePath` when it
+ * parked (idle park or teardown) in any thread of this OMP process; undefined
+ * when none was kept. A new live generation of the same file deletes it when it
+ * starts observing, and it is valid only while the transcript still ends at
+ * `response` (the caller checks). The main session's shutdown deletes the
+ * process's directory.
+ */
+export async function parkedRequest(file: string): Promise<ParkedRequest | undefined> {
+	const text = await readOptional(parkedFilePath(file));
+	if (text === undefined) return undefined;
+	const source = parsePortableSource(JSON.parse(text));
+	const { response } = source;
+	return response === undefined ? undefined : { ...source, response };
+}
+
+/** Whether `session` is a live session of this thread, whose requests this module copy observes. */
+export function observedHere(session: AgentSession): boolean {
+	return observed.has(session);
 }
 
 /** The provider-facing fields of a tool (pi-ai `Tool`), without the AgentTool runtime it was spread from. */
@@ -85,27 +104,40 @@ function wireTool(tool: Tool): Tool {
  * Contexts are per-call values; retain only the latest one, without duplicating
  * the transcript. Child wrappers capture their replicated input too, so a fork
  * of a fork has the same source of truth. Disposal (teardown or idle park)
- * moves an answered latest request to `parkedRequests`.
+ * writes an answered latest request to the session file's parked record, which
+ * every thread of this OMP process reads; the write is synchronous because the
+ * session's disposers are, so a fork right after the park finds it.
  */
-export function observeRequests(session: AgentSession): void {
+export function observeRequests(session: AgentSession, warn: (message: string, error: unknown) => void): void {
 	if (observed.has(session)) return;
 	observed.add(session);
 	const file = session.sessionManager.getSessionFile();
-	// This generation supersedes what the file's previous one kept at park.
-	if (file) parkedRequests.delete(file);
+	if (file) {
+		liveSessions.set(file, session);
+		// This generation supersedes what the file's previous one kept at park.
+		fs.rmSync(parkedFilePath(file), { force: true });
+	}
 	session.addDisposer(() => {
 		const latest = requests.get(session);
 		requests.delete(session);
 		const at = session.sessionManager.getSessionFile();
+		if (file && liveSessions.get(file) === session) liveSessions.delete(file);
 		if (!at || latest?.response === undefined) return;
-		parkedRequests.set(at, {
+		const parked: ParkedRequest = {
 			request: latest.request,
 			response: latest.response,
 			systemPrompt: [...session.systemPrompt],
 			toolNames: session.agent.state.tools.map((tool) => tool.name),
 			thinkingLevel: session.thinkingLevel,
 			cwd: session.sessionManager.getCwd(),
-		});
+		};
+		try {
+			const target = parkedFilePath(at);
+			fs.mkdirSync(path.dirname(target), { recursive: true });
+			fs.writeFileSync(target, JSON.stringify(parked));
+		} catch (error) {
+			warn("fork_task: keeping the parked session's request failed; forking it needs a wake first", error);
+		}
 	});
 	const stream = session.agent.streamFn;
 	session.agent.streamFn = (model, context, options) => {
@@ -181,15 +213,7 @@ type Capture = Omit<Replica, "replay"> & { readonly response: number | undefined
 /** The latest request of a live session in this thread. */
 export function liveRequest(session: AgentSession): SourceRequestResult {
 	const latest = requests.get(session);
-	if (!latest) {
-		// Every session of this thread is observed at its first prompt; an unobserved one runs in a subagent worker thread, whose requests stay there.
-		if (!observed.has(session))
-			return {
-				kind: "unavailable",
-				reason: "it runs in a subagent worker thread, where its requests are captured; message it to fork itself",
-			};
-		return { kind: "unavailable", reason: "it has not sent a model request in this OMP process since fork capture loaded" };
-	}
+	if (!latest) return { kind: "unavailable", reason: "it has not sent a model request in this OMP process since fork capture loaded" };
 	return {
 		kind: "ready",
 		source: {
@@ -201,6 +225,23 @@ export function liveRequest(session: AgentSession): SourceRequestResult {
 			ask: session.getToolByName("ask"),
 		},
 	};
+}
+
+/**
+ * Answer another thread asking for the live source whose transcript is `file`:
+ * undefined when no live session of this thread writes it. A ready answer
+ * captures the latest request, then flushes the transcript, so the asker's
+ * copy of the transcript holds every replicated message.
+ */
+export async function shareSource(file: string): Promise<SharedSource | undefined> {
+	const session = liveSessions.get(file);
+	if (!session) return undefined;
+	const live = liveRequest(session);
+	if (live.kind === "unavailable") return live;
+	await session.sessionManager.ensureOnDisk();
+	await session.sessionManager.flush();
+	const { ask: _live, ...source } = live.source;
+	return { kind: "ready", source: { ...source, cwd: session.sessionManager.getCwd() } };
 }
 
 export function captureReplica(

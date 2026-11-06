@@ -3,13 +3,16 @@
 // conversation, or of another agent's named by an item's `from`.
 //
 // Registers fork_task plus before_subagent_spawn, before_agent_start and
-// session_shutdown hooks in main and sub sessions. Reads the source agent's
-// persisted session; writes temporary JSONL under the OS temp directory and
-// moves it into the caller's artifact store; writes each child's replica copy
-// under `<tmp>/omp-fork-task/replicas/` and deletes it at parent shutdown.
+// session_shutdown hooks in main and sub sessions, and one BroadcastChannel
+// listener per thread (source-channel.ts). Reads the source agent's persisted
+// session; writes temporary JSONL under the OS temp directory and moves it
+// into the caller's artifact store; writes each child's replica copy under
+// `<tmp>/omp-fork-task/replicas/` and deletes it at parent shutdown; writes a
+// parked session's latest request under `<tmp>/omp-fork-task/parked/<pid>/`
+// and deletes that directory at main-session shutdown.
 // Execution failures warn and return tool errors; user aborts reject for host
 // cancellation accounting. Spawn preparation failures block the child and warn,
-// while shutdown cleanup failures warn without rejecting the hook.
+// while park-record and shutdown cleanup failures warn without rejecting.
 //
 // Every item replicates its source's actual model request: the caller's, or
 // that of the agent `from` names, live or parked. replica.ts captures each session's
@@ -60,10 +63,12 @@
 //
 // Relies on omp internals (AgentRegistry, the executor's session-file path and
 // hook ordering, session entry types, subagent worker threads); re-verify after
-// every omp upgrade. OMP may run a child in a subagent worker thread, which
-// loads its own copy of this module: such a child reads the replica from the
-// copy file instead of `replicas`, and a `from` source hosted in a worker
-// cannot be replicated from another thread (its requests are observed there).
+// every omp upgrade. OMP may run a session in a subagent worker thread, which
+// loads its own copy of this module. A child there reads the replica from the
+// copy file instead of `replicas`. A `from` source this thread does not host
+// is asked over source-channel.ts, and its own thread answers with its latest
+// request; a parked source's kept request is a file every thread of the
+// process reads, deleted when the main session shuts down.
 // ============================================================================
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -94,12 +99,15 @@ import {
 	captureReplica,
 	type ForkNotice,
 	liveRequest,
+	observedHere,
 	observeRequests,
+	type ParkedRequest,
 	parkedRequest,
 	type Replica,
 	type SourceRequest,
 } from "./replica.ts";
-import { readReplicaFile, replicaFilePath, writeReplicaFile } from "./replica-file.ts";
+import { parkedRoot, readReplicaFile, replicaFilePath, STAGING_ROOT, writeReplicaFile } from "./replica-file.ts";
+import { askSource, serveSources } from "./source-channel.ts";
 import { forkTaskTopics, TOPIC_POINTERS } from "./topics.ts";
 
 const itemSchema = z.object({
@@ -155,7 +163,7 @@ Children keep native task result delivery, Agent Hub, \`agent://\`/\`history://\
 
 - \`shake\` defaults to false. Explicit \`shake: true\` elides the inherited copy and writes recovery artifacts; it deliberately gives up exact inherited-message prefix reuse. There is no source-token or source-cost check.
 - \`isolated\` overrides the default. Concurrent writers must explicitly use isolated workspaces. Plan mode forces shared, read-only children. Isolated children cannot be resumed after completion.
-- \`from\` selects another registered agent (running, idle or parked) whose latest request is replicated; a parked source is forked without waking it. Omit it for your conversation. The child's workspace still derives from the caller, not from the source's isolated checkout.
+- \`from\` selects another registered agent (running, idle or parked, in any thread of this OMP process) whose latest request is replicated; a parked source is forked without waking it. Omit it for your conversation. The child's workspace still derives from the caller, not from the source's isolated checkout.
 - Omit \`effort\` unless the user asks; an effort change keeps the replicated prefix.
 - Each \`name\` gets a short unique suffix; use the returned id for follow-ups. The child has its own Todo and only owns the assignment, not unfinished work in inherited history.
 - Forked workers must run relevant scoped checks and real runtime verification before returning; the parent owns final acceptance.
@@ -259,8 +267,6 @@ type StagedFork = {
 	readonly notice: ForkNotice;
 	readonly shakeSummary?: string;
 };
-
-const STAGING_ROOT = path.join(os.tmpdir(), "omp-fork-task");
 
 /** The parent's plain-data copy for `childFile`; it carries no borrowed `ask`, a live tool that stays in the parent's thread. */
 async function portableReplica(childFile: string): Promise<Replica | undefined> {
@@ -455,7 +461,8 @@ type SourceResolution = { readonly kind: "error"; readonly message: string } | F
  * `history://<id>` (exact, then case-insensitive) after the caller root's
  * persisted roster is loaded. A live source's latest request is captured and
  * then its transcript flushed, so the transcript holds every replicated
- * message; a parked source stays parked and is forked from the request it
+ * message: in this thread directly, or by the thread hosting it when that is
+ * another one. A parked source stays parked and is forked from the request it
  * kept at park and its closed transcript.
  */
 async function resolveSource(from: string | undefined, parent: AgentSession, parentFile: string): Promise<SourceResolution> {
@@ -475,24 +482,43 @@ async function resolveSource(from: string | undefined, parent: AgentSession, par
 	ref ??= registry.list().find((candidate) => candidate.kind !== "advisor" && candidate.id.toLowerCase() === lower);
 	if (!ref) return { kind: "error", message: `no agent \`${requested}\` is registered; \`from\` takes an id as in \`agent://<id>\`.` };
 	if (ref.session === parent || ref.sessionFile === parentFile) return caller();
-	if (!ref.session) {
-		const kept = ref.sessionFile ? parkedRequest(ref.sessionFile) : undefined;
+	const parked = (id: string, file: string, kept: ParkedRequest): SourceResolution => {
+		const { cwd, ...request } = kept;
+		return { kind: "parked", id, request: { ...request, ask: undefined }, file, cwd };
+	};
+	const session = ref.session;
+	if (!session) {
+		const kept = ref.sessionFile ? await parkedRequest(ref.sessionFile) : undefined;
 		if (!ref.sessionFile || !kept) {
 			return {
 				kind: "error",
-				message: `agent \`${ref.id}\` is parked and this thread kept no request of it (it parked in a subagent worker thread or an earlier OMP process, or its last request got no response); wake it with \`write agent://${ref.id}\`, then fork it.`,
+				message: `agent \`${ref.id}\` is parked and OMP kept no request of it (it parked in an earlier OMP process, or its last request got no response); wake it with \`write agent://${ref.id}\`, then fork it.`,
 			};
 		}
-		return { kind: "parked", id: ref.id, request: { ...kept, ask: undefined }, file: ref.sessionFile, cwd: kept.cwd };
+		return parked(ref.id, ref.sessionFile, kept);
 	}
-	const session = ref.session;
-	const live = liveRequest(session);
-	if (live.kind === "unavailable") return { kind: "error", message: `cannot replicate the source's request: ${live.reason}` };
-	await session.sessionManager.ensureOnDisk();
-	await session.sessionManager.flush();
-	const file = session.sessionManager.getSessionFile();
+	if (observedHere(session)) {
+		const live = liveRequest(session);
+		if (live.kind === "unavailable") return { kind: "error", message: `cannot replicate the source's request: ${live.reason}` };
+		await session.sessionManager.ensureOnDisk();
+		await session.sessionManager.flush();
+		const file = session.sessionManager.getSessionFile();
+		if (!file) return { kind: "error", message: `agent \`${ref.id}\` has no persisted transcript to fork.` };
+		return { kind: "agent", id: ref.id, request: live.source, file, cwd: session.sessionManager.getCwd() };
+	}
+	// Hosted by another thread of this process (a subagent worker, or the main thread seen from a worker).
+	const file = ref.sessionFile ?? session.sessionManager.getSessionFile();
 	if (!file) return { kind: "error", message: `agent \`${ref.id}\` has no persisted transcript to fork.` };
-	return { kind: "agent", id: ref.id, request: live.source, file, cwd: session.sessionManager.getCwd() };
+	const shared = await askSource(file);
+	if (!shared) {
+		// It may have parked between the registry read and the ask.
+		const kept = await parkedRequest(file);
+		if (kept) return parked(ref.id, file, kept);
+		return { kind: "error", message: `agent \`${ref.id}\` runs in another OMP thread that did not answer for it; retry the fork.` };
+	}
+	if (shared.kind === "unavailable") return { kind: "error", message: `cannot replicate the source's request: ${shared.reason}` };
+	const { cwd, ...request } = shared.source;
+	return { kind: "agent", id: ref.id, request: { ...request, ask: undefined }, file, cwd };
 }
 
 /** What an item's `agent` contributes: nothing, or a role prompt and model binding. */
@@ -527,6 +553,8 @@ function roleResolver(parent: AgentSession): (agent: string | undefined) => Prom
 }
 
 export default function forkTask(pi: ExtensionAPI): void {
+	const warn = (message: string, error: unknown) => pi.logger.warn(message, { error: errorText(error) });
+	serveSources(warn);
 	const pending: PendingFork[] = [];
 	/** Child session files of the forks each parent spawned, by parent artifacts dir. */
 	const forkChildren = new Map<string, string[]>();
@@ -576,7 +604,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 		const session = callerSession(ctx);
 		if (!session) return;
 		try {
-			observeRequests(session);
+			observeRequests(session, warn);
 			const file = ctx.sessionManager.getSessionFile();
 			// A child OMP placed in a subagent worker thread has its own copy of this module: read the parent's copy.
 			const replica = file ? (replicas.get(file) ?? (await portableReplica(file))) : undefined;
@@ -597,6 +625,12 @@ export default function forkTask(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		if (ctx.agent.kind === "main") {
+			// The process's parked sources belong to the agent tree this main session ends.
+			await fs
+				.rm(parkedRoot(), { recursive: true, force: true })
+				.catch((error: unknown) => warn("fork_task: removing parked requests failed", error));
+		}
 		const parentFile = ctx.sessionManager.getSessionFile();
 		if (!parentFile) return;
 		const artifactsDir = parentFile.slice(0, -".jsonl".length);
