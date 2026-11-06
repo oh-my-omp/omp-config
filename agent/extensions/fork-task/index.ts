@@ -7,14 +7,15 @@
 // listener per thread (source-channel.ts). Reads the source agent's persisted
 // session; writes temporary JSONL under the OS temp directory and moves it
 // into the caller's artifact store; writes each child's replica copy under
-// `<tmp>/omp-fork-task/replicas/` and deletes it at parent shutdown; writes a
-// parked session's latest request under `<tmp>/omp-fork-task/parked/<pid>/`
-// and each isolated subagent's workspace start under
-// `<tmp>/omp-fork-task/starts/<pid>/`, deleting both at main-session shutdown;
-// writes a `workspace: "source"` child's inherited changes under
-// `<tmp>/omp-fork-task/overlays/`, consumed at the child's first turn
-// (workspace.ts). Inherited changes that do not apply stop the child before
-// its first model call; a failed start record only warns.
+// `<tmp>/omp-fork-task/replicas/<pid>/`, each isolated subagent's workspace
+// start under `<tmp>/omp-fork-task/starts/<pid>/`, a parked session's latest
+// request under `<tmp>/omp-fork-task/parked/<pid>/` and a
+// `workspace: "source"` child's inherited changes under
+// `<tmp>/omp-fork-task/overlays/<pid>/`, deleting all four at main-session
+// shutdown (park disposes a sub session too, so a sub shutdown never deletes
+// what its fork children still need); the overlay is consumed at the child's
+// first turn (workspace.ts). Inherited changes that do not apply stop the
+// child before its first model call; a failed start record only warns.
 // Execution failures warn and return tool errors; user aborts reject for host
 // cancellation accounting. Spawn preparation failures block the child and warn,
 // while park-record and shutdown cleanup failures warn without rejecting.
@@ -119,14 +120,14 @@ import {
 	type Replica,
 	type SourceRequest,
 } from "./replica.ts";
-import { parkedRoot, readReplicaFile, replicaFilePath, STAGING_ROOT, writeReplicaFile } from "./replica-file.ts";
+import { parkedRoot, readReplicaFile, replicaFilePath, replicasRoot, STAGING_ROOT, writeReplicaFile } from "./replica-file.ts";
 import { askSource, serveSources } from "./source-channel.ts";
 import { forkTaskTopics, TOPIC_POINTERS } from "./topics.ts";
 import {
 	applyOverlay,
 	type Inheritance,
 	inheritSourceWorkspace,
-	overlayFilePath,
+	overlaysRoot,
 	recordStart,
 	rejection,
 	startsRoot,
@@ -272,10 +273,11 @@ const FORK_AGENT = "fork:self";
  * Replicas by child session file. A child on the parent's thread rebinds this
  * module's factory, so the parent's write is visible to it; a child in a
  * subagent worker thread reads `replica-file.ts`'s copy instead. Entries and
- * copies live until the parent session shuts down, so a revived child keeps
- * its replicated contract. A replica holds plain request data and at most a
- * borrowed `ask` tool (absent from the copy), never the source session, so it
- * keeps no parked session alive.
+ * copies live until the main session shuts down — a sub session's park runs
+ * the same shutdown event, so a revived child keeps its replicated contract.
+ * A replica holds plain request data and at most a borrowed `ask` tool
+ * (absent from the copy), never the source session, so it keeps no parked
+ * session alive.
  */
 const replicas = new Map<string, Replica>();
 
@@ -299,7 +301,7 @@ type StagedFork = {
 
 /** The parent's plain-data copy for `childFile`; it carries no borrowed `ask`, a live tool that stays in the parent's thread. */
 async function portableReplica(childFile: string): Promise<Replica | undefined> {
-	const copy = await readReplicaFile(replicaFilePath(STAGING_ROOT, childFile));
+	const copy = await readReplicaFile(replicaFilePath(childFile));
 	return copy && { ...copy, ask: undefined };
 }
 
@@ -633,8 +635,6 @@ type ForkTaskRuntime = {
 	readonly pi: ExtensionAPI;
 	readonly warn: (message: string, error: unknown) => void;
 	readonly pending: PendingFork[];
-	/** Child session files of the forks each parent spawned, by parent artifacts dir. */
-	readonly forkChildren: Map<string, string[]>;
 	/** Child sessions whose per-call hook is installed. */
 	readonly cloned: WeakSet<AgentSession>;
 	/** Subagent transcripts whose workspace start this module copy has handled. */
@@ -680,9 +680,8 @@ async function beforeSubagentSpawn(
 		await moveFile(entry.staging, target);
 		await discardPending(rt, entry);
 		replicas.set(target, entry.replica);
-		await writeReplicaFile(replicaFilePath(STAGING_ROOT, target), entry.replica);
+		await writeReplicaFile(replicaFilePath(target), entry.replica);
 		if (entry.overlay) await writeOverlay(target, entry.overlay);
-		rt.forkChildren.set(artifactsDir, [...(rt.forkChildren.get(artifactsDir) ?? []), target]);
 		return entry.model === undefined ? undefined : { model: entry.model };
 	} catch (error) {
 		rt.pi.logger.warn("fork_task: preparing the child conversation failed", { error: errorText(error) });
@@ -748,14 +747,15 @@ async function beforeAgentStart(
 }
 
 /**
- * On main-session shutdown remove this process's parked-source and
- * workspace-start records; on any session shutdown drop replica copies and
- * staged conversations of the forks that parent spawned.
+ * On main-session shutdown remove this process's replica copies, overlays,
+ * parked-source and workspace-start records; on any session shutdown drop the
+ * staged conversations of the forks that parent spawned. A sub session's park
+ * emits the same event, so it must not drop what its fork children still need.
  */
 async function sessionShutdown(rt: ForkTaskRuntime, _event: SessionShutdownEvent, ctx: ExtensionContext): Promise<void> {
 	if (ctx.agent.kind === "main") {
-		// The process's parked sources and workspace starts belong to the agent tree this main session ends.
-		for (const root of [parkedRoot(), startsRoot()]) {
+		// The process's replica copies, overlays, parked sources and workspace starts belong to the agent tree this main session ends.
+		for (const root of [replicasRoot(), overlaysRoot(), parkedRoot(), startsRoot()]) {
 			await fs
 				.rm(root, { recursive: true, force: true })
 				.catch((error: unknown) => rt.warn("fork_task: removing per-process records failed", error));
@@ -764,12 +764,6 @@ async function sessionShutdown(rt: ForkTaskRuntime, _event: SessionShutdownEvent
 	const parentFile = ctx.sessionManager.getSessionFile();
 	if (!parentFile) return;
 	const artifactsDir = parentFile.slice(0, -".jsonl".length);
-	for (const child of rt.forkChildren.get(artifactsDir) ?? []) {
-		replicas.delete(child);
-		await fs.rm(replicaFilePath(STAGING_ROOT, child), { force: true });
-		await fs.rm(overlayFilePath(child), { force: true });
-	}
-	rt.forkChildren.delete(artifactsDir);
 	for (const entry of rt.pending.filter((p) => p.artifactsDir === artifactsDir)) {
 		try {
 			await discardPending(rt, entry);
@@ -913,7 +907,6 @@ export default function forkTask(pi: ExtensionAPI): void {
 		pi,
 		warn,
 		pending: [],
-		forkChildren: new Map(),
 		cloned: new WeakSet(),
 		started: new Set(),
 	};
