@@ -6,7 +6,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { z } from "@oh-my-pi/pi-coding-agent";
 import type { PortableSource, Replica } from "./replica.ts";
 
-/** Root of everything fork_task writes outside the session store: staging JSONL, replica copies, parked requests. */
+/** Root of everything fork_task writes outside the session store: staging JSONL, replica copies, parked requests, workspace starts, overlays. */
 export const STAGING_ROOT = path.join(os.tmpdir(), "omp-fork-task");
 
 /**
@@ -55,9 +55,14 @@ const portableSourceSchema = z.object({
 	cwd: z.string(),
 });
 
+/** This OMP process's replica-copy directory, shared by its main and worker threads. */
+export function replicasRoot(): string {
+	return path.join(STAGING_ROOT, "replicas", String(process.pid));
+}
+
 /** Where the copy for the child whose session file is `childFile` lives; the same path in every thread. */
-export function replicaFilePath(root: string, childFile: string): string {
-	return path.join(root, "replicas", `${createHash("sha256").update(childFile).digest("hex")}.json`);
+export function replicaFilePath(childFile: string): string {
+	return path.join(replicasRoot(), `${createHash("sha256").update(childFile).digest("hex")}.json`);
 }
 
 export async function writeReplicaFile(file: string, replica: Replica): Promise<void> {
@@ -66,7 +71,7 @@ export async function writeReplicaFile(file: string, replica: Replica): Promise<
 	await fs.writeFile(file, JSON.stringify(portable));
 }
 
-/** The copy, or undefined when none was written for this child (not a fork, or its parent has shut down). */
+/** The copy, or undefined when none was written for this child (not a fork, or the main session has shut down). */
 export async function readReplicaFile(file: string): Promise<PortableReplica | undefined> {
 	const text = await readOptional(file);
 	if (text === undefined) return undefined;

@@ -74,9 +74,14 @@ function startFilePath(sessionFile: string): string {
 	return path.join(startsRoot(), `${createHash("sha256").update(sessionFile).digest("hex")}.json`);
 }
 
+/** This OMP process's overlay directory, shared by its main and worker threads. */
+export function overlaysRoot(): string {
+	return path.join(STAGING_ROOT, "overlays", String(process.pid));
+}
+
 /** Where the parent's spawn hook leaves the changes the child at `childFile` inherits; the same path in every thread. */
 export function overlayFilePath(childFile: string): string {
-	return path.join(STAGING_ROOT, "overlays", `${createHash("sha256").update(childFile).digest("hex")}.patch`);
+	return path.join(overlaysRoot(), `${createHash("sha256").update(childFile).digest("hex")}.patch`);
 }
 
 /**
