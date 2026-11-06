@@ -4,6 +4,7 @@ import type { Api, Model } from "@oh-my-pi/pi-ai";
 import type { AgentDefinition, AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { resolveAgentModelPatterns, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import type { AgentSessionHandle } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 
@@ -62,9 +63,10 @@ export function bindAgent(session: AgentSession, agent: AgentDefinition): Bindin
 /**
  * The top-level session `session` descends from. Its session directory and cwd name the project
  * bucket: a subagent's own directory is its parent's artifact folder, and an isolated one runs in
- * a copy of the checkout whose git metadata does not lead back to the project.
+ * a copy of the checkout whose git metadata does not lead back to the project. When this subagent
+ * runs in a subagent worker thread, the root is a handle homed on another thread.
  */
-export function rootSession(session: AgentSession): AgentSession {
+export function rootSession(session: AgentSession): AgentSessionHandle {
 	const registry = AgentRegistry.global();
 	let ref = registry.list().find((candidate) => candidate.session === session);
 	const visited = new Set<string>();

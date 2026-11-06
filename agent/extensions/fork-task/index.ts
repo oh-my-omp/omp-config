@@ -87,6 +87,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { ensurePersistedRoster } from "@oh-my-pi/pi-coding-agent/registry/persisted-agents";
+import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
@@ -497,7 +498,7 @@ async function resolveSource(from: string | undefined, parent: AgentSession, par
 		}
 		return parked(ref.id, ref.sessionFile, kept);
 	}
-	if (observedHere(session)) {
+	if (isLocalAgentSession(session) && observedHere(session)) {
 		const live = liveRequest(session);
 		if (live.kind === "unavailable") return { kind: "error", message: `cannot replicate the source's request: ${live.reason}` };
 		await session.sessionManager.ensureOnDisk();

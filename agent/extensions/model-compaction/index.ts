@@ -70,8 +70,9 @@
 
 import { readFileSync } from "node:fs";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { AgentRegistry, type ExtensionAPI, type ExtensionContext, type Settings } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Settings } from "@oh-my-pi/pi-coding-agent";
 import { cfgCompactionModelThresholds, cfgExtendedContext } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
@@ -257,10 +258,8 @@ function restore(settings: Settings, baseline: Extract<Ownership, { kind: "owned
 }
 
 function sessionSettings(ctx: ExtensionContext): Settings {
-	const session = AgentRegistry.global()
-		.list()
-		.find((ref) => ref.session?.sessionManager === ctx.sessionManager)?.session;
-	if (session == null) throw new Error("current OMP session is not registered");
+	const session = callerSession(ctx);
+	if (session === undefined) throw new Error("current OMP session is not registered");
 	return session.settings;
 }
 
