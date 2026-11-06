@@ -44,8 +44,8 @@
 // Shipped APPEND-SYSTEM-*.md, PROMPT-INJECT-*.md, TURN-JUDGE-*.md and
 // REPLACE-SYSTEM-*.yml/.yaml rule files are managed templates; additional host
 // files stay machine-owned. Edits to APPEND-SYSTEM and REPLACE-SYSTEM files
-// take effect on the next prompt, TURN-JUDGE files on the next turn, and
-// PROMPT-INJECT files in the next subagent started.
+// take effect on the next prompt or tool call, TURN-JUDGE files on the next
+// turn, and PROMPT-INJECT files in the next subagent started.
 // Untouched by every rule: keys and files the repo never had, app-managed
 // files (`// @orca-managed-pi-extension` first line, or the Otty marker
 // anywhere; see OTTY_MARKER), runtime state. A symlinked target is written

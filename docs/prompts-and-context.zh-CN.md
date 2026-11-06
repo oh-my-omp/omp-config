@@ -13,7 +13,7 @@
 | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理 | 加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件，并处理所有规则来源的 `paths` 按路径触发。 |
 | [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 只为 OMP 自己的工具实例添加 surface 与 `Topics` 索引；由插件或扩展注册的工具保留自己的说明与专题，包括以相同名称替换内置工具的情况，例如 `omp-ask-more` 的 `ask`。OMP 工具的详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
-| [system-prompt-replace](#system-prompt-replace) | 按规则（默认所有会话；完整与轻量模式） | 在所有按路径加载的扩展最后运行，按 `REPLACE-SYSTEM-*.yml` 规则文件对渲染出的 system prompt 做措辞级修改；每条规则可以全局生效，也可以限定会话、cwd、模型、provider、当前模型的委派倾向（delegation bias）或模式，并用 `exclude.*` 写明何时不生效。 |
+| [system-prompt-replace](#system-prompt-replace) | 按规则（默认所有会话；完整与轻量模式） | 按 `REPLACE-SYSTEM-*.yml` 规则文件对渲染出的 system prompt 给出措辞级修改，作为一条增量消息送达，逐条引出命中的原文与替换后文本；每条规则可以全局生效，也可以限定会话、cwd、模型、provider、当前模型的委派倾向（delegation bias）或模式，并用 `exclude.*` 写明何时不生效。 |
 | [append-system-model](#append-system-model) | 按片段（默认仅主会话） | 把 frontmatter 条件（会话、cwd、模型、provider、当前模型的委派倾向、完整/轻量模式，以及表示何时不注入的 `exclude.*`）命中的 `APPEND-SYSTEM-*.md` 片段作为一条增量消息送达。仓库自带 `APPEND-SYSTEM-decision-support.md`：完整模式的主会话中，重大决策询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`；主模型为 `claude-opus-5-5` 时不注入。 |
 | [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时追加仓库下发的 `ARGON_PROMPT.md`：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
 | [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理 | `TOPIC` frontmatter 的 `inject:` 规则在命中的只读工具调用后，把专题在每个真实上下文中投递一次；追加 developer 上下文，而不是扩大常驻工具说明。 |
@@ -24,9 +24,9 @@
 
 源码：`agent/extensions-last/system-prompt-replace/`，登记在 `agent/config.yml` 与 `agent/config-light.yml` 的 `extensions` 列表最后一项。键与匹配规则以其文件头注释为准。
 
-`before_agent_start` 处理器按扩展加载顺序串行执行：native 发现（`~/.omp/agent/extensions/` 与 `settings.json` 模块）→ hooks → 插件扩展 → `-e` 路径 → `config.yml` `extensions` → OMP 内置 inline 扩展。把该扩展放在 `extensions/` 之外的 `extensions-last/` 并排在 `extensions` 列表末项，可使它在两种模式下都在所有按路径加载的扩展之后运行（详见 [`agent/extensions-last/README.zh-CN.md`](../agent/extensions-last/README.zh-CN.md)）。
+`before_agent_start` 处理器按扩展加载顺序串行执行：native 发现（`~/.omp/agent/extensions/` 与 `settings.json` 模块）→ hooks → 插件扩展 → `-e` 路径 → `config.yml` `extensions` → OMP 内置 inline 扩展。把该扩展放在 `extensions/` 之外的 `extensions-last/` 并排在 `extensions` 列表末项，可使它在两种模式下都在所有按路径加载的扩展之后运行，它的增量在一条 prompt 的消息中排在这些扩展的增量之后（详见 [`agent/extensions-last/README.zh-CN.md`](../agent/extensions-last/README.zh-CN.md)）。
 
-每次 `before_agent_start` 时（主会话与每个子代理各按自身匹配），扩展读取同目录下的全部 `REPLACE-SYSTEM-<label>.yml`（仓库自带与本机自建文件放在同一目录），以及从会话 cwd 到 git 根每层目录及其 `.omp/` 中的同名模式文件；配合 `config.yml` 的 `inlineToolDescriptors: "on"` 将工具说明内联渲染进 system prompt 后再替换。一个文件是一个由规则组成的 YAML 序列：
+每条 prompt 时与每次工具调用之后（主会话与每个子代理各按自身匹配），扩展读取同目录下的全部 `REPLACE-SYSTEM-<label>.yml`（仓库自带与本机自建文件放在同一目录），以及从会话 cwd 到 git 根每层目录及其 `.omp/` 中的同名模式文件；`config.yml` 的 `inlineToolDescriptors: "on"` 把工具说明内联渲染进 system prompt，规则才能匹配到其中的句子。一个文件是一个由规则组成的 YAML 序列：
 
 ```yaml
 - literal: "原文"
@@ -38,13 +38,15 @@
   exclude.target: "mentor:default"
 ```
 
-不写条件键的规则对所有会话生效。条件键与 [append-system-model](#append-system-model) 相同（`target`、`cwd`、`model`、`provider`、`mode`、`delegation` 以及 `exclude.` 下的同名键），但这里的默认 target 是所有会话，而不是 `main`。在 `REPLACE-SYSTEM-*.yml` 中，`model` 与 `provider` 字符串以 YAML 解码后的原值作为正则源码，包括解码后字符串内部的引号字符，不会再去掉引号。文件按发现顺序生效，文件内规则按顺序生效，每条作用于前一条的结果。未知键或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
+不写条件键的规则对所有会话生效。条件键与 [append-system-model](#append-system-model) 相同（`target`、`cwd`、`model`、`provider`、`mode`、`delegation` 以及 `exclude.` 下的同名键），但这里的默认 target 是所有会话，而不是 `main`。在 `REPLACE-SYSTEM-*.yml` 中，`model` 与 `provider` 字符串以 YAML 解码后的原值作为正则源码，包括解码后字符串内部的引号字符，不会再去掉引号。文件按发现顺序生效，文件内规则按顺序生效，每条匹配前一条替换后的文本。未知键或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
+
+system prompt 本身从不改动。规则匹配扩展拿到的提示（prompt 时为 `event.systemPrompt`，工具调用之后为 `ctx.getSystemPrompt()`），每条规则命中的每段不同原文成为 `<system-reminder source="omp-config/system-prompt-replace">` 增量（见[提示词文件](#提示词文件)）中的一项：写出原文及其在本会话中的替换后文本；`replace` 为空时写明这段原文不适用于本会话。各项按规则顺序排列；没有命中的规则不产生任何项。规则文件的修改与 `/model` 切换从下一条 prompt 或下一次工具调用开始生效。
 
 仓库自带的 `REPLACE-SYSTEM-default.yml` 当前包含的替换规则，每条都限定 `mode: full`（其中文件检索与编辑固定使用 `read` + hashline `edit` 并禁止在 `eval` 中查文件，以要求模型在读取目标行邻近上下文后再做修改，避免在缺少编译器与测试保护的脚本、配置或命令行操作中脱离上下文直接修改）：
 
 | 目标 | 修改内容 |
 |---|---|
-| 子代理 Todo 说明（`target: subagents`） | 删去原生子代理提示词中的 `"No TODO tracking, no progress updates."`，避免与子代理必填 Todo 及 `fork_task` 的验证要求冲突。task 侧的句子（按各 agent 的定义文本选择 agent、显式 `agent`、并发写入隔离、删掉的 “skip build/lint/tests”）改由 [tool-topics](extensions.zh-CN.md#tool-topics) 的 `SURFACE-task.md` 承载。 |
+| 子代理 Todo 说明（`target: subagents`） | 声明原生子代理提示词中的 `"No TODO tracking, no progress updates."` 不适用，避免与子代理必填 Todo 及 `fork_task` 的验证要求冲突。task 侧的句子（按各 agent 的定义文本选择 agent、显式 `agent`、并发写入隔离、删掉的 “skip build/lint/tests”）改由 [tool-topics](extensions.zh-CN.md#tool-topics) 的 `SURFACE-task.md` 承载。 |
 | 用户报错处理规则 | 补充说明“不重跑检查去质疑用户报错”不影响为定位原因而复现和修复后验证。 |
 | 编译代码规则 | 补上原句缺失的动词 `add`（`NEVER add avoidable allocation...`）。 |
 | `eval` 工具说明 | 禁止通过 `eval` 读取、列目录或搜索本地文件（统一使用 `read`、`glob`、`grep`）。 |
@@ -53,7 +55,7 @@
 
 [tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞处理 OMP 自己的工具（`read`、`bash`、`task`）的整段说明，上游改写措辞后仍然生效。
 
-当某条适用于主会话的规则找不到匹配文本时（例如升级 OMP 后上游改了内置措辞），每个进程对每条规则记一次日志并弹一次 UI 警告（headless 模式写 stderr），不阻塞请求。子代理的 system prompt 本就不含 `task` 等工具，不做缺失检查；条件不匹配当前会话的规则直接跳过，不做检查。
+当某条适用于主会话的规则找不到匹配文本时（例如升级 OMP 后上游改了内置措辞），增量中没有这一项，每个进程对每条规则记一次日志并弹一次 UI 警告（headless 模式写 stderr），不阻塞请求。子代理的 system prompt 本就不含 `task` 等工具，不做缺失检查；条件不匹配当前会话的规则直接跳过，不做检查。
 
 更新器把本机 `omomp.yml` 中的 `system-prompt-replace` 段转换成 `REPLACE-SYSTEM-default.yml`，并删除已迁移的段；app-managed 源文件绝不导入或删除（见[文件归属与同步规则](operations.zh-CN.md#文件归属与同步规则)）。
 
