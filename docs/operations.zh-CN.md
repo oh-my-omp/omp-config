@@ -23,7 +23,7 @@ flowchart LR
 | `agent/agents/*.md` | 本机（仓库仅首次播种默认值） | 本机所有的播种文件：仅在该文件无任何基准记录时从仓库播种；此后本机未改的副本仍跟随仓库（上游修改和删除生效，仓库侧的重命名因此传播），本机改过的一律保留、不合并也不报冲突，本机删除或改名的不再重建；本机自建的 `.md` 不动，只登记其存在 | 不收回仓库（要改默认直接改仓库里的 `agent/agents/*.md`） | 下次派发生效 |
 | `agent/config-light.yml` | 仓库；保留本机修改 | 按上面文本文件的规则三方合并 | 与本机 `cmp` 比对，有改动时写回仓库 | 实时重载的设置覆盖层（`omp-light` 通过 `--config` 传入）；不会重跑仅在启动时执行的工作，当前进程从未导入的扩展源仍需重启（[设置](omp://settings.md#live-file-changes)、[扩展加载](omp://extension-loading.md#live-source-changes)） |
 | `agent/extensions/<name>/*.ts`、`extensions/_shared/*.ts`、`extensions-last/<name>/*.ts`、`omp-light.ts` | 仓库（代码以仓库为准） | 即使本机改过也覆盖，改过的文件列入 `overwritten`；基准（尚无基准时为 `auto` 的上一个提交）有而源中已删除的文件会被删除（`extensions-last/README*.md` 只留仓库） | 逐个 `.ts` 比对并写回仓库 | 下次启动 OMP |
-| `PROMPT-INJECT-*.md`、`TURN-JUDGE-*.md`、`INTENT-*.md`、`extensions/append-system-model/APPEND-SYSTEM-*.md`、`extensions-last/system-prompt-replace/REPLACE-SYSTEM-*.yml` / `REPLACE-SYSTEM-*.yaml` | 仓库自带归仓库；本机自建归本机 | 仓库自带文件按上面文本文件的规则三方合并；不改动或删除同目录下本机自建的文件 | 只收回仓库已跟踪的同名文件 | 下次派发 / 下一轮 / 下次调用 / 下一条 prompt |
+| `PROMPT-INJECT-*.md`、`TURN-JUDGE-*.md`、`INTENT-*.md`、`extensions/append-system-model/APPEND-SYSTEM-*.md`、`extensions-last/system-prompt-replace/REPLACE-SYSTEM-*.yml` / `REPLACE-SYSTEM-*.yaml` | 仓库自带归仓库；本机自建归本机 | 仓库自带文件按上面文本文件的规则三方合并；不改动或删除同目录下本机自建的文件 | 只收回仓库已跟踪的同名文件 | 下次派发 / 下一轮 / 下次调用 / 下一条 prompt（`APPEND-SYSTEM-*.md` 也在下一次工具调用之后） |
 | `extensions/tool-topics/TOPIC-*.md`、`SURFACE-*.md` | 仓库自带归仓库；本机自建归本机 | 仓库自带文件按上面文本文件的规则三方合并 | 只收回仓库已跟踪的同名文件 | 下次启动 OMP |
 | `extensions/argon-long-output/ARGON_PROMPT.md` | 仓库；保留本机修改 | 按上面文本文件的规则三方合并 | 与本机 `cmp` 比对，有改动时写回仓库 | 下一条 prompt |
 | `WATCHDOG-*.md` | 本机 | 不写入也不删除（仅在旧平铺目录迁移时从根目录移入扩展目录） | 不收回仓库 | 写入即重读 |
@@ -139,8 +139,8 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 | `session-filter.ts` | `parseSessionFilter`、`parseInjectMode`、`targetsSession`、`producerMatches`、`describeFilter`、`SessionFilter`、`InjectMode`、`FilterProblem`：解析规格文件的 `target` 列表、`cwd` glob 列表、产出模型正则与 `inject` 形式，解析问题以数据返回、由调用方措辞；`watchdog-agent`、`turn-judge` 与 `prompt-conditions.ts` 使用 |
 | `prompt-conditions.ts` | `parseSessionConditions`、`conditionsApply`、`CONDITION_KEYS`、`SessionConditions`、`ConditionProblem`：`append-system-model` 片段与 `system-prompt-replace` 规则共用的注入与 `exclude.*` 条件（`target`、`cwd`、`model`、`provider`、`mode`、`delegation`），按会话、当前模型及其委派倾向与 `OMOMP_MODE` 匹配；默认 target 与问题措辞由各调用方决定 |
 | `context-delivery.ts` | `createContextDelivery(pi)`：`repo-rules` 和专题注入共用的真实上下文标记判重；内存只保存同 turn 待交付标记 |
+| `context-delta.ts` | `createDeltaStream(pi, id)`、`Delta`：扩展的增量流——把定制渲染成 `<system-reminder source="omp-config/<id>">` 消息，只在它与活动叶节点上下文中该来源最新的增量不同时，于 prompt 开始时（`atPrompt`，`before_agent_start` 的 `message`）或工具批次之后（`afterTools`，`tool_result` 的 `additionalContext`）投递，并取代较早的增量；内存只保存同 turn 工具批次已交付的增量；`append-system-model` 使用 |
 | `agent-definition.ts` | `declaresFlag(session, cwd, agentName, key)`：指定的 agent 定义 frontmatter 是否把某 flag 声明为 `true`（与 task 工具相同的发现顺序）；`completionJudge` 与 `splitCheck` 使用 |
-
 | `tool-calls.ts` | `watchedCallOf`、`WatchedCall`：从宿主 `tool_call` 事件读出 shell 命令（`bash`、`bash_bg` 及其 `xd://` 设备写入）或 eval 代码；忽略插件调用；`tool-policy-nag` 与 `delete-guard` 使用 |
 | `eval-py-launches.ts` | `scanPy`、`pyLaunchAt`、`isOp`、`PyLaunch`、`LaunchWord`、`LaunchVia`：对 Python eval cell 做词法分析（字符串、f-string、`!cmd`、`%%bash`、magic），读出 import 绑定，以及某个调用启动的进程，并标明识别来源 `direct`/`alias`/`distinctive`；`delete-guard`（失败即阻断）与 `tool-policy-nag` 的 pty 通道（失败即放行）使用 |
 | `eval-js-launches.ts` | `parseJs`、`jsLaunchOf`、`walk`、`propertyName`、`receiverModule`、`isBunFile`、`JsLaunch`：用 omp 的 Babel 选项解析 JS eval cell，读出模块绑定，以及某个节点启动的 child_process/Bun/桥接进程；`delete-guard` 与 `tool-policy-nag` 的 pty 通道使用 |
