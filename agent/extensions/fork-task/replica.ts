@@ -28,6 +28,42 @@ type ObservedRequest = { readonly request: RequestSnapshot; response: number | u
 const requests = new WeakMap<AgentSession, ObservedRequest>();
 const observed = new WeakSet<AgentSession>();
 
+/**
+ * What a fork replicates from its source: the latest request, where the
+ * source's history continues after it, and the source state read with it.
+ */
+export type SourceRequest = {
+	readonly request: RequestSnapshot;
+	readonly response: number | undefined;
+	readonly systemPrompt: readonly string[];
+	readonly toolNames: readonly string[];
+	readonly thinkingLevel: AgentSession["thinkingLevel"];
+	/** The source's own `ask`, only while it is live. */
+	readonly ask: AgentTool | undefined;
+};
+
+/** A source's request kept when its session was disposed, for forking it without reviving it. */
+export type ParkedRequest = Omit<SourceRequest, "response" | "ask"> & { readonly response: number; readonly cwd: string };
+
+/**
+ * Copies of each disposed session's latest answered request, by session file.
+ * Derived from the session's observed request at dispose (idle park or
+ * teardown); a new live generation of the same file drops it when it starts
+ * observing, and it is valid only while the transcript still ends at
+ * `response` (the caller checks). Lives as long as this thread, like the
+ * parked agent's registry row.
+ */
+const parkedRequests = new Map<string, ParkedRequest>();
+
+type SourceRequestResult =
+	| { readonly kind: "ready"; readonly source: SourceRequest }
+	| { readonly kind: "unavailable"; readonly reason: string };
+
+/** The request a parked source sent last, kept when it parked; undefined when this thread kept none. */
+export function parkedRequest(file: string): ParkedRequest | undefined {
+	return parkedRequests.get(file);
+}
+
 /** The provider-facing fields of a tool (pi-ai `Tool`), without the AgentTool runtime it was spread from. */
 function wireTool(tool: Tool): Tool {
 	const { name, description, parameters, strict, deferLoading, customFormat, customWireName, native, examples } = tool;
@@ -48,14 +84,28 @@ function wireTool(tool: Tool): Tool {
  * Capture the actual provider-neutral input, not a separately rendered prompt.
  * Contexts are per-call values; retain only the latest one, without duplicating
  * the transcript. Child wrappers capture their replicated input too, so a fork
- * of a fork has the same source of truth. The snapshot ends with the session:
- * disposal (teardown or idle park) drops it.
+ * of a fork has the same source of truth. Disposal (teardown or idle park)
+ * moves an answered latest request to `parkedRequests`.
  */
 export function observeRequests(session: AgentSession): void {
 	if (observed.has(session)) return;
 	observed.add(session);
+	const file = session.sessionManager.getSessionFile();
+	// This generation supersedes what the file's previous one kept at park.
+	if (file) parkedRequests.delete(file);
 	session.addDisposer(() => {
+		const latest = requests.get(session);
 		requests.delete(session);
+		const at = session.sessionManager.getSessionFile();
+		if (!at || latest?.response === undefined) return;
+		parkedRequests.set(at, {
+			request: latest.request,
+			response: latest.response,
+			systemPrompt: [...session.systemPrompt],
+			toolNames: session.agent.state.tools.map((tool) => tool.name),
+			thinkingLevel: session.thinkingLevel,
+			cwd: session.sessionManager.getCwd(),
+		});
 	});
 	const stream = session.agent.streamFn;
 	session.agent.streamFn = (model, context, options) => {
@@ -128,12 +178,8 @@ export type Replica = {
 /** A replica before staging: the replay mode needs the staged fork notice. */
 type Capture = Omit<Replica, "replay"> & { readonly response: number | undefined };
 
-type CaptureResult = { readonly kind: "ready"; readonly capture: Capture } | { readonly kind: "unavailable"; readonly reason: string };
-
-export function captureReplica(
-	session: AgentSession,
-	options: { readonly inheritReasoning: boolean; readonly caller: AgentSession },
-): CaptureResult {
+/** The latest request of a live session in this thread. */
+export function liveRequest(session: AgentSession): SourceRequestResult {
 	const latest = requests.get(session);
 	if (!latest) {
 		// Every session of this thread is observed at its first prompt; an unobserved one runs in a subagent worker thread, whose requests stay there.
@@ -144,21 +190,33 @@ export function captureReplica(
 			};
 		return { kind: "unavailable", reason: "it has not sent a model request in this OMP process since fork capture loaded" };
 	}
-	const { request } = latest;
-	const level = session.thinkingLevel;
-	const toolNames = session.agent.state.tools.map((tool) => tool.name);
 	return {
 		kind: "ready",
-		capture: {
-			request,
+		source: {
+			request: latest.request,
 			response: latest.response,
 			systemPrompt: [...session.systemPrompt],
-			toolNames,
-			// The caller outlives the replica, so its `ask` pins no extra session; a `from` source's own is the fallback.
-			ask: toolNames.includes("ask") ? (options.caller.getToolByName("ask") ?? session.getToolByName("ask")) : undefined,
-			sourceModel: `${request.model.provider}/${request.model.id}${level ? `:${level}` : ""}`,
-			inheritReasoning: options.inheritReasoning,
+			toolNames: session.agent.state.tools.map((tool) => tool.name),
+			thinkingLevel: session.thinkingLevel,
+			ask: session.getToolByName("ask"),
 		},
+	};
+}
+
+export function captureReplica(
+	source: SourceRequest,
+	options: { readonly inheritReasoning: boolean; readonly caller: AgentSession },
+): Capture {
+	const { request, toolNames, thinkingLevel: level } = source;
+	return {
+		request,
+		response: source.response,
+		systemPrompt: source.systemPrompt,
+		toolNames,
+		// The caller outlives the replica, so its `ask` pins no extra session; a live `from` source's own is the fallback.
+		ask: toolNames.includes("ask") ? (options.caller.getToolByName("ask") ?? source.ask) : undefined,
+		sourceModel: `${request.model.provider}/${request.model.id}${level ? `:${level}` : ""}`,
+		inheritReasoning: options.inheritReasoning,
 	};
 }
 

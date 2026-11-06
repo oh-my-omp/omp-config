@@ -102,7 +102,7 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 
 源码：`agent/extensions/fork-task/`。注册 `fork_task` 工具（顶层 `context` 加不含 `solutionSpace` 的 `tasks[]`，需开启 `async.enabled: true`）。它的前置条件、不支持的字段和来源报错写在专题 `xd://fork_task/limits` 中，在 eval 单元中按模板批量分叉写在专题 `xd://fork_task/batch` 中；两者都由工具自己的 `docTopics()`（`topics.ts`）提供，并列在其说明末尾。
 
-`fork_task` 保留原生 Agent Hub、结果投递、`agent://`/`history://`、后续消息与隔离工作区合并。每个子代理都复刻源的最近一次模型请求（调用方的，或 `from` 指定的活跃代理的），同一源的多个分叉共享供应商缓存前缀；任何任务项都不改写 system prompt。`agent` 只决定模型与角色：
+`fork_task` 保留原生 Agent Hub、结果投递、`agent://`/`history://`、后续消息与隔离工作区合并。每个子代理都复刻源的最近一次模型请求（调用方的，或 `from` 指定代理的，无论它活跃还是 parked），同一源的多个分叉共享供应商缓存前缀；任何任务项都不改写 system prompt。`agent` 只决定模型与角色：
 
 | 任务项 | 模型 | 任务消息 | 默认工作区 | 用途 |
 |---|---|---|---|---|
@@ -110,12 +110,12 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 | 显式填写 `agent` | 该 agent 在 `task.agentModelOverrides` 中的绑定，否则取定义里的 `model` | `<role agent="…">` 包裹的定义正文 + `context` + `task` | 隔离（`isolated: true`） | 让另一个角色接着源的工作做，通常换更便宜的模型 |
 
 - **前缀复刻**：`replica.ts` 在每个会话的 `Agent.streamFn` 捕获实际 `Context`，位置在 SDK 的提醒、图片、上下文变换之后、供应商序列化之前。子代理复用这份 system/工具定义前缀和分叉点以前的源消息；运行源的模型时还复用 thinking/service-tier/temperature/max-token 参数和 prompt-cache key，换成其他模型则用该模型自己的参数。共享 `context`、角色和任务接在继承历史后，作为子代理的 user 消息。所有子代理都以内部 `fork:self` 派发，工具调用由子会话自己的实现执行，存在的 `yield` 追加在源工具之后。子代理以 `fork:self` 运行源的工具面，所以指定 agent 的工具限制、派发策略、按 agent 配置的 service-tier、压缩阈值与账号池，以及按 agent 名生效的钩子（如 [`task-completion-judge`](extensions.zh-CN.md#task-completion-judge)）都不生效。实现只有一条供应商无关的路径，不分别改写 Anthropic/OpenAI payload。子会话的对话和传输身份保持独立；原生 `ask` 仍遵守 headless 限制。
-- **缓存与生命周期边界**：模型相同、请求参数兼容是必要条件；是否命中仍由供应商的缓存策略、路由和 TTL 决定。改 `effort` 不影响复刻的前缀。不支持追加工具保留缓存的供应商可能因新增 `yield` 而 miss。请求快照保存在创建它的 OMP 进程中，支持同进程 idle/park/revive。OMP 可能把子代理放进子代理 worker 线程（`task.workerThreads`），该线程加载自己的一份扩展副本；因此父会话的派发钩子还会把复刻请求的纯数据写到 `$TMPDIR/omp-fork-task/replicas/`，这类子代理从那里读取。`from` 指向 worker 线程中的代理时无法从别的线程复刻，因为它的请求只在它自己的线程里捕获：应给它发消息，让它自己调用 `fork_task`。会话自己的快照在该会话 dispose（关闭或 idle park）时释放，分叉子代理的复刻请求及其副本保留到父会话关闭。两者只保存纯请求数据（消息、工具 schema），至多再加一个借给 headless 子代理的 `ask` 工具（副本中没有），所以 park 后的会话不会因它们留在内存中。进程重启或父会话关闭后丢失快照的子代理会在请求供应商前失败，应创建新分叉。压缩改变子会话上下文后，包装器停止替换继承消息；未压缩时锚点缺失或不唯一则报错，不猜测拼接位置。
+- **缓存与生命周期边界**：模型相同、请求参数兼容是必要条件；是否命中仍由供应商的缓存策略、路由和 TTL 决定。改 `effort` 不影响复刻的前缀。不支持追加工具保留缓存的供应商可能因新增 `yield` 而 miss。请求快照保存在创建它的 OMP 进程中，支持同进程 idle/park/revive。OMP 可能把子代理放进子代理 worker 线程（`task.workerThreads`），该线程加载自己的一份扩展副本；因此父会话的派发钩子还会把复刻请求的纯数据写到 `$TMPDIR/omp-fork-task/replicas/`，这类子代理从那里读取。`from` 指向 worker 线程中的代理时无法从别的线程复刻，因为它的请求只在它自己的线程里捕获：应给它发消息，让它自己调用 `fork_task`。会话 dispose（关闭或 idle park）时，它最近一次得到回复的请求连同 system prompt、工具名、thinking 等级和 cwd 转存为以会话文件为键的副本；同一文件的下一代活跃会话会丢弃这份副本，否则它保留到进程退出。分叉子代理的复刻请求及其副本保留到父会话关闭。这些都只保存纯请求数据（消息、工具 schema），至多再加一个借给 headless 子代理的 `ask` 工具（副本中没有），所以 park 后的会话不会因它们留在内存中。进程重启或父会话关闭后丢失快照的子代理会在请求供应商前失败，应创建新分叉。压缩改变子会话上下文后，包装器停止替换继承消息；未压缩时锚点缺失或不唯一则报错，不猜测拼接位置。
 - **工作区覆盖**：`isolated` 覆盖默认值。并发写入必须显式选择 `isolated: true`；plan mode 强制共享、只读子代理；隔离子代理完成后不能继续唤醒。
 - **Shake 必须显式选择**：`shake` 默认为 false，任何任务项都不检查继承 token 数或来源成本。显式 `shake: true` 对副本执行 `session.shake("elide")`，保留最近约 4,000 token 及 `skill://`、`local://PLAN.md` 读取，把更早的文本工具结果、$\ge 400$ token 的代码块和顶层小写 XML 块替换成共享 artifact 中的恢复引用。开启 shake 的分叉明确不再回放原始消息前缀。
 - **拒绝的任务项**：`tools` 不是 fork 字段，子代理只暴露源的工具。未知 agent、`task.disabledAgents` 中的 agent 或 `fork:self` 本身在派发前报错。
 - **执行失败**：execute 边界捕获失败，在暂存清理后记录警告并返回 `isError` 工具结果；只有用户中止（`signal.aborted`）会重新抛出，交由宿主处理取消。
-- `from: "<agent-id>"`（解析规则同 `agent://<id>`）复刻运行中或 idle 的代理而非调用方：先捕获它的最近一次请求，再落盘并复制它的对话历史。parked 代理没有可复刻的活跃请求，派发前报错，需先用 `write agent://<id>` 唤醒。子代理的工作目录仍取自调用方的 checkout，而非 `from` 代理自己的隔离 worktree。
+- `from: "<agent-id>"`（解析规则同 `agent://<id>`）复刻另一个代理而非调用方。运行中或 idle 的代理：先捕获它的最近一次请求，再落盘并复制它的对话历史。parked 代理保持 parked：分叉使用它 park 时保留的请求和它的对话历史，历史必须仍以该请求的回复结尾；不满足，或本线程没有为它保留请求（它在 worker 线程或更早的进程中 park，或最后一次请求没有得到回复）时，该任务项在派发前报错，并指出可用 `write agent://<id>` 唤醒。子代理的工作目录仍取自调用方的 checkout，而非 `from` 代理自己的隔离 worktree。
 - 复制出的历史末尾会追加 `<system-notice cause="fork_task">`，说明前面的历史仅作背景，并要求子代理在交回结果前完成相关构建、测试与真实运行验证。
 - 暂存步骤：先把源会话复制到 `$TMPDIR/omp-fork-task/<uuid>/`（清零继承费用、为未完成的工具调用补齐中止结果、清空源 Todo、追加 fork notice），移除 `session_init`、`model_change`、`thinking_level_change`、`service_tier_change` 与 shake 产生的 `session_exit` 并将子条目重挂到上一级，共享子代理写入调用方 `cwd`、隔离子代理置空 `cwd`，最后在 `before_subagent_spawn` 中把暂存文件移到 `<父会话文件去掉 .jsonl>/<子代理 id>.jsonl`。
 

@@ -12,7 +12,7 @@
 // while shutdown cleanup failures warn without rejecting the hook.
 //
 // Every item replicates its source's actual model request: the caller's, or
-// that of the live agent `from` names. replica.ts captures each session's
+// that of the agent `from` names, live or parked. replica.ts captures each session's
 // provider-neutral Context through Agent.streamFn; the child reuses that
 // system prompt, tool list, message prefix and (on the source's model) its
 // request controls, so forks of one source share the provider cache prefix.
@@ -35,7 +35,8 @@
 // differ:
 //
 //   1. At call time the source's persisted conversation (the caller's, or the
-//      registered agent `from` names, resolved like `history://<id>`) is forked
+//      registered agent `from` names, resolved like `history://<id>`; a parked
+//      agent is read from its closed transcript, not revived) is forked
 //      into a staging JSONL (inherited cost zeroed, a dangling in-flight tool call
 //      paired with a synthetic aborted result, the source's todo list cleared),
 //      followed by a fork notice. `shake: true` then runs the same
@@ -88,7 +89,16 @@ import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { applyReplica, captureReplica, type ForkNotice, observeRequests, type Replica } from "./replica.ts";
+import {
+	applyReplica,
+	captureReplica,
+	type ForkNotice,
+	liveRequest,
+	observeRequests,
+	parkedRequest,
+	type Replica,
+	type SourceRequest,
+} from "./replica.ts";
 import { readReplicaFile, replicaFilePath, writeReplicaFile } from "./replica-file.ts";
 import { forkTaskTopics, TOPIC_POINTERS } from "./topics.ts";
 
@@ -137,7 +147,7 @@ const RUNTIME_STATE_TYPES: Record<string, true> = {
 const SESSION_EXIT_CUSTOM_TYPE = "session_exit";
 
 const DESCRIPTION = `Fork a conversation into a native task child that continues it under the source's exact request: its system prompt, tools and message prefix are replicated unchanged, so forks of one source share the provider's cached prefix. \`context\`, an \`agent\` role and \`task\` reach the child only as its new user message, never as system text.
-- The source is your conversation, or that of the live agent \`from\` names.
+- The source is your conversation, or that of the agent \`from\` names, live or parked.
 - Omit \`agent\` to run the source's model and thinking/request controls; the default is a shared working directory (\`isolated: false\`).
 - Set \`agent\` to run that agent's model binding, with its definition prompt as a role block in the assignment. The child keeps the source's tools, so the agent's tool restrictions do not apply; a different model reuses no cache. The default is \`isolated: true\`.
 
@@ -145,7 +155,7 @@ Children keep native task result delivery, Agent Hub, \`agent://\`/\`history://\
 
 - \`shake\` defaults to false. Explicit \`shake: true\` elides the inherited copy and writes recovery artifacts; it deliberately gives up exact inherited-message prefix reuse. There is no source-token or source-cost check.
 - \`isolated\` overrides the default. Concurrent writers must explicitly use isolated workspaces. Plan mode forces shared, read-only children. Isolated children cannot be resumed after completion.
-- \`from\` selects another registered agent (running or idle) whose latest request is replicated; a parked source must be woken first. Omit it for your conversation. The child's workspace still derives from the caller, not from the source's isolated checkout.
+- \`from\` selects another registered agent (running, idle or parked) whose latest request is replicated; a parked source is forked without waking it. Omit it for your conversation. The child's workspace still derives from the caller, not from the source's isolated checkout.
 - Omit \`effort\` unless the user asks; an effort change keeps the replicated prefix.
 - Each \`name\` gets a short unique suffix; use the returned id for follow-ups. The child has its own Todo and only owns the assignment, not unfinished work in inherited history.
 - Forked workers must run relevant scoped checks and real runtime verification before returning; the parent owns final acceptance.
@@ -155,11 +165,14 @@ Children keep native task result delivery, Agent Hub, \`agent://\`/\`history://\
 /**
  * Where the forked transcript and replicated request come from. `caller` is
  * the session calling fork_task; `agent` is another live registered agent
- * named by `from`, whose workspace may differ from the parent's.
+ * named by `from`; `parked` is such an agent without a live session, forked
+ * from the request it kept at park and its transcript, without reviving it.
+ * The two may run in workspaces other than the parent's.
  */
 type ForkSource =
-	| { readonly kind: "caller"; readonly session: AgentSession; readonly file: string; readonly cwd: string }
-	| { readonly kind: "agent"; readonly id: string; readonly session: AgentSession; readonly file: string; readonly cwd: string };
+	| { readonly kind: "caller"; readonly request: SourceRequest; readonly file: string; readonly cwd: string }
+	| { readonly kind: "agent"; readonly id: string; readonly request: SourceRequest; readonly file: string; readonly cwd: string }
+	| { readonly kind: "parked"; readonly id: string; readonly request: SourceRequest; readonly file: string; readonly cwd: string };
 
 function workspaceNotice(source: ForkSource, parentCwd: string, isolated: boolean): string[] {
 	switch (source.kind) {
@@ -169,7 +182,8 @@ function workspaceNotice(source: ForkSource, parentCwd: string, isolated: boolea
 					? `- You run in an isolated copy of the workspace. Paths under \`${parentCwd}\` in the conversation name the parent's checkout: use the same repository-relative paths inside your own working directory, and NEVER read or write under \`${parentCwd}\`.`
 					: "- You share the parent's working directory; files may change between your reads.",
 			];
-		case "agent": {
+		case "agent":
+		case "parked": {
 			const id = `\`${source.id}\``;
 			const foreign = [...new Set([source.cwd, ...(isolated ? [parentCwd] : [])])];
 			const lines = [
@@ -342,6 +356,16 @@ async function moveFile(from: string, to: string): Promise<void> {
 	}
 }
 
+/** The timestamp of the last assistant message on the branch, which the latest request produced. */
+function lastResponse(manager: SessionManager): number | undefined {
+	const branch = manager.getBranchView();
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry?.type === "message" && entry.message.role === "assistant") return entry.message.timestamp;
+	}
+	return undefined;
+}
+
 async function stageFork(
 	ctx: ExtensionContext,
 	parent: AgentSession,
@@ -365,6 +389,12 @@ async function stageFork(
 		let preShakeIds: ReadonlySet<string>;
 		let notice: ForkNotice;
 		try {
+			// A parked source's kept request is current only while its transcript still ends at that request's response.
+			if (source.kind === "parked" && lastResponse(manager) !== source.request.response) {
+				throw new Error(
+					`agent \`${source.id}\`'s transcript has moved past the request it kept at park, or is still being written while it parks; retry the fork.`,
+				);
+			}
 			manager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
 			const timestamp = Date.now();
 			const entryId = manager.appendMessage({
@@ -421,14 +451,22 @@ type SourceResolution = { readonly kind: "error"; readonly message: string } | F
 
 /**
  * Resolve `from` to the source to fork: omitted (or naming the caller) forks
- * the caller; otherwise a live registered non-advisor agent, matched like
+ * the caller; otherwise a registered non-advisor agent, matched like
  * `history://<id>` (exact, then case-insensitive) after the caller root's
- * persisted roster is loaded, so a parked agent is named as such.
+ * persisted roster is loaded. A live source's latest request is captured and
+ * then its transcript flushed, so the transcript holds every replicated
+ * message; a parked source stays parked and is forked from the request it
+ * kept at park and its closed transcript.
  */
 async function resolveSource(from: string | undefined, parent: AgentSession, parentFile: string): Promise<SourceResolution> {
-	const caller: ForkSource = { kind: "caller", session: parent, file: parentFile, cwd: parent.sessionManager.getCwd() };
 	const requested = from?.trim();
-	if (!requested) return caller;
+	const caller = async (): Promise<SourceResolution> => {
+		const live = liveRequest(parent);
+		if (live.kind === "unavailable") return { kind: "error", message: `cannot replicate your own request: ${live.reason}` };
+		await parent.sessionManager.flush();
+		return { kind: "caller", request: live.source, file: parentFile, cwd: parent.sessionManager.getCwd() };
+	};
+	if (!requested) return caller();
 	const registry = AgentRegistry.global();
 	await ensurePersistedRoster(registry, parentFile);
 	let ref = registry.get(requested);
@@ -436,18 +474,25 @@ async function resolveSource(from: string | undefined, parent: AgentSession, par
 	const lower = requested.toLowerCase();
 	ref ??= registry.list().find((candidate) => candidate.kind !== "advisor" && candidate.id.toLowerCase() === lower);
 	if (!ref) return { kind: "error", message: `no agent \`${requested}\` is registered; \`from\` takes an id as in \`agent://<id>\`.` };
-	if (ref.session === parent || ref.sessionFile === parentFile) return caller;
+	if (ref.session === parent || ref.sessionFile === parentFile) return caller();
 	if (!ref.session) {
-		return {
-			kind: "error",
-			message: `agent \`${ref.id}\` is parked; wake it with \`write agent://${ref.id}\`, then fork it while it is live.`,
-		};
+		const kept = ref.sessionFile ? parkedRequest(ref.sessionFile) : undefined;
+		if (!ref.sessionFile || !kept) {
+			return {
+				kind: "error",
+				message: `agent \`${ref.id}\` is parked and this thread kept no request of it (it parked in a subagent worker thread or an earlier OMP process, or its last request got no response); wake it with \`write agent://${ref.id}\`, then fork it.`,
+			};
+		}
+		return { kind: "parked", id: ref.id, request: { ...kept, ask: undefined }, file: ref.sessionFile, cwd: kept.cwd };
 	}
-	// execute flushes after capturing the request, so the transcript holds every replicated message.
-	await ref.session.sessionManager.ensureOnDisk();
-	const file = ref.session.sessionManager.getSessionFile();
+	const session = ref.session;
+	const live = liveRequest(session);
+	if (live.kind === "unavailable") return { kind: "error", message: `cannot replicate the source's request: ${live.reason}` };
+	await session.sessionManager.ensureOnDisk();
+	await session.sessionManager.flush();
+	const file = session.sessionManager.getSessionFile();
 	if (!file) return { kind: "error", message: `agent \`${ref.id}\` has no persisted transcript to fork.` };
-	return { kind: "agent", id: ref.id, session: ref.session, file, cwd: ref.session.sessionManager.getCwd() };
+	return { kind: "agent", id: ref.id, request: live.source, file, cwd: session.sessionManager.getCwd() };
 }
 
 /** What an item's `agent` contributes: nothing, or a role prompt and model binding. */
@@ -608,18 +653,16 @@ export default function forkTask(pi: ExtensionAPI): void {
 						const agent = item.agent?.trim() || undefined;
 						const role = await resolveRole(agent);
 						if (role.kind === "error") throw new Error(role.message);
-						const captured = captureReplica(source.session, {
+						const captured = captureReplica(source.request, {
 							inheritReasoning: role.kind === "none" && item.effort === undefined,
 							caller: parent,
 						});
-						if (captured.kind === "unavailable") throw new Error(`cannot replicate the source's request: ${captured.reason}`);
-						await source.session.sessionManager.flush();
 						const name = `${sanitizeName(item.name) ?? "Fork"}_${randomUUID().slice(0, 4)}`;
 						// Without a role the fork continues the source in its workspace unless explicitly isolated.
 						const isolated = !planMode && (item.isolated ?? role.kind === "role");
 						const shake = item.shake === true;
 						const { staging, notice, shakeSummary } = await stageFork(ctx, parent, source, shake, isolated);
-						const { response, ...capture } = captured.capture;
+						const { response, ...capture } = captured;
 						const entry: PendingFork = {
 							name,
 							artifactsDir,
