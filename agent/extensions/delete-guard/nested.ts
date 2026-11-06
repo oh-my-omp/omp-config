@@ -1,10 +1,12 @@
 import type { ArgvWord } from "./classify.ts";
 import { classifyCmd } from "./cmd.ts";
+import { classifyInterpreter, interpreterKind } from "./interpreter.ts";
 import { classifyPosixArgv } from "./posix.ts";
+import type { StdinSource } from "./posix-parse.ts";
 import { classifyPowershell } from "./powershell.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
-/** The dialect a shell program interprets its script in; null for other programs. */
+/** The dialect a shell program interprets its script in. */
 type ShellKind = "posix" | "powershell" | "cmd";
 
 /** A program name as any dialect sees it: basename (either separator), lowercased, without `.exe`/`.com`. */
@@ -13,18 +15,16 @@ export function programName(text: string): string {
 	return base.endsWith(".exe") || base.endsWith(".com") ? base.slice(0, -4) : base;
 }
 
-const SHELLS: ReadonlyMap<string, ShellKind> = new Map([
-	["sh", "posix"],
-	["bash", "posix"],
-	["zsh", "posix"],
-	["dash", "posix"],
-	["ksh", "posix"],
-	["powershell", "powershell"],
-	["pwsh", "powershell"],
-	["cmd", "cmd"],
-]);
-
-export const shellKind = (name: string): ShellKind | null => SHELLS.get(programName(name)) ?? null;
+const SHELLS: Record<string, ShellKind> = {
+	sh: "posix",
+	bash: "posix",
+	zsh: "posix",
+	dash: "posix",
+	ksh: "posix",
+	powershell: "powershell",
+	pwsh: "powershell",
+	cmd: "cmd",
+};
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
@@ -94,14 +94,7 @@ export function classifyCmdInvocation(args: readonly ArgvWord[], depth: number, 
 	return block("nonLiteral", fragment, "cmd has no `/c` or `/k` command line, so it reads commands from stdin");
 }
 
-/** Dispatches a nested shell invocation found in any dialect. */
-export function classifyShellInvocation(
-	kind: ShellKind,
-	name: ArgvWord,
-	args: readonly ArgvWord[],
-	depth: number,
-	fragment: string,
-): Verdict {
+function classifyShellInvocation(kind: ShellKind, name: ArgvWord, args: readonly ArgvWord[], depth: number, fragment: string): Verdict {
 	switch (kind) {
 		case "posix":
 			return classifyPosixArgv([name, ...args], depth);
@@ -114,4 +107,24 @@ export function classifyShellInvocation(
 			return unreachable;
 		}
 	}
+}
+
+/**
+ * Classifies a program that runs a script from its arguments: a nested shell (`sh -c`, `pwsh -Command`, `cmd /c`) or
+ * an interpreter (`python3 -c`, `node -e`, …). Returns null when the program is neither, so the caller classifies it
+ * as an ordinary command. `stdin` is the program's own stdin source; dialects without stdin tracking pass null.
+ */
+export function classifyNestedProgram(
+	name: ArgvWord,
+	args: readonly ArgvWord[],
+	depth: number,
+	fragment: string,
+	stdin: StdinSource | null,
+): Verdict | null {
+	const program = programName(name.text);
+	const shell = Object.hasOwn(SHELLS, program) ? SHELLS[program] : undefined;
+	if (shell !== undefined) return classifyShellInvocation(shell, name, args, depth, fragment);
+	const interpreter = interpreterKind(program);
+	if (interpreter !== null) return classifyInterpreter(interpreter, args, { depth, fragment, stdin });
+	return null;
 }

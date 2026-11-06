@@ -2,21 +2,12 @@ import { watchedCallOf } from "../_shared/tool-calls.ts";
 import { classify } from "./classify.ts";
 import { classifyJs } from "./eval-js.ts";
 import { classifyPy } from "./eval-py.ts";
-import type { Dialect, Rule, Verdict } from "./verdict.ts";
+import { BRUSH, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
 
 /** One guarded tool call, parsed once at the hook boundary. */
 type Entry =
 	| { readonly kind: "bash"; readonly command: string }
 	| { readonly kind: "eval"; readonly language: "py" | "js"; readonly code: string };
-
-/** The bash tool runs omp's embedded pi-shell engine on every platform; it, `Bun.$`, `Bun.spawn` and the `tool.bash` bridge are classified as posix. */
-const BRUSH: Dialect = { kind: "posix" };
-
-/**
- * The shell an eval cell's `shell=True`, `os.system`, `!cmd` or `child_process.exec` string reaches: `/bin/sh` on
- * macOS and Linux, `cmd.exe` (`ComSpec`) on Windows. `%%bash`, `Bun.$`, `Bun.spawn` and `tool.bash` stay posix.
- */
-const SYSTEM_SHELL: Dialect = process.platform === "win32" ? { kind: "cmd" } : { kind: "posix" };
 
 const FRAGMENT_LIMIT = 300;
 
@@ -36,7 +27,7 @@ function entryOf(toolName: string, input: unknown): Entry | null {
 	}
 }
 
-async function judge(entry: Entry): Promise<Verdict> {
+function judge(entry: Entry): Verdict {
 	switch (entry.kind) {
 		case "bash":
 			return classify(BRUSH, { kind: "script", text: entry.command }, 0);
@@ -72,7 +63,7 @@ type GuardResult = { readonly block: true; readonly reason: string } | undefined
 export async function guardToolCall(toolName: string, input: unknown, deleteAvailable: () => boolean): Promise<GuardResult> {
 	const entry = entryOf(toolName, input);
 	if (entry === null) return undefined;
-	const verdict = await judge(entry);
+	const verdict = judge(entry);
 	switch (verdict.kind) {
 		case "allow":
 			return undefined;

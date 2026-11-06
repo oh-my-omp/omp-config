@@ -1,5 +1,5 @@
 import type { ArgvWord } from "./classify.ts";
-import { classifyShellInvocation, programName, shellKind } from "./nested.ts";
+import { classifyNestedProgram, programName } from "./nested.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
 /** cmd's internal deletion commands, plus the posix names Git for Windows puts on PATH. */
@@ -143,8 +143,8 @@ function classifyCmdCommand(command: CmdCommand, depth: number): Verdict {
 		if (!word.literal) return block("nonLiteral", command.raw, `the command name \`${word.raw}\` comes from a \`%VAR%\` expansion`);
 		const name = programName(head);
 		if (DELETE_COMMANDS.has(name)) return block("delete", command.raw, `\`${name}\` deletes files`);
-		const kind = shellKind(head);
-		if (kind !== null) return classifyShellInvocation(kind, word, words.slice(i + 1), depth, command.raw);
+		const nested = classifyNestedProgram(word, words.slice(i + 1), depth, command.raw, null);
+		if (nested !== null) return nested;
 		return ALLOW;
 	}
 }

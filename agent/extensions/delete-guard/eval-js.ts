@@ -15,7 +15,13 @@ import { ALLOW, type Dialect, type Rule, type Verdict } from "./verdict.ts";
 /** API names only fs uses: blocked wherever code names them, so aliases made in earlier cells are caught too. */
 const DISTINCTIVE_DELETE: ReadonlySet<string> = new Set(["rmSync", "unlinkSync", "rmdirSync", "unlink", "rmdir"]);
 
-type Context = { readonly code: string; readonly bindings: JsCell["bindings"]; readonly shell: Dialect; readonly brush: Dialect };
+type Context = {
+	readonly code: string;
+	readonly bindings: JsCell["bindings"];
+	readonly shell: Dialect;
+	readonly brush: Dialect;
+	readonly depth: number;
+};
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
@@ -26,24 +32,26 @@ function judgeLaunch(launch: JsLaunch, fragment: string, ctx: Context): Verdict 
 		case "childScript":
 			return launch.text === null
 				? nonLiteral("the command handed to a shell")
-				: classify(ctx.shell, { kind: "script", text: launch.text }, 1);
+				: classify(ctx.shell, { kind: "script", text: launch.text }, ctx.depth + 1);
 		case "childSpawn": {
 			const words = launch.words;
 			if (words === null) return nonLiteral("the argument list");
 			if (launch.shell) {
 				if (words.some((word) => !word.literal)) return nonLiteral("the command handed to a shell");
-				return classify(ctx.shell, { kind: "script", text: words.map((word) => word.text).join(" ") }, 1);
+				return classify(ctx.shell, { kind: "script", text: words.map((word) => word.text).join(" ") }, ctx.depth + 1);
 			}
-			return classify(ctx.brush, { kind: "argv", words }, 1);
+			return classify(ctx.brush, { kind: "argv", words }, ctx.depth + 1);
 		}
 		case "bunSpawn":
-			return launch.words === null ? nonLiteral("the command list") : classify(ctx.brush, { kind: "argv", words: launch.words }, 1);
+			return launch.words === null
+				? nonLiteral("the command list")
+				: classify(ctx.brush, { kind: "argv", words: launch.words }, ctx.depth + 1);
 		case "bunShell":
 			return launch.text === null
 				? block("nonLiteral", fragment, "the `Bun.$` template interpolates values, so it is not a literal command")
-				: classify(ctx.brush, { kind: "script", text: launch.text }, 1);
+				: classify(ctx.brush, { kind: "script", text: launch.text }, ctx.depth + 1);
 		case "bridge":
-			if (launch.command !== null) return classify(ctx.brush, { kind: "script", text: launch.command }, 1);
+			if (launch.command !== null) return classify(ctx.brush, { kind: "script", text: launch.command }, ctx.depth + 1);
 			return nonLiteral(launch.source === "bash" ? "the bash bridge command" : "the xd://bash payload");
 		default: {
 			const unreachable: never = launch;
@@ -87,6 +95,8 @@ function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Contex
 	if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
 		const property = propertyName(node);
 		if (property !== null && DISTINCTIVE_DELETE.has(property)) return block("delete", quoted, `\`${property}\` deletes files`);
+		if ((property === "remove" || property === "removeSync") && node.object.type === "Identifier" && node.object.name === "Deno")
+			return block("delete", quoted, `\`Deno.${property}\` deletes files`);
 		if (property === "rm") {
 			const module = receiverModule(node.object, bindings);
 			if (module === "fs" || module === "fs/promises") return block("delete", quoted, `\`${module}.rm\` deletes files`);
@@ -103,9 +113,9 @@ function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Contex
  * for `Bun.$`, `Bun.spawn` argv and the `tool.bash` bridge). Parse failures throw
  * to the hook boundary, which blocks the call.
  */
-export async function classifyJs(code: string, shell: Dialect, brush: Dialect): Promise<Verdict> {
-	const { program, bindings } = await parseJs(code);
-	const ctx: Context = { code, bindings, shell, brush };
+export function classifyJs(code: string, shell: Dialect, brush: Dialect, depth = 0): Verdict {
+	const { program, bindings } = parseJs(code);
+	const ctx: Context = { code, bindings, shell, brush, depth };
 	let verdict: Verdict = ALLOW;
 	for (const statement of program.body) {
 		walk(statement, program, (node, parent) => {
