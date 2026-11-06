@@ -290,7 +290,7 @@ export function inspectMaskedFailure(trace: ExecutedTrace): readonly TraceStep[]
 		if (step.status === SIGPIPE_STATUS && !step.lastStage) return false;
 		// `cmd; echo "$?"`: the next command reads the status, so the failure is shown.
 		const next = steps[index + 1]?.source ?? "";
-		return !next.includes("$?") && !next.includes("${?}");
+		return !/\$\{?\?/.test(next);
 	});
 	return masked.length === 0 ? null : masked;
 }
