@@ -297,6 +297,21 @@ function holderText(conflict: ShortcutConflict): string {
 		}
 	}
 }
+/** `holderText` in the notification language. */
+function holderTextLocalized(conflict: ShortcutConflict): string {
+	switch (conflict.kind) {
+		case "reserved":
+			return tr("reserved by omp itself", "已被 omp 保留");
+		case "keybinding":
+			return tr(`bound to ${conflict.keybindings.join(", ")}`, `已被 ${conflict.keybindings.join("、")} 绑定`);
+		case "extension":
+			return tr(`registered by ${conflict.extensionPath}`, `已被 ${conflict.extensionPath} 注册`);
+		default: {
+			const unreachable: never = conflict;
+			return unreachable;
+		}
+	}
+}
 
 /** Startup conflict check: name whoever already holds the configured chord. */
 function warnShortcutConflict(pi: ExtensionAPI, ctx: ExtensionContext, key: PolishConfig["key"]): void {
@@ -308,7 +323,7 @@ function warnShortcutConflict(pi: ExtensionAPI, ctx: ExtensionContext, key: Poli
 	const holder = holderText(conflict);
 	const notice = tr(
 		`input-polish: shortcut ${key} is ${holder} — pressing it may trigger both actions`,
-		`input-polish：快捷键 ${key} 已${holder} — 按下可能同时触发两个动作`,
+		`input-polish：快捷键 ${key}${holderTextLocalized(conflict)} — 按下可能同时触发两个动作`,
 	);
 	pi.logger.warn(`input-polish: shortcut conflict: ${key} is ${holder}`);
 	if (ctx.hasUI) ctx.ui.notify(notice, "warning");
