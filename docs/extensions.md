@@ -51,7 +51,7 @@ Runs at `tool_call` on `task` and `fork_task`. Judges items concurrently under a
 
 - **Models**: queries the OMP model role `@task-split-check` (assigned in `/model`, stored in machine-local `modelRoles`), then the `default` role chain, resolved per call. Uses `medium` reasoning unless the role entry has a `:level` suffix; the chain's models are tried in order, each attempt limited to the remaining budget divided over the models not yet tried, so a provider error or a hanging model costs only its own share and the chain moves on.
 - **Split coverage**: the `split` check covers `task` items whose `agent` definition declares `splitCheck: true` in its frontmatter (the shipped `task:low`, `task:free` and `task:mid` definitions declare it; resolved with the same lookup the task tool's spawn preflight uses). The `report-limit` check applies to every `task:*` agent regardless.
-- **Failure handling**: with no usable model or verdict (including request errors, timeouts and unparseable answers), the call fails open. Every judged call logs `task-split-check verdicts`.
+- **Failure handling**: with no usable model or verdict (including request errors, timeouts, replies cut off by `length` or ending in `toolUse`, and unparseable answers), the call fails open. Every judged call logs `task-split-check verdicts`.
 
 Retry identity is the rendered prompt containing shared `context` and item `task`, with each trimmed. Both must stay unchanged for a retry to reuse a verdict.
 

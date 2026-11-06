@@ -36,7 +36,8 @@ export type AttemptBudget = { readonly kind: "whole" } | { readonly kind: "split
  * text answer. A provider `stopReason: "error"` or a thrown error that is not
  * the caller's deadline records a failure line and moves to the next model. The
  * signal aborting ends the pass at once; so does a provider `stopReason: "aborted"`
- * under `whole`. `effort` is the reasoning level for chain entries without a
+ * under `whole`. A reply that ends `length` or `toolUse` is never parsed as an answer:
+ * it records a failure line and moves to the next model, like `error`. `effort` is the reasoning level for chain entries without a
  * `:level` suffix; an entry at level `off` runs with `disableReasoning`.
  */
 export async function completeRoleChain(
@@ -67,17 +68,26 @@ export async function completeRoleChain(
 						? { apiKey: ctx.modelRegistry.resolver(model), disableReasoning: true, signal: attempt }
 						: { apiKey: ctx.modelRegistry.resolver(model), reasoning: level ?? effort, signal: attempt },
 				);
-				if (reply.stopReason === "aborted") {
-					if (budget.kind === "whole") return { kind: "aborted" };
-					if (signal.aborted) return { kind: "deadline" };
-					failures.push(`${modelLabel(model)}: attempt timeout`);
-					continue;
+				switch (reply.stopReason) {
+					case "stop":
+						return { kind: "text", text: textOf(reply.content), model: candidate, failures };
+					case "length":
+					case "toolUse":
+						failures.push(`${modelLabel(model)}: ${reply.stopReason}`);
+						continue;
+					case "error":
+						failures.push(`${modelLabel(model)}: ${reply.errorMessage ?? "error"}`);
+						continue;
+					case "aborted":
+						if (budget.kind === "whole") return { kind: "aborted" };
+						if (signal.aborted) return { kind: "deadline" };
+						failures.push(`${modelLabel(model)}: attempt timeout`);
+						continue;
+					default: {
+						const unreachable: never = reply.stopReason;
+						throw new Error(`unknown stop reason: ${String(unreachable)}`);
+					}
 				}
-				if (reply.stopReason === "error") {
-					failures.push(`${modelLabel(model)}: ${reply.errorMessage ?? "error"}`);
-					continue;
-				}
-				return { kind: "text", text: textOf(reply.content), model: candidate, failures };
 			} catch (error) {
 				if (signal.aborted) return { kind: "deadline" };
 				failures.push(`${modelLabel(model)}: ${errorText(error)}`);
