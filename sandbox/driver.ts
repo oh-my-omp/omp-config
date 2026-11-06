@@ -1,9 +1,10 @@
 // RPC driver (S5), run inside the sandbox as
 //   bun /sandbox/driver.ts SCENARIO_JSON MODEL EVIDENCE_DIR
-// One scenario against one model through `omp --mode rpc --no-ui`. The scenario's `init` runs in
-// sh (the driver, not the agent) before the session; the prompt is sent once; every tool call is
-// recorded; then `finalAssertion` runs in sh and the declared call and reply assertions are
-// checked. The driver reads the scenario and never interprets what it means.
+// One scenario against one model through `omp --mode rpc --no-ui`. Each run gets a fresh working
+// directory `/runs/<provider>_<model>/<name>-<ms>`; the scenario's `init` runs there in sh (the
+// driver, not the agent) before the session, the session runs there, the prompt is sent once,
+// every tool call is recorded, then `finalAssertion` runs there in sh and the declared call and
+// reply assertions are checked. The driver reads the scenario and never interprets what it means.
 //
 // Scenario file (JSON):
 //   name            [a-z0-9][a-z0-9._-]*; names the evidence files
@@ -115,8 +116,8 @@ export function parseScenario(raw: unknown): Scenario {
 	};
 }
 
-function shell(command: string): { code: number | null; out: string } {
-	const result = spawnSync("sh", ["-c", command], { encoding: "utf8" });
+function shell(command: string, cwd: string): { code: number | null; out: string } {
+	const result = spawnSync("sh", ["-c", command], { cwd, encoding: "utf8" });
 	return { code: result.status, out: `${result.stdout}${result.stderr}`.trim() };
 }
 
@@ -276,13 +277,14 @@ async function main(argv: readonly string[]): Promise<number> {
 		return outcome.kind === "pass" || outcome.kind === "untested" ? 0 : 1;
 	};
 
-	const init = shell(scenario.init);
-	if (init.code !== 0) return write({ kind: "harness-error", reason: `init exited ${init.code}: ${init.out}` }, {});
-
+	// `init`, the session and `finalAssertion` share one fresh directory per model run.
 	const cwd = join("/runs", model.replaceAll("/", "_"), `${scenario.name}-${Date.now()}`);
 	mkdirSync(cwd, { recursive: true });
+	const init = shell(scenario.init, cwd);
+	if (init.code !== 0) return write({ kind: "harness-error", reason: `init exited ${init.code}: ${init.out}` }, { cwd });
+
 	const session = await runSession(model, scenario.prompt, cwd, evidence("events.jsonl"));
-	const finalState = shell(scenario.finalAssertion);
+	const finalState = shell(scenario.finalAssertion, cwd);
 	const lastReply = textOf(session.replies.at(-1));
 	const outcome = classify(model, session, assertionFailures(scenario, session.calls, finalState.code, lastReply));
 	if (session.sessionFile !== null && existsSync(session.sessionFile)) copyFileSync(session.sessionFile, evidence("session.jsonl"));

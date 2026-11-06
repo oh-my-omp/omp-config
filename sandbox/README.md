@@ -46,14 +46,14 @@ The credential copy is used as it is: nothing is rewritten, refreshed or filtere
 
 ## Scenarios and the RPC driver
 
-`matrix` and `run` copy the scenario into the container and run `sandbox/driver.ts` there once per model, each in a fresh `omp --mode rpc --no-ui --model <model>` session with its own working directory under `/runs/`. A scenario file is JSON:
+`matrix` and `run` copy the scenario into the container and run `sandbox/driver.ts` there once per model, each in a fresh `omp --mode rpc --no-ui --model <model>` session with its own working directory `/runs/<provider>_<model>/<name>-<ms>`. The scenario's `init` and `finalAssertion` run in that same directory, so `init` can prepare the session's workspace (a git repository, files) and `finalAssertion` can inspect what the session left there. A scenario file is JSON:
 
 | Field | Meaning |
 |---|---|
 | `name` | `[a-z0-9][a-z0-9._-]*`; names the evidence files |
-| `init` | sh command the driver runs before the session (not through the agent), exit 0 required; it runs again before every model |
+| `init` | sh command the driver runs in the session's working directory before the session (not through the agent), exit 0 required; it runs again before every model |
 | `prompt` | the single user message |
-| `finalAssertion` | sh command run after the session; exit 0 passes |
+| `finalAssertion` | sh command run in the session's working directory after the session; exit 0 passes |
 | `calls.expect` | matchers that must appear in this order among the tool calls (a subsequence) |
 | `calls.forbid` | matchers no tool call may satisfy |
 | `replyIncludes` | literal strings the last assistant reply must contain |
