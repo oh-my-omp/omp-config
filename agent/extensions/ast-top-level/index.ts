@@ -20,8 +20,9 @@
 // before the first frame after the session already partitioned its tools
 // (startup deferral), and a table change alone does not re-partition. So on
 // `session_start`, which OMP replays to late-bound extensions, a session that
-// has either tool re-applies its own active set once, re-partitioning it
-// against the table.
+// has either tool re-applies its own active set once in registration order,
+// re-partitioning it against the table. New and resumed sessions then list
+// the tools in the same order, whenever the table took effect.
 //
 // LIFETIME. The table is process-wide and outlives the extension: disabling
 // the extension takes effect after a restart.
@@ -37,6 +38,7 @@
 // escaping into omp.
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { isMountableUnderXdev, XDEV_KEEP_TOP_LEVEL } from "@oh-my-pi/pi-coding-agent/tools/xdev";
+import { applyActiveTools } from "../_shared/active-tools.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 
@@ -65,7 +67,7 @@ export default function astTopLevel(pi: ExtensionAPI): void {
 			switch (pin.kind) {
 				case "pinned": {
 					const active = pi.getActiveTools();
-					if (TOOLS.some((name) => active.includes(name))) await pi.setActiveTools(active);
+					if (TOOLS.some((name) => active.includes(name))) await applyActiveTools(pi, active);
 					return;
 				}
 				case "failed":

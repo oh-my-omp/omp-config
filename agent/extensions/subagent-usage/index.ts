@@ -36,6 +36,7 @@ import { dirname } from "node:path";
 import { type AgentSession, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { worktreeSessionDirs } from "@oh-my-pi/pi-coding-agent/session/session-paths";
+import { applyActiveTools } from "../_shared/active-tools.ts";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -70,7 +71,7 @@ async function setToolActive(pi: ExtensionAPI, active: boolean): Promise<void> {
 	if (tools.has(TOOL) === active) return;
 	if (active) tools.add(TOOL);
 	else tools.delete(TOOL);
-	await pi.setActiveTools([...tools]);
+	await applyActiveTools(pi, tools);
 }
 
 /** Calibration fresh enough to use, computing it first when missing, unreadable or older than a day. */

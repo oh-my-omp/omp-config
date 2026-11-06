@@ -115,6 +115,11 @@ review.
   `pi.sendUserMessage` an extension sends on its own behalf passes
   `attribution: "agent"`. Only `context` fires on every model call (IRC wakes
   included); `before_agent_start` does not.
+- **Tool registration:** tools register in the factory before any `await`.
+  A tool that is an `xd://` device or serves only some sessions registers
+  `defaultInactive` and is activated on `session_start` / `session_switch`,
+  never in `before_agent_start`. Every active-set change goes through
+  `_shared/active-tools.ts`, which lists tools in registration order.
 - **Imports:** host package roots (`pi-agent-core`, `pi-ai`, `pi-catalog`,
   `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins
   and relative paths. A host subpath is used only if an extension already loads
