@@ -67,11 +67,12 @@
 在 frontmatter 声明 `completionJudge: true` 的子代理调用终止性结构化 `yield` 时运行（仓库自带的 `task:free`、`task:mid`、`task:low` 声明了该键；其他子代理、主会话、报错 `yield` 与增量提交不拦截）：
 
 - **输入内容（60k token 预算）**：读取当前分支最后一条 `session_init` 中的任务说明（忽略 `fork_task` 继承的前置历史）、system prompt 中的共享背景、子代理 Todo 的 `goal`、本次 `yield` 提交内容（最多 6,000 字符），以及 `session_init` 之后从最新一条往前能装入剩余预算的连续工具调用与结果（单条参数和结果各最多 800 字符，超长保留前 60% + 后 40%；按 ASCII 字符 1 token、非 ASCII 字符 2 token 估算）。
-- **判定模型与标准**：先取 `@task-completion-judge`，再取 `default` 角色链，每次判定实时解析，未带 `:level` 时使用 `low` 推理强度，超时 25 秒，provider 报错时换链中下一个模型，返回 `DONE` 或 `NOT_DONE`。若子代理的 Todo `goal` 缩小了派工范围、`goal` 中声明的验证方式未在工具调用中出现，或未达到 `doneWhen`（包括报告 blocker），均判为 `NOT_DONE`。
+- **判定模型与标准**：先取 `@task-completion-judge`，再取 `default` 角色链，每次判定实时解析，未带 `:level` 时使用 `low` 推理强度，超时 25 秒，provider 报错时换链中下一个模型。若子代理的 Todo `goal` 缩小了派工范围、`goal` 中声明的验证方式未在工具调用中出现，或未达到 `doneWhen`（包括报告 blocker），均判为 `NOT_DONE`。
+- **判定词解析**：判定词是回复首行的开头词元——`DONE`、`NOT_DONE` 或 `NOT DONE`——经 trim、去掉首尾反引号与星号、大小写不敏感比较；词元之后须紧接行尾、空白或 `_` 以外的 Unicode 标点（`NOT_DONE: 缺测试`、`DONE — 全部完成` 算判定；`Verdict: DONE`、`NOT-DONE`、`NOT_DONE_X`、`DONEFOO` 不算）。回复其余部分作为原因。首行不符、无可用模型、超时或全部模型失败都判不出结论：只放行当次 `yield`，下一个终止性 `yield` 照常鉴定。
 - **退回规则**：
   1. 首次判为 `NOT_DONE` 时拦截 `yield` 并返回原因，要求子代理继续完成并验证。
   2. 判为 `DONE` 后，同步触发 `omp-todo-more:read` 读取最新 Todo 列表；若仍有 `pending` 或 `in_progress` 项（`blocked` 项不计），再拦截一次并列出这些项的说明，要求先更新 Todo 状态。
-  3. 每种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；通过后，该会话后续 `yield` 不再拦截。判定结论只写日志（`task-completion-judge verdict`），`yield` 数据保持 agent 的 `{ report }` schema。配置、模型或插件读取失败时记 warning 并放行。
+  3. 每种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；`yield` 通过后，该会话后续 `yield` 不再拦截。判定结论只写日志（`task-completion-judge verdict`），`yield` 数据保持 agent 的 `{ report }` schema。配置、模型或插件读取失败时记 warning 并放行。
 
 ### subagent-usage
 
