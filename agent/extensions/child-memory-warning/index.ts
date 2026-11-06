@@ -1,10 +1,14 @@
 /**
- * Warns the interactive omp process's main UI and agent when an owned descendant's
- * macOS phys_footprint exceeds the configured threshold. Main session_start starts one
- * process-shared monitor; session_switch refreshes delivery, and its owning main's
- * session_shutdown clears the managed timer before closing libproc. Child factories
- * never own it. Native 2 s stable scans retain PID+birth ownership after
- * reparenting; observed descendant-led process groups can discover surviving members.
+ * Warns the interactive omp process's main UI and agent when an owned descendant OS
+ * child process's macOS phys_footprint exceeds the configured threshold. Only OS
+ * child processes are in scope: subagents running in-process (on the main thread,
+ * or in a worker thread when more than 8 subagents run concurrently and
+ * `task.workerThreads` is greater than 0) share the omp process's memory and are
+ * not tracked here. Main session_start starts one process-shared monitor;
+ * session_switch refreshes delivery, and its owning main's session_shutdown clears
+ * the managed timer before closing libproc. Child factories never own it. Native 2 s
+ * stable scans retain PID+birth ownership after reparenting; observed descendant-led
+ * process groups can discover surviving members.
  * A process born and orphaned between observations without a known surviving group
  * anchor cannot be attributed retroactively from the process table.
  * Reads `thresholdGiB` from the `child-memory-warning` section of omomp.* every scan
