@@ -2,12 +2,13 @@
  * Warns the interactive omp process's main UI and agent when an owned descendant OS
  * child process's macOS phys_footprint exceeds the configured threshold. Only OS
  * child processes are in scope: subagents running in-process (on the main thread,
- * or in a Bun worker thread once concurrency reaches SUBAGENT_WORKER_THRESHOLD)
- * share the omp process's memory and are not tracked here. Main session_start starts
- * one process-shared monitor; session_switch refreshes delivery, and its owning
- * main's session_shutdown clears the managed timer before closing libproc. Child
- * factories never own it. Native 2 s stable scans retain PID+birth ownership after
- * reparenting; observed descendant-led process groups can discover surviving members.
+ * or in a worker thread when more than 8 subagents run concurrently and
+ * `task.workerThreads` is greater than 0) share the omp process's memory and are
+ * not tracked here. Main session_start starts one process-shared monitor;
+ * session_switch refreshes delivery, and its owning main's session_shutdown clears
+ * the managed timer before closing libproc. Child factories never own it. Native 2 s
+ * stable scans retain PID+birth ownership after reparenting; observed descendant-led
+ * process groups can discover surviving members.
  * A process born and orphaned between observations without a known surviving group
  * anchor cannot be attributed retroactively from the process table.
  * Reads `thresholdGiB` from the `child-memory-warning` section of omomp.* every scan
@@ -116,13 +117,13 @@ function deliver(monitor: Monitor, current: ProcessRecord, bytes: bigint, comman
 	const uiText = tr(
 		`Child process memory limit exceeded: PID ${current.pid}, PPID ${current.parentPid}, orphan: ${
 			current.parentPid === 1 ? "yes" : "no"
-		}; phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB (${bytes} bytes), threshold > ${threshold.gib} GiB.\nCommand: ${command}\nScope: owned descendant OS processes only; in-process subagents (main thread or worker threads) are not tracked.\nWarning only; process was not terminated.`,
+		}; phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB (${bytes} bytes), threshold > ${threshold.gib} GiB.\nCommand: ${command}\nWarning only; process was not terminated.`,
 		`子进程内存超限：PID ${current.pid}，PPID ${current.parentPid}，孤儿：${current.parentPid === 1 ? "是" : "否"}；` +
-			`phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB（${bytes} bytes），阈值 > ${threshold.gib} GiB。\n命令：${command}\n范围：仅限归属的后代 OS 进程；进程内子代理（主线程或 worker 线程）不在监控范围内。\n仅告警，未结束该进程。`,
+			`phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB（${bytes} bytes），阈值 > ${threshold.gib} GiB。\n命令：${command}\n仅告警，未结束该进程。`,
 	);
 	const agentText =
 		`子进程内存超限：PID ${current.pid}，PPID ${current.parentPid}，孤儿：${current.parentPid === 1 ? "是" : "否"}；` +
-		`phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB（${bytes} bytes），阈值 > ${threshold.gib} GiB。\n命令：${command}\n范围：仅限归属的后代 OS 进程；进程内子代理（主线程或 worker 线程）不在监控范围内。\n仅告警，未结束该进程。`;
+		`phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB（${bytes} bytes），阈值 > ${threshold.gib} GiB。\n命令：${command}\n仅告警，未结束该进程。`;
 	try {
 		ctx.ui.notify(uiText, "warning");
 	} catch (error) {
