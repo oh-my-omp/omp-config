@@ -1,7 +1,19 @@
 /**
- * repo-rules: load the rule files OMP's native discovery skips, and give every rule source Claude
- * Code's path-specific rules. The system prompt stays as OMP built it; what this extension adds
- * reaches the model as messages.
+ * repo-rules: deliver the working directory's AGENTS.md / CLAUDE.md, load the rule files OMP's
+ * native discovery skips, and give every rule source Claude Code's path-specific rules. The system
+ * prompt stays as OMP built it; what this extension adds reaches the model as messages.
+ *
+ * Context files. `config.yml` disables OMP's `agents-md` and `claude-md` providers, which render
+ * AGENTS.md / CLAUDE.md into the system prompt under their absolute paths, so the prompt changed
+ * whenever the session moved into a worktree. This extension delivers the same files: the
+ * providers' walk from the cwd up to the repository root (past it to below the home directory
+ * when the repository sits under home), one file per directory with AGENTS.md before CLAUDE.md,
+ * none in a directory where a context file OMP still loads (`.omp`, `.claude`, `.agents`, …)
+ * takes the slot, `@path` imports expanded, farthest from the cwd first. Each is written with its
+ * path relative to the repository root, `~/…` under the home directory, absolute otherwise, so a
+ * checkout and its worktrees produce the same bytes. Subagents (`ctx.agent.kind` `sub`) skip
+ * AGENTS.md as OMP's task subagents do. Files are re-read at every delivery point; the occupied
+ * slots are collected per cwd.
  *
  * Unscoped rules. OMP loads `.omp/rules`, `.agent(s)/rules`, `.cursor/rules`, `.windsurf/rules`,
  * `.clinerules` and `.github/instructions`, but not `.claude/rules` or `.pi/rules`, and drops a rule
@@ -30,8 +42,8 @@
  *
  * Delta. One delta of `_shared/context-delta.ts` with source `omp-config/repo-rules`, computed from
  * OMP's system prompt (`event.systemPrompt` at a prompt, `ctx.getSystemPrompt()` after a tool call)
- * and the collected rules: the unscoped bodies and listings above, then each taken-over native rule
- * found in that prompt, quoted with its `paths`. It is delivered at every `before_agent_start`
+ * and the collected files: the context files, then the unscoped rule bodies and listings above,
+ * then each taken-over native rule found in that prompt, quoted with its `paths`. It is delivered at every `before_agent_start`
  * (except a revive's, whose result OMP discards) and after every tool call, only when it differs
  * from the source's effective delta in the current context; with nothing to add it supersedes an
  * earlier one with a retraction.
@@ -43,11 +55,12 @@
  * delivered is not repeated.
  *
  * Registers `session_start`, `before_agent_start`, `turn_start` and `tool_result` for main and sub
- * sessions. Reads rule files only; writes no files. Rules are collected per cwd and re-collected
- * when the session cwd changes. Missing or unreadable rule files are skipped; unexpected hook
- * failures are logged as warnings without interrupting the session.
+ * sessions. Reads context and rule files only; writes no files. Rules are collected per cwd and
+ * re-collected when the session cwd changes. Missing or unreadable files are skipped; unexpected
+ * hook failures are logged as warnings without interrupting the session.
  */
 
+import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 import { ruleAppliesToAgent } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { cfgTtsr } from "@oh-my-pi/pi-coding-agent/export/ttsr-settings";
@@ -55,8 +68,19 @@ import { createContextDelivery } from "../_shared/context-delivery.ts";
 import { createDeltaStream, type Delta } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
 import { sessionSettings } from "../_shared/settings.ts";
+import { type ContextFileScope, contextFileScope, type DeliveredContextFile, loadContextFiles } from "./context-files.ts";
 import { collectRules, type RuleCatalog, ruleMatches, type ScopedRule, type UnscopedRule } from "./rules.ts";
 import { touchedFiles } from "./touched.ts";
+
+/** The working directory's AGENTS.md / CLAUDE.md, in place of OMP's `<repo-rules>` block of the system prompt. */
+function renderContextFiles(files: readonly DeliveredContextFile[]): string[] {
+	if (files.length === 0) return [];
+	const parts = [
+		"MUST follow these context files for all tasks. Paths are relative to the repository root (`~/` is the home directory). They are already in context: NEVER `grep`/`glob` for `AGENTS.md`, `CLAUDE.md` or similar agent/context files.",
+	];
+	for (const file of files) parts.push(`<context-file path="${escapeAttr(file.displayPath)}">`, file.content, "</context-file>");
+	return [parts.join("\n")];
+}
 
 /** Inner text of the first `<tag>\n…</tag>` block among the parts of OMP's system prompt. */
 function blockInner(systemPrompt: readonly string[], tag: string): string | undefined {
@@ -151,8 +175,17 @@ function renderNativeScopes(rules: readonly ScopedRule[], systemPrompt: readonly
 }
 
 /** What this extension adds to `systemPrompt`, OMP's base prompt as handed to the hook. */
-function rulesDelta(catalog: RuleCatalog, ctx: ExtensionContext, systemPrompt: readonly string[]): Delta {
-	const sections = [...renderUnscoped(catalog.unscoped, systemPrompt), ...renderNativeScopes(activeScoped(catalog, ctx), systemPrompt)];
+function rulesDelta(
+	catalog: RuleCatalog,
+	files: readonly DeliveredContextFile[],
+	ctx: ExtensionContext,
+	systemPrompt: readonly string[],
+): Delta {
+	const sections = [
+		...renderContextFiles(files),
+		...renderUnscoped(catalog.unscoped, systemPrompt),
+		...renderNativeScopes(activeScoped(catalog, ctx), systemPrompt),
+	];
 	return sections.length === 0 ? { kind: "none" } : { kind: "text", body: sections.join("\n\n") };
 }
 
@@ -213,8 +246,15 @@ function pathScopedContext(
 
 export default function repoRules(pi: ExtensionAPI): void {
 	let catalog: RuleCatalog | null = null;
+	let scope: ContextFileScope | null = null;
 	const claimDelivery = createContextDelivery(pi);
 	const deltas = createDeltaStream(pi, "repo-rules");
+
+	/** Context files read fresh at each delivery point; the depth slots OMP keeps are collected once per cwd. */
+	const contextFilesFor = async (ctx: ExtensionContext): Promise<DeliveredContextFile[]> => {
+		if (scope?.cwd !== path.resolve(ctx.cwd)) scope = await contextFileScope(ctx.cwd);
+		return await loadContextFiles(scope, ctx.agent.kind);
+	};
 
 	const rulesFor = async (ctx: ExtensionContext): Promise<RuleCatalog> => {
 		if (catalog?.cwd === ctx.cwd) return catalog;
@@ -242,7 +282,8 @@ export default function repoRules(pi: ExtensionAPI): void {
 		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;
 		try {
-			return deltas.atPrompt(ctx, rulesDelta(await rulesFor(ctx), ctx, event.systemPrompt));
+			const [rules, files] = await Promise.all([rulesFor(ctx), contextFilesFor(ctx)]);
+			return deltas.atPrompt(ctx, rulesDelta(rules, files, ctx, event.systemPrompt));
 		} catch (error) {
 			pi.logger.warn("repo-rules: cannot deliver rules", { error: errorText(error) });
 		}
@@ -250,15 +291,16 @@ export default function repoRules(pi: ExtensionAPI): void {
 
 	pi.on("tool_result", async (event, ctx) => {
 		let rules: RuleCatalog;
+		let files: DeliveredContextFile[];
 		try {
-			rules = await rulesFor(ctx);
+			[rules, files] = await Promise.all([rulesFor(ctx), contextFilesFor(ctx)]);
 		} catch (error) {
 			pi.logger.warn("repo-rules: failed to collect rules", { error: errorText(error) });
 			return;
 		}
 		const parts: string[] = [];
 		try {
-			const delta = deltas.afterTools(ctx, rulesDelta(rules, ctx, ctx.getSystemPrompt()));
+			const delta = deltas.afterTools(ctx, rulesDelta(rules, files, ctx, ctx.getSystemPrompt()));
 			if (delta !== undefined) parts.push(delta.additionalContext);
 		} catch (error) {
 			pi.logger.warn("repo-rules: cannot deliver rules", { error: errorText(error) });

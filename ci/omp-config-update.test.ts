@@ -267,6 +267,24 @@ describe("structured files", () => {
 		});
 	});
 
+	test("a machine list the repo never delivered keeps the host's entries and adds the repo's after them", async () => {
+		const src = source();
+		const agentDir = temp("omp-agent-");
+		src.commit({ "agent/config.yml": "lsp:\n  enabled: false\n" });
+		await apply(src.dir, agentDir);
+		writeTree(agentDir, { "config.yml": "lsp:\n  enabled: false\ndisabledProviders:\n  - mine\n  - vscode\n" });
+		src.commit({ "agent/config.yml": "lsp:\n  enabled: false\ndisabledProviders:\n  - vscode\n  - agents-md\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.conflicts).toEqual([]);
+		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({
+			lsp: { enabled: false },
+			disabledProviders: ["mine", "vscode", "agents-md"],
+		});
+		src.commit({ "agent/config.yml": "lsp:\n  enabled: false\ndisabledProviders:\n  - agents-md\n" });
+		await apply(src.dir, agentDir);
+		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({ lsp: { enabled: false }, disabledProviders: ["mine", "agents-md"] });
+	});
+
 	test("a resolved key keeps the local value and follows the next upstream change only when unmodified again", async () => {
 		const src = source();
 		const agentDir = temp("omp-agent-");

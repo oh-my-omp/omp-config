@@ -2,8 +2,12 @@ extensions:
   - ~/.omp/agent/extensions-last/system-prompt-replace/index.ts
 # omp's VS Code MCP discovery warns `Failed to read <cwd>/.vscode/mcp.json` in
 # every directory without that file; no project here uses it.
+# agents-md and claude-md render AGENTS.md / CLAUDE.md into the system prompt
+# under their absolute paths; the repo-rules extension delivers them instead.
 disabledProviders:
   - vscode
+  - agents-md
+  - claude-md
 modelTags:
   input-polish:
     name: Input polish
