@@ -75,14 +75,23 @@
 //     wherever code names them (not in strings or comments), and `os.remove`
 //     on `os` or an `os` alias or import; shell handoffs — `os.system`,
 //     `os.popen`, `subprocess.getoutput|getstatusoutput`,
-//     `asyncio.create_subprocess_shell`, any call whose `shell=` is not literally `False`/`None`, and the
-//     kernel's `!cmd`, `x = !cmd` and `%%bash` body: the literal command is
-//     classified as a system-shell script (posix on macOS and Linux, cmd on
-//     Windows; `%%bash` stays posix); launches without a shell — `subprocess`
-//     `run|call|check_call|check_output|Popen`, `asyncio.create_subprocess_exec`
-//     — classify a literal argv (argv[0] non-literal → blocked); the
-//     `tool.bash({"command": …})` bridge. `%time`/`%timeit` arguments,
-//     `%%capture`/`%%timeit` bodies, f-string placeholders and expressions nested in their format specs are judged as
+//     `asyncio.create_subprocess_shell`, any call whose `shell=` is not literally
+//     `False`/`None` (also the ninth positional argument of the subprocess
+//     calls), and the kernel's shell lines (`!cmd`, `x = !cmd`, `%sx`,
+//     `%system` at any line start outside strings) and `%%bash` body: the
+//     literal command is classified as a system-shell script (posix on macOS
+//     and Linux, cmd on Windows; `%%bash` stays posix); launches without a
+//     shell — `subprocess` `run|call|check_call|check_output|Popen`,
+//     `asyncio.create_subprocess_exec` — classify a literal argv (argv[0]
+//     non-literal → blocked); the `tool.bash({"command": …})` bridge and
+//     `tool.write({"path": "xd://bash", "content": …})` (literal JSON or
+//     `json.dumps({"command": …})`); builtin `exec`/`eval` with a literal
+//     first argument are classified as Python. `__import__` and
+//     `importlib.import_module` with a literal name resolve to that module
+//     for a launch called on them or a name bound to them; a non-literal name
+//     blocks. A `**` expansion among a launch's arguments blocks it.
+//     `%time`/`%timeit` arguments, `%%capture`/`%%timeit` bodies, f-string
+//     placeholders and expressions nested in their format specs are judged as
 //     Python. `%run`/`%load` run script files (not covered).
 //   - js (`eval-js.ts`, omp's own Babel parser with the kernel's options):
 //     deletion APIs — `rmSync`, `unlinkSync`, `rmdirSync`, `unlink`, `rmdir`

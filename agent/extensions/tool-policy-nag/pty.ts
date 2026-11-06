@@ -604,9 +604,27 @@ function pythonHit(code: string): PtyHit | null {
 	const { scan } = scanned;
 	for (let k = 0; k < scan.tokens.length; k++) {
 		const launch = pyLaunchAt(scan, k);
-		if (launch === null || launch.kind === "bridge" || launch.via !== "direct" || !PY_LAUNCHES.has(launch.api)) continue;
-		const hit = launch.kind === "script" ? scriptHit(launch.text) : argvHit(launch.words);
-		if (hit !== null) return hit;
+		if (launch === null) continue;
+		switch (launch.kind) {
+			case "script":
+			case "argv": {
+				if (launch.via !== "direct" || !PY_LAUNCHES.has(launch.api)) continue;
+				const hit = launch.kind === "script" ? scriptHit(launch.text) : argvHit(launch.words);
+				if (hit !== null) return hit;
+				continue;
+			}
+			case "bridge":
+				// The bridged command reaches the lane as its own `bash` call.
+				continue;
+			case "execEval":
+			case "opaque":
+				// This lane does not judge code run through `exec`/`eval` or unknown loaded modules; delete-guard does.
+				continue;
+			default: {
+				const unreachable: never = launch;
+				return unreachable;
+			}
+		}
 	}
 	for (const rule of RULE_IDS) {
 		const entry: Rule = RULES[rule];
