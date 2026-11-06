@@ -82,10 +82,17 @@ import * as path from "node:path";
 import {
 	type AgentDefinition,
 	type AgentSession,
+	type AgentToolResult,
+	type AgentToolUpdateCallback,
+	type BeforeAgentStartEvent,
+	type BeforeAgentStartEventResult,
+	type BeforeSubagentSpawnEvent,
+	type BeforeSubagentSpawnEventResult,
 	createAgentSession,
 	type ExtensionAPI,
 	type ExtensionContext,
 	SessionManager,
+	type SessionShutdownEvent,
 	type TaskItem,
 	type ToolDefinition,
 	z,
@@ -616,129 +623,304 @@ async function sourceInheritance(source: ForkSource, isolated: boolean, callerCw
 	}
 }
 
-export default function forkTask(pi: ExtensionAPI): void {
-	const warn = (message: string, error: unknown) => pi.logger.warn(message, { error: errorText(error) });
-	serveSources(warn);
-	const pending: PendingFork[] = [];
+/**
+ * Per-load runtime state of the fork factory, shared by the hooks and the
+ * tool's execute: created fresh by each `forkTask` call so a rebind (a child
+ * OMP on the parent's thread, a worker-thread copy) gets its own copy.
+ * Module-level functions below receive it as their first argument.
+ */
+type ForkTaskRuntime = {
+	readonly pi: ExtensionAPI;
+	readonly warn: (message: string, error: unknown) => void;
+	readonly pending: PendingFork[];
 	/** Child session files of the forks each parent spawned, by parent artifacts dir. */
-	const forkChildren = new Map<string, string[]>();
-
-	const discard = async (entry: PendingFork): Promise<void> => {
-		const index = pending.indexOf(entry);
-		if (index !== -1) pending.splice(index, 1);
-		await fs.rm(path.dirname(entry.staging), { recursive: true, force: true });
-	};
-
-	pi.on("before_subagent_spawn", async (event, ctx) => {
-		if (event.invocationKind !== "task" || !event.spawnKey) return;
-		const parentFile = ctx.sessionManager.getSessionFile();
-		if (!parentFile) return;
-		const artifactsDir = parentFile.slice(0, -".jsonl".length);
-		const spawnKey = event.spawnKey;
-		const segment = spawnKey.slice(spawnKey.lastIndexOf(".") + 1);
-		const entry = pending.find((p) => p.artifactsDir === artifactsDir && p.name === segment);
-		if (!entry) return;
-		const target = path.join(artifactsDir, `${spawnKey}.jsonl`);
-		try {
-			const occupied = await fs.access(target).then(
-				() => true,
-				() => false,
-			);
-			if (occupied) {
-				await discard(entry);
-				return { block: true, reason: `fork_task: ${target} already exists; refusing to overwrite it.` };
-			}
-			await fs.mkdir(artifactsDir, { recursive: true });
-			await moveFile(entry.staging, target);
-			await discard(entry);
-			replicas.set(target, entry.replica);
-			await writeReplicaFile(replicaFilePath(STAGING_ROOT, target), entry.replica);
-			if (entry.overlay) await writeOverlay(target, entry.overlay);
-			forkChildren.set(artifactsDir, [...(forkChildren.get(artifactsDir) ?? []), target]);
-			return entry.model === undefined ? undefined : { model: entry.model };
-		} catch (error) {
-			pi.logger.warn("fork_task: preparing the child conversation failed", { error: errorText(error) });
-			return { block: true, reason: `fork_task: preparing the child conversation failed: ${errorText(error)}` };
-		}
-	});
-
+	readonly forkChildren: Map<string, string[]>;
 	/** Child sessions whose per-call hook is installed. */
-	const cloned = new WeakSet<AgentSession>();
+	readonly cloned: WeakSet<AgentSession>;
 	/** Subagent transcripts whose workspace start this module copy has handled. */
-	const started = new Set<string>();
+	readonly started: Set<string>;
+};
 
-	pi.on("before_agent_start", async (_event, ctx) => {
-		const session = callerSession(ctx);
-		if (!session) return;
-		const file = ctx.sessionManager.getSessionFile();
-		if (ctx.agent.kind === "sub" && file && !started.has(file)) {
-			started.add(file);
-			const cwd = ctx.sessionManager.getCwd();
-			// The start is recorded before an inherited overlay lands, so it matches OMP's own baseline of this run.
-			await recordStart(file, cwd, ctx.agent.id).catch((error: unknown) => warn("fork_task: recording the workspace start failed", error));
-			let failure: string | undefined;
-			try {
-				const overlay = await applyOverlay(file, cwd);
-				if (overlay.kind === "failed") failure = overlay.message;
-			} catch (error) {
-				failure = errorText(error);
-			}
-			if (failure !== undefined) {
-				const reason = rejection("overlay-conflict", `the inherited changes did not apply to this workspace: ${failure}`);
-				pi.logger.warn(`fork_task: ${reason}`);
-				// The assignment assumes the inherited changes; do not run it without them.
-				session.agent.addBeforeModelCallHook(() => {
-					throw new Error(reason);
-				});
-				return;
-			}
+async function discardPending(rt: ForkTaskRuntime, entry: PendingFork): Promise<void> {
+	const index = rt.pending.indexOf(entry);
+	if (index !== -1) rt.pending.splice(index, 1);
+	await fs.rm(path.dirname(entry.staging), { recursive: true, force: true });
+}
+
+/**
+ * Move the staged conversation into the parent's artifact store under the
+ * pre-allocated spawn key so the executor opens the fork, not an empty
+ * session. An existing target blocks the spawn instead of overwriting; any
+ * failure blocks the child and warns.
+ */
+async function beforeSubagentSpawn(
+	rt: ForkTaskRuntime,
+	event: BeforeSubagentSpawnEvent,
+	ctx: ExtensionContext,
+): Promise<BeforeSubagentSpawnEventResult | undefined> {
+	if (event.invocationKind !== "task" || !event.spawnKey) return;
+	const parentFile = ctx.sessionManager.getSessionFile();
+	if (!parentFile) return;
+	const artifactsDir = parentFile.slice(0, -".jsonl".length);
+	const spawnKey = event.spawnKey;
+	const segment = spawnKey.slice(spawnKey.lastIndexOf(".") + 1);
+	const entry = rt.pending.find((p) => p.artifactsDir === artifactsDir && p.name === segment);
+	if (!entry) return;
+	const target = path.join(artifactsDir, `${spawnKey}.jsonl`);
+	try {
+		const occupied = await fs.access(target).then(
+			() => true,
+			() => false,
+		);
+		if (occupied) {
+			await discardPending(rt, entry);
+			return { block: true, reason: `fork_task: ${target} already exists; refusing to overwrite it.` };
 		}
+		await fs.mkdir(artifactsDir, { recursive: true });
+		await moveFile(entry.staging, target);
+		await discardPending(rt, entry);
+		replicas.set(target, entry.replica);
+		await writeReplicaFile(replicaFilePath(STAGING_ROOT, target), entry.replica);
+		if (entry.overlay) await writeOverlay(target, entry.overlay);
+		rt.forkChildren.set(artifactsDir, [...(rt.forkChildren.get(artifactsDir) ?? []), target]);
+		return entry.model === undefined ? undefined : { model: entry.model };
+	} catch (error) {
+		rt.pi.logger.warn("fork_task: preparing the child conversation failed", { error: errorText(error) });
+		return { block: true, reason: `fork_task: preparing the child conversation failed: ${errorText(error)}` };
+	}
+}
+
+/**
+ * Per subagent transcript: record the isolated workspace start, apply a
+ * `workspace: "source"` overlay before the first turn (a failed apply blocks
+ * the child before its first model call), then install the replicated
+ * request. A failed replication also blocks the child rather than running a
+ * different contract.
+ */
+async function beforeAgentStart(
+	rt: ForkTaskRuntime,
+	_event: BeforeAgentStartEvent,
+	ctx: ExtensionContext,
+): Promise<BeforeAgentStartEventResult | undefined> {
+	const session = callerSession(ctx);
+	if (!session) return;
+	const file = ctx.sessionManager.getSessionFile();
+	if (ctx.agent.kind === "sub" && file && !rt.started.has(file)) {
+		rt.started.add(file);
+		const cwd = ctx.sessionManager.getCwd();
+		// The start is recorded before an inherited overlay lands, so it matches OMP's own baseline of this run.
+		await recordStart(file, cwd, ctx.agent.id).catch((error: unknown) => rt.warn("fork_task: recording the workspace start failed", error));
+		let failure: string | undefined;
 		try {
-			observeRequests(session, warn);
-			// A child OMP placed in a subagent worker thread has its own copy of this module: read the parent's copy.
-			const replica = file ? (replicas.get(file) ?? (await portableReplica(file))) : undefined;
-			if (!replica && ctx.agent.name === FORK_AGENT) {
-				throw new Error("the fork's request snapshot is no longer available; create a fresh fork from the parent");
-			}
-			if (!replica || cloned.has(session)) return;
-			applyReplica(session, replica);
-			cloned.add(session);
+			const overlay = await applyOverlay(file, cwd);
+			if (overlay.kind === "failed") failure = overlay.message;
 		} catch (error) {
-			const reason = `fork_task: preparing request replication failed: ${errorText(error)}`;
-			pi.logger.warn(reason);
-			// Do not run a different child contract after replication failed.
+			failure = errorText(error);
+		}
+		if (failure !== undefined) {
+			const reason = rejection("overlay-conflict", `the inherited changes did not apply to this workspace: ${failure}`);
+			rt.pi.logger.warn(`fork_task: ${reason}`);
+			// The assignment assumes the inherited changes; do not run it without them.
 			session.agent.addBeforeModelCallHook(() => {
 				throw new Error(reason);
 			});
+			return;
 		}
-	});
+	}
+	try {
+		observeRequests(session, rt.warn);
+		// A child OMP placed in a subagent worker thread has its own copy of this module: read the parent's copy.
+		const replica = file ? (replicas.get(file) ?? (await portableReplica(file))) : undefined;
+		if (!replica && ctx.agent.name === FORK_AGENT) {
+			throw new Error("the fork's request snapshot is no longer available; create a fresh fork from the parent");
+		}
+		if (!replica || rt.cloned.has(session)) return;
+		applyReplica(session, replica);
+		rt.cloned.add(session);
+	} catch (error) {
+		const reason = `fork_task: preparing request replication failed: ${errorText(error)}`;
+		rt.pi.logger.warn(reason);
+		// Do not run a different child contract after replication failed.
+		session.agent.addBeforeModelCallHook(() => {
+			throw new Error(reason);
+		});
+	}
+}
 
-	pi.on("session_shutdown", async (_event, ctx) => {
-		if (ctx.agent.kind === "main") {
-			// The process's parked sources and workspace starts belong to the agent tree this main session ends.
-			for (const root of [parkedRoot(), startsRoot()]) {
-				await fs
-					.rm(root, { recursive: true, force: true })
-					.catch((error: unknown) => warn("fork_task: removing per-process records failed", error));
-			}
+/**
+ * On main-session shutdown remove this process's parked-source and
+ * workspace-start records; on any session shutdown drop replica copies and
+ * staged conversations of the forks that parent spawned.
+ */
+async function sessionShutdown(rt: ForkTaskRuntime, _event: SessionShutdownEvent, ctx: ExtensionContext): Promise<void> {
+	if (ctx.agent.kind === "main") {
+		// The process's parked sources and workspace starts belong to the agent tree this main session ends.
+		for (const root of [parkedRoot(), startsRoot()]) {
+			await fs
+				.rm(root, { recursive: true, force: true })
+				.catch((error: unknown) => rt.warn("fork_task: removing per-process records failed", error));
 		}
-		const parentFile = ctx.sessionManager.getSessionFile();
-		if (!parentFile) return;
-		const artifactsDir = parentFile.slice(0, -".jsonl".length);
-		for (const child of forkChildren.get(artifactsDir) ?? []) {
-			replicas.delete(child);
-			await fs.rm(replicaFilePath(STAGING_ROOT, child), { force: true });
-			await fs.rm(overlayFilePath(child), { force: true });
+	}
+	const parentFile = ctx.sessionManager.getSessionFile();
+	if (!parentFile) return;
+	const artifactsDir = parentFile.slice(0, -".jsonl".length);
+	for (const child of rt.forkChildren.get(artifactsDir) ?? []) {
+		replicas.delete(child);
+		await fs.rm(replicaFilePath(STAGING_ROOT, child), { force: true });
+		await fs.rm(overlayFilePath(child), { force: true });
+	}
+	rt.forkChildren.delete(artifactsDir);
+	for (const entry of rt.pending.filter((p) => p.artifactsDir === artifactsDir)) {
+		try {
+			await discardPending(rt, entry);
+		} catch (error) {
+			rt.pi.logger.warn("fork_task: cleaning up the staged conversation failed", { error: errorText(error) });
 		}
-		forkChildren.delete(artifactsDir);
-		for (const entry of pending.filter((p) => p.artifactsDir === artifactsDir)) {
+	}
+}
+
+/**
+ * Stage each item's fork (resolve the source, capture its request, write the
+ * staging JSONL), then dispatch the whole batch through the native `task`
+ * tool. A `workspace: "source"` rejection refuses before dispatch; staging or
+ * dispatch leftovers are discarded. Failures warn and return a tool error;
+ * user aborts re-throw for host cancellation accounting.
+ */
+async function executeForkTask(
+	rt: ForkTaskRuntime,
+	toolCallId: string,
+	rawParams: unknown,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+	ctx: ExtensionContext,
+): Promise<AgentToolResult<unknown>> {
+	const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true });
+	const staged: PendingFork[] = [];
+	const discardStaged = async (): Promise<void> => {
+		for (const entry of staged) {
 			try {
-				await discard(entry);
-			} catch (error) {
-				pi.logger.warn("fork_task: cleaning up the staged conversation failed", { error: errorText(error) });
+				await discardPending(rt, entry);
+			} catch (cleanupError) {
+				rt.pi.logger.warn("fork_task: cleaning up the staged conversation failed", { error: errorText(cleanupError) });
 			}
 		}
-	});
+	};
+	try {
+		const params = paramsSchema.parse(rawParams);
+		const parent = callerSession(ctx);
+		if (!parent) return fail("fork_task: could not resolve the calling session in the agent registry.");
+		const taskTool = parent.getToolByName("task");
+		if (!taskTool) return fail("fork_task: the `task` tool is unavailable in this session (recursion depth or settings).");
+		// Only async dispatch pre-allocates the child id before the spawn hook;
+		// sync dispatch reports the bare label, which misses nested id prefixes.
+		if (!parent.asyncJobManager || cfgAsyncEnabled.get(parent.settings) !== true) {
+			return fail("fork_task: requires background jobs (`async.enabled: true`).");
+		}
+		await parent.sessionManager.ensureOnDisk();
+		await parent.sessionManager.flush();
+		const parentFile = parent.sessionManager.getSessionFile();
+		if (!parentFile) return fail("fork_task: forking needs a persisted session.");
+		const artifactsDir = parentFile.slice(0, -".jsonl".length);
+		const planMode = parent.getPlanModeState()?.enabled === true;
+
+		const notes: string[] = [];
+		const tasks: TaskItem[] = [];
+		const resolveRole = roleResolver(parent);
+		/** The first `workspace: "source"` rejection; nothing is dispatched then. */
+		let refused: string | undefined;
+		try {
+			for (const [index, item] of params.tasks.entries()) {
+				const source = await resolveSource(item.from, parent, parentFile);
+				if (source.kind === "error") throw new Error(source.message);
+				const agent = item.agent?.trim() || undefined;
+				const role = await resolveRole(agent);
+				if (role.kind === "error") throw new Error(role.message);
+				const captured = captureReplica(source.request, {
+					inheritReasoning: role.kind === "none" && item.effort === undefined,
+					caller: parent,
+				});
+				const name = `${sanitizeName(item.name) ?? "Fork"}_${randomUUID().slice(0, 4)}`;
+				// Without a role the fork continues the source in its workspace unless explicitly isolated;
+				// inheriting the source's workspace needs an isolated child, so `workspace: "source"` defaults to one.
+				const isolated = !planMode && (item.isolated ?? (role.kind === "role" || item.workspace === "source"));
+				const inheritance =
+					item.workspace === "source" ? await sourceInheritance(source, isolated, parent.sessionManager.getCwd()) : undefined;
+				if (inheritance?.kind === "rejected") {
+					refused = rejection(inheritance.code, inheritance.detail);
+					break;
+				}
+				const shake = item.shake === true;
+				const { staging, notice, shakeSummary } = await stageFork(ctx, parent, source, shake, isolated, inheritance !== undefined);
+				const { response, ...capture } = captured;
+				const entry: PendingFork = {
+					name,
+					artifactsDir,
+					staging,
+					replica: { ...capture, replay: shake ? { kind: "own" } : { kind: "prefix", response, notice } },
+					model: role.kind === "role" ? role.model : capture.sourceModel,
+					overlay: inheritance?.patch,
+				};
+				staged.push(entry);
+				rt.pending.push(entry);
+				if (shakeSummary) notes.push(`${name}: ${shakeSummary}`);
+				tasks[index] = {
+					name,
+					// The replicated system prompt is the source's: role, shared context and assignment form the new user message.
+					task: [role.kind === "role" ? role.block : "", params.context.trim(), item.task].filter((part) => part.length > 0).join("\n\n"),
+					agent: FORK_AGENT,
+					...(planMode ? {} : { isolated }),
+					...(item.effort !== undefined ? { effort: item.effort } : {}),
+					...(item.outputSchema !== undefined ? { outputSchema: item.outputSchema } : {}),
+					...(item.schemaMode !== undefined ? { schemaMode: item.schemaMode } : {}),
+				};
+			}
+		} catch (error) {
+			if (signal?.aborted) throw error;
+			throw new Error(`staging the conversation fork failed: ${errorText(error)}`, { cause: error });
+		}
+		if (refused !== undefined) {
+			await discardStaged();
+			return fail(refused);
+		}
+
+		// The native task tool requires `context`; it lands only in the child's base prompt, which replication never sends.
+		const result = await taskTool.execute(toolCallId, { context: params.context, tasks }, signal, onUpdate);
+
+		// Items the task tool never scheduled (validation errors) leave nothing staged.
+		const parsed = progressSchema.safeParse(result.details);
+		const scheduled = new Set(parsed.success ? parsed.data.progress.map((p) => p.index) : []);
+		for (const [index, entry] of staged.entries()) {
+			if (!scheduled.has(index)) await discardPending(rt, entry);
+		}
+
+		if (notes.length === 0) return result;
+		return {
+			...result,
+			content: [...result.content, { type: "text" as const, text: `\n[fork_task] ${notes.join("; ")}` }],
+		};
+	} catch (error) {
+		await discardStaged();
+		if (signal?.aborted) throw error;
+		rt.pi.logger.warn("fork_task: executing the conversation fork failed", { error: errorText(error) });
+		return fail(`fork_task: ${errorText(error)}`);
+	}
+}
+
+export default function forkTask(pi: ExtensionAPI): void {
+	const warn = (message: string, error: unknown) => pi.logger.warn(message, { error: errorText(error) });
+	serveSources(warn);
+	const rt: ForkTaskRuntime = {
+		pi,
+		warn,
+		pending: [],
+		forkChildren: new Map(),
+		cloned: new WeakSet(),
+		started: new Set(),
+	};
+
+	pi.on("before_subagent_spawn", beforeSubagentSpawn.bind(null, rt));
+	pi.on("before_agent_start", beforeAgentStart.bind(null, rt));
+	pi.on("session_shutdown", sessionShutdown.bind(null, rt));
 
 	// `docTopics` serves xd://fork_task/<topic>; OMP keeps it on the tool object, though ToolDefinition does not declare it.
 	const tool: ToolDefinition<typeof paramsSchema> & { docTopics(): Readonly<Record<string, string>> } = {
@@ -748,120 +930,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 		loadMode: "essential",
 		parameters: paramsSchema,
 		docTopics: forkTaskTopics,
-		async execute(toolCallId, rawParams, signal, onUpdate, ctx) {
-			const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true });
-			const staged: PendingFork[] = [];
-			const discardStaged = async (): Promise<void> => {
-				for (const entry of staged) {
-					try {
-						await discard(entry);
-					} catch (cleanupError) {
-						pi.logger.warn("fork_task: cleaning up the staged conversation failed", { error: errorText(cleanupError) });
-					}
-				}
-			};
-			try {
-				const params = paramsSchema.parse(rawParams);
-				const parent = callerSession(ctx);
-				if (!parent) return fail("fork_task: could not resolve the calling session in the agent registry.");
-				const taskTool = parent.getToolByName("task");
-				if (!taskTool) return fail("fork_task: the `task` tool is unavailable in this session (recursion depth or settings).");
-				// Only async dispatch pre-allocates the child id before the spawn hook;
-				// sync dispatch reports the bare label, which misses nested id prefixes.
-				if (!parent.asyncJobManager || cfgAsyncEnabled.get(parent.settings) !== true) {
-					return fail("fork_task: requires background jobs (`async.enabled: true`).");
-				}
-				await parent.sessionManager.ensureOnDisk();
-				await parent.sessionManager.flush();
-				const parentFile = parent.sessionManager.getSessionFile();
-				if (!parentFile) return fail("fork_task: forking needs a persisted session.");
-				const artifactsDir = parentFile.slice(0, -".jsonl".length);
-				const planMode = parent.getPlanModeState()?.enabled === true;
-
-				const notes: string[] = [];
-				const tasks: TaskItem[] = [];
-				const resolveRole = roleResolver(parent);
-				/** The first `workspace: "source"` rejection; nothing is dispatched then. */
-				let refused: string | undefined;
-				try {
-					for (const [index, item] of params.tasks.entries()) {
-						const source = await resolveSource(item.from, parent, parentFile);
-						if (source.kind === "error") throw new Error(source.message);
-						const agent = item.agent?.trim() || undefined;
-						const role = await resolveRole(agent);
-						if (role.kind === "error") throw new Error(role.message);
-						const captured = captureReplica(source.request, {
-							inheritReasoning: role.kind === "none" && item.effort === undefined,
-							caller: parent,
-						});
-						const name = `${sanitizeName(item.name) ?? "Fork"}_${randomUUID().slice(0, 4)}`;
-						// Without a role the fork continues the source in its workspace unless explicitly isolated;
-						// inheriting the source's workspace needs an isolated child, so `workspace: "source"` defaults to one.
-						const isolated = !planMode && (item.isolated ?? (role.kind === "role" || item.workspace === "source"));
-						const inheritance =
-							item.workspace === "source" ? await sourceInheritance(source, isolated, parent.sessionManager.getCwd()) : undefined;
-						if (inheritance?.kind === "rejected") {
-							refused = rejection(inheritance.code, inheritance.detail);
-							break;
-						}
-						const shake = item.shake === true;
-						const { staging, notice, shakeSummary } = await stageFork(ctx, parent, source, shake, isolated, inheritance !== undefined);
-						const { response, ...capture } = captured;
-						const entry: PendingFork = {
-							name,
-							artifactsDir,
-							staging,
-							replica: { ...capture, replay: shake ? { kind: "own" } : { kind: "prefix", response, notice } },
-							model: role.kind === "role" ? role.model : capture.sourceModel,
-							overlay: inheritance?.patch,
-						};
-						staged.push(entry);
-						pending.push(entry);
-						if (shakeSummary) notes.push(`${name}: ${shakeSummary}`);
-						tasks[index] = {
-							name,
-							// The replicated system prompt is the source's: role, shared context and assignment form the new user message.
-							task: [role.kind === "role" ? role.block : "", params.context.trim(), item.task]
-								.filter((part) => part.length > 0)
-								.join("\n\n"),
-							agent: FORK_AGENT,
-							...(planMode ? {} : { isolated }),
-							...(item.effort !== undefined ? { effort: item.effort } : {}),
-							...(item.outputSchema !== undefined ? { outputSchema: item.outputSchema } : {}),
-							...(item.schemaMode !== undefined ? { schemaMode: item.schemaMode } : {}),
-						};
-					}
-				} catch (error) {
-					if (signal?.aborted) throw error;
-					throw new Error(`staging the conversation fork failed: ${errorText(error)}`, { cause: error });
-				}
-				if (refused !== undefined) {
-					await discardStaged();
-					return fail(refused);
-				}
-
-				// The native task tool requires `context`; it lands only in the child's base prompt, which replication never sends.
-				const result = await taskTool.execute(toolCallId, { context: params.context, tasks }, signal, onUpdate);
-
-				// Items the task tool never scheduled (validation errors) leave nothing staged.
-				const parsed = progressSchema.safeParse(result.details);
-				const scheduled = new Set(parsed.success ? parsed.data.progress.map((p) => p.index) : []);
-				for (const [index, entry] of staged.entries()) {
-					if (!scheduled.has(index)) await discard(entry);
-				}
-
-				if (notes.length === 0) return result;
-				return {
-					...result,
-					content: [...result.content, { type: "text" as const, text: `\n[fork_task] ${notes.join("; ")}` }],
-				};
-			} catch (error) {
-				await discardStaged();
-				if (signal?.aborted) throw error;
-				pi.logger.warn("fork_task: executing the conversation fork failed", { error: errorText(error) });
-				return fail(`fork_task: ${errorText(error)}`);
-			}
-		},
+		execute: executeForkTask.bind(null, rt),
 	};
 	pi.registerTool(tool);
 }
