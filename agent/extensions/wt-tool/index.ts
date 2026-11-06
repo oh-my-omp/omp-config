@@ -134,7 +134,7 @@ function unexpected(value: never): never {
 function captureFailureText(failure: InteractiveModeFailure): string {
 	switch (failure.kind) {
 		case "missing-setEditorComponent":
-			return "InteractiveMode" + ".prototype.setEditorComponent is missing (omp internals changed).";
+			return "the InteractiveMode setEditorComponent method is missing (omp internals changed).";
 		case "unreachable":
 			return "the interactive TUI instance is not reachable from this session.";
 		case "other-session":
