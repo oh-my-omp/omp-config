@@ -54,7 +54,7 @@ function source(...snapshots: Record<string, string | null>[]): string {
 	return dir;
 }
 
-/** Stand-in for the four `omp plugin` commands the updater uses; state and calls in $FAKE_OMP_STATE. */
+/** Stand-in for the four `omp plugin` commands the updater uses; state and calls in $FAKE_OMP_STATE. Like OMP, `config list` lays the cwd's `.omp/plugin-overrides.json` over the machine's settings. */
 const FAKE_OMP = `#!/usr/bin/env bun
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -76,7 +76,9 @@ if (command === "list") {
 } else if (command === "config" && rest[0] === "list") {
 	if (state.path === null) fail('Plugin "omp-config" not found');
 	save();
-	console.log(JSON.stringify({ settings: state.settings, schema: {} }));
+	const overrides = join(process.cwd(), ".omp", "plugin-overrides.json");
+	const project = existsSync(overrides) ? (JSON.parse(readFileSync(overrides, "utf8")).settings?.["omp-config"] ?? {}) : {};
+	console.log(JSON.stringify({ settings: { ...state.settings, ...project }, schema: {} }));
 } else if (command === "config" && rest[0] === "set") {
 	const [, , key, ...value] = rest;
 	const schema = JSON.parse(readFileSync(join(state.path, "package.json"), "utf8")).omp.settings[key];
@@ -106,10 +108,16 @@ function fakeOmp(initial: Partial<FakeState> = {}): { readonly env: Record<strin
 	};
 }
 
-function applyCli(src: string, agentDir: string, env: Record<string, string>, ...extra: string[]): ApplyReport {
+function applyCli(
+	src: string,
+	agentDir: string,
+	env: Record<string, string>,
+	{ extra = [], cwd }: { readonly extra?: readonly string[]; readonly cwd?: string } = {},
+): ApplyReport {
 	const result = spawnSync("bun", [UPDATER, "apply", "--source", src, "--agent-dir", agentDir, "--json", ...extra], {
 		encoding: "utf8",
 		env,
+		cwd,
 	});
 	if (result.status !== 0 && result.stdout.trim() === "") throw new Error(`updater failed: ${result.stderr}`);
 	const report: unknown = JSON.parse(result.stdout);
@@ -235,6 +243,29 @@ describe("settings move", () => {
 		expect(report.deleted).toContain(join(agentDir, "omomp.yml"));
 	});
 
+	test("a project's plugin-overrides.json does not hide the machine's settings: the move still writes the machine value", () => {
+		const src = repo({ "agent/PERSONALITY.md": "repo\n" });
+		const agentDir = temp("omp-settings-agent-");
+		writeTree(agentDir, {
+			"omomp.yml": "lang-nag:\n  language: 中文\n  instruction: from omomp\nomp-config-autoupdate:\n  exclude:\n    - PERSONALITY.md\n",
+			"PERSONALITY.md": "mine\n",
+		});
+		// The updater runs from a project whose overrides set both keys; OMP lists them only for that cwd.
+		const project = temp("omp-settings-project-");
+		writeTree(project, {
+			".omp/plugin-overrides.json": JSON.stringify({
+				settings: { "omp-config": { "lang-nag.instruction": "from project", "omp-config-autoupdate.exclude": "" } },
+			}),
+		});
+		const omp = fakeOmp();
+		const report = applyCli(src, agentDir, omp.env, { cwd: project });
+		expect(report.errors).toEqual([]);
+		expect(omp.state().settings).toEqual({ "lang-nag.instruction": "from omomp", "omp-config-autoupdate.exclude": "PERSONALITY.md" });
+		expect(report.notes.some((note) => note.includes("already set"))).toBe(false);
+		expect(readFileSync(join(agentDir, "PERSONALITY.md"), "utf8")).toBe("mine\n");
+		expect(existsSync(join(agentDir, "omomp.yml"))).toBe(false);
+	});
+
 	test("invalid, customized, refused and excluded sections stay with a note while the rest moves", () => {
 		const src = repo();
 		const agentDir = temp("omp-settings-agent-");
@@ -291,7 +322,7 @@ describe("settings move", () => {
 		const agentDir = temp("omp-settings-agent-");
 		writeTree(agentDir, { "omomp.yml": HOST_OMOMP, "agents/free1.md": AGENT });
 		const omp = fakeOmp();
-		const checked = applyCli(src, agentDir, omp.env, "--check");
+		const checked = applyCli(src, agentDir, omp.env, { extra: ["--check"] });
 		expect(checked.errors).toEqual([]);
 		expect(
 			checked.notes.some(

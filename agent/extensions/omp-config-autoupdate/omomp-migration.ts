@@ -522,11 +522,16 @@ export type PluginState =
 	| { readonly kind: "unregistered" }
 	| { readonly kind: "failed"; readonly error: string };
 
+/**
+ * One `omp plugin …` call, run from `/`: OMP lists a plugin's settings with the
+ * cwd's `.omp/plugin-overrides.json` laid over them, and the updater reads and
+ * writes the machine's own values (the machine scope of `_shared/plugin-settings.ts`).
+ */
 function runOmp(
 	omp: string,
 	args: readonly string[],
 ): { readonly ok: true; readonly out: string } | { readonly ok: false; readonly error: string } {
-	const result = spawnSync(omp, args, { encoding: "utf8" });
+	const result = spawnSync(omp, args, { encoding: "utf8", cwd: "/" });
 	if (result.error) return { ok: false, error: result.error.message };
 	if (result.status !== 0) return { ok: false, error: `omp ${args.slice(0, 3).join(" ")}: ${(result.stderr || result.stdout).trim()}` };
 	return { ok: true, out: result.stdout };
