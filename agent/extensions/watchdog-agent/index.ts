@@ -70,8 +70,9 @@
 // of an assistant message whose producer passes the model filters counts as
 // one, both live and when restored. When a watchdog's counter reaches
 // `every`, it runs immediately (mid-run), and its finding is injected as soon as
-// the review finishes, whatever state the agent is in. When the agent's run
-// settles (`agent_end`, non-continuation) with a nonzero counter below
+// the review finishes, whatever state the agent is in. When the run reaches
+// a terminal `agent_end`, or an `agent_end` that hands control back to wait
+// on background work (`awaitingAsyncWork`), with a nonzero counter below
 // `every`, the watchdog runs once for the remainder. `scope: full` reviews the
 // whole branch; `scope: window` reviews only messages after the cursor, which
 // advances only when a review reaches a verdict and is persisted as a session
