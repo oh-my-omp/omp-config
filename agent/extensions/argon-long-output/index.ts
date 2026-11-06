@@ -38,22 +38,32 @@
 // unchanged. A context-window refit would build a row no sweep sees; OMP gives
 // the argon rows no window tiers, so it does not refit them.
 //
-// PROMPT. `before_agent_start`, in the main session and in every subagent, each
-// matched against its own model, appends `ARGON_PROMPT.md` (beside this
-// module, re-read per prompt) to the system prompt: keep every `write`/`edit`
+// PROMPT. In the main session and in every subagent, each matched against its
+// own model, `ARGON_PROMPT.md` (beside this module, re-read at every delivery
+// point) reaches an argon session as one delta of `_shared/context-delta.ts`
+// with source `omp-config/argon-long-output`: keep every `write`/`edit`
 // payload and final reply within 8,000 characters by writing a skeleton first
-// and filling it one section per `edit`.
+// and filling it one section per `edit`. The system prompt stays as OMP built
+// it. Delivery points are `before_agent_start` (after the prompt) and
+// `tool_result` (after the tool batch); the delta is sent only when it differs
+// from the source's effective delta in the current context, so a session holds
+// one copy until compaction drops it or the file changes. A session whose model
+// stops matching gets a delta saying the earlier one no longer applies. A
+// revive's `before_agent_start` delivers nothing, because OMP discards its result.
 //
-// Registers session_start, before_agent_start, context and session.compacting; no tools or
-// commands; writes no files. Failure policy: a missing or unreadable
-// ARGON_PROMPT.md warns once per reason and appends nothing; any other error is
-// logged and the prompt or request proceeds unchanged. Nothing throws into omp.
+// Registers session_start, before_agent_start, context, session.compacting,
+// tool_result and the delta stream's turn_start; no tools or commands; writes
+// no files. Failure policy: a missing or unreadable ARGON_PROMPT.md warns once
+// per reason and delivers nothing, leaving any delta already in the context in
+// effect; any other error is logged and the prompt or request proceeds
+// unchanged. Nothing throws into omp.
 // ============================================================================
 
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { createDeltaStream, type Delta } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
 
 const API = "google-gemini-cli";
@@ -90,9 +100,9 @@ function sweep(ctx: ExtensionContext): void {
 
 type PromptRead = { readonly kind: "ok"; readonly text: string } | { readonly kind: "failed"; readonly reason: string };
 
-async function readPrompt(): Promise<PromptRead> {
+function readPrompt(): PromptRead {
 	try {
-		const text = (await readFile(PROMPT_FILE, "utf8")).trim();
+		const text = readFileSync(PROMPT_FILE, "utf8").trim();
 		return text === "" ? { kind: "failed", reason: `${PROMPT_FILE} is empty` } : { kind: "ok", text };
 	} catch (error) {
 		return { kind: "failed", reason: `cannot read ${PROMPT_FILE}: ${errorText(error)}` };
@@ -102,6 +112,28 @@ async function readPrompt(): Promise<PromptRead> {
 export default function argonLongOutput(pi: ExtensionAPI): void {
 	/** Last prompt-file failure already logged, so a broken file warns once per reason. */
 	let warnedReason: string | null = null;
+
+	/** The delta this session should hold, or undefined when ARGON_PROMPT.md cannot be read. */
+	const promptDelta = (ctx: ExtensionContext): Delta | undefined => {
+		const model = ctx.model;
+		if (model === undefined || !isArgon(model)) return { kind: "none" };
+		const prompt = readPrompt();
+		switch (prompt.kind) {
+			case "failed":
+				if (warnedReason !== prompt.reason) {
+					warnedReason = prompt.reason;
+					pi.logger.warn(`argon-long-output: ${prompt.reason}; not delivering`);
+				}
+				return undefined;
+			case "ok":
+				warnedReason = null;
+				return { kind: "text", body: prompt.text };
+			default: {
+				const unreachable: never = prompt;
+				return unreachable;
+			}
+		}
+	};
 
 	const sweepHook = (_event: unknown, ctx: ExtensionContext): void => {
 		try {
@@ -114,29 +146,24 @@ export default function argonLongOutput(pi: ExtensionAPI): void {
 	pi.on("context", sweepHook);
 	pi.on("session.compacting", sweepHook);
 
-	pi.on("before_agent_start", async (event, ctx) => {
+	const deltas = createDeltaStream(pi, "argon-long-output");
+	pi.on("before_agent_start", (event, ctx) => {
+		sweepHook(event, ctx);
+		// OMP discards the result of a revive.
+		if (event.reason === "revive") return;
 		try {
-			sweep(ctx);
-			const model = ctx.model;
-			if (model === undefined || !isArgon(model)) return;
-			const prompt = await readPrompt();
-			switch (prompt.kind) {
-				case "failed":
-					if (warnedReason !== prompt.reason) {
-						warnedReason = prompt.reason;
-						pi.logger.warn(`argon-long-output: ${prompt.reason}; not appending`);
-					}
-					return;
-				case "ok":
-					warnedReason = null;
-					return { systemPrompt: [...event.systemPrompt, prompt.text] };
-				default: {
-					const unreachable: never = prompt;
-					return unreachable;
-				}
-			}
+			const delta = promptDelta(ctx);
+			return delta === undefined ? undefined : deltas.atPrompt(ctx, delta);
 		} catch (error) {
-			pi.logger.warn("argon-long-output: cannot prepare argon prompt", { error: errorText(error) });
+			pi.logger.warn("argon-long-output: cannot deliver argon prompt", { error: errorText(error) });
+		}
+	});
+	pi.on("tool_result", (_event, ctx) => {
+		try {
+			const delta = promptDelta(ctx);
+			return delta === undefined ? undefined : deltas.afterTools(ctx, delta);
+		} catch (error) {
+			pi.logger.warn("argon-long-output: cannot deliver argon prompt", { error: errorText(error) });
 		}
 	});
 }
