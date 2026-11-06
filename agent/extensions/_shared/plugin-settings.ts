@@ -44,15 +44,32 @@ const manifestSchema = z
 	.object({ name: z.literal(PLUGIN), omp: z.object({ settings: z.record(z.string(), settingSchema) }) })
 	.passthrough();
 
-/** Manifest key → default (undefined without one); read once per process, the file ships with this module. */
-let declared: ReadonlyMap<string, Scalar | undefined> | undefined;
+type ManifestRead =
+	| { readonly kind: "ok"; readonly defaults: ReadonlyMap<string, Scalar | undefined> }
+	| { readonly kind: "invalid"; readonly reason: string };
 
-function manifestDefaults(): ReadonlyMap<string, Scalar | undefined> {
-	declared ??= new Map(
-		Object.entries(manifestSchema.parse(JSON.parse(readFileSync(join(import.meta.dir, "package.json"), "utf8"))).omp.settings).map(
-			([key, setting]) => [key, setting.default],
-		),
-	);
+/** Manifest key → default (undefined without one); read once per process, the file ships with this module. */
+let declared: ManifestRead | undefined;
+
+function readManifest(): ManifestRead {
+	const path = join(import.meta.dir, "package.json");
+	let json: unknown;
+	try {
+		json = JSON.parse(readFileSync(path, "utf8"));
+	} catch (error) {
+		return { kind: "invalid", reason: `${path}: ${errorText(error)}` };
+	}
+	const parsed = manifestSchema.safeParse(json);
+	if (!parsed.success)
+		return {
+			kind: "invalid",
+			reason: `${path}: ${parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
+		};
+	return { kind: "ok", defaults: new Map(Object.entries(parsed.data.omp.settings).map(([key, setting]) => [key, setting.default])) };
+}
+
+function manifestDefaults(): ManifestRead {
+	declared ??= readManifest();
 	return declared;
 }
 
@@ -86,9 +103,11 @@ export async function readSettings<T>(section: SettingsSection<T>, scope: Settin
 	} catch (error) {
 		return { kind: "invalid", reason: errorText(error) };
 	}
+	const manifest = manifestDefaults();
+	if (manifest.kind === "invalid") return manifest;
 	const prefix = `${section.id}.`;
 	const raw: Tree = {};
-	for (const [key, fallback] of manifestDefaults()) {
+	for (const [key, fallback] of manifest.defaults) {
 		if (!key.startsWith(prefix)) continue;
 		const value = Object.hasOwn(stored, key) ? stored[key] : fallback;
 		if (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
@@ -105,6 +124,8 @@ export async function readSettings<T>(section: SettingsSection<T>, scope: Settin
 
 /** Store one machine value (`<extension>.<key>`), as `omp plugin config set` would. */
 export async function writeSetting(key: string, value: Scalar): Promise<void> {
-	if (!manifestDefaults().has(key)) throw new Error(`${PLUGIN}: unknown setting ${key}`);
+	const manifest = manifestDefaults();
+	if (manifest.kind === "invalid") throw new Error(`${PLUGIN}: ${manifest.reason}`);
+	if (!manifest.defaults.has(key)) throw new Error(`${PLUGIN}: unknown setting ${key}`);
 	await new PluginManager("/").setPluginSetting(PLUGIN, key, value);
 }
