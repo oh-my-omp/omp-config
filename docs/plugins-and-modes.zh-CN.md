@@ -50,7 +50,7 @@
 | `task.eager` | `preferred` | `default` |
 | `disabledExtensions` | 无 | 禁用以下本地扩展：`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
 | `config.yml` 的 `extensions` 路径列表 | 加载 `extensions-last/system-prompt-replace` | `config-light.yml` 用自己的列表覆盖 `extensions`，同样最后加载 `extensions-last/system-prompt-replace`（其 `REPLACE-SYSTEM-*.yml` 规则用 `mode` / `exclude.mode` 区分模式，仓库自带规则写 `mode: full`）；`omp-light.ts` 读取本机 `config.yml`，把不含 `/extensions-last/` 的本机条目（如 `~/.claude`）通过 `-e` 传回 |
-| 其余本地扩展 | 启用 | 保留：`antigravity-wire-profiles`、`append-system-model`、`argon-long-output`、`ast-top-level`、`child-memory-warning`、`delete-guard`、`harness-restart`、`input-polish`、`model-compaction`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`subagent-usage`、`tool-topic-injection`、`tool-topics`、`wt-tool`（轻量模式下 OMP 自有工具的说明同样有表层文本与 `Topics` 索引；插件工具保留自身说明） |
+| 其余本地扩展 | 启用 | 保留：`append-system-model`、`argon-long-output`、`ast-top-level`、`child-memory-warning`、`delete-guard`、`harness-restart`、`input-polish`、`model-compaction`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`subagent-usage`、`tool-topic-injection`、`tool-topics`、`wt-tool`（轻量模式下 OMP 自有工具的说明同样有表层文本与 `Topics` 索引；插件工具保留自身说明） |
 | 已安装插件 | 全部加载 | 全部加载：仓库自带的 `agent/config-light.yml` 禁用列表只列出本地扩展 |
 | 轻量模式减少的本地工具 | — | `polish_doc`、`fork_task` |
 

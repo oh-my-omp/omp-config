@@ -26,15 +26,14 @@ Configuration files expose choices users can adapt to their own work. Shipped ru
 | 16 | `doc-polish` | [doc-polish](#doc-polish) | Main + Sub | No | `omomp.yml#doc-polish` (machine-local) | Choose fallback role, concurrency and `@doc-polish.*` model bindings |
 | 17 | `wt-tool` | [wt-tool](#wt-tool) | Main TUI | Yes | No config file | Choose the worktree branch and review removal state through the tools |
 | 18 | `harness-restart` | [harness-restart](#harness-restart) | Main TUI | Yes | No config file | Request a restart with a reason; the session resumes after it |
-| 19 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | Root main, plus the first session in each subagent worker thread; per-thread table | Yes | Provider-reported model metadata | Refreshes output capacity from Antigravity when credentials exist; no local policy file |
-| 20 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omomp.yml#omp-config-autoupdate` (machine-local) | Choose startup updates and conflict handling through `/omp-config-autoupdate`; adapt conflicts when needed |
-| 21 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide | Yes | Agent-dir `omomp.yml#omomp-lang` or environment | Choose interface language in the machine section or override with `OMOMP_LANG` |
-| 22 | `tool-topics` | [tool-topics](#tool-topics) | Main + Sub; process-wide router | Yes | Sibling `TOPIC-*.md` and `SURFACE-*.md` | Edit or add OMP-owned tool instructions and topics; reload them by restarting OMP |
-| 23 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | Main + Sub | Yes | `omomp.yml#tool-topic-injection` | Choose tool-argument matches and topics at machine or project scope; an empty rules list disables injection |
-| 24 | `delete-guard` | [delete-guard](#delete-guard) | Main + Sub | Yes | No config file or switch | Choose literal deletion paths; recoverable deletion is the default, permanent deletion requires explicit confirmation |
-| 25 | `subagent-usage` | [subagent-usage](#subagent-usage) | Main + Sub | Yes | Machine consent; local calibration data | A human enables or disables history access through `/subagent-usage`; project files cannot grant consent |
-| 26 | `argon-long-output` | [argon-long-output](#argon-long-output) | Main + Sub | Yes | `ARGON_PROMPT.md` and supported stream-timeout settings | Customize long-output instructions and explicit timeout budgets for the matching models |
-| 27 | `ast-top-level` | [ast-top-level](#ast-top-level) | Process-wide + Main + Sub | Yes | No extension config file | OMP owns the syntax-tool settings; this extension keeps enabled tools directly visible, and disabling it requires a restart |
++| 19 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omomp.yml#omp-config-autoupdate` (machine-local) | Choose startup updates and conflict handling through `/omp-config-autoupdate`; adapt conflicts when needed |
++| 20 | `omomp-lang` | [omomp-lang](#omomp-lang) | Process-wide | Yes | Agent-dir `omomp.yml#omomp-lang` or environment | Choose interface language in the machine section or override with `OMOMP_LANG` |
++| 21 | `tool-topics` | [tool-topics](#tool-topics) | Main + Sub; process-wide router | Yes | Sibling `TOPIC-*.md` and `SURFACE-*.md` | Edit or add OMP-owned tool instructions and topics; reload them by restarting OMP |
++| 22 | `tool-topic-injection` | [tool-topic-injection](#tool-topic-injection) | Main + Sub | Yes | `omomp.yml#tool-topic-injection` | Choose tool-argument matches and topics at machine or project scope; an empty rules list disables injection |
++| 23 | `delete-guard` | [delete-guard](#delete-guard) | Main + Sub | Yes | No config file or switch | Choose literal deletion paths; recoverable deletion is the default, permanent deletion requires explicit confirmation |
++| 24 | `subagent-usage` | [subagent-usage](#subagent-usage) | Main + Sub | Yes | Machine consent; local calibration data | A human enables or disables history access through `/subagent-usage`; project files cannot grant consent |
++| 25 | `argon-long-output` | [argon-long-output](#argon-long-output) | Main + Sub | Yes | `ARGON_PROMPT.md` and supported stream-timeout settings | Customize long-output instructions and explicit timeout budgets for the matching models |
++| 26 | `ast-top-level` | [ast-top-level](#ast-top-level) | Process-wide + Main + Sub | Yes | No extension config file | OMP owns the syntax-tool settings; this extension keeps enabled tools directly visible, and disabling it requires a restart |
 
 ---
 
@@ -282,14 +281,6 @@ OMP's `/wt` and `/move` reject calls while a turn is streaming, and `ExtensionAP
 Source: `agent/extensions/harness-restart/`. Main interactive TUI only (enabled in light mode).
 
 Queues a restart using the same idle-turn `InteractiveMode` mechanism and arming rule as `wt-tool`. Right before calling `InteractiveMode.restart()`, appends custom session entry `mouriya.omp.harness-restart.request` (`reason` and timestamp); when the restarted process resumes the session, `session_start` sends `"Harness restart completed (<time>). Reason was: <reason>. Continue what you were doing."` with `attribution: "agent"`.
-
-### antigravity-wire-profiles
-
-Source: `agent/extensions/antigravity-wire-profiles/`.
-
-OMP's `google-antigravity` provider only overrides the caller's `maxTokens` for wire ids present in its static `ANTIGRAVITY_MODEL_WIRE_PROFILES` table (`@oh-my-pi/pi-catalog/wire/gemini-headers`); newer wire ids (`gemini-4-argon-*`) were missing, so compaction's 512-token short summary request spent its entire budget on thinking and failed with `thought-only response without final output`.
-
-At root `session_start` (awaited up to 20 s; `before_agent_start` awaits the same promise), the extension calls `POST <baseUrl>/v1internal:fetchAvailableModels` for the session credential and every stored Antigravity account, merges served models (non-internal, non-disabled, positive integer `maxOutputTokens`), and updates `ANTIGRAVITY_MODEL_WIRE_PROFILES` in place (adding and overwriting entries, never deleting). The table is per thread: a subagent worker thread (`task.workerThreads`) loads its own copy of the provider module, so the first session OMP places in each worker runs the same load for that thread. If all accounts fail, it keeps the existing table, warns in the log and main UI, and retries on the next root (or worker) session start.
 
 ### argon-long-output
 

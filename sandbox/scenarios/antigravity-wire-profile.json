@@ -1,0 +1,9 @@
+{
+	"name": "antigravity-wire-profile",
+	"init": "true",
+	"prompt": "用 bash 执行 `echo wire-ok`，只需要看到输出。",
+	"finalAssertion": "grep -r -h -o '\"maxOutputTokens\": [0-9]*' /runs --include='rr-session-*.json' | sort | uniq -c | grep '65535'",
+	"calls": {
+		"expect": [{ "tool": "bash", "resultIncludes": "wire-ok" }]
+	}
+}
