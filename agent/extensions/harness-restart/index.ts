@@ -25,12 +25,12 @@
 // TUI-main-only tool harness_restart; hooks: session_start/switch/shutdown, agent_start/end.
 // Reads the live InteractiveMode; writes durable custom request and consumed session entries.
 // No extension config files. Failures are returned to the agent; hook failures are logged.
-import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, InteractiveMode, z } from "@oh-my-pi/pi-coding-agent";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { applyActiveTools } from "../_shared/active-tools.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
+import { captureInteractiveMode, type InteractiveModeFailure } from "../_shared/interactive-mode.ts";
 
 const TOOL = "harness_restart";
 const ENTRY_TYPE = "mouriya.omp.harness-restart.request";
@@ -67,34 +67,19 @@ function reset(runtime: Runtime, ctx: ExtensionContext): void {
 	runtime.state = { kind: "idle" };
 }
 
-/** Live InteractiveMode behind ctx.ui, read through one recorded setEditorComponent call. */
-function capture(ctx: ExtensionContext): { kind: "ok"; mode: InteractiveModeContext } | { kind: "error"; reason: string } {
-	const proto = InteractiveMode.prototype;
-	const original = Object.getOwnPropertyDescriptor(proto, "setEditorComponent");
-	if (typeof original?.value !== "function") {
-		return { kind: "error", reason: "InteractiveMode.prototype.setEditorComponent is missing (omp internals changed)." };
+function captureFailureText(failure: InteractiveModeFailure): string {
+	switch (failure.kind) {
+		case "missing-setEditorComponent":
+			return "the InteractiveMode setEditorComponent method is missing (omp internals changed).";
+		case "unreachable":
+			return "the interactive TUI instance is not reachable from this session.";
+		case "other-session":
+			return "the interactive TUI is attached to a different session.";
+		default: {
+			const unreachable: never = failure;
+			throw new Error(`Unexpected capture failure: ${String(unreachable)}`);
+		}
 	}
-	let captured: unknown;
-	Object.defineProperty(proto, "setEditorComponent", {
-		...original,
-		value: function (this: unknown): void {
-			captured = this;
-		},
-	});
-	try {
-		ctx.ui.setEditorComponent(undefined);
-	} finally {
-		Object.defineProperty(proto, "setEditorComponent", original);
-	}
-	if (!(captured instanceof InteractiveMode)) {
-		return { kind: "error", reason: "the interactive TUI instance is not reachable from this session." };
-	}
-	// Unchecked: the host hides the live instance behind a private member; instanceof already proved it.
-	const mode = captured as unknown as InteractiveModeContext;
-	if (mode.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) {
-		return { kind: "error", reason: "the interactive TUI is attached to a different session." };
-	}
-	return { kind: "ok", mode };
 }
 
 function pendingMarker(ctx: ExtensionContext): Marker | undefined {
@@ -119,10 +104,11 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 	runtime.state = { kind: "running", request };
 	try {
 		if (ctx.sessionManager.getSessionId() !== request.sessionId) return;
-		const live = capture(ctx);
-		if (live.kind === "error") {
-			runtime.pi.logger.warn("harness-restart: queued restart not run", { reason: live.reason });
-			runtime.pi.sendUserMessage(`The queued harness restart did not run: ${live.reason}`, { attribution: "agent" });
+		const live = captureInteractiveMode(ctx);
+		if (live.kind !== "ok") {
+			const reason = captureFailureText(live);
+			runtime.pi.logger.warn("harness-restart: queued restart not run", { reason });
+			runtime.pi.sendUserMessage(`The queued harness restart did not run: ${reason}`, { attribution: "agent" });
 			return;
 		}
 		runtime.pi.appendEntry(ENTRY_TYPE, request.marker);
@@ -180,8 +166,8 @@ function blocker(runtime: Runtime, ctx: ExtensionContext): string | undefined {
 			throw new Error(`Unexpected harness-restart state: ${String(unreachable)}`);
 		}
 	}
-	const live = capture(ctx);
-	if (live.kind === "error") return `${TOOL}: ${live.reason}`;
+	const live = captureInteractiveMode(ctx);
+	if (live.kind !== "ok") return `${TOOL}: ${captureFailureText(live)}`;
 	if (live.mode.collabGuest) return `${TOOL}: restarts are host-only during a collab session.`;
 	return undefined;
 }
