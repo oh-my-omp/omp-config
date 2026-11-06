@@ -79,7 +79,10 @@ export function overlayFilePath(childFile: string): string {
 	return path.join(STAGING_ROOT, "overlays", `${createHash("sha256").update(childFile).digest("hex")}.patch`);
 }
 
-/** The cwd in the header line of the transcript at `sessionFile`, if it exists. */
+/**
+ * The cwd in the `session` header of the transcript at `sessionFile`, if it exists. OMP may write
+ * other records (a padded `title` line) before the header, so lines are read until it appears.
+ */
 async function headerCwd(sessionFile: string): Promise<string | undefined> {
 	let handle: fs.FileHandle;
 	try {
@@ -90,8 +93,9 @@ async function headerCwd(sessionFile: string): Promise<string | undefined> {
 	}
 	try {
 		for await (const line of handle.readLines()) {
+			if (!line.trim()) continue;
 			const header = headerSchema.safeParse(JSON.parse(line));
-			return header.success ? header.data.cwd : undefined;
+			if (header.success) return header.data.cwd;
 		}
 		return undefined;
 	} finally {
