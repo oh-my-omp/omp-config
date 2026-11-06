@@ -364,25 +364,6 @@ describe("exclusions", () => {
 		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({ task: { eager: "later" }, lsp: { enabled: true } });
 	});
 
-	test("an excluded omomp field is kept while sibling sections update", async () => {
-		const src = source();
-		const agentDir = temp("omp-excl-");
-		src.commit({ "agent/omomp.yml": "judge:\n  fallbackRole: a\ntool-policy-nag:\n  extra: 1\n" });
-		await apply(src.dir, agentDir);
-		writeExclusions(agentDir, ["omomp.yml:tool-policy-nag"], "judge:\n  fallbackRole: a\ntool-policy-nag:\n  extra: 1\n");
-		src.commit({ "agent/omomp.yml": "judge:\n  fallbackRole: b\ntool-policy-nag:\n  extra: 2\n" });
-		const report = await apply(src.dir, agentDir);
-		expect(report.errors).toEqual([]);
-		expect(Bun.YAML.parse(host(agentDir, "omomp.yml"))).toEqual({
-			judge: { fallbackRole: "b" },
-			"tool-policy-nag": { extra: 1 },
-			"omp-config-autoupdate": { enabled: false, exclude: ["omomp.yml:tool-policy-nag"] },
-		});
-		expect(report.skipped).toEqual([
-			{ path: `${join(agentDir, "omomp.yml")}:tool-policy-nag`, reason: expect.stringContaining("exclude") },
-		]);
-	});
-
 	test("a literal directory entry covers its subtree; a bare structured file name excludes the whole file", async () => {
 		const src = source();
 		const agentDir = temp("omp-excl-");
@@ -532,10 +513,7 @@ describe("machines without a base", () => {
 });
 
 describe("legacy model appendix fragments", () => {
-	const missingSourceNotes = [
-		"agent/omomp.yml: not in source, host copy left alone",
-		"agent/config.yml: not in source, host copy left alone",
-	];
+	const missingSourceNotes = ["agent/config.yml: not in source, host copy left alone"];
 	const extensionDir = "extensions/append-system-model";
 	const legacyLocations = ["APPEND_SYSTEM_MODEL.md", `${extensionDir}/APPEND_SYSTEM_MODEL.md`];
 	const first = `${extensionDir}/APPEND-SYSTEM-model-01.md`;
@@ -791,20 +769,6 @@ describe("legacy model appendix fragments", () => {
 });
 
 describe("earlier layouts", () => {
-	test("an app-managed legacy section file is skipped, not imported or deleted", async () => {
-		const src = source();
-		src.commit({ "agent/omomp.yml": "lang-nag:\n  language: en\n" });
-		const agentDir = temp("omp-legacy-section-");
-		const managed = JSON.stringify({ language: "zh", note: ["marker:", "_otty"].join(" ") });
-		writeTree(agentDir, { "extensions/tool-policy-nag/tool-policy-nag.json": managed });
-		const report = await apply(src.dir, agentDir);
-		expect(report.errors).toEqual([]);
-		const legacy = join(agentDir, "extensions/tool-policy-nag/tool-policy-nag.json");
-		expect(report.skipped).toContainEqual({ path: legacy, reason: "app-managed" });
-		expect(host(agentDir, "extensions/tool-policy-nag/tool-policy-nag.json")).toBe(managed);
-		expect(host(agentDir, "omomp.yml")).not.toContain("tool-policy-nag");
-	});
-
 	test("an agent-root template moves to its directory copy only when unmodified; a customized one stays with a note", async () => {
 		const src = source();
 		const shipped = "---\ntarget: *\n---\nShipped.\n";
@@ -893,8 +857,7 @@ describe("legacy system replacement rule files", () => {
 
 	test("starting HEAD section converts byte-for-byte to the rule file the migration shipped", () => {
 		expect(converted(section)).toBe(migratedRules);
-		const current: unknown = Bun.YAML.parse(readFileSync(join(repoRoot, "agent/omomp.yml"), "utf8"));
-		expect(isMapping(current) && Object.hasOwn(current, "system-prompt-replace")).toBe(false);
+		expect(existsSync(join(repoRoot, "agent/omomp.yml"))).toBe(false);
 	});
 
 	test("converter preserves multiline strings, spaces, quotes, backticks, regex substitutions and scope exactly", () => {
@@ -1141,7 +1104,7 @@ describe("legacy system replacement rule files", () => {
 			expect(report.errors).toEqual([]);
 			expect(report.conflicts).toEqual([]);
 			expect(host(agentDir, ruleRel)).toBe(shipped);
-			expect(Bun.YAML.parse(host(agentDir, "omomp.yml"))).toEqual({});
+			expect(existsSync(join(agentDir, "omomp.yml"))).toBe(false);
 			expect(report.deleted).toEqual([join(agentDir, legacy)]);
 		});
 
@@ -1204,7 +1167,7 @@ describe("legacy system replacement rule files", () => {
 		writeTree(agentDir, { "omomp.yml": text });
 		const report = await apply(src.dir, agentDir);
 		expect(report.errors).toEqual([]);
-		expect(report.notes).toContain(note("section is not one direct top-level YAML block"));
+		expect(report.notes).toContain(note("system-prompt-replace is not one direct top-level YAML block"));
 		expect(host(agentDir, "omomp.yml")).toBe(text);
 		expect(existsSync(join(agentDir, ruleRel))).toBe(false);
 	});

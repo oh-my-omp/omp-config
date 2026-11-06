@@ -40,7 +40,9 @@ const settingSchema = z.union([
 	z.object({ type: z.literal("boolean"), default: z.boolean().optional() }).passthrough(),
 	z.object({ type: z.literal("enum"), values: z.array(z.string()), default: z.string().optional() }).passthrough(),
 ]);
-const manifestSchema = z.object({ name: z.literal(PLUGIN), omp: z.object({ settings: z.record(z.string(), settingSchema) }) }).passthrough();
+const manifestSchema = z
+	.object({ name: z.literal(PLUGIN), omp: z.object({ settings: z.record(z.string(), settingSchema) }) })
+	.passthrough();
 
 /** Manifest key → default (undefined without one); read once per process, the file ships with this module. */
 let declared: ReadonlyMap<string, Scalar | undefined> | undefined;
@@ -89,7 +91,8 @@ export async function readSettings<T>(section: SettingsSection<T>, scope: Settin
 	for (const [key, fallback] of manifestDefaults()) {
 		if (!key.startsWith(prefix)) continue;
 		const value = Object.hasOwn(stored, key) ? stored[key] : fallback;
-		if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") place(raw, key.slice(prefix.length).split("."), value);
+		if (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+			place(raw, key.slice(prefix.length).split("."), value);
 		else if (value !== undefined) return { kind: "invalid", reason: `${key}: expected a string, number or boolean` };
 	}
 	const parsed = section.schema.safeParse(raw);
