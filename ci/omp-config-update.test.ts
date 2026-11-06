@@ -933,12 +933,11 @@ describe("legacy system replacement rule files", () => {
 	test("unchanged host section becomes the shipped template without conflicts, preserves neighbors and cleans old bases", async () => {
 		const src = migrationSource();
 		const agentDir = migrationHost(section);
-		writeTree(agentDir, { "system-prompt-replace.json": JSON.stringify(section) });
 		const report = await apply(src.dir, agentDir);
 		expect(report.errors).toEqual([]);
 		expect(report.conflicts).toEqual([]);
 		expect(report.written).toEqual([join(agentDir, ruleRel), join(agentDir, "omomp.yml")]);
-		expect(report.deleted).toEqual([join(agentDir, "system-prompt-replace.json")]);
+		expect(report.deleted).toEqual([]);
 		expect(report.restartNeeded).toBe(false);
 		expect(host(agentDir, ruleRel)).toBe(shipped);
 		expect(host(agentDir, "omomp.yml")).toBe(prefix + suffix);
@@ -1166,6 +1165,30 @@ describe("legacy system replacement rule files", () => {
 		expect(report.deleted).toEqual([]);
 	});
 
+	for (const legacy of [
+		["system-prompt-replace.json"],
+		["extensions-last/system-prompt-replace/system-prompt-replace.json"],
+		["extensions-last/system-prompt-replace/system-prompt-replace.json", "system-prompt-replace.json"],
+	]) {
+		test(`section coexisting with legacy JSON at ${legacy.join(" and ")} blocks with a note naming every file`, async () => {
+			const src = migrationSource();
+			const agentDir = migrationHost(section);
+			writeTree(agentDir, Object.fromEntries(legacy.map((rel) => [rel, JSON.stringify(section)])));
+			const before = snapshot(agentDir);
+			const report = await apply(src.dir, agentDir);
+			expect(report.errors).toEqual([]);
+			expect(report.notes).toContain(
+				note(
+					`the section and legacy JSON coexist: ${[join(agentDir, "omomp.yml"), ...legacy.map((rel) => join(agentDir, rel))].join(", ")}`,
+				),
+			);
+			expect(report.written).toEqual([]);
+			expect(report.deleted).toEqual([]);
+			expect(snapshot(agentDir)).toEqual(before);
+			expect(existsSync(join(agentDir, ruleRel))).toBe(false);
+		});
+	}
+
 	test("malformed section is retained with a note and no default file is installed", async () => {
 		const src = migrationSource();
 		const malformed = { replacements: [{ literal: "x", replace: 5 }] };
@@ -1300,7 +1323,6 @@ describe("legacy system replacement rule files", () => {
 	test("CLI --check plans conversion and cleanup without writing files, directories or base records", () => {
 		const src = migrationSource();
 		const agentDir = migrationHost(section);
-		writeTree(agentDir, { "system-prompt-replace.json": JSON.stringify(section) });
 		const before = snapshot(agentDir);
 		const result = spawnSync("bun", [UPDATER, "apply", "--source", src.dir, "--agent-dir", agentDir, "--no-plugins", "--check"], {
 			encoding: "utf8",
@@ -1310,7 +1332,6 @@ describe("legacy system replacement rule files", () => {
 		expect(result.stderr).toBe("");
 		expect(result.stdout).toContain(`would write: ${join(agentDir, ruleRel)}\n`);
 		expect(result.stdout).toContain(`would write: ${join(agentDir, "omomp.yml")}\n`);
-		expect(result.stdout).toContain(`would delete: ${join(agentDir, "system-prompt-replace.json")}\n`);
 		expect(snapshot(agentDir)).toEqual(before);
 	});
 
