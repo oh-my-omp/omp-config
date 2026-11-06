@@ -13,7 +13,7 @@ const USER_RULE_DIR = path.join(os.homedir(), ".claude", "rules");
 /** Placement of a rule that applies everywhere. */
 type UnscopedKind = { readonly kind: "always" } | { readonly kind: "catalog"; readonly description: string };
 
-/** A scanned rule without `paths`, rendered into the system prompt. */
+/** A scanned rule without `paths`, rendered into the repo-rules delta. */
 export interface UnscopedRule {
 	/** Real path of the rule file. */
 	readonly id: string;
@@ -25,7 +25,8 @@ export interface UnscopedRule {
 
 /**
  * Where OMP itself puts a native rule (`bucketRules`: alwaysApply before description). When the
- * rule has `paths`, the extension removes it from there and loads it by path instead.
+ * rule has `paths`, it stays there; the delta quotes it as limited to its `paths`, and the extension
+ * loads it by path.
  */
 type NativePlacement = { readonly kind: "always"; readonly content: string } | { readonly kind: "rulebook" } | { readonly kind: "dropped" };
 
