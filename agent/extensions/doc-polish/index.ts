@@ -4,7 +4,9 @@
 // documents and writes original copies, split indexes, and reviews under /tmp/doc-polish.
 // Available in main and sub sessions. Models come only from OMP model roles; a failing
 // model hands the request to the next model of its role chain, while unparseable polish
-// output is reported in the review without changing the source document.
+// output is reported in the review without changing the source document. The tool's abort
+// signal cancels in-flight sub-agent requests and stops the pipeline; the source document
+// is never written either way.
 // ============================================================================
 // doc-polish — an omp extension that restructures a markdown/plaintext document
 // for engineer readability WITHOUT changing its meaning, then emits a
@@ -38,6 +40,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, join, resolve as resolvePath } from "node:path";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
@@ -208,17 +211,26 @@ type SubSessionOptions = {
 	cwd: string;
 	/** Receives the `provider/id` of the model that answered. */
 	used: Set<string>;
+	/** Tool abort signal: cancels the in-flight helper request and refuses every later one. */
+	signal?: AbortSignal;
 	/** Runs before every model's attempt, e.g. to clear a file the previous model left. */
 	beforeAttempt?: () => void;
 };
 
+/** The error the pipeline raises once the tool's abort signal fires; `signal.reason` wins. */
+function abortedError(signal: AbortSignal | undefined): Error {
+	return signal?.reason instanceof Error ? signal.reason : new AIError.AbortError("doc-polish aborted");
+}
+
 // Each model of the chain in turn: a provider error or a failed helper session hands
 // the request to the next model; the first text answer wins. Every model failing is a
 // readable, self-contained error. A response that merely fails to parse is handled by
-// the caller, not here.
+// the caller, not here. Once `opts.signal` aborts — before any model's attempt or by a
+// `canceled` helper — this throws the abort error instead of starting another attempt.
 async function runSubSession(ctx: ExtensionContext, opts: SubSessionOptions): Promise<string> {
 	const failures: string[] = [];
 	for (const { model, level } of opts.models) {
+		if (opts.signal?.aborted) throw abortedError(opts.signal);
 		opts.beforeAttempt?.();
 		const result = await runHelperPrompt(ctx, {
 			cwd: opts.cwd,
@@ -228,6 +240,7 @@ async function runSubSession(ctx: ExtensionContext, opts: SubSessionOptions): Pr
 			prompt: opts.prompt,
 			agentId: opts.agentId,
 			systemPrompt: "default",
+			signal: opts.signal,
 		});
 		switch (result.kind) {
 			case "text":
@@ -240,8 +253,8 @@ async function runSubSession(ctx: ExtensionContext, opts: SubSessionOptions): Pr
 				failures.push(`\`${modelLabel(model)}\`：${result.message}`);
 				continue;
 			case "canceled":
-				// No signal is passed: cancellation cannot originate from this caller.
-				throw new Error("doc-polish: sub-agent canceled");
+				// The tool aborted mid-chain: stop here instead of retrying the next model.
+				throw abortedError(opts.signal);
 			default: {
 				const exhaustive: never = result;
 				return exhaustive;
@@ -469,6 +482,7 @@ async function polishOneFile(
 	models: StageModels,
 	progress: Progress,
 	concurrency: number,
+	signal?: AbortSignal,
 ): Promise<string> {
 	const ext = extname(absPath).toLowerCase();
 	if (ext !== ".md" && ext !== ".txt") {
@@ -500,6 +514,7 @@ async function polishOneFile(
 		agentId: `docpolish-split-${stamp}`,
 		cwd: workspace,
 		used: used.split,
+		signal,
 		// A model that failed after writing part of the index must not hand it to the next one.
 		beforeAttempt: () => rmSync(splitOut, { force: true }),
 	});
@@ -545,6 +560,7 @@ async function polishOneFile(
 			agentId: `docpolish-polish-${stamp}-${i}`,
 			cwd: workspace,
 			used: used.polish,
+			signal,
 		});
 		progress(
 			`[${basename(absPath)}] Polishing ${++polished}/${batches.length}…`,
@@ -579,6 +595,7 @@ async function polishOneFile(
 			agentId: `docpolish-check-${stamp}-${i}`,
 			cwd: workspace,
 			used: used.check,
+			signal,
 		});
 		progress(`[${basename(absPath)}] Checking ${++checked}/${groups.length}…`, `[${basename(absPath)}] 校验 ${checked}/${groups.length}…`);
 		return review;
@@ -677,7 +694,9 @@ async function polishDocuments(
 	ctx: ExtensionContext,
 	options: PolishOptions,
 	progress: Progress,
+	signal?: AbortSignal,
 ): Promise<{ source: string; review: string }[]> {
+	signal?.throwIfAborted();
 	const config = await loadConfig(pi, ctx.cwd);
 	// Each stage's role, then the `default` role's models; resolved per call so `/model` changes apply.
 	const chain = (stage: Stage): RoleModel[] => roleModels(ctx, [stageRole(stage), "default"]);
@@ -693,8 +712,9 @@ async function polishDocuments(
 	const concurrency = options.concurrency ?? config.concurrency;
 	const results: { source: string; review: string }[] = [];
 	for (const p of options.paths) {
+		if (signal?.aborted) throw abortedError(signal);
 		const abs = isAbsolute(p) ? p : resolvePath(ctx.cwd, p);
-		const review = await polishOneFile(ctx, abs, models, progress, concurrency);
+		const review = await polishOneFile(ctx, abs, models, progress, concurrency, signal);
 		results.push({ source: abs, review });
 	}
 	return results;
@@ -750,15 +770,16 @@ export default function docPolish(pi: ExtensionAPI): void {
 			"`@doc-polish.check` (assigned in `/model`). The '改之后' rewrite is a REFERENCE direction, not an " +
 			"authoritative result: the caller must read the review and decide what, if anything, to adopt.",
 		parameters: polishOptionsSchema,
-		async execute(_toolCallId, params, _signal, onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const progress: Progress = (_english, chinese) => onUpdate?.({ content: [{ type: "text", text: chinese }] });
 			try {
-				const results = await polishDocuments(pi, ctx, polishOptionsSchema.parse(params), progress);
+				const results = await polishDocuments(pi, ctx, polishOptionsSchema.parse(params), progress, signal);
 				return {
 					content: [{ type: "text", text: buildAgentResultText(results) }],
 					details: { results, reviewPaths: results.map((r) => r.review), reference: true },
 				};
 			} catch (err) {
+				if (signal?.aborted) throw abortedError(signal);
 				pi.logger.warn("doc-polish tool failed", { error: errorText(err) });
 				if (err instanceof DocPolishModelError) {
 					return { content: [{ type: "text", text: err.message }], details: { modelError: true }, isError: true };
