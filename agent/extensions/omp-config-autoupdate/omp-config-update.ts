@@ -296,7 +296,6 @@ export const LOCAL_CONFIG_FIELDS: readonly string[] = [
  */
 export const SEED_CONFIG_FIELDS: readonly string[] = [
 	"browser",
-	"disabledProviders",
 	"composer",
 	"cycleOrder",
 	"task.maxConcurrency",
@@ -310,7 +309,7 @@ export const SEED_CONFIG_FIELDS: readonly string[] = [
  * other entries belong to the machine and stay ahead of the repo's.
  * /sync-omp-config never writes machine entries into the repo.
  */
-export const MACHINE_LIST_FIELDS: readonly string[] = ["extensions"];
+export const MACHINE_LIST_FIELDS: readonly string[] = ["extensions", "disabledProviders"];
 
 /**
  * Entries earlier repo versions put in a MACHINE_LIST_FIELDS list and later

@@ -25,7 +25,7 @@ description: 把本机 ~/.omp/agent 配置同步进本仓库快照（单向）
 - `omp` 安装目录里的 `omp-light`、`omp-light.ts`、`omp-light.cmd`；light 文件只从 `~/.omp/agent` 取。
 - 应用托管的扩展：首行为 `// @orca-managed-pi-extension`，或任意位置含 `marker: _otty`。以标记为准，不凭文件名判断。
 - 结构化配置中的本机路径与播种路径，仓库保留原值：即更新器的 `LOCAL_CONFIG_FIELDS`、`SEED_CONFIG_FIELDS`（`config.yml`）。更新器从不写本机路径；播种路径只在本机缺少时写入一次，之后归本机，所以本机的值不代表仓库默认值。要改仓库默认值，直接改仓库。
-- `config.yml` 中本机列表的本机条目：更新器的 `MACHINE_LIST_FIELDS`（`extensions`）里，仓库列表没有的条目（例如 `~/.claude`）属于本机，不写进仓库。这类列表只比对仓库已有的条目：本机删掉的，从仓库删除。要给仓库加新条目，直接改仓库。
+- `config.yml` 中本机列表的本机条目：更新器的 `MACHINE_LIST_FIELDS`（`extensions`、`disabledProviders`）里，仓库列表没有的条目（例如 `~/.claude`）属于本机，不写进仓库。这类列表只比对仓库已有的条目：本机删掉的，从仓库删除。要给仓库加新条目，直接改仓库。
 - `agent/agents/*.md` 子代理定义是本机级用户设置：更新器按 `MACHINE_OWNED_PLAIN` 处理——本机从未记录过该文件时播种一次仓库默认值，之后本机没改仍随仓库更新和删除，本机改过的一律保留、不参与合并和冲突，本机删掉或改名的不再重建，本机自建的 `.md` 也只登记存在、不回写。本机的副本（改动、重命名、删除、自建）都不比对、不收回；要改仓库默认值，直接改仓库。
 
 ## 步骤
