@@ -1,8 +1,7 @@
-import { AgentRegistry, type ExtensionContext, type Settings } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionContext, Settings } from "@oh-my-pi/pi-coding-agent";
+import { callerSession } from "./caller-session.ts";
 
 /** The live settings of the session `ctx` serves, as OMP registered it; undefined before registration. */
 export function sessionSettings(ctx: ExtensionContext): Settings | undefined {
-	return AgentRegistry.global()
-		.list()
-		.find((ref) => ref.session?.sessionManager === ctx.sessionManager)?.session?.settings;
+	return callerSession(ctx)?.settings;
 }

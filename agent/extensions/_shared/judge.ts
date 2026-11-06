@@ -8,8 +8,9 @@ import {
 	TextJudge,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
-import { AgentRegistry, type ExtensionContext, logger } from "@oh-my-pi/pi-coding-agent";
+import { type ExtensionContext, logger } from "@oh-my-pi/pi-coding-agent";
 import { type JudgeDeps, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "@oh-my-pi/pi-coding-agent/judgment";
+import { callerSession } from "./caller-session.ts";
 import { modelLabel, type RoleModel, roleModels } from "./roles.ts";
 
 export type JudgeOpen = { readonly kind: "ready"; readonly judge: Judge } | { readonly kind: "inactive" };
@@ -32,9 +33,7 @@ export type JudgeOpen = { readonly kind: "ready"; readonly judge: Judge } | { re
  * no chat model and the judge-role chain has no primary model.
  */
 export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
-	const session = AgentRegistry.global()
-		.list()
-		.find((ref) => ref.session?.sessionManager === ctx.sessionManager)?.session;
+	const session = callerSession(ctx);
 	if (session == null) throw new Error("JUDGE: current OMP session is not registered");
 	const deps: JudgeDeps = {
 		settings: session.settings,

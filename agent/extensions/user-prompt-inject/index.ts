@@ -64,7 +64,6 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import type { DeveloperMessage } from "@oh-my-pi/pi-ai";
 import {
-	type AgentSession,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type FileEntry,
@@ -72,6 +71,7 @@ import {
 	type SessionEntry,
 } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { type AgentSessionHandle, isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
@@ -255,15 +255,14 @@ function renderSpec(spec: InjectSpec, root: { readonly prompts: readonly string[
 
 /**
  * The root session's current branch. A root on this thread is a live session; when this subagent
- * runs in a subagent worker thread, the root is a peer stub whose session manager exposes its
- * file and cwd but not `getBranch`, so its branch is read from its persisted transcript.
+ * runs in a subagent worker thread, the root is a handle homed on another thread whose session
+ * manager exposes its file and cwd but not `getBranch`, so its branch is read from its persisted transcript.
  */
 async function rootBranch(
-	session: AgentSession,
+	session: AgentSessionHandle,
 ): Promise<{ readonly kind: "ok"; readonly entries: readonly SessionEntry[] } | MissingRoot> {
-	const manager = session.sessionManager;
-	if (typeof manager.getBranch === "function") return { kind: "ok", entries: manager.getBranch() };
-	const file = manager.getSessionFile();
+	if (isLocalAgentSession(session)) return { kind: "ok", entries: session.sessionManager.getBranch() };
+	const file = session.sessionManager.getSessionFile();
 	if (!file) return { kind: "missing", reason: "root session on another thread has no persisted transcript" };
 	return { kind: "ok", entries: leafPath(await loadEntriesFromFile(file)) };
 }

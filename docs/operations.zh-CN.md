@@ -133,7 +133,7 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 | `models.ts` | `Model`、`ThinkingLevel`：宿主模型与辅助会话思考强度类型 |
 | `roles.ts` | `roleModels`、`roleName`、`modelLabel`：每次调用从当前会话实时设置解析 OMP 模型角色的聊天模型链（`modelRoles.<role>` → `retry.fallbackChains.<role>` → 内置默认链）。扩展使用的角色名登记在 `agent/config.yml` 的 `modelTags` 中 |
 | `helper-session.ts` | `runHelperPrompt`：在无工具、无扩展、`taskDepth: 1` 的内存辅助会话中执行单次请求，返回结果联合类型而不抛异常 |
-| `caller-session.ts` | `callerSession(ctx)`：按 session manager 或会话文件在 `AgentRegistry` 中找到 `ExtensionContext` 所服务的实时 `AgentSession`；`fork-task` 与 `subagent-usage` 使用 |
+| `caller-session.ts` | `callerSession(ctx)`：按 session manager 或会话文件，在 `AgentRegistry` 里本线程的会话中（`isLocalAgentSession`；其他线程的注册表条目是 `AgentSessionHandle`）找到 `ExtensionContext` 所服务的实时 `AgentSession`；`fork-task`、`subagent-usage`、`model-compaction`、`judge.ts` 与 `settings.ts` 使用 |
 | `judge.ts` | `openJudge`：`@<purpose>` 角色已绑定时由其聊天模型作答，否则构建 OMP 的 judge 角色链（`resolveJudge`）；链解析不出模型时报 `inactive`，候选失败时判定失败，不再回退聊天模型 |
 | `spec-files.ts` | `discoverSpecFiles`、`parseFrontmatter`、`unquote`：按文件名模式（如 `*-<label>.md`）扫描扩展目录及 `cwd` 至 git 根各层（含 `.omp/`）的文件，并解析 `---` frontmatter |
 | `session-filter.ts` | `parseSessionFilter`、`parseInjectMode`、`targetsSession`、`producerMatches`、`describeFilter`、`SessionFilter`、`InjectMode`、`FilterProblem`：解析规格文件的 `target` 列表、`cwd` glob 列表、产出模型正则与 `inject` 形式，解析问题以数据返回、由调用方措辞；`watchdog-agent`、`turn-judge` 与 `prompt-conditions.ts` 使用 |

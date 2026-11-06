@@ -34,6 +34,7 @@
 // ============================================================================
 import { dirname } from "node:path";
 import { type AgentSession, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { worktreeSessionDirs } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
@@ -126,12 +127,18 @@ async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
 			? [{ agent: binding.agent, provider: binding.model.provider, modelId: binding.model.id, thinking: binding.thinking }]
 			: [],
 	);
-	const root = rootSession(session).sessionManager;
-	// A root on another thread (this subagent runs in a subagent worker) is a peer stub exposing its
+	const root = rootSession(session);
+	// A root on another thread (this subagent runs in a subagent worker) is a handle exposing its
 	// session file and cwd but not getSessionDir; a persisted main session's directory holds its file.
-	const rootFile = root.getSessionFile();
-	const sessionDir = rootFile ? dirname(rootFile) : root.getSessionDir();
-	const dirs = [sessionDir, ...(await worktreeSessionDirs(root.getCwd(), sessionDir))];
+	const rootFile = root.sessionManager.getSessionFile();
+	const sessionDir = rootFile ? dirname(rootFile) : isLocalAgentSession(root) ? root.sessionManager.getSessionDir() : undefined;
+	if (sessionDir === undefined) {
+		return text(
+			"subagent_usage: the root session runs in another OMP thread and has no persisted transcript. Report this to the user; do not retry.",
+			true,
+		);
+	}
+	const dirs = [sessionDir, ...(await worktreeSessionDirs(root.sessionManager.getCwd(), sessionDir))];
 	if (!(await consented())) {
 		return text("subagent_usage was disabled. Only a human can enable it with /subagent-usage on; do not retry.", true);
 	}
