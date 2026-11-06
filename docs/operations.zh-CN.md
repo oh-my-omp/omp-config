@@ -29,7 +29,9 @@ flowchart LR
 | `WATCHDOG-*.md` | 本机 | 不写入也不删除（仅在旧平铺目录迁移时从根目录移入扩展目录） | 不收回仓库 | 写入即重读 |
 | `APPEND_SYSTEM_MODEL.md`（`append-system-model` 旧格式） | 本机 | 一次性按块拆成 `extensions/append-system-model/APPEND-SYSTEM-model-NN.md`，每块一个本机文件并带 `target: *`，随后删除原文件；目标文件名已存在或原文件无法解析时保留原文件并记 note | 不收回仓库 | — |
 | `agent/config.yml` | 仓库 + 本机按字段合并 | 按字段三方合并。`LOCAL_CONFIG_FIELDS`（本机、OMP 或用户本人同意所有，如 `modelRoles`、`theme`、`setupVersion`、`dev.autoqaConsent`、`codexResets`）从不写入；`SEED_CONFIG_FIELDS`（默认值，如 `task.agentModelOverrides`、`retry.fallbackChains`、`browser`、`task.maxConcurrency`）只在本机缺少时写入；本机独有键保留；`extensions`（`MACHINE_LIST_FIELDS`）中的本机条目（如 `~/.claude`）保留在前，仓库条目作为一个整体三方合并 | 只用 `edit` 修改差异行，不整文件重序列化；跳过 `LOCAL_CONFIG_FIELDS`、`SEED_CONFIG_FIELDS` 与本机 `extensions` 条目 | OMP 热重载 |
-| `agent/omomp.yml` | 仓库段 + 本机段 | 仓库段按字段三方合并；本机段（`LOCAL_OMOMP_SECTIONS`：`doc-polish`、`model-compaction`、`omp-config-autoupdate`、`subagent-usage`）从不写入；`SEED_OMOMP_FIELDS`（语言、输入与硬件偏好——`omomp-lang`、`lang-nag`、`input-polish.key`、`input-polish.instruction`、`child-memory-warning`——以及本机的派发白名单 `task-split-check.agents`）只在缺少时写入 | 只修改仓库段的差异行，跳过本机段与播种路径 | 按各扩展读取时机生效 |
+| `agent/extensions/_shared/package.json`（`omp-config` 插件 manifest） | 仓库；保留本机修改 | 按上面文本文件的规则三方合并；`omp.settings` 是设置键、类型与默认值的唯一清单 | 与本机 `cmp` 比对，有改动时写回仓库 | 下次启动 OMP |
+| `omp-config` 插件设置（`/settings → Plugins → omp-config`、`omp plugin config`；项目 `.omp/plugin-overrides.json` 覆盖机器值） | 本机 | 从不写入；apply 先 link 插件（`omp plugin link` 指向 `extensions/_shared`），再把本机 `omomp.*` 中 omp-config 拥有的段一次性迁入设置（见下方迁移） | 不收回仓库（仓库默认值在 manifest 里） | 按各扩展读取时机生效 |
+| `<agentDir>/omomp.*` | 各段各自的归属方 | 只有 omp-config 拥有的段迁出（见下方迁移）；其他归属方的段（如 `omp-unified-exec`）从不写入；内容清空后删除该文件 | 不收回仓库 | — |
 | `<agentDir>/subagent-usage/calibration.json` | 本机（`subagent-usage` 扩展在 `/subagent-usage on` 之后写入） | 不写入也不删除；`/subagent-usage reset` 删除 | 不收回仓库 | 下次调用 `subagent_usage` |
 | `<agentDir>/thinking-translator.json` | 插件 / 本机 | 从不创建、重写或删除；旧结构化基准记录不再参与操作 | 不收回仓库；设置见 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) | 由插件定义 |
 | `<agentDir>/.omp-config-base/` | 更新器（本机） | 每个受管项的基准：本机写入成功后写入，`resolve` 也会写；`--check` 从不写 | 不进仓库 | — |
@@ -37,7 +39,7 @@ flowchart LR
 | 运行时文件（`*.db*`、WAL、`*.lock`、`models.yml`、`sessions/`、`blobs/`、`cache/`、`logs/`、`.omp-config-applied`、`settings.json`、已安装的 `omp-light`）与插件状态（`~/.pi/agent/pi-bansos-relay-state.json`） | 本机运行时 | 不改动（`.omp-config-applied` 与 `omp-light` 由更新器写入） | 不进仓库 | — |
 
 手动与自动更新都会处理位置迁移：
-- `omomp.yml` 缺少的段可以从 `OMOMP_LEGACY_SECTIONS` 指定的独立 JSON 导入，随后删除该源；已有同名段时保留源文件并记 note。应用托管的源从不导入或删除。
+- 文件操作完成后，apply 用 `omp plugin link` 把 `extensions/_shared` 注册为本机插件 `omp-config`（OMP 已把插件注册在别的路径时保留并记 note），再把本机 `omomp.*` 中 omp-config 拥有的段以及更早放这些段的独立 JSON 迁入插件设置和它们的新 md 载体：值只在本机尚未设置该键且与 manifest 默认值不同时写成设置；`task-split-check` 的 agents 写进 `agents/*.md` 的 `splitCheck: true` frontmatter，`model-compaction` 规则写成 `extensions/model-compaction/COMPACTION-rule-NN.md`，`tool-topic-injection` 规则只在与仓库自带内容相同时删除（现在由 TOPIC 文件携带），`fallbackRole` 记 note 丢弃（改由 `@<extension>` 角色 / `default` 角色链）。无效、歧义或受阻的段保留并记 note；应用托管的源从不导入或删除。
 - 旧 `system-prompt-replace` 段或 JSON 与本机已接受的结构化基准一致（无基准时与仓库某个已提交版本一致）时删除，再按普通规则安装仓库默认规则文件；只有定制规则才转换并进入目标文件的受管模板合并。目标已占用、定制数据无效、布局有歧义、其他 `omomp` 格式或应用托管源都会保留迁移源并记 note，同时阻止安装默认模板。
 - agent 根目录的数据只移到扩展目录中空闲的目标路径。根目录中的仓库 `PROMPT-INJECT-*` 或 `TURN-JUDGE-*` 模板，只有内容等于旧路径或新路径的仓库自带版本或本机已接受版本时才删除；定制模板保留并记 note 提醒移植。符号链接只记 note，不移动。
 
@@ -57,7 +59,7 @@ flowchart LR
    - 当 `~/.omp/plugins/package.json` 的依赖与 `install-plugins.sh` 不一致时，同步更新脚本中的插件列表（保留 Git/URL 原文、去掉 npm 版本范围、保持注释掉的可选插件不变）。
 3. **把当前工作区应用到本机（`/update-omp [check]`）**：
    - 执行 `bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source .`（加 `check` 时只读不写）。
-   - 与 `auto` 一样按记录的基准三方合并（记录的基准是工作区版本），区别在于：没有上一个提交，因此本机记录基准之前源中已删除的文件保留不删；不修改 `.omp-config-applied`；当场报告冲突并与用户逐项适配（`conflicts --source .`，再 `resolve --source .`）；运行 `./plugin-audit.sh` 并在有 `[卸载候选]` 时询问是否卸载；在本机缺少 `omomp.yml#doc-polish` 时询问是否创建。
+   - 与 `auto` 一样按记录的基准三方合并（记录的基准是工作区版本），区别在于：没有上一个提交，因此本机记录基准之前源中已删除的文件保留不删；不修改 `.omp-config-applied`；当场报告冲突并与用户逐项适配（`conflicts --source .`，再 `resolve --source .`）；运行 `./plugin-audit.sh` 并在有 `[卸载候选]` 时询问是否卸载；链接 `omp-config` 插件并迁移本机 `omomp.*` 段。
 4. **跨机器复制供应商凭据（`/migrate-omp-keys <target>`）**：
    - 通过 SSH 把本机 `~/.omp/agent/agent.db` 中的 `auth_credentials` 表复制到远端同路径 `agent.db`。写前确认远端 `omp` 已退出，先用 `sqlite3` `.backup` 备份远端数据库，再在单个事务中清空远端 `auth_credential_blocks` 与 `auth_credential_refresh_leases` 并替换 `auth_credentials`，不打印凭据内容。
 5. **在空白新机器上手动复制**：
@@ -65,7 +67,7 @@ flowchart LR
    ```bash
    mkdir -p "$HOME/.omp/agent"
    cp agent/config.yml agent/SYSTEM_TEMPLATE.md agent/APPEND_SYSTEM.md \
-     agent/PERSONALITY.md agent/omomp.yml agent/config-light.yml \
+    agent/PERSONALITY.md agent/config-light.yml \
      agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
      "$HOME/.omp/agent/"
    cp -a agent/agents agent/extensions agent/extensions-last "$HOME/.omp/agent/"
@@ -77,33 +79,31 @@ flowchart LR
 
 源码：`agent/extensions/omp-config-autoupdate/`。
 
-启动时从 agent 目录的 `omomp.*` 读取一次 `omp-config-autoupdate` 段：`enabled`（`true` 或 `false`，默认关闭）与 `conflicts`（默认 `notify`，或 `agent`）。第三个选项 `exclude` 由更新器在每次运行时读取（启动自动更新与 `/update-omp` 手动更新同样生效），不经过本扩展：
+启动时读取一次 `omp-config` 插件的机器级设置：`enabled`（`true` 或 `false`，默认关闭）与 `conflicts`（默认 `notify`，或 `agent`）。第三个设置 `exclude` 由更新器在每次运行时读取（启动自动更新与 `/update-omp` 手动更新同样生效），不经过本扩展；三个设置都在 `/settings → Plugins → omp-config` 或 `omp plugin config` 中读写，`exclude` 是空白分隔的条目字符串：
 
-```yaml
-omp-config-autoupdate:
-  enabled: true
-  exclude:
-    - agents/task-high.md              # 受管文件：完全保留本机副本
-    - extensions/my-tool/**            # 支持 glob；字面量目录名覆盖其下全部文件
-    - config.yml                       # 文件名本身即排除整个结构化文件
-    - config.yml:task.eager            # 结构化文件里的单个字段路径
-    - omomp.yml:lang-nag               # omomp.yml 的段同理
+```
+omp-config-autoupdate.exclude:
+  agents/task-high.md              # 受管文件：完全保留本机副本
+  extensions/my-tool/**            # 支持 glob；字面量目录名覆盖其下全部文件
+  config.yml                       # 文件名本身即排除整个结构化文件
+  config.yml:task.eager            # 结构化文件里的单个字段路径
+  omomp.yml:lang-nag               # 让 omomp.yml 的该段不参与插件设置迁移
 ```
 
-被排除的项从不被写入、创建或删除，已记录的基准也保持原样，因此之后移除条目会从原位继续更新；每个被保留的项都列在报告的 skipped 部分。无效条目（路径写法错误、`file:field` 指定的文件不是 `config.yml`/`omomp.yml`、或 exclude 不是字符串列表）与其他预检错误一样让整个更新中止。
+被排除的项从不被写入、创建或删除，已记录的基准也保持原样，因此之后移除条目会从原位继续更新；每个被保留的项都列在报告的 skipped 部分。无效条目（路径写法错误、`file:field` 指定的文件不是 `config.yml`/`omomp.yml`、条目含空白）与其他预检错误一样让整个更新中止。
 
 | 命令 | 行为 |
 |---|---|
-| `/omp-config-autoupdate` 或 `… status` | 显示自动更新开关、冲突处理方式与配置文件路径 |
-| `/omp-config-autoupdate on\|off` | 修改 agent 目录 `omomp.*` 中的 `enabled`（下次启动 OMP 生效） |
-| `/omp-config-autoupdate conflicts notify\|agent` | 修改 `conflicts`（下次启动 OMP 生效） |
+| `/omp-config-autoupdate` 或 `… status` | 显示自动更新开关、冲突处理方式与设置位置 |
+| `/omp-config-autoupdate on\|off` | 修改 `omp-config-autoupdate.enabled` 设置（下次启动 OMP 生效） |
+| `/omp-config-autoupdate conflicts notify\|agent` | 修改 `omp-config-autoupdate.conflicts` 设置（下次启动 OMP 生效） |
 | `/omp-config-autoupdate run` | 不看开关状态，立即从 GitHub 默认分支拉取并执行一次 `auto` 更新，在会话空闲时把含冲突的明细报告作为只展示、不触发模型回合的消息写入对话 |
 | `/omp-config-autoupdate adapt` | 列出相对更新器克隆的待处理冲突；有冲突时向主会话发出适配请求 |
 
 `omp-config-update.ts auto` 的执行顺序：
 1. 在根主会话 `session_start` 中由 `ctx.setTimeout` 异步启动子进程，获取锁目录 `~/.omp/omp-config-update.lock`（锁中 PID 已不存在时自动接管）。
 2. 拉取 `https://github.com/oh-my-omp/omp-config.git` 的 `main` 分支到 `~/.omp/omp-config-src`（自动修正旧的 `mouriya-s-lab/omp-config.git` 远程地址；离线拉取失败时直接退出，不使用本地旧克隆）。
-3. 当远端提交与 `<agentDir>/.omp-config-applied` 不同时，从新拉取的克隆导入 `applySnapshot`，依次执行：配置解析及 `TODO_RETIREMENTS`、`CTX_RETIREMENTS` 归属预检 → `omp install` 安装/升级必装插件 → 重新向 OMP 插件目录确认 `omp-todo-more` 已启用且声明的入口存在 → 位置迁移 → 普通文件与结构化配置三方合并 → 删除源中已删除且本机未改的文件及精确列出的 Todo 退休叶文件 → 记录基准。ctx 退休叶文件只有在就绪插件携带 `src/ctx` 时才删除，否则保留。
+3. 当远端提交与 `<agentDir>/.omp-config-applied` 不同时，从新拉取的克隆导入 `applySnapshot`，依次执行：配置解析及 `TODO_RETIREMENTS`、`CTX_RETIREMENTS` 归属预检 → `omp install` 安装/升级必装插件 → 重新向 OMP 插件目录确认 `omp-todo-more` 已启用且声明的入口存在 → 位置迁移 → 普通文件与结构化配置三方合并 → 删除源中已删除且本机未改的文件及精确列出的 Todo 退休叶文件 → 记录基准 → `omp plugin link` 注册 `extensions/_shared`，并把 `omomp.*` 段一次性迁入插件设置。ctx 退休叶文件只有在就绪插件携带 `src/ctx` 时才删除，否则保留。
 4. 当远端提交与 `.omp-config-applied` 相同时，不写配置文件，仍对 `install-plugins.sh` 中每个不带 `#ref` 的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，并只读重新扫描冲突。已安装的 GitHub 源按 owner/repo 匹配，兼容 `github:`、HTTPS 与 Git URL 形式；npm 条目与带固定引用的 URL 等到下次配置提交变化时才更新。
 5. 移动或写入阶段只要报错，就跳过全部删除步骤、保留原 `.omp-config-applied` 不变，并报告 `Cutover incomplete; do not restart OMP`。冲突不算错误：提交照常记录，冲突保持待处理。
 6. 只有配置文件或插件实际发生变化时，才在编辑框上方显示 5 秒提示框（如 `omp-config 93d519e → e5a34bc (3 files)`、`omp-todo-more 0.1.10 → 0.1.12`）；无变化、锁占用与离线只写日志，失败弹 warning。
@@ -127,18 +127,19 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 | `errors.ts` | `errorText(error)`：将 `unknown` 异常转为字符串 |
 | `messages.ts` | `textOf`、`lastAssistantText`：提取消息中的纯文本块 |
 | `ask-answers.ts` | `askAnswers`、`formatAskAnswers`、`AskAnswer`：从一次 `ask` 工具结果（原生或 omp-ask-more 的 `details`）读出用户的回答，取消、被拒或未作答时返回 null；`turn-judge` 与 `user-prompt-inject` 使用 |
-| `i18n.ts` | `tr`、`language`、`resolveLanguage`、`parseLanguage`、`configuredLanguage`、`omompLangSection`、`LANGUAGE_ENV`：在每次调用处按 `OMOMP_LANG` → agent 目录 `omomp-lang` 段 → locale → 英文 解析界面语言（不在模块顶层调 `tr`） |
-| `omomp.ts` | `defineOmompSection`、`defineSharedOmompSection`、`loadOmompSection`、`writeOmompSection`：按扩展目录名或 `_shared` 文件名读写 `omomp.{yml,yaml,json,toml}` 中的配置段（项目 `<cwd>/.omp/omomp.*` 优先于 `<agentDir>/omomp.*`） |
+| `i18n.ts` | `tr`、`parseLanguage`、`omompLangSetting`、`LANGUAGE_ENV`：在每次调用处按 `OMOMP_LANG` → `omomp-lang.language` 设置（`plugin-settings` 读取一次）→ locale → 英文 解析界面语言（不在模块顶层调 `tr`） |
+| `plugin-settings.ts` | `defineSettings`、`readSettings`、`writeSetting`、`PLUGIN`：扩展设置是 `omp-config` 插件设置（manifest 在 `_shared/package.json` 的 `omp.settings`）；`readSettings` 在项目级时把 `<cwd>/.omp/plugin-overrides.json` 合并到机器值上，机器级从 OMP 设置存储读 |
 | `models.ts` | `Model`、`ThinkingLevel`：宿主模型与辅助会话思考强度类型 |
 | `roles.ts` | `roleModels`、`roleName`、`modelLabel`：每次调用从当前会话实时设置解析 OMP 模型角色的聊天模型链（`modelRoles.<role>` → `retry.fallbackChains.<role>` → 内置默认链）。扩展使用的角色名登记在 `agent/config.yml` 的 `modelTags` 中 |
 | `helper-session.ts` | `runHelperPrompt`：在无工具、无扩展、`taskDepth: 1` 的内存辅助会话中执行单次请求，返回结果联合类型而不抛异常 |
 | `caller-session.ts` | `callerSession(ctx)`：按 session manager 或会话文件在 `AgentRegistry` 中找到 `ExtensionContext` 所服务的实时 `AgentSession`；`fork-task` 与 `subagent-usage` 使用 |
-| `judge.ts` | `openJudge`：`@<purpose>` 角色已绑定时由其聊天模型作答，否则构建 OMP 的 judge 角色链（`resolveJudge`）；两条路径失败或未配时都回退到 `omomp.yml#judge.fallbackRole` 的聊天模型（`TextJudge`） |
+| `judge.ts` | `openJudge`：`@<purpose>` 角色已绑定时由其聊天模型作答，否则构建 OMP 的 judge 角色链（`resolveJudge`）；链解析不出模型时报 `inactive`，候选失败时判定失败，不再回退聊天模型 |
 | `spec-files.ts` | `discoverSpecFiles`、`parseFrontmatter`、`unquote`：按文件名模式（如 `*-<label>.md`）扫描扩展目录及 `cwd` 至 git 根各层（含 `.omp/`）的文件，并解析 `---` frontmatter |
 | `session-filter.ts` | `parseSessionFilter`、`parseInjectMode`、`targetsSession`、`producerMatches`、`describeFilter`、`SessionFilter`、`InjectMode`、`FilterProblem`：解析规格文件的 `target` 列表、`cwd` glob 列表、产出模型正则与 `inject` 形式，解析问题以数据返回、由调用方措辞；`watchdog-agent`、`turn-judge` 与 `prompt-conditions.ts` 使用 |
 | `prompt-conditions.ts` | `parseSessionConditions`、`conditionsApply`、`CONDITION_KEYS`、`SessionConditions`、`ConditionProblem`：`append-system-model` 片段与 `system-prompt-replace` 规则共用的注入与 `exclude.*` 条件（`target`、`cwd`、`model`、`provider`、`mode`、`delegation`），按会话、当前模型及其委派倾向与 `OMOMP_MODE` 匹配；默认 target 与问题措辞由各调用方决定 |
 | `context-delivery.ts` | `createContextDelivery(pi)`：`repo-rules` 和专题注入共用的真实上下文标记判重；内存只保存同 turn 待交付标记 |
-| `tool-topic-injection.ts` | `installToolTopicInjection`、`ToolTopicInjectionRule`、`toolTopicInjectionRulesSchema`：通用的工具参数正则匹配与可信专题投递 |
+| `agent-definition.ts` | `declaresFlag(session, cwd, agentName, key)`：指定的 agent 定义 frontmatter 是否把某 flag 声明为 `true`（与 task 工具相同的发现顺序）；`completionJudge` 与 `splitCheck` 使用 |
+
 | `tool-calls.ts` | `watchedCallOf`、`WatchedCall`：从宿主 `tool_call` 事件读出 shell 命令（`bash`、`bash_bg` 及其 `xd://` 设备写入）或 eval 代码；忽略插件调用；`tool-policy-nag` 与 `delete-guard` 使用 |
 | `eval-py-launches.ts` | `scanPy`、`pyLaunchAt`、`isOp`、`PyLaunch`、`LaunchWord`、`LaunchVia`：对 Python eval cell 做词法分析（字符串、f-string、`!cmd`、`%%bash`、magic），读出 import 绑定，以及某个调用启动的进程，并标明识别来源 `direct`/`alias`/`distinctive`；`delete-guard`（失败即阻断）与 `tool-policy-nag` 的 pty 通道（失败即放行）使用 |
 | `eval-js-launches.ts` | `parseJs`、`jsLaunchOf`、`walk`、`propertyName`、`receiverModule`、`isBunFile`、`JsLaunch`：用 omp 的 Babel 选项解析 JS eval cell，读出模块绑定，以及某个节点启动的 child_process/Bun/桥接进程；`delete-guard` 与 `tool-policy-nag` 的 pty 通道使用 |
@@ -159,11 +160,9 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 
 ### 渐进式专题注入 API
 
-`_shared/tool-topic-injection.ts` 是 [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection) 的引擎。`toolTopicInjectionRulesSchema.safeParse(rawRules)` 验证原始规则数组，将每个 pattern 编译为 `RegExp`；输出类型 `ToolTopicInjectionRule` 包含 `id`、`tool`、`parameter`、已编译的 `pattern` 和 `topic`。重复 id、无效正则、`tool://<tool>/<topic>` 以外的专题 URL 都会被拒绝。
+`extensions/tool-topics/injection.ts` 是 [tool-topics](extensions.zh-CN.md#tool-topics) 的注入引擎。`installToolTopicInjection(pi, { owner, rules })` 每个扩展/会话安装一次。`owner` 必须非空且稳定（`omp-config/tool-topic-injection`）；`rules` 是目录中已验证的 `inject` 条目，加载时固定。引擎不含 read、SSH、bash 或 eval 特例，也不注册专题。带状态的正则会在匹配前重置。
 
-`installToolTopicInjection(pi, { owner, rules })` 每个扩展/会话安装一次规则读取函数。`owner` 必须非空且稳定，`rules(ctx)` 返回该会话的已验证规则。引擎不含 read、SSH、bash 或 eval 特例，也不注册专题。带状态的正则会在匹配前重置。
-
-内置适配器的动态配置和默认 SSH 触发条件见 [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection)。投递身份是 owner + 规则 id，不是专题 URL。同一逻辑规则应保留 id；如果旧标记仍在上下文中但需要再次具备注入资格，则使用新的 id。共享上下文守卫只检查活动叶节点模型投影中的 developer 消息，不把压缩摘要或兄弟分支当成已投递内容。
+生效规则与仓库自带触发条件见 [tool-topics](extensions.zh-CN.md#tool-topics)。投递身份是 owner + 规则 id，不是专题 URL。同一逻辑规则应保留 id；如果旧标记仍在上下文中但需要再次具备注入资格，则使用新的 id。共享上下文守卫只检查活动叶节点模型投影中的 developer 消息，不把压缩摘要或兄弟分支当成已投递内容。
 
 ### CI 配置检查（`bun ci/check.ts`）
 
@@ -171,7 +170,7 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 
 ### 升级与维护注意事项
 
-- **增删受管文件或配置段，或调整路径的归属**：同步修改 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 的 `managedPlain` / `STRUCTURED`（以及 `LOCAL_*` / `SEED_*`）、`.omp/commands/sync-omp-config.md`、`README.md` / `README.zh-CN.md` 以及对应的 `docs/` 页面。保持 `applySnapshot(options)` 签名与相对路径 `extensions/omp-config-autoupdate/omp-config-update.ts` 兼容：旧机器运行已安装的 `runAuto`，导入拉取到的 `applySnapshot`，并忽略不认识的报告字段。
+- **增删受管文件或插件设置，或调整路径的归属**：受管文件改动同步修改 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 的 `managedPlain` / `STRUCTURED`（以及 `LOCAL_*` / `SEED_*`）；设置改动同步修改 `agent/extensions/_shared/package.json` 的 `omp.settings` manifest；`.omp/commands/sync-omp-config.md`、`README.md` / `README.zh-CN.md` 以及对应的 `docs/` 页面一起改。保持 `applySnapshot(options)` 签名与相对路径 `extensions/omp-config-autoupdate/omp-config-update.ts` 兼容：旧机器运行已安装的 `runAuto`，导入拉取到的 `applySnapshot`，并忽略不认识的报告字段。
 - **不在 `omp-config-update.ts` 中写出连续的 Otty 标记字面量**：外部应用托管检查会匹配文件任意位置的 `marker:` + `_otty`，若在更新器源码里直接写出完整字面量，更新器会把自身当成外部应用托管文件而跳过更新。
 - **升级 OMP 之后**：
   1. 在真实 TUI 会话中验证依赖 OMP 内部实现（`AgentRegistry`、子会话文件路径、钩子顺序、运行时设置层、`InteractiveMode` 原型、内置斜杠命令分发器、为 `xd://` 写入补发的嵌套 `tool_call`）的功能：[`fork-task`](prompts-and-context.zh-CN.md#fork-task)、[`user-prompt-inject`](agents.zh-CN.md#user-prompt-inject)、[`turn-judge`](extensions.zh-CN.md#turn-judge)、[`task-completion-judge`](extensions.zh-CN.md#task-completion-judge)、[`model-compaction`](prompts-and-context.zh-CN.md#model-compaction)、[`wt-tool`](extensions.zh-CN.md#wt-tool)、[`harness-restart`](extensions.zh-CN.md#harness-restart)、[`subagent-usage`](extensions.zh-CN.md#subagent-usage)（子代理会话的 `session_init.agent`/`resolvedModel` 字段、worktree 会话目录、供应商用量策略、`authStorage.usage.history`、`ModelsConfigFile` 与它的 Worker；在已开启的机器上执行 `/subagent-usage recalibrate` 并调用一次工具）、[`argon-long-output`](extensions.zh-CN.md#argon-long-output)（`pi-ai` 中 `register-builtins.ts` 与 `google-gemini-cli.ts` 的看门狗超时优先级，以及 OMP 的 Google compat 解析丢弃 `models.yml` 流超时的行为）、[`ast-top-level`](extensions.zh-CN.md#ast-top-level)（`src/tools/xdev.ts` 的 `XDEV_KEEP_TOP_LEVEL` 与 `isMountableUnderXdev`；system prompt 把 `ast_grep`、`ast_edit` 列为函数，不在 `# xd:// Tool Devices` 下）、[`system-prompt-replace`](prompts-and-context.zh-CN.md#system-prompt-replace)（`delegation` 条件：`@oh-my-pi/pi-catalog/compat/delegation` 的 `resolveDelegationBias` 仍能加载，`eagerDelegation` 仍控制 `delegation: eager` 规则所改的 eval 原句；在一个 `eager` 模型和一个非 `eager` 模型（如 `openai-codex/gpt-6.1-sol`）上各开一次会话，都不得出现 `found no target` 警告）与 [`delete-guard`](extensions.zh-CN.md#delete-guard)（`bash` 里的 `rm` 与 `write xd://bash` 里的 `rm` 都被拦截）。插件自身的验证按 [omp-todo-more README](https://github.com/oh-my-omp/omp-todo-more#readme) 操作。

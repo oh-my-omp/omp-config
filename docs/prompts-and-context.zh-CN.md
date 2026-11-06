@@ -16,7 +16,7 @@
 | [system-prompt-replace](#system-prompt-replace) | 按规则（默认所有会话；完整与轻量模式） | 在所有按路径加载的扩展最后运行，按 `REPLACE-SYSTEM-*.yml` 规则文件对渲染出的 system prompt 做措辞级修改；每条规则可以全局生效，也可以限定会话、cwd、模型、provider、当前模型的委派倾向（delegation bias）或模式，并用 `exclude.*` 写明何时不生效。 |
 | [append-system-model](#append-system-model) | 按片段（默认仅主会话） | 追加 frontmatter 条件（会话、cwd、模型、provider、当前模型的委派倾向、完整/轻量模式，以及表示何时不注入的 `exclude.*`）命中的 `APPEND-SYSTEM-*.md` 片段。仓库自带 `APPEND-SYSTEM-decision-support.md`：完整模式的主会话中，重大决策询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`；主模型为 `claude-opus-5-5` 时不注入。 |
 | [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时追加仓库下发的 `ARGON_PROMPT.md`：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
-| [tool-topic-injection](extensions.zh-CN.md#tool-topic-injection) | 主会话 + 子代理 | 配置的工具参数命中后才加载专题，每条规则在真实未压缩上下文中注入一次；追加 developer 上下文，而不是扩大常驻工具说明。 |
+| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理 | `TOPIC` frontmatter 的 `inject:` 规则在命中的只读工具调用后，把专题在每个真实上下文中投递一次；追加 developer 上下文，而不是扩大常驻工具说明。 |
 
 ### system-prompt-replace
 
@@ -123,22 +123,19 @@ OMP 默认扫描 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf
 
 源码：`agent/extensions/model-compaction/`。
 
-OMP 原生的 `compaction.modelThresholds` 只支持精确 `provider/id` 或 `*` 前缀。该扩展在主会话每次 `before_agent_start` 时依次读取项目（`<cwd>/.omp/`，随会话当前目录变化）与 agent 目录（本机）`omomp.*` 中的 `model-compaction` 段，取第一份有效副本整段使用，两份不合并：
+OMP 原生的 `compaction.modelThresholds` 只支持精确 `provider/id` 或 `*` 前缀。该扩展在主会话每次 `before_agent_start` 时重新发现并读取 `COMPACTION-<label>.md` 文件：扩展自己的目录（本机规则）加上会话 cwd 到 git 根的每一层目录及各自的 `.omp/`（项目规则）。一个文件一条规则，`---` 包围的 frontmatter 含 `provider` 和/或 `model` 的 JavaScript 正则（不锚定；`"model": ".*"` 匹配全部模型）与正整数 `thresholdTokens`：
 
-```yaml
-model-compaction:
-  rules:
-    - provider: "^anthropic$"
-      model: "opus"
-      thresholdTokens: 150000
-    - model: "[gG][pP][tT]"
-      thresholdTokens: 650000
+```markdown
+---
+provider: ^anthropic$
+model: opus
+thresholdTokens: 150000
+---
 ```
 
-每条规则至少填 `model` 或 `provider` 的 JavaScript 正则（匹配全部模型写 `"model": ".*"`）。对 `ctx.models.list()` 中的每个模型，按文件顺序取第一条命中的规则，把 `"<provider>/<id>": "f<thresholdTokens>"` 写入主会话的运行时设置层（不改磁盘上的 `config.yml`；`/model` 切换、重试回退以及读取主会话设置的子代理都会按各自模型使用对应阈值）。
+对 `ctx.models.list()` 中的每个模型，取第一条命中的规则——项目文件先于扩展目录文件，各组内部按文件名排序——把 `"<provider>/<id>": "f<thresholdTokens>"` 写入主会话的运行时设置层（不改磁盘上的 `config.yml`；`/model` 切换、重试回退以及读取主会话设置的子代理都会按各自模型使用对应阈值）。仓库不带规则文件。
 
-由于原生 `f<N>` 条目可能改变模型的上下文窗口档位（standard vs extended），凡是会让某个模型切换当前窗口档位的规则都会对该模型跳过并记一次 warning。项目副本在该项目中整段取代本机规则，仍需要的本机规则要在项目副本里重写一遍；项目副本写 `rules: []` 即在该项目关闭本机规则。无法读取、有歧义或无效的副本会被跳过并记 warning，改用下一个位置：项目副本无效时回落到本机副本，没有任何有效副本时不应用规则。其他来源已写入的运行时条目会被保留，并在无规则命中或 `session_shutdown` 时恢复；若运行期间有其他代码修改了这张映射表，扩展会记一次 warning 并停止更新。
-
+由于原生 `f<N>` 条目可能改变模型的上下文窗口档位（standard vs extended），会让某个模型切换当前窗口档位的规则对该模型拒绝并记 warning。未知键和非空正文都是错误，写错的键不会悄悄放宽规则；无法读取或无效的文件跳过并记 warning，其他文件仍生效，没有任何有效文件时不应用规则。其他来源已写入的运行时条目会被保留，并在无规则命中或 `session_shutdown` 时恢复；若运行期间有其他代码修改了这张映射表，扩展会记一次 warning 并停止更新。
 ### ctx
 
 [omp-todo-more](plugins-and-modes.zh-CN.md#todo-more) 插件拥有 `ctx` 与 `todo`；`agent/config.yml` 关闭原生 `todo`。更新器在安装插件前预检待退役本地 Todo/ctx 文件的归属；只有 OMP 确认插件就绪后才删除列出的 Todo 文件，且只有该就绪插件带有 `src/ctx` 时才删除列出的 ctx 文件。

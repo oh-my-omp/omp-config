@@ -24,9 +24,10 @@ Behavior is described where it lives; read the matching one before changing it:
 - **Two one-way directions.** Repo → machine is the updater (`/update-omp`
   applies the working tree; the opt-in startup auto-update applies GitHub
   `main`). Machine → repo is `/sync-omp-config`, which never writes the
-  machine. Adding or removing a managed file or `omomp.yml` section, or moving
-  a path between the updater's owner lists, changes the updater's
-  `managedPlain` / `STRUCTURED` / `LOCAL_*` / `SEED_*`,
+  machine. Adding or removing a managed file or an `omp.settings` key, or
+  moving a path between the updater's owner lists, changes the updater's
+  `managedPlain` / `STRUCTURED` / `LOCAL_*` / `SEED_*` or the manifest
+  `agent/extensions/_shared/package.json`,
   `.omp/commands/sync-omp-config.md` and the docs pages together.
 - **Updater compatibility.** Older machines import `applySnapshot(options)` from
   the fetched clone at `agent/extensions/omp-config-autoupdate/omp-config-update.ts`;
@@ -77,19 +78,23 @@ review.
   lives in `_shared/`, imported by relative path with `.ts`. `_shared` holds
   mechanics; retries, timeouts, wording and failure-to-null rules stay in the
   caller.
-- **Config and files:** settings are `omomp.yml` sections
-  (`defineOmompSection` / `loadOmompSection` / `writeOmompSection`). Files an
-  extension owns sit beside it and are read via `import.meta.dir`, never via
-  `getAgentDir()`.
+- **Config and files:** an extension's settings are `<extension>.<key>` keys
+  of the `omp-config` plugin manifest (`_shared/package.json`), read through
+  `_shared/plugin-settings.ts` (`defineSettings` / `readSettings` /
+  `writeSetting`). List data that describes another object lives with that
+  object: an agent's flags in its frontmatter, a topic's `inject` rules in the
+  `TOPIC-*.md` frontmatter, a rule file of its own (`COMPACTION-*.md`). Files
+  an extension owns sit beside it and are read via `import.meta.dir`, never
+  via `getAgentDir()`.
 - **Models:** an extension that picks its own model uses the OMP role
-  `@<extension>` through `roleModels`, with an optional `fallbackRole` in its
-  section, and lists the role in `config.yml` `modelTags`. Judgments that
-  return only answer probabilities go through `openJudge`; a verdict that must
-  carry a written reason back to the agent (`task-completion-judge`,
-  `task-split-check`) is a completion over `roleModels`. Extensions add no
-  other LLM fallback of their own. One-shot calls use
-  `runHelperPrompt`; any other `createAgentSession` passes `taskDepth: 1`, or
-  its `dispose()` releases every idle subagent.
+  `@<extension>` through `roleModels` and lists the role in `config.yml`
+  `modelTags`; an unbound role falls back to the host `default` role chain —
+  no `fallbackRole`. Judgments that return only answer probabilities go
+  through `openJudge`; a verdict that must carry a written reason back to
+  the agent (`task-completion-judge`, `task-split-check`) is a completion
+  over `roleModels`. Extensions add no other LLM fallback of their own.
+  One-shot calls use `runHelperPrompt`; any other `createAgentSession`
+  passes `taskDepth: 1`, or its `dispose()` releases every idle subagent.
 - **Types:** strict, `noUncheckedIndexedAccess`, no `any`. Parse external input
   (files, tool parameters, session entries, `unknown` payloads, child output)
   once at the boundary with `z` from `@oh-my-pi/pi-coding-agent` or a type
