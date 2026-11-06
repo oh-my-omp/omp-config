@@ -1,6 +1,7 @@
 // ============================================================================
-// append-system-model — system-prompt fragments with inject / not-inject
-// conditions, one file per fragment.
+// append-system-model — prompt fragments with inject / not-inject conditions,
+// one file per fragment, delivered as a delta message beside OMP's system
+// prompt, which stays as OMP built it.
 //
 // WHY THIS EXISTS. OMP's APPEND_SYSTEM.md / SYSTEM.md / SYSTEM_TEMPLATE.md and
 // the rulebook cannot be conditioned on the session (main or subagent, cwd,
@@ -44,24 +45,32 @@
 // session. With no current model a model, provider or delegation constraint
 // never matches, on either side. Without `target` a fragment targets `main`.
 //
-// TIMING. `before_agent_start`, in the main session and in every subagent, each
-// matched against its own identity, cwd and model. Files are re-read per
-// prompt, so edits and `/model` switches apply from the next prompt. A model
-// switched mid-run by auto-retry keeps the fragments chosen when the prompt
-// started, and a subagent turn woken by IRC does not run this hook.
+// TIMING. Fragments are re-read and matched at every prompt (`before_agent_start`)
+// and after every tool call (`tool_result`), in the main session and in every
+// subagent, each matched against its own identity, cwd and model. Edits and
+// `/model` switches apply from the next of those points; until then requests
+// keep the delta already in the conversation. A revive's `before_agent_start`
+// is skipped, because OMP discards its result.
 //
 // OUTPUT. The bodies of every applying fragment, in discovery order, joined
-// into one extra system-prompt block appended after the existing blocks.
+// into one delta of `_shared/context-delta.ts` with source
+// `omp-config/append-system-model`: a hidden `<system-reminder>` message
+// appended to the conversation (after the prompt, or after the tool batch). It
+// is sent only when it differs from the source's effective delta in the current
+// context; a changed set supersedes the earlier delta, and when nothing applies
+// any longer a delta saying so supersedes it.
 //
 // FAILURE POLICY. An invalid or unreadable file is skipped on its own and
 // warned once per path and reason (UI notification, or stderr when headless,
-// plus a log line); the other files still apply. The prompt is never blocked.
-// It registers only `before_agent_start` and writes no files.
+// plus a log line); the other files still apply. The prompt and tool results
+// are never blocked. It registers `before_agent_start`, `tool_result` and the
+// delta stream's `turn_start`, and writes no files.
 // ============================================================================
 
 import { readFileSync } from "node:fs";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { createDeltaStream, type Delta } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import {
@@ -148,32 +157,46 @@ function warn(pi: ExtensionAPI, ctx: ExtensionContext, path: string, reason: str
 	else process.stderr.write(`${notice}\n`);
 }
 
-export default function appendSystemModel(pi: ExtensionAPI): void {
-	pi.on("before_agent_start", (event, ctx) => {
-		try {
-			const bodies: string[] = [];
-			const delegation = ctx.model === undefined ? undefined : resolveDelegationBias(ctx.model);
-			for (const path of discoverSpecFiles(FILE_PATTERN, import.meta.dir, ctx.cwd)) {
-				const parsed = parseFragment(path);
-				switch (parsed.kind) {
-					case "ok":
-						if (conditionsApply(parsed.fragment.conditions, ctx, delegation)) bodies.push(parsed.fragment.body);
-						break;
-					case "disabled":
-						break;
-					case "invalid":
-						warn(pi, ctx, path, parsed.reason);
-						break;
-					default: {
-						const unreachable: never = parsed;
-						return unreachable;
-					}
-				}
+/** The bodies of every fragment that applies to this session, in discovery order, as one delta. */
+function fragmentDelta(pi: ExtensionAPI, ctx: ExtensionContext): Delta {
+	const bodies: string[] = [];
+	const delegation = ctx.model === undefined ? undefined : resolveDelegationBias(ctx.model);
+	for (const path of discoverSpecFiles(FILE_PATTERN, import.meta.dir, ctx.cwd)) {
+		const parsed = parseFragment(path);
+		switch (parsed.kind) {
+			case "ok":
+				if (conditionsApply(parsed.fragment.conditions, ctx, delegation)) bodies.push(parsed.fragment.body);
+				break;
+			case "disabled":
+				break;
+			case "invalid":
+				warn(pi, ctx, path, parsed.reason);
+				break;
+			default: {
+				const unreachable: never = parsed;
+				return unreachable;
 			}
-			if (bodies.length === 0) return;
-			return { systemPrompt: [...event.systemPrompt, bodies.join("\n\n")] };
+		}
+	}
+	return bodies.length === 0 ? { kind: "none" } : { kind: "text", body: bodies.join("\n\n") };
+}
+
+export default function appendSystemModel(pi: ExtensionAPI): void {
+	const deltas = createDeltaStream(pi, "append-system-model");
+	pi.on("before_agent_start", (event, ctx) => {
+		// OMP discards the result of a revive.
+		if (event.reason === "revive") return;
+		try {
+			return deltas.atPrompt(ctx, fragmentDelta(pi, ctx));
 		} catch (error) {
-			pi.logger.warn("append-system-model: cannot append system prompt", { error: errorText(error) });
+			pi.logger.warn("append-system-model: cannot deliver fragments", { error: errorText(error) });
+		}
+	});
+	pi.on("tool_result", (_event, ctx) => {
+		try {
+			return deltas.afterTools(ctx, fragmentDelta(pi, ctx));
+		} catch (error) {
+			pi.logger.warn("append-system-model: cannot deliver fragments", { error: errorText(error) });
 		}
 	});
 }
