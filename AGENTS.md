@@ -119,7 +119,7 @@ review.
   A tool that is an `xd://` device or serves only some sessions registers
   `defaultInactive` and is activated on `session_start` / `session_switch`,
   never in `before_agent_start`. Every active-set change goes through
-  `_shared/active-tools.ts`, which lists tools in registration order.
+  `_shared/active-tools.ts`, which lists tools in canonical order: built-in tools in registry order first, all others sorted by name.
 - **Imports:** host package roots (`pi-agent-core`, `pi-ai`, `pi-catalog`,
   `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins
   and relative paths. A host subpath is used only if an extension already loads

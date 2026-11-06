@@ -20,7 +20,7 @@
 // before the first frame after the session already partitioned its tools
 // (startup deferral), and a table change alone does not re-partition. So on
 // `session_start`, which OMP replays to late-bound extensions, a session that
-// has either tool re-applies its own active set once in registration order,
+// has either tool re-applies its own active set once in canonical order (`applyActiveTools`),
 // re-partitioning it against the table. New and resumed sessions then list
 // the tools in the same order, whenever the table took effect.
 //
