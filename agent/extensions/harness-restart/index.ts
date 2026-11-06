@@ -19,6 +19,9 @@
 // session entry. On `session_start` or `session_switch`, activation scans the
 // branch for a pending request, sends an attributed restart-completed user
 // message, then appends a consumed marker so later activation does not replay it.
+// If the process does not relaunch (`restart()` throws, or returns after a host
+// teardown failure), the failure is sent and a consumed marker is appended in
+// its place, so a later activation never reports the request as completed.
 //
 // TUI-main-only. Hook failures are logged without escaping into omp.
 // ============================================================================
@@ -112,11 +115,21 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 			return;
 		}
 		runtime.pi.appendEntry(ENTRY_TYPE, request.marker);
-		if (ctx.hasUI) ctx.ui.notify(tr("Restarting omp…", "正在重启 omp…"), "info");
-		await live.mode.restart();
-	} catch (error) {
-		runtime.pi.logger.warn("harness-restart: restart failed", { error: errorText(error) });
-		runtime.pi.sendUserMessage(`The queued harness restart failed: ${errorText(error)}`, { attribution: "agent" });
+		const fail = (detail: string): void => {
+			// Every path that does not relaunch must consume the marker written above.
+			runtime.pi.appendEntry(ENTRY_TYPE, { consumed: true, at: Date.now() });
+			runtime.pi.logger.warn("harness-restart: restart failed", { error: detail });
+			runtime.pi.sendUserMessage(`The queued harness restart failed: ${detail}`, { attribution: "agent" });
+		};
+		try {
+			if (ctx.hasUI) ctx.ui.notify(tr("Restarting omp…", "正在重启 omp…"), "info");
+			await live.mode.restart();
+			// restart() returns without relaunching only when it gave up: a successful
+			// relaunch execs this process instead of returning.
+			fail("InteractiveMode.restart() returned without relaunching omp.");
+		} catch (error) {
+			fail(errorText(error));
+		}
 	} finally {
 		runtime.state = { kind: "idle" };
 	}
