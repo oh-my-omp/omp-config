@@ -209,6 +209,9 @@ class StructuredMerger {
 	 * Only that subsequence is merged three-way, as one value. Without a record,
 	 * entries the repo dropped in the past count as the host's: history only
 	 * tells whether the host's subsequence is a version the repo once had.
+	 * A known-absent base means the repo never delivered this list to the
+	 * machine (a list that was seeded or host-only before): the host's entries
+	 * are all its own, so the repo's list is added after them.
 	 */
 	private machineList(path: Path, host: unknown, repo: unknown): { host: unknown; base: unknown } {
 		const repoList = Array.isArray(repo) ? repo : [];
@@ -224,7 +227,8 @@ class StructuredMerger {
 		if (same(hostRepo, repo)) next = { host: hostRepo, base: clone(repo) };
 		else {
 			const base = this.baseLeaf(path, hostRepo, subsequence);
-			if (base.kind === "known" && same(hostRepo, base.value)) next = { host: clone(repo), base: clone(repo) };
+			if (base.kind === "known" && (base.value === undefined || same(hostRepo, base.value)))
+				next = { host: clone(repo), base: clone(repo) };
 			else if (base.kind === "known" && same(repo, base.value)) next = { host: hostRepo, base: clone(base.value) };
 			else {
 				this.conflict(path, base, hostRepo, repo);
