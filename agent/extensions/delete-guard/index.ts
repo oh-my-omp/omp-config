@@ -7,31 +7,37 @@
 // with the same call id (each event is judged; either one blocking stops the
 // call). The command text is parsed once (`posix-parse.ts`, fail closed:
 // unparsable text is blocked) and every command it runs is classified in the
-// posix dialect (`posix.ts`), because the bash tool runs in the embedded brush
-// shell on every platform: commands in `$(…)`, backticks, `<(…)`, unquoted
-// here-document bodies, literal `sh|bash|zsh|dash|ksh -c` scripts, quoted
-// here-documents read by a shell, and literal `eval`, `trap` and `alias`
-// bodies, up to 8 nested levels. Blocked:
+// posix dialect (`posix.ts`), because the bash tool runs in omp's embedded
+// pi-shell engine (Bash 5.3 semantics) on every platform: commands in `$(…)`,
+// backticks, `<(…)`, Bash 5.3 `${ …; }` and `${| …; }`, unquoted
+// here-document bodies, literal `sh|bash|zsh|dash|ksh -c` and
+// `omp sh|bash|zsh -c` scripts, quoted here-documents read by a shell, and
+// literal `eval`, `trap` and `alias` bodies, up to 8 nested levels. Blocked:
 //   - deletion commands, whatever their arguments: `rm`, `unlink`, `rmdir`,
 //     `shred` (name lowercased, basename of a path, quotes and backslashes
 //     removed), also behind `sudo`, `doas`, `command`, `builtin`, `exec`,
 //     `env`, `nice`, `nohup`, `time`, `timeout`, `stdbuf`, `busybox`, `xargs`
 //     (their options skipped by table; an unknown option is read both with and
-//     without a value), `find -delete` and `find -exec|-execdir|-ok|-okdir`;
+//     without a value), `find -delete` and `find -exec|-execdir|-ok|-okdir`,
+//     and `hash -p` mapping a name to one of them (`hash -p /bin/rm k`);
 //   - non-literal commands: a command name from an expansion, substitution,
 //     glob or brace pattern; a non-literal nested shell, `eval`, `trap` or
 //     `alias` script; a shell argument from an expansion (`bash "$FLAGS"`, it
-//     may be `-c` or `-s`); `env -S`; a shell reading its script from stdin
-//     other than a quoted here-document (pipe, here-string, unquoted
-//     here-document, nothing). Literal script files (`bash x.sh`, `sh < x.sh`,
-//     `source`), `-n` (syntax check, undone by `+n`) and `--version`/`--help`
-//     run nothing the text shows and pass. An unknown long shell option is read
-//     both with and without a value. Here-document bodies on any descriptor
-//     are scanned for substitutions, and inside double quotes `'` does not
-//     quote (`"${x:-'$(…)'}"` runs the substitution).
-// Words that are only arguments pass (`echo rm -rf /`, `git rm`).
+//     may be `-c` or `-s`), and an `omp` argument from an expansion before its
+//     subcommand; `hash -p` from an expansion; `env -S`; a shell reading its
+//     script from stdin other than a quoted here-document (pipe, here-string,
+//     unquoted here-document, nothing); `source`/`.` of a process
+//     substitution or of standard input (`/dev/stdin`, `/dev/fd/N`). Literal
+//     script files (`bash x.sh`, `sh < x.sh`, `source x.sh`), `-n` (syntax
+//     check, undone by `+n`) and `--version`/`--help` run nothing the text
+//     shows and pass. An unknown long shell option is read both with and
+//     without a value. Here-document bodies on any descriptor are scanned for
+//     substitutions, and inside double quotes `'` does not quote
+//     (`"${x:-'$(…)'}"` runs the substitution).
+// Words that are only arguments pass (`echo rm -rf /`, `git rm`), and so do
+// programs with their own deletion semantics (`rsync --delete`, `git clean`).
 //
-// Nested Windows shells (any platform; reached from brush on Windows):
+// Nested Windows shells (any platform; reached from the bash tool on Windows):
 // `powershell|pwsh` (`.exe`, any path) with `-Command`/`-c` or a positional
 // script is classified in the PowerShell dialect (`powershell.ts`):
 // `Remove-Item` and its aliases `rm`, `ri`, `del`, `erase`, `rd`, `rmdir`,
@@ -74,7 +80,7 @@
 //     `spawn|spawnSync|execFile|execFileSync` as argv (a script when the
 //     options may start a shell: `shell` not literally false/null/undefined,
 //     or options not spelled out), `Bun.spawn|spawnSync` argv, `Bun.$`
-//     templates (posix, brush), the `tool.bash({command})` bridge and
+//     templates (posix), the `tool.bash({command})` bridge and
 //     `tool.write` to `xd://bash`.
 // A command that is not a literal string (f-string or template with
 // placeholders, variable, concatenation) is blocked as non-literal. Names are

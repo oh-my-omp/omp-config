@@ -9,7 +9,7 @@ type Entry =
 	| { readonly kind: "bash"; readonly command: string }
 	| { readonly kind: "eval"; readonly language: "py" | "js"; readonly code: string };
 
-/** The bash tool, `Bun.$`, `Bun.spawn` and the `tool.bash` bridge run in the embedded brush shell on every platform. */
+/** The bash tool runs omp's embedded pi-shell engine on every platform; it, `Bun.$`, `Bun.spawn` and the `tool.bash` bridge are classified as posix. */
 const BRUSH: Dialect = { kind: "posix" };
 
 /**

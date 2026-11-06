@@ -7,6 +7,12 @@ const DELETE_COMMANDS: ReadonlySet<string> = new Set(["rm", "unlink", "rmdir", "
 
 const SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 
+/** `omp <name>` subcommands that run the built-in pi-shell engine as that shell (`omp bash -c '…'`). */
+const OMP_SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh"]);
+
+/** Paths that make `source`/`.` read its script from standard input. */
+const STDIN_SCRIPT = /^\/dev\/(?:stdin|fd\/\d+)$|^\/proc\/self\/fd\/\d+$/;
+
 /** Words that open or close compound commands; the command follows them. A Set: a `then` key reads as a thenable to Biome. */
 const RESERVED: ReadonlySet<string> = new Set([
 	"!",
@@ -431,6 +437,70 @@ function resolveAlias(ctx: Context, words: readonly Word[], start: number): Verd
 	return ALLOW;
 }
 
+/**
+ * `omp` runs a shell when its first non-option argument is `sh|bash|zsh`; the rest is that shell's command line. An
+ * argument from an expansion before it may be that subcommand, so it is non-literal.
+ */
+function resolveOmp(ctx: Context, words: readonly Word[], start: number): Verdict {
+	for (let j = start; j < words.length; j++) {
+		const word = words[j];
+		if (word === undefined) break;
+		if (!word.literal)
+			return block("nonLiteral", ctx.fragment, `the omp argument \`${word.raw}\` comes from an expansion, so it may be a shell subcommand`);
+		if (word.text.startsWith("-")) continue;
+		return OMP_SHELLS.has(word.text) ? resolveShell(ctx, words, j + 1) : ALLOW;
+	}
+	return ALLOW;
+}
+
+/**
+ * `source`/`.` runs the text of its first operand. A literal file passes like `bash x.sh`; text that only exists at
+ * run time — a process substitution (`source <(…)`) or standard input — is non-literal.
+ */
+function resolveSource(ctx: Context, words: readonly Word[], start: number): Verdict {
+	let j = start;
+	for (;;) {
+		const word = words[j];
+		if (word === undefined) return ALLOW;
+		if (word.literal && word.text === "--") {
+			j++;
+			break;
+		}
+		if (!word.literal || !word.text.startsWith("-") || word.text === "-") break;
+		// Bash 5.3 `source -p PATH file`: the option's value is a search path, not the script.
+		j += word.text === "-p" ? 2 : 1;
+	}
+	const script = words[j];
+	if (script === undefined) return ALLOW;
+	if (!script.literal && /[<>]\(/.test(script.raw))
+		return block("nonLiteral", ctx.fragment, `\`${script.raw}\` is a process substitution, so the script it runs exists only at run time`);
+	if (script.literal && STDIN_SCRIPT.test(script.text))
+		return block("nonLiteral", ctx.fragment, `\`${script.text}\` reads the script from standard input`);
+	return ALLOW;
+}
+
+/** `hash -p PATH NAME` makes `NAME` run `PATH`: a deletion program there is a deletion command under another name. */
+function resolveHash(ctx: Context, words: readonly Word[], start: number): Verdict {
+	for (let j = start; j < words.length; j++) {
+		const word = words[j];
+		if (word === undefined || (word.literal && word.text === "--")) break;
+		if (!word.text.startsWith("-") || word.text === "-") break;
+		if (!word.literal) return block("nonLiteral", ctx.fragment, `the hash option \`${word.raw}\` comes from an expansion`);
+		const p = word.text.indexOf("p");
+		if (p === -1) continue;
+		const attached = word.text.slice(p + 1);
+		const path: Word | undefined = attached.length > 0 ? { text: attached, raw: word.raw, literal: true } : words[j + 1];
+		if (path === undefined) return ALLOW;
+		if (!path.literal)
+			return block("nonLiteral", ctx.fragment, `\`hash -p\` maps a name to \`${path.raw}\`, which comes from an expansion`);
+		const name = programName(path.text);
+		return DELETE_COMMANDS.has(name)
+			? block("delete", ctx.fragment, `\`hash -p\` makes a name run \`${name}\`, which deletes files`)
+			: ALLOW;
+	}
+	return ALLOW;
+}
+
 function resolveEval(ctx: Context, words: readonly Word[], start: number): Verdict {
 	const args = words.slice(start);
 	if (args.length === 0) return ALLOW;
@@ -460,6 +530,13 @@ function resolveCommand(ctx: Context, words: readonly Word[], start: number): Ve
 			return resolveTrap(ctx, words, start + 1);
 		case "alias":
 			return resolveAlias(ctx, words, start + 1);
+		case "omp":
+			return resolveOmp(ctx, words, start + 1);
+		case "source":
+		case ".":
+			return resolveSource(ctx, words, start + 1);
+		case "hash":
+			return resolveHash(ctx, words, start + 1);
 		default:
 			return ALLOW;
 	}

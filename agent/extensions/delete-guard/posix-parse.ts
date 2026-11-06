@@ -1,9 +1,10 @@
 /**
- * Fail-closed POSIX shell parser for delete-guard: splits command text into
- * simple commands with quote-removed words, the effective stdin source and
- * every nested script (`$(…)`, backticks, `<(…)`/`>(…)`, substitutions inside
- * unquoted here-document bodies, `${…}` and `$((…))`). Malformed or
- * unterminated text is `invalid`, never a best guess.
+ * Fail-closed shell parser for delete-guard (POSIX plus the Bash syntax the
+ * bash tool's pi-shell engine runs): splits command text into simple commands
+ * with quote-removed words, the effective stdin source and every nested script
+ * (`$(…)`, backticks, `<(…)`/`>(…)`, Bash 5.3 `${ …; }` / `${| …; }`,
+ * substitutions inside unquoted here-document bodies, `${…}` and `$((…))`).
+ * Malformed or unterminated text is `invalid`, never a best guess.
  */
 
 /** `literal`: no expansion, substitution, glob or brace pattern, so the runtime text is `text`. */
@@ -66,10 +67,15 @@ class Parser {
 		}
 	}
 
-	/** Parses commands up to the end of text, or up to the `)` closing a `$(` / `<(` when `closer` is set. */
-	parseScript(closer: boolean): Script {
+	/**
+	 * Parses commands up to the end of text, up to the `)` closing a `$(` / `<(` (`closer` `)`), or up to the `}`
+	 * reserved word closing a Bash 5.3 `${ …; }` / `${| …; }` command substitution (`closer` `}`).
+	 */
+	parseScript(closer: ")" | "}" | null): Script {
 		const builder: Builder = { commands: [], nested: [] };
 		let command: CommandBuilder | null = null;
+		/** `{` groups opened inside a `${ …; }` body: their `}` closes the group, not the substitution. */
+		let braces = 0;
 		let piped = false;
 		let groups = 0;
 		const cases: Case[] = [];
@@ -91,7 +97,8 @@ class Parser {
 		for (;;) {
 			this.skipBlanks();
 			if (this.i >= this.src.length) {
-				if (closer) this.fail("unterminated `$(` or `<(`");
+				if (closer === ")") this.fail("unterminated `$(` or `<(`");
+				if (closer === "}") this.fail(`unterminated \`\${ …; }\``);
 				if (groups > 0) this.fail("unterminated `(` group");
 				finishCommand();
 				this.readPendingDocs();
@@ -126,7 +133,7 @@ class Parser {
 					groups--;
 					continue;
 				}
-				if (closer) return builder;
+				if (closer === ")") return builder;
 				this.fail("unexpected `)`");
 			}
 			if (ch === "(") {
@@ -187,10 +194,18 @@ class Parser {
 				piped = false;
 				continue;
 			}
+			if (closer === "}" && ch === "}" && current() === null) {
+				if (braces === 0) {
+					this.i++;
+					return builder;
+				}
+				braces--;
+			}
 			if (this.readRedirect(builder, open)) continue;
 			const target = open();
 			const word = this.readWord(builder);
 			target.words.push(word);
+			if (word.literal && word.text === "{" && target.words.every((w) => w.literal && RESERVED_OPENERS.has(w.text))) braces++;
 			if (target.words.length === 1 && word.literal && word.text === "[[") {
 				this.skipDoubleBracket(builder);
 				continue;
@@ -308,7 +323,7 @@ class Parser {
 			if (ch === "<" || ch === ">") {
 				if (this.src.charAt(this.i + 1) !== "(") break;
 				this.i += 2;
-				builder.nested.push(this.parseScript(true));
+				builder.nested.push(this.parseScript(")"));
 				literal = false;
 				bare += "\0";
 				continue;
@@ -383,6 +398,8 @@ class Parser {
 	/**
 	 * `$…` at the cursor. A lone `$` is the literal character. Inside double quotes (`inQuotes`) `$'` and `$"` are a
 	 * literal `$`, and single quotes in a `${…}` body are ordinary characters, so substitutions in them still run.
+	 * `${` followed by a blank, a newline or `|` is a Bash 5.3 command substitution run in the current shell: its
+	 * body is a script, inside double quotes too.
 	 */
 	private readDollar(builder: Builder, inQuotes = false): { readonly text: string; readonly literal: boolean } {
 		const start = this.i;
@@ -393,11 +410,17 @@ class Parser {
 				this.skipArithmetic(builder, 2);
 			} else {
 				this.i += 2;
-				builder.nested.push(this.parseScript(true));
+				builder.nested.push(this.parseScript(")"));
 			}
 		} else if (next === "{") {
-			this.i += 2;
-			this.skipData(builder, "}", inQuotes);
+			const after = this.src.charAt(this.i + 2);
+			if (after === "|" || after === "\n" || isBlank(after)) {
+				this.i += after === "|" ? 3 : 2;
+				builder.nested.push(this.parseScript("}"));
+			} else {
+				this.i += 2;
+				this.skipData(builder, "}", inQuotes);
+			}
 		} else if (inQuotes && (next === "'" || next === '"')) {
 			this.i++;
 			return { text: "$", literal: true };
@@ -557,7 +580,7 @@ class Parser {
 }
 
 function parseNested(text: string): Script {
-	return new Parser(text).parseScript(false);
+	return new Parser(text).parseScript(null);
 }
 
 function expansionScripts(body: string): Script[] {

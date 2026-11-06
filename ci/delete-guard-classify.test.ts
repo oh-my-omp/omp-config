@@ -60,6 +60,19 @@ describe("classifyPosix", () => {
 		"bash -n +n -c 'rm /tmp/omp-dg-probe/f'",
 		"echo /tmp/omp-dg-probe/f | xargs --show-limits rm",
 		"bash -c 'coproc WORKER { rm /tmp/omp-dg-probe/f; }; wait'",
+		`echo \${ rm /tmp/omp-dg-probe/f; }`,
+		`echo "\${ rm /tmp/omp-dg-probe/f; }"`,
+		`echo \${| rm f; REPLY=x; }`,
+		`v=\${\nrm f\n}`,
+		`echo \${ { rm f; }; }`,
+		`cat <<EOF\n\${ rm f; }\nEOF`,
+		"omp bash -c 'rm /tmp/omp-dg-probe/f'",
+		"omp sh -c 'rm f'",
+		"omp zsh -c 'unlink f'",
+		"/usr/local/bin/omp bash -lc 'rmdir d'",
+		"hash -p /bin/rm keep; keep /tmp/omp-dg-probe/f",
+		"hash -rp /bin/rm keep",
+		"hash -p/opt/homebrew/bin/shred s",
 	])("blocks deletion: %p", (command) => {
 		expect(ruleOf(command)).toBe("delete");
 	});
@@ -85,6 +98,14 @@ describe("classifyPosix", () => {
 		"echo $(ls",
 		"FLAGS=-s; echo 'rm f' | bash \"$FLAGS\"",
 		"FLAGS=-c; bash \"$FLAGS\" 'rm f'",
+		"source <(echo rm /tmp/omp-dg-probe/f)",
+		". <(printf 'rm f')",
+		"echo 'rm f' | source /dev/stdin",
+		"omp bash",
+		"echo 'rm f' | omp bash",
+		'omp "$SUB" -c x',
+		'hash -p "$P" k',
+		"echo ${ echo ok",
 	])("blocks non-literal: %p", (command) => {
 		expect(ruleOf(command)).toBe("nonLiteral");
 	});
@@ -119,6 +140,19 @@ describe("classifyPosix", () => {
 		"cat 3<<'EOF'\nrm f\nEOF",
 		"echo \"$'x'\"",
 		"constructor x",
+		`echo \${ echo ok; }`,
+		`echo "\${HOME}" \${x:-y} \${#arr[@]}`,
+		`echo \${ { echo a; }; echo b; }`,
+		"rsync -a --delete src/ dst/",
+		"source .venv/bin/activate",
+		'. "$HOME/.cargo/env"',
+		"source -p /opt/lib helpers.sh",
+		"hash -r",
+		"hash -p /usr/bin/touch t",
+		"omp -p 'explain rm -rf'",
+		"omp update",
+		"omp bash -c 'echo ok'",
+		"omp bash script.sh",
 	])("allows: %p", (command) => {
 		expect(ruleOf(command)).toBe("allow");
 	});
