@@ -39,8 +39,15 @@ const KEYWORDS: ReadonlySet<string> = new Set([
 /** Keywords followed by a pipeline that runs (`return Remove-Item x`). */
 const PIPELINE_KEYWORDS: ReadonlySet<string> = new Set(["return", "throw", "exit"]);
 
-/** `[System.IO.File]::Delete(…)`, `[IO.Directory]::Delete(…)` and any `.Delete(` method call, outside strings. */
-const DELETE_METHOD = /(?:\]\s*::\s*|\.)delete\s*\(/i;
+/** `[System.IO.File]::Delete(…)` and any `Delete`, `DeleteFile`, `DeleteDirectory` or `DeleteFolder` method call, outside strings. */
+const DELETE_METHOD = /(?:\]\s*::\s*|\.)delete(?:file|directory|folder)?\s*\(/i;
+
+/**
+ * `[scriptblock]::Create(…)` and the same type spelled `[Management.Automation.ScriptBlock]` or
+ * `[System.Management.Automation.ScriptBlock]`: a string turned into executable code cannot be read from the
+ * text, so the call is non-literal like `Invoke-Expression`.
+ */
+const SCRIPTBLOCK_CREATE = /\[(?:(?:system\.)?management\.automation\.)?scriptblock\]\s*::\s*create\s*\(/i;
 
 type PsWord = ArgvWord & { readonly raw: string };
 
@@ -262,7 +269,9 @@ function assignedCommand(words: readonly PsWord[]): readonly PsWord[] | null {
 }
 
 function classifyStatement(statement: PsStatement, depth: number): Verdict {
-	if (DELETE_METHOD.test(statement.code)) return block("delete", statement.raw, "`.Delete()` deletes files");
+	if (DELETE_METHOD.test(statement.code))
+		return block("delete", statement.raw, "`Delete`/`DeleteFile`/`DeleteDirectory`/`DeleteFolder` deletes files");
+	if (SCRIPTBLOCK_CREATE.test(statement.code)) return block("nonLiteral", statement.raw, "`[scriptblock]::Create` runs a string as code");
 	let words: readonly PsWord[] = statement.words;
 	const first = words[0];
 	if (first === undefined) return ALLOW;
