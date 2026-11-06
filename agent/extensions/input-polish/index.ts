@@ -23,14 +23,16 @@
 // section leaves the extension inert.
 //
 // Drafts that start with `/`, `!` or `$` (slash command, bash, python) and empty
-// drafts are not polished: the chord falls through to the host untouched.
+// drafts are not polished: the chord falls through to the host untouched. At startup
+// the configured chord is checked with `pi.getShortcutConflict`: a holder (reserved,
+// keybinding, or another extension) is reported as a warning naming it.
 // Registers session_start/session_switch/session_shutdown and a terminal-input
 // listener, only in the main TUI session. Reads config; writes no files. Model
 // failures stay in the preview without changing the editor; hook failures log.
 // ============================================================================
 
 import { stripVTControlCharacters } from "node:util";
-import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type ShortcutConflict, z } from "@oh-my-pi/pi-coding-agent";
 import { type Component, isKeyRelease, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
@@ -280,6 +282,38 @@ type Phase =
 
 const CLOSED: Phase = { kind: "closed" };
 
+/** Whoever already holds the chord, as a human-readable phrase. */
+function holderText(conflict: ShortcutConflict): string {
+	switch (conflict.kind) {
+		case "reserved":
+			return "reserved by omp itself";
+		case "keybinding":
+			return `bound to ${conflict.keybindings.join(", ")}`;
+		case "extension":
+			return `registered by ${conflict.extensionPath}`;
+		default: {
+			const unreachable: never = conflict;
+			return unreachable;
+		}
+	}
+}
+
+/** Startup conflict check: name whoever already holds the configured chord. */
+function warnShortcutConflict(pi: ExtensionAPI, ctx: ExtensionContext, key: PolishConfig["key"]): void {
+	const conflict: ShortcutConflict | undefined = pi.getShortcutConflict(key);
+	if (conflict === undefined) {
+		pi.logger.info(`input-polish: shortcut ${key} is free of conflicts`);
+		return;
+	}
+	const holder = holderText(conflict);
+	const notice = tr(
+		`input-polish: shortcut ${key} is ${holder} — pressing it may trigger both actions`,
+		`input-polish：快捷键 ${key} 已${holder} — 按下可能同时触发两个动作`,
+	);
+	pi.logger.warn(`input-polish: shortcut conflict: ${key} is ${holder}`);
+	if (ctx.hasUI) ctx.ui.notify(notice, "warning");
+}
+
 export default function inputPolish(pi: ExtensionAPI): void {
 	let unsubscribe: (() => void) | undefined;
 	let phase: Phase = CLOSED;
@@ -404,6 +438,8 @@ export default function inputPolish(pi: ExtensionAPI): void {
 				return { consume: true };
 			}
 		});
+		// After the listener is installed, so an unexpected throw here cannot cost the polish feature.
+		warnShortcutConflict(pi, ctx, cfg.key);
 	};
 
 	const onAttach = (_event: unknown, ctx: ExtensionContext): void => {
