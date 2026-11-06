@@ -135,7 +135,15 @@ export function captureReplica(
 	options: { readonly inheritReasoning: boolean; readonly caller: AgentSession },
 ): CaptureResult {
 	const latest = requests.get(session);
-	if (!latest) return { kind: "unavailable", reason: "it has not sent a model request in this OMP process since fork capture loaded" };
+	if (!latest) {
+		// Every session of this thread is observed at its first prompt; an unobserved one runs in a subagent worker thread, whose requests stay there.
+		if (!observed.has(session))
+			return {
+				kind: "unavailable",
+				reason: "it runs in a subagent worker thread, where its requests are captured; message it to fork itself",
+			};
+		return { kind: "unavailable", reason: "it has not sent a model request in this OMP process since fork capture loaded" };
+	}
 	const { request } = latest;
 	const level = session.thinkingLevel;
 	const toolNames = session.agent.state.tools.map((tool) => tool.name);

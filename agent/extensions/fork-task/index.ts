@@ -5,7 +5,8 @@
 // Registers fork_task plus before_subagent_spawn, before_agent_start and
 // session_shutdown hooks in main and sub sessions. Reads the source agent's
 // persisted session; writes temporary JSONL under the OS temp directory and
-// moves it into the caller's artifact store.
+// moves it into the caller's artifact store; writes each child's replica copy
+// under `<tmp>/omp-fork-task/replicas/` and deletes it at parent shutdown.
 // Execution failures warn and return tool errors; user aborts reject for host
 // cancellation accounting. Spawn preparation failures block the child and warn,
 // while shutdown cleanup failures warn without rejecting the hook.
@@ -57,10 +58,11 @@
 //      unique name, so the allocated id is predictable and matched exactly.
 //
 // Relies on omp internals (AgentRegistry, the executor's session-file path and
-// hook ordering, session entry types); re-verify after every omp upgrade.
-// Parent and child must share this module instance, so `config.yml` sets
-// `task.workerThreads: 0`: a child OMP places in a subagent worker thread loads
-// its own copy of this module, finds no replica and fails before its first turn.
+// hook ordering, session entry types, subagent worker threads); re-verify after
+// every omp upgrade. OMP may run a child in a subagent worker thread, which
+// loads its own copy of this module: such a child reads the replica from the
+// copy file instead of `replicas`, and a `from` source hosted in a worker
+// cannot be replicated from another thread (its requests are observed there).
 // ============================================================================
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -87,6 +89,7 @@ import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { applyReplica, captureReplica, type ForkNotice, observeRequests, type Replica } from "./replica.ts";
+import { readReplicaFile, replicaFilePath, writeReplicaFile } from "./replica-file.ts";
 import { forkTaskTopics, TOPIC_POINTERS } from "./topics.ts";
 
 const itemSchema = z.object({
@@ -217,12 +220,13 @@ const forkNotice = (source: ForkSource, parentCwd: string, isolated: boolean): s
 const FORK_AGENT = "fork:self";
 
 /**
- * Replicas by child session file. Child sessions rebind this module's factory
- * in the same thread (`task.workerThreads: 0`), so the parent's write is visible to the child. Entries
- * live until the parent session shuts down, so a revived child keeps its
- * replicated contract. A replica holds plain request data and at most a
- * borrowed `ask` tool, never the source session, so it keeps no parked
- * session alive.
+ * Replicas by child session file. A child on the parent's thread rebinds this
+ * module's factory, so the parent's write is visible to it; a child in a
+ * subagent worker thread reads `replica-file.ts`'s copy instead. Entries and
+ * copies live until the parent session shuts down, so a revived child keeps
+ * its replicated contract. A replica holds plain request data and at most a
+ * borrowed `ask` tool (absent from the copy), never the source session, so it
+ * keeps no parked session alive.
  */
 const replicas = new Map<string, Replica>();
 
@@ -243,6 +247,12 @@ type StagedFork = {
 };
 
 const STAGING_ROOT = path.join(os.tmpdir(), "omp-fork-task");
+
+/** The parent's plain-data copy for `childFile`; it carries no borrowed `ask`, a live tool that stays in the parent's thread. */
+async function portableReplica(childFile: string): Promise<Replica | undefined> {
+	const copy = await readReplicaFile(replicaFilePath(STAGING_ROOT, childFile));
+	return copy && { ...copy, ask: undefined };
+}
 
 /** Mirrors the task tool's `sanitizeAgentId`, so the requested name is the allocated id. */
 function sanitizeName(value: string | undefined): string | undefined {
@@ -505,6 +515,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 			await moveFile(entry.staging, target);
 			await discard(entry);
 			replicas.set(target, entry.replica);
+			await writeReplicaFile(replicaFilePath(STAGING_ROOT, target), entry.replica);
 			forkChildren.set(artifactsDir, [...(forkChildren.get(artifactsDir) ?? []), target]);
 			return entry.model === undefined ? undefined : { model: entry.model };
 		} catch (error) {
@@ -516,15 +527,16 @@ export default function forkTask(pi: ExtensionAPI): void {
 	/** Child sessions whose per-call hook is installed. */
 	const cloned = new WeakSet<AgentSession>();
 
-	pi.on("before_agent_start", (_event, ctx) => {
+	pi.on("before_agent_start", async (_event, ctx) => {
 		const session = callerSession(ctx);
 		if (!session) return;
 		try {
 			observeRequests(session);
 			const file = ctx.sessionManager.getSessionFile();
-			const replica = file ? replicas.get(file) : undefined;
+			// A child OMP placed in a subagent worker thread has its own copy of this module: read the parent's copy.
+			const replica = file ? (replicas.get(file) ?? (await portableReplica(file))) : undefined;
 			if (!replica && ctx.agent.name === FORK_AGENT) {
-				throw new Error("the fork's request snapshot is no longer available in this process; create a fresh fork from the parent");
+				throw new Error("the fork's request snapshot is no longer available; create a fresh fork from the parent");
 			}
 			if (!replica || cloned.has(session)) return;
 			applyReplica(session, replica);
@@ -543,7 +555,10 @@ export default function forkTask(pi: ExtensionAPI): void {
 		const parentFile = ctx.sessionManager.getSessionFile();
 		if (!parentFile) return;
 		const artifactsDir = parentFile.slice(0, -".jsonl".length);
-		for (const child of forkChildren.get(artifactsDir) ?? []) replicas.delete(child);
+		for (const child of forkChildren.get(artifactsDir) ?? []) {
+			replicas.delete(child);
+			await fs.rm(replicaFilePath(STAGING_ROOT, child), { force: true });
+		}
 		forkChildren.delete(artifactsDir);
 		for (const entry of pending.filter((p) => p.artifactsDir === artifactsDir)) {
 			try {

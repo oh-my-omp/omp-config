@@ -61,7 +61,6 @@ task:
   enableLsp: false
   enableEffort: false
   maxConcurrency: 64
-  workerThreads: 0
   maxEffort: high
 fetch:
   enabled: true
