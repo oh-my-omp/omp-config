@@ -1,9 +1,9 @@
 /**
- * Completion judge for `task:low` / `task:mid` / `task:free` subagents. It runs
- * inside the subagent's own session and intercepts a terminal `yield` when
- * that run has a structured yield tool. Unstructured task runs have no yield
- * to intercept. A fast model compares the assignment (the `task` prompt the
- * executor recorded in the run's `session_init`, plus the batch's shared
+ * Completion judge for subagents whose definition declares `completionJudge: true`
+ * in its frontmatter. It runs inside the subagent's own session and intercepts a
+ * terminal `yield` when that run has a structured yield tool. Unstructured task
+ * runs have no yield to intercept. A fast model compares the assignment (the `task`
+ * prompt the executor recorded in the run's `session_init`, plus the batch's shared
  * context) with the subagent's todo goal, the newest of the tool calls the
  * subagent made after that point (as many as fit a fixed budget) and the
  * submitted result, and decides whether the
@@ -29,23 +29,30 @@
  * model role `@task-completion-judge` (assign it in `/model`), then the role
  * named by `fallbackRole` in the `task-completion-judge` section of omomp.* (a
  * project copy wins), both resolved at every judgment, and it writes only
- * in-memory round state. Only the named task subagents
- * are judged; main sessions pass.
- * Every failure (agent not identified, Todo owner unavailable, no model in
- * either role, every model's provider failing, unparseable answer, deadline) lets
- * the yield pass as written. A provider failure moves to the next model of the
- * chain; an unparseable answer does not. The deadline stays under the harness's 30 s
- * `tool_call` handler timeout, which would otherwise block the yield.
+ * in-memory round state. Only subagents whose definition file declares
+ * `completionJudge: true` are judged; other subagents and main sessions pass.
+ * Every failure (agent not identified, definition not found or unreadable, Todo
+ * owner unavailable, no model in either role, every model's provider failing,
+ * unparseable answer, deadline) lets the yield pass as written. A provider
+ * failure moves to the next model of the chain; an unparseable answer does not.
+ * The deadline stays under the harness's 30 s `tool_call` handler timeout, which
+ * would otherwise block the yield.
  */
+
+import { readFile } from "node:fs/promises";
+import * as os from "node:os";
 import { basename } from "node:path";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
-import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { type AgentSession, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discovery";
+import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
 import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
 import { modelLabel, roleModels, roleName } from "../_shared/roles.ts";
+import { parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 
 const configSchema = z.object({
 	/** OMP model role (`smol`, `@smol`, …) whose models answer when `@task-completion-judge` resolves none or all of its models fail. */
@@ -60,7 +67,8 @@ const ROLE = omompSection.id;
 const EFFORT = THINKING_EFFORTS.find((effort) => effort === "low");
 if (EFFORT === undefined) throw new Error("Host thinking efforts do not include low");
 const DEADLINE_MS = 25_000;
-const JUDGED_AGENTS: Record<string, true> = { "task:low": true, "task:free": true, "task:mid": true };
+/** Frontmatter key an agent definition sets to opt into completion judging. */
+const COMPLETION_JUDGE_KEY = "completionjudge";
 /** The judge model's input window in tokens; the whole request, system prompt included, must fit it. */
 const JUDGE_CONTEXT_TOKENS = 64_000;
 /** Headroom for token estimation error and the judge's reply. */
@@ -388,6 +396,30 @@ const openTodoItems = (todo: ReviewTodo): string[] =>
 	todo.openItems.map(
 		({ phase, title, explanation }) => `${phase}: ${title} — ${explanation ?? "(no explanation yet: add one with op explain)"}`,
 	);
+/**
+ * Whether the agent definition behind this subagent run opts into completion
+ * judging. `ref.displayName` is the definition name the task tool spawned
+ * (`executor.ts` registers `agentDisplayName: agent.name`), so resolve it with
+ * the same lookup the spawn preflight uses: `discoverAgents` over the spawning
+ * session's cwd and extension roots plus that session's session agents, first
+ * match wins. The host's parsed `AgentDefinition` drops unknown frontmatter
+ * keys, so read the definition's `filePath` and check `completionJudge` there.
+ * Anything unresolvable or unreadable fails open: the yield passes unjudged.
+ */
+const isJudged = async (session: AgentSession | undefined, cwd: string, agentName: string): Promise<boolean> => {
+	try {
+		const { agents } = await discoverAgents(cwd, os.homedir(), session?.effectiveExtensionRoots);
+		const definition = getAgent([...agents, ...(session?.getSessionAgents() ?? [])], agentName);
+		const filePath = definition?.filePath;
+		if (filePath === undefined) return false;
+		const parsed = parseFrontmatter(await readFile(filePath, "utf8"));
+		if (parsed === null) return false;
+		return unquote(parsed.fields[COMPLETION_JUDGE_KEY] ?? "").toLowerCase() === "true";
+	} catch {
+		// Unresolvable or unreadable definition: let the yield pass unjudged.
+		return false;
+	}
+};
 
 export default function taskCompletionJudge(pi: ExtensionAPI): void {
 	const rounds = new Map<string, Round>();
@@ -411,8 +443,12 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 		const ref = AgentRegistry.global()
 			.list()
 			.find((candidate) => candidate.sessionFile === sessionFile);
-		if (ref === undefined || !Object.hasOwn(JUDGED_AGENTS, ref.displayName)) return undefined;
+		if (ref === undefined) return undefined;
 		const agentName = ref.displayName;
+		// The caller's session is the spawning session: the same cwd, extension
+		// roots and session agents the task tool's spawn preflight resolved the
+		// definition against.
+		if (!(await isJudged(callerSession(ctx), ctx.sessionManager.getCwd(), agentName))) return undefined;
 
 		const transcript = readTranscript(ctx);
 		if (transcript === undefined) {

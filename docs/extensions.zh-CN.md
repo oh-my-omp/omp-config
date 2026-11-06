@@ -16,7 +16,7 @@
 | 6 | `user-prompt-inject` | [子代理](agents.zh-CN.md#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库示例或本机文件） | 修改或添加模板，选择目标角色及其接收的用户原话和回答 |
 | 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | 主 + 子 | 否 | 无配置文件 | 在 task 调用中显式设置 `isolated`，选择共享只读工作或隔离写入 |
 | 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | `omomp.yml#task-split-check` | 选择回退角色与 `agents` 列表（`split` 覆盖的 worker 名），将 `@task-split-check` 或 `modelRoles.smol` 绑定到自己的可用模型 |
-| 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | `task:low/mid/free` | 否 | `omomp.yml#task-completion-judge` | 选择回退角色，将 `@task-completion-judge` 或 `modelRoles.smol` 绑定到自己的可用模型 |
+| 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | 声明 `completionJudge: true` 的子代理 | 否 | `omomp.yml#task-completion-judge` | 在 agent 定义中声明 `completionJudge: true`，选择回退角色，将 `@task-completion-judge` 或 `modelRoles.smol` 绑定到自己的可用模型 |
 | 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `omomp.yml#tool-policy-nag` 与 `INTENT-policy.md` | 按工作方式调整检测模式、提醒措辞与频率、意图及风险设置和终端路由通道 |
 | 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子，按文件条件 | 否 | `WATCHDOG-*.md`（本机或项目） | 定义审阅内容、目标会话、间隔和投递方式；存在匹配文件后运行 |
 | 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子，按文件条件 | 否 | `TURN-JUDGE-*.md`（仓库示例或本机文件） | 编写判定问题、触发规则、提醒和会话条件，绑定适合的判定或聊天模型 |
@@ -67,7 +67,7 @@
 
 源码：`agent/extensions/task-completion-judge/`。
 
-在 `task:low`、`task:mid`、`task:free` 子代理调用终止性结构化 `yield` 时运行（`task:high`、主会话、报错 `yield` 与增量提交不拦截）：
+在 frontmatter 声明 `completionJudge: true` 的子代理调用终止性结构化 `yield` 时运行（仓库自带的 `task:free`、`task:mid`、`task:low` 声明了该键；其他子代理、主会话、报错 `yield` 与增量提交不拦截）：
 
 - **输入内容（60k token 预算）**：读取当前分支最后一条 `session_init` 中的任务说明（忽略 `fork_task` 继承的前置历史）、system prompt 中的共享背景、子代理 Todo 的 `goal`、本次 `yield` 提交内容（最多 6,000 字符），以及 `session_init` 之后从最新一条往前能装入剩余预算的连续工具调用与结果（单条参数和结果各最多 800 字符，超长保留前 60% + 后 40%；按 ASCII 字符 1 token、非 ASCII 字符 2 token 估算）。
 - **判定模型与标准**：先取 `@task-completion-judge`，再取 `omomp.yml#task-completion-judge.fallbackRole`（仓库配置 `smol`），每次判定实时解析，未带 `:level` 时使用 `low` 推理强度，超时 25 秒，provider 报错时换链中下一个模型，返回 `DONE` 或 `NOT_DONE`。若子代理的 Todo `goal` 缩小了派工范围、`goal` 中声明的验证方式未在工具调用中出现，或未达到 `doneWhen`（包括报告 blocker），均判为 `NOT_DONE`。
