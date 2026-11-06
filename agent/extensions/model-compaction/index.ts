@@ -309,6 +309,7 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 				const written = { ...(baseline.kind === "present" ? baseline.value : {}), ...entries };
 				cfgCompactionModelThresholds.override(settings, written);
 				ownership = { kind: "owned", baseline, written };
+				pi.logger.info("model-compaction: thresholds applied", { entries });
 				return;
 			}
 			case "owned": {
@@ -322,6 +323,7 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 				if (Bun.deepEquals(written, ownership.written, true)) return;
 				cfgCompactionModelThresholds.override(settings, written);
 				ownership = { kind: "owned", baseline: ownership.baseline, written };
+				pi.logger.info("model-compaction: thresholds applied", { entries });
 				return;
 			}
 			default: {

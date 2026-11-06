@@ -218,6 +218,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 						failures.push(`${modelLabel(model)}: ${reply.errorMessage ?? "error"}`);
 						continue;
 					}
+					pi.logger.info("task-split-check answered", { model: modelLabel(model), failures });
 					return { kind: "text", text: textOf(reply.content) };
 				} catch (error) {
 					if (signal.aborted) return { kind: "failed", why: "deadline" };
