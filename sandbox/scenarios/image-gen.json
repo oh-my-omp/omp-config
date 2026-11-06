@@ -18,7 +18,7 @@
 			}
 		]
 	},
-	"finalAssertion": "test $(ls /tmp/omp-image-* 2>/dev/null | wc -l) -ge 2; for f in $(ls -t /tmp/omp-image-* 2>/dev/null | head -2); do python3 -c \"from PIL import Image; Image.open('$f'.strip()).verify()\"; done; ls -t /tmp/omp-image-* | head -2",
+	"finalAssertion": "test $(ls /tmp/omp-image-* 2>/dev/null | wc -l) -ge 2; for f in $(ls -t /tmp/omp-image-* 2>/dev/null | head -2); do test $(wc -c < \"$f\") -gt 10000; head -c 3 \"$f\" | od -An -tx1 | grep -qiE 'ff d8 ff|89 50 4e'; done; ls -l -t /tmp/omp-image-* | head -2",
 	"init": "true",
 	"name": "image-gen",
 	"prompt": "Call the generate_image tool with subject \"a small red circle on a white background\" and aspect_ratio \"1:1\". After it succeeds, take the generated image path from the result and call generate_image again with subject \"the same red circle\" and changes [\"add a blue square next to the red circle\"] and input referencing that path. Reply with both image paths when done."
