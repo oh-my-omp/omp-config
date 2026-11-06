@@ -4,6 +4,11 @@ name: web
 title: Reading web pages
 when: before reading a URL in pieces, or when a fetched page looks incomplete or failed
 upstream: pi-coding-agent@18.13.2 src/tools/fetch.ts, src/tools/read.ts, omp://tools/read.md § Web URLs
+inject:
+  - id: read-web
+    tool: read
+    parameter: path
+    pattern: '^(https?://|www\.)'
 ---
 # Reading web pages
 

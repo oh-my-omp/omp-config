@@ -4,6 +4,11 @@ name: documents
 title: Documents, PDFs and notebooks
 when: before reading a PDF, Word, PowerPoint, Excel, EPUB or Jupyter notebook
 upstream: pi-coding-agent@18.13.2 src/utils/markit.ts, src/tools/read-pdf.ts, src/tools/read.ts, omp://tools/read.md § Documents, § Jupyter notebooks
+inject:
+  - id: read-documents
+    tool: read
+    parameter: path
+    pattern: '\.(pdf|docx|pptx|xlsx|epub|ipynb)(:|\?|$)'
 ---
 # Documents, PDFs and notebooks
 

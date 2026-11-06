@@ -7,26 +7,28 @@
 // This extension lets ordered regex rules choose a fixed compaction trigger and
 // hands the result to the native map; OMP itself still decides and compacts.
 //
-// FILE. The `model-compaction` section of omomp.*, read from the project
-// (`<cwd>/.omp/omomp.*`) and then the agent directory (machine-local); the first
-// valid copy is used whole, never merged with the other, so a project copy with
-// `rules: []` turns the machine rules off for that project. Example:
+// FILE. One rule per `COMPACTION-<label>.md` file: `---`-fenced frontmatter,
+// nothing else. Files come from the extension's own directory (machine rules)
+// plus every directory between cwd and its git root and each one's `.omp`
+// (project rules); re-discovered and re-read every main prompt. Project files
+// rule before extension files; inside each group, filename order; for each
+// model the first matching rule wins. Example:
 //
-//   model-compaction:
-//     rules:
-//       - { provider: "^anthropic$", model: "opus", thresholdTokens: 150000 }
-//       - { model: "(gpt-5|o3)", thresholdTokens: 120000 }
-//       - { model: ".*", thresholdTokens: 90000 }
+//   ---
+//   provider: ^anthropic$
+//   model: opus
+//   thresholdTokens: 150000
+//   ---
 //
-// Rule keys (`model` and/or `provider` required):
+// Rule keys (`model` and/or `provider` required; `thresholdTokens` required):
 //   provider        JavaScript regex tested against the model's provider id (`anthropic`).
 //   model           JavaScript regex tested against the model id (`claude-opus-5-5`).
 //   thresholdTokens Positive integer: the context size, in tokens, at which
 //                   auto-compaction triggers for a matched model.
 // Patterns are unanchored (`RegExp.test`, no flags); write `^`/`$` to anchor and
-// `.*` to match every model. A rule matches when every pattern it sets matches;
-// for each model the first matching rule in file order wins. Unknown keys are
-// errors, so a misspelled key cannot widen a rule.
+// `.*` to match every model. A rule matches when every pattern it sets matches.
+// Values may be wrapped in one pair of quotes. Unknown keys and a non-empty
+// body are errors, so a misspelled key cannot widen a rule.
 //
 // EFFECT. Every model in `ctx.models.list()` that a rule matches gets the exact
 // native entry `"provider/id": "f<thresholdTokens>"` (the native fixed-trigger
@@ -46,10 +48,10 @@
 // tier a model currently runs with is refused for that model with a warning;
 // this extension never changes a context window.
 //
-// TIMING. Main session `before_agent_start`: both locations are re-read every
-// prompt against the session's current cwd, so edits and worktree moves apply
-// from the next main prompt (subagents follow the main session's latest write).
-// Subagent sessions write nothing.
+// TIMING. Main session `before_agent_start`: the files are re-discovered and
+// re-read every prompt against the session's current cwd, so edits and worktree
+// moves apply from the next main prompt (subagents follow the main session's
+// latest write). Subagent sessions write nothing.
 //
 // OWNERSHIP. The extension writes the runtime layer of
 // `compaction.modelThresholds` only. Before its first write it keeps the
@@ -58,20 +60,20 @@
 // `session_shutdown`. When it finds the runtime record changed by another
 // writer, it warns once and stops managing it for the session.
 //
-// FAILURE POLICY. No copy anywhere means no rules, silently. An unreadable,
-// ambiguous or invalid copy is skipped whole with a warning and the next
-// location is used (an invalid project copy falls back to the machine copy;
-// with none valid, no rules apply for that prompt). Warnings repeat only when
-// they change or a clean read intervened. Warnings go to the log and, with a
+// FAILURE POLICY. No file anywhere means no rules, silently. An unreadable or
+// invalid file is skipped with a warning and the other files still apply.
+// Warnings repeat only when they change or a clean read intervened. Warnings go to the log and, with a
 // UI, a notification. The prompt is never blocked.
 // ============================================================================
 
+import { readFileSync } from "node:fs";
+import { sep } from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { AgentRegistry, type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
+import { AgentRegistry, type ExtensionAPI, type ExtensionContext, type Settings } from "@oh-my-pi/pi-coding-agent";
 import { cfgCompactionModelThresholds, cfgExtendedContext } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
+import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 
 type MatchField = "provider" | "model";
 
@@ -85,7 +87,7 @@ interface Rule {
 	readonly thresholdTokens: number;
 }
 
-/** Rules from the first valid copy (none when no copy is valid), plus why other copies were skipped. */
+/** Every valid rule in precedence order (project files first), plus why other files were skipped. */
 interface LoadedRules {
 	readonly rules: readonly Rule[];
 	readonly problems: readonly string[];
@@ -122,43 +124,72 @@ function compiles(pattern: string): boolean {
 	}
 }
 
-const patternSchema = z
-	.string()
-	.refine((value) => value.trim() !== "", "a non-empty regex")
-	.refine(compiles, "a valid JavaScript regex");
-const ruleSchema = z
-	.object({
-		provider: patternSchema.optional(),
-		model: patternSchema.optional(),
-		thresholdTokens: z.number().refine((value) => Number.isSafeInteger(value) && value > 0, "a positive integer token count"),
-	})
-	.strict()
-	.refine((rule) => rule.provider !== undefined || rule.model !== undefined, "a rule that sets `model` and/or `provider`");
-const configSchema = z.object({ rules: z.array(ruleSchema) }).strict();
-const omompSection = defineOmompSection(import.meta.dir, configSchema);
+const FILE_PATTERN = /^COMPACTION-.+\.md$/i;
+const KNOWN_KEYS: Readonly<Record<string, true>> = { provider: true, model: true, thresholdtokens: true };
 
-function toRule(rule: z.infer<typeof ruleSchema>): Rule {
-	const [first, ...rest] = (["provider", "model"] as const).flatMap((field): Constraint[] => {
-		const pattern = rule[field];
-		return pattern === undefined ? [] : [{ field, pattern: new RegExp(pattern) }];
-	});
-	if (first === undefined) throw new Error("model-compaction: schema admitted a rule without `model` or `provider`");
-	return { constraints: [first, ...rest], thresholdTokens: rule.thresholdTokens };
+type RuleParse = { readonly kind: "ok"; readonly rule: Rule } | { readonly kind: "invalid"; readonly reason: string };
+
+/** One file's frontmatter as a rule; anything that would silently widen or drop a rule is `invalid`. */
+function parseRuleFile(path: string): RuleParse {
+	let raw: string;
+	try {
+		raw = readFileSync(path, "utf8");
+	} catch (error) {
+		return { kind: "invalid", reason: `unreadable: ${errorText(error)}` };
+	}
+	const parsed = parseFrontmatter(raw);
+	if (parsed === null) return { kind: "invalid", reason: "missing frontmatter" };
+	const { fields, body } = parsed;
+	const unknown = Object.keys(fields).find((key) => !Object.hasOwn(KNOWN_KEYS, key));
+	if (unknown !== undefined) return { kind: "invalid", reason: `unknown key ${unknown}` };
+	if (body.trim() !== "") return { kind: "invalid", reason: "body must be empty" };
+	const constraints: Constraint[] = [];
+	for (const field of ["provider", "model"] as const) {
+		const value = fields[field];
+		if (value === undefined) continue;
+		const pattern = unquote(value);
+		if (pattern === "" || !compiles(pattern)) return { kind: "invalid", reason: `${field} is not a valid regex` };
+		constraints.push({ field, pattern: new RegExp(pattern) });
+	}
+	const [first, ...rest] = constraints;
+	if (first === undefined) return { kind: "invalid", reason: "sets neither `model` nor `provider`" };
+	const threshold = fields.thresholdtokens;
+	if (threshold === undefined) return { kind: "invalid", reason: "missing thresholdTokens" };
+	const thresholdTokens = Number(unquote(threshold));
+	if (!Number.isSafeInteger(thresholdTokens) || thresholdTokens <= 0)
+		return { kind: "invalid", reason: "thresholdTokens is not a positive integer token count" };
+	return { kind: "ok", rule: { constraints: [first, ...rest], thresholdTokens } };
 }
 
+/**
+ * Rules from every `COMPACTION-*.md` in scope: project files (cwd up to the git
+ * root, each with its `.omp`) before the extension's own directory, each group
+ * in discovery order. An invalid file is skipped with a problem; the others apply.
+ */
 function loadRules(cwd: string): LoadedRules {
-	const loaded = loadOmompSection(omompSection, cwd);
-	const skipped = loaded.skipped.map((problem) => `${problem.path}: ${problem.reason}`);
-	switch (loaded.kind) {
-		case "found":
-			return { rules: loaded.value.rules.map(toRule), problems: skipped.map((problem) => `${problem}; using ${loaded.path}`) };
-		case "none":
-			return { rules: [], problems: skipped.map((problem) => `${problem}; no rules applied`) };
-		default: {
-			const unreachable: never = loaded;
-			return unreachable;
+	const discovered = discoverSpecFiles(FILE_PATTERN, import.meta.dir, cwd);
+	const files = [
+		...discovered.filter((path) => !path.startsWith(import.meta.dir + sep)),
+		...discovered.filter((path) => path.startsWith(import.meta.dir + sep)),
+	];
+	const rules: Rule[] = [];
+	const problems: string[] = [];
+	for (const file of files) {
+		const parsed = parseRuleFile(file);
+		switch (parsed.kind) {
+			case "ok":
+				rules.push(parsed.rule);
+				break;
+			case "invalid":
+				problems.push(`${file}: ${parsed.reason}`);
+				break;
+			default: {
+				const unreachable: never = parsed;
+				return unreachable;
+			}
 		}
 	}
+	return { rules, problems };
 }
 
 /**

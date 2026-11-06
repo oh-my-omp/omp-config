@@ -4,6 +4,11 @@ name: archives
 title: Reading inside archives
 when: before looking inside a zip, jar, wheel, tar(.gz/.bz2/.xz/.zst), 7z, rar, deb, rpm or similar archive
 upstream: pi-coding-agent@18.13.2 src/tools/read-archive.ts, pi-utils src/ar/limits.ts, omp://tools/read.md § Archives
+inject:
+  - id: read-archives
+    tool: read
+    parameter: path
+    pattern: '\.(zip|jar|war|whl|apk|vsix|nupkg|tar|tgz|tbz2?|txz|tzst|gz|bz2|xz|zst|7z|rar|deb|rpm|iso|asar)(:|$)'
 ---
 # Reading inside archives
 

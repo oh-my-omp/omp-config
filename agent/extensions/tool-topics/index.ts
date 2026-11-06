@@ -6,13 +6,23 @@
 // tool that replaces a built-in under the same name (OMP reports a filesystem source path for it).
 //
 // FILES. Authored beside this module (repo-managed): `TOPIC-*.md` (header: tool, name, title,
-// when, upstream) and `SURFACE-*.md` (header: tool, upstream). Loaded once at factory time;
+// when, upstream, optional inject) and `SURFACE-*.md` (header: tool, upstream). Loaded once at factory time;
 // edits apply on the next omp start. `upstream` names the OMP version and sources the text was
 // checked against; after an OMP upgrade, re-check each tool against them.
 //
+// INJECTION. A TOPIC header may list `inject` entries `{id, tool, parameter, pattern}`: after a
+// `tool_result` whose named string argument (dotted paths allowed) matches the pattern, the file's
+// own `tool://<tool>/<name>` is delivered once per actual context as trusted additionalContext
+// (main and sub sessions, failed results included). Delivery identity is
+// `omp-config/tool-topic-injection` + entry id; ids are unique across the catalog and stay stable
+// while a rule is the same rule, so a session's already-delivered markers still dedup. Installed
+// only when this extension holds `tool://`: another handler's topics must not be injected under
+// its marker.
+//
 // ROUTING. registry.ts puts the topics on OMP's URL router as the `tool://` scheme, replacing the
 // handler of an earlier load (subagents, isolated children). When OMP or another handler holds
-// `tool://`, no tool gets an index, so an index never points at missing topics.
+// `tool://`, no tool gets an index and injection is off, so nothing points at or injects topics
+// this extension does not serve.
 //
 // PROMPT. On every `before_agent_start` (main and sub, full and light), when the session has
 // `read`, each tool with authored docs that the prompt renders gets its description replaced by
@@ -23,12 +33,13 @@
 // when a rendered tool cannot be rewritten (layout change, missing native section), its native
 // description stays and a warning is logged, and shown once in the main session.
 //
-// FAILURE. A malformed or unreadable file is skipped with one warning each; the rest still load.
-// Hooks never throw into omp.
+// FAILURE. A malformed or unreadable file — including a bad `inject` entry or a duplicate id — is
+// skipped with one warning each; the rest still load. Hooks never throw into omp.
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { type Catalog, loadCatalog, type ToolDocs } from "./catalog.ts";
+import { installToolTopicInjection } from "./injection.ts";
 import { composeDescription, renderIndex, rewriteTool } from "./prompt.ts";
 import { publishTopics } from "./registry.ts";
 
@@ -117,6 +128,16 @@ export default function toolTopics(pi: ExtensionAPI): void {
 		return;
 	}
 	const docsList = [...catalog.tools.values()];
+
+	// Inject only when this extension serves tool://; another handler's topics must not go out under our marker.
+	if (indexed) {
+		installToolTopicInjection(pi, {
+			owner: "omp-config/tool-topic-injection",
+			rules: docsList.flatMap((docs) =>
+				docs.topics.flatMap((topic) => topic.inject.map((rule) => ({ ...rule, topic: `tool://${docs.tool}/${topic.name}` }))),
+			),
+		});
+	}
 
 	pi.on("before_agent_start", (event, ctx) => {
 		try {

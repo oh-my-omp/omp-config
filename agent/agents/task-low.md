@@ -3,6 +3,7 @@ name: task:low
 description: "General-purpose low-cost tier on an Opus-class model: blended cost about USD 0.01 per 1M tokens across input, output, and cached tokens, cheaper than any DeepSeek version. Handles any bounded slice outside design and core work with results trustworthy enough to deliver; fits when cost outweighs the extra judgment of the default `task:mid` — bulk mechanical edits, lookups, routine checks — and is the validator for free-tier work: independently checks its claims against artifacts and runtime evidence, reproduces decisive checks, and adjudicates disagreements. Never assign it any design or core work: architecture, domain types and state model, interfaces and cross-slice contracts, the central logic of a change, or the design of docs, prompts, skills, or agent definitions. It cannot delegate: its only subagent is `mentor:default` for plan review, so hand it a slice it executes itself."
 spawns: mentor:default
 completionJudge: true
+splitCheck: true
 output:
   properties:
     report:

@@ -154,3 +154,13 @@ calls only from subagents whose definition file declares `completionJudge: true`
 in its frontmatter. Unknown frontmatter keys are ignored by the host, so the
 key is safe to add. Without it the subagent's yields pass unjudged. The shipped
 `task-free`, `task-mid` and `task-low` declare it; `task:high` does not.
+
+
+15. `splitCheck: true` opts the agent into task-split-check's `split` check
+--------------------------------------------------------------------------
+The `task-split-check` extension's `split` check intercepts `task` dispatches
+in the main session only for items whose `agent` definition file declares
+`splitCheck: true` in its frontmatter. Unknown frontmatter keys are ignored by
+the host, so the key is safe to add. Items without `agent` are not
+split-checked. The shipped `task-free`, `task-mid` and `task-low` declare it;
+`task:high` does not.

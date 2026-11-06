@@ -137,3 +137,11 @@ prewalk 清空。调试派发问题时，先确认自己不在 plan mode，否�
 的子代理的终止性结构化 `yield` 调用。宿主会忽略未知的 frontmatter 键，所以加这个键是
 安全的。没有它，子代理的 `yield` 直接放行，不做评判。仓库自带的 `task-free`、
 `task-mid`、`task-low` 声明了它；`task:high` 没有。
+
+
+15. `splitCheck: true` 让该 agent 接受 task-split-check 的 `split` 检查
+----------------------------------------------------------------------
+`task-split-check` 扩展的 `split` 检查只拦截主会话中 `agent` 定义文件的
+frontmatter 声明了 `splitCheck: true` 的派发项。宿主会忽略未知的
+frontmatter 键，所以加这个键是安全的。没有 `agent` 的项不做 split 检查。
+仓库自带的 `task-free`、`task-mid`、`task-low` 声明了它；`task:high` 没有。

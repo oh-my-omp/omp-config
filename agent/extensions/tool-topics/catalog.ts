@@ -1,15 +1,27 @@
 // Authored tool topics and surfaces beside this extension: `TOPIC-*.md` and `SURFACE-*.md`,
 // each a `---`-fenced YAML header (strict keys) followed by a non-empty markdown body.
+// A TOPIC header may list `inject` entries — `{id, tool, parameter, pattern}` rules that
+// deliver the file's own `tool://<tool>/<name>` after a matching tool call; ids are unique
+// across the whole catalog.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
+
+export interface InjectRule {
+	readonly id: string;
+	/** The tool whose call triggers the rule — not necessarily the topic's own tool. */
+	readonly tool: string;
+	readonly parameter: string;
+	readonly pattern: RegExp;
+}
 
 export interface Topic {
 	readonly name: string;
 	readonly title: string;
 	readonly when: string;
 	readonly body: string;
+	readonly inject: readonly InjectRule[];
 }
 
 /** Everything authored for one tool: an optional surface replacing its description, and its topics. */
@@ -28,7 +40,35 @@ export interface Catalog {
 const NAME = /^[A-Za-z0-9_.-]+$/;
 const nameSchema = z.string().refine((value) => NAME.test(value), "Expected [A-Za-z0-9_.-]+");
 const textSchema = z.string().refine((value) => value.trim().length > 0 && !value.includes("\n"), "Expected one non-empty line");
-const topicHeader = z.object({ tool: nameSchema, name: nameSchema, title: textSchema, when: textSchema, upstream: textSchema }).strict();
+const injectEntry = z
+	.object({
+		id: z.string().min(1),
+		tool: z.string().min(1),
+		parameter: z.string().refine((value) => /^[A-Za-z_][\w]*(?:\.[\w]+)*$/.test(value), "Expected an argument name or dotted path"),
+		pattern: z
+			.string()
+			.refine((value) => {
+				try {
+					new RegExp(value);
+					return true;
+				} catch {
+					// An invalid configured regex is the failure being reported.
+					return false;
+				}
+			}, "Invalid regular expression")
+			.transform((source) => new RegExp(source)),
+	})
+	.strict();
+const topicHeader = z
+	.object({
+		tool: nameSchema,
+		name: nameSchema,
+		title: textSchema,
+		when: textSchema,
+		upstream: textSchema,
+		inject: z.array(injectEntry).optional(),
+	})
+	.strict();
 const surfaceHeader = z.object({ tool: nameSchema, upstream: textSchema }).strict();
 
 const FILE = /^(TOPIC|SURFACE)-.+\.md$/;
@@ -53,19 +93,20 @@ function parseEntry(file: string, text: string): Entry {
 	if (file.startsWith("TOPIC-")) {
 		const parsed = topicHeader.safeParse(header);
 		if (!parsed.success) return { kind: "invalid", reason: parsed.error.message };
-		const { tool, name, title, when } = parsed.data;
-		return { kind: "topic", tool, topic: { name, title, when, body } };
+		const { tool, name, title, when, inject } = parsed.data;
+		return { kind: "topic", tool, topic: { name, title, when, body, inject: inject ?? [] } };
 	}
 	const parsed = surfaceHeader.safeParse(header);
 	if (!parsed.success) return { kind: "invalid", reason: parsed.error.message };
 	return { kind: "surface", tool: parsed.data.tool, body };
 }
 
-/** Read every authored file in `dir`; a bad file, duplicate topic or second surface is skipped and reported. */
+/** Read every authored file in `dir`; a bad file, duplicate topic, duplicate inject id or second surface is skipped and reported. */
 export function loadCatalog(dir: string): Catalog {
 	const problems: string[] = [];
 	const surfaces = new Map<string, string>();
 	const topics = new Map<string, Map<string, Topic>>();
+	const injectIds = new Set<string>();
 	for (const file of readdirSync(dir)
 		.filter((name) => FILE.test(name))
 		.sort()) {
@@ -87,8 +128,14 @@ export function loadCatalog(dir: string): Catalog {
 				break;
 			case "topic": {
 				const own = topics.get(entry.tool) ?? new Map<string, Topic>();
-				if (own.has(entry.topic.name)) problems.push(`${file}: duplicate topic ${entry.tool}/${entry.topic.name}`);
-				else own.set(entry.topic.name, entry.topic);
+				const ids = new Set<string>();
+				const duplicate = entry.topic.inject.find((rule) => ids.size === ids.add(rule.id).size || injectIds.has(rule.id));
+				if (duplicate !== undefined) problems.push(`${file}: duplicate inject id ${duplicate.id}`);
+				else if (own.has(entry.topic.name)) problems.push(`${file}: duplicate topic ${entry.tool}/${entry.topic.name}`);
+				else {
+					for (const rule of entry.topic.inject) injectIds.add(rule.id);
+					own.set(entry.topic.name, entry.topic);
+				}
 				topics.set(entry.tool, own);
 				break;
 			}
