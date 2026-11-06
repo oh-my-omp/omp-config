@@ -10,9 +10,10 @@
  *   judged on what ran: it is a risk when at least two steps ran and one of
  *   them failed silently — a non-zero exit status that nothing tested (not an
  *   `if`/`elif`/`while`/`until` test, not negated by `!`, not a non-final
- *   `&&`/`||` operand, not inside a substitution), that is not a pipeline
- *   stage's SIGPIPE (141) before a later stage, and that wrote no output of
- *   its own. Function calls, `eval`, `source` and `.` stand for their bodies,
+ *   `&&`/`||` operand, not inside a substitution, not read as `$?` by the
+ *   next command), that is not a pipeline stage's SIGPIPE (141) before a
+ *   later stage, and that wrote no output of its own. Function calls, `eval`,
+ *   `source` and `.` stand for their bodies,
  *   whose steps are judged instead. Length, breadth and writes do not matter.
  * - A call that went to the background before it ended has no complete trace
  *   and is judged from its text, as before the trace existed:
@@ -284,9 +285,13 @@ const SIGPIPE_STATUS = 141;
 export function inspectMaskedFailure(trace: ExecutedTrace): readonly TraceStep[] | null {
 	const steps = trace.steps.filter((step) => step.resolved !== "none" && !step.wrapsBody);
 	if (steps.length < 2) return null;
-	const masked = steps.filter(
-		(step) => step.status !== 0 && !step.statusUsed && !step.output && !(step.status === SIGPIPE_STATUS && !step.lastStage),
-	);
+	const masked = steps.filter((step, index) => {
+		if (step.status === 0 || step.statusUsed || step.output) return false;
+		if (step.status === SIGPIPE_STATUS && !step.lastStage) return false;
+		// `cmd; echo "$?"`: the next command reads the status, so the failure is shown.
+		const next = steps[index + 1]?.source ?? "";
+		return !next.includes("$?") && !next.includes("${?}");
+	});
 	return masked.length === 0 ? null : masked;
 }
 
