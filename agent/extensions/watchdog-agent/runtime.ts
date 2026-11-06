@@ -52,6 +52,8 @@ type Runtime = {
 	branchOf: () => ReadonlyArray<unknown>;
 	nextTurnQueue: QueuedNote[];
 	userTurnArmed: boolean;
+	/** Set by `session_shutdown` until the next session boundary: in-flight reviews abort and nothing new starts. */
+	closed: boolean;
 };
 
 export function registerWatchdog(pi: ExtensionAPI): void {
@@ -65,6 +67,7 @@ export function registerWatchdog(pi: ExtensionAPI): void {
 		branchOf: () => [],
 		nextTurnQueue: [],
 		userTurnArmed: false,
+		closed: false,
 	};
 	registerCommand(runtime);
 	registerEvents(runtime);
@@ -72,7 +75,13 @@ export function registerWatchdog(pi: ExtensionAPI): void {
 
 // --- extension registration -------------------------------------------------
 
-type RunState = { readonly kind: "idle" } | { readonly kind: "running"; readonly flushAfter: boolean };
+/**
+ * `running` keeps the session-level abort handle and the review's settling promise:
+ * a switch aborts it, a shutdown aborts it and awaits `done` before the session ends.
+ */
+type RunState =
+	| { readonly kind: "idle" }
+	| { readonly kind: "running"; readonly flushAfter: boolean; readonly controller: AbortController; readonly done: Promise<void> };
 
 /** Per-watchdog runtime state; each watchdog counts, runs and caps on its own. */
 type WatchdogState = {
@@ -250,6 +259,7 @@ function logActive(runtime: Runtime): void {
 
 /** Session boundary: identity, overrides and the active set are rebuilt; state is restored from the branch. */
 function load(runtime: Runtime, ctx: ExtensionContext): void {
+	runtime.closed = false;
 	runtime.identity = ctx.agent;
 	runtime.cwd = () => ctx.sessionManager.getCwd();
 	runtime.branchOf = () => ctx.sessionManager.getBranch();
@@ -320,9 +330,20 @@ function advanceCursor(runtime: Runtime, state: WatchdogState, reviewed: number)
 	state.cursor = reviewed;
 	runtime.pi.appendEntry<CursorEntry>(CURSOR_ENTRY_TYPE, { filePath: state.spec.filePath, cursor: reviewed });
 }
+/** Abort every in-flight review and return their settling promises for the caller to await or drop. */
+function abortReviews(runtime: Runtime): Promise<void>[] {
+	const done: Promise<void>[] = [];
+	for (const state of runtime.states.values()) {
+		if (state.run.kind !== "running") continue;
+		state.run.controller.abort();
+		done.push(state.run.done);
+	}
+	return done;
+}
 
 /** Start one review now; never awaited by the caller, so the watched agent keeps running. */
 function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, tail: unknown): void {
+	if (runtime.closed) return;
 	const spec = state.spec;
 	state.pending = 0;
 	if (state.sent >= spec.maxPerContext) return;
@@ -335,11 +356,14 @@ function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, ta
 		advanceCursor(runtime, state, reviewed);
 		return;
 	}
-	state.run = { kind: "running", flushAfter: false };
-	const review = spec.kind === "jev" ? runJev(runtime.pi, ctx, spec, transcript) : runReviewer(runtime.pi, ctx, spec, transcript);
+	const controller = new AbortController();
+	const review =
+		spec.kind === "jev"
+			? runJev(runtime.pi, ctx, spec, transcript, controller.signal)
+			: runReviewer(runtime.pi, ctx, spec, transcript, controller.signal);
 	// A session boundary, branch move or switch-off removed this state; its finding is stale.
 	const live = (): boolean => runtime.states.get(spec.filePath) === state;
-	void review
+	const done = review
 		.then(
 			(verdict) => {
 				// No verdict = failed review: the cursor stays, so the next run covers this range again.
@@ -356,6 +380,8 @@ function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, ta
 			if (state.pending >= state.spec.every || (flush && state.pending > 0)) start(runtime, state, ctx, undefined);
 		})
 		.catch((error) => runtime.pi.logger.warn("watchdog review delivery failed", { error: errorText(error) }));
+	// run is registered last so `done` settles the chain the state itself carries.
+	state.run = { kind: "running", flushAfter: false, controller, done };
 }
 
 /** One line per watchdog file for `/watchdog list`. */
@@ -734,9 +760,27 @@ function registerEvents(runtime: Runtime): void {
 	});
 	runtime.pi.on("session_switch", (_event, ctx) => {
 		try {
+			// Abort before load: load replaces the states map, so the old handles are unreachable after it.
+			abortReviews(runtime);
 			load(runtime, ctx);
 		} catch (error) {
 			runtime.pi.logger.warn(`watchdog ${"session_switch"} handler failed`, { error: errorText(error) });
+		}
+	});
+	// Shutdown ends the session: abort every in-flight review (no more verdicts, no more helper
+	// model calls) and close the runtime so no review starts for a session that is gone.
+	runtime.pi.on("session_shutdown", async () => {
+		try {
+			runtime.closed = true;
+			const settling = abortReviews(runtime);
+			runtime.states = new Map();
+			runtime.nextTurnQueue = [];
+			runtime.userTurnArmed = false;
+			// The aborted reviews are this session's inner work: they finish (helper disposed,
+			// judgment returned) before the session's own teardown proceeds.
+			await Promise.allSettled(settling);
+		} catch (error) {
+			runtime.pi.logger.warn(`watchdog ${"session_shutdown"} handler failed`, { error: errorText(error) });
 		}
 	});
 	// Branch and tree moves swap the working transcript: overrides, cursors and cap counts are
@@ -798,6 +842,7 @@ function registerEvents(runtime: Runtime): void {
 	// prompt is being prepared (the session already counts as streaming here).
 	runtime.pi.on("before_agent_start", () => {
 		try {
+			if (runtime.closed) return;
 			refresh(runtime, false);
 			const armed = runtime.userTurnArmed;
 			runtime.userTurnArmed = false;
@@ -824,6 +869,7 @@ function registerEvents(runtime: Runtime): void {
 
 	runtime.pi.on("message_end", (event, ctx) => {
 		try {
+			if (runtime.closed) return;
 			// Registration can precede the first session boundary; initialize lazily.
 			if (runtime.identity === null) load(runtime, ctx);
 			for (const state of runtime.states.values()) {
@@ -839,12 +885,13 @@ function registerEvents(runtime: Runtime): void {
 
 	runtime.pi.on("agent_end", (event, ctx) => {
 		try {
+			if (runtime.closed) return;
 			if (runtime.identity === null) load(runtime, ctx);
 			if (event.willContinue === true) return; // auto-continuation, not a settled run.
 			for (const state of runtime.states.values()) {
 				if (state.pending === 0) continue;
 				if (state.run.kind === "idle") start(runtime, state, ctx, undefined);
-				else state.run = { kind: "running", flushAfter: true };
+				else state.run = { kind: "running", flushAfter: true, controller: state.run.controller, done: state.run.done };
 			}
 		} catch (error) {
 			runtime.pi.logger.warn(`watchdog ${"agent_end"} handler failed`, { error: errorText(error) });
