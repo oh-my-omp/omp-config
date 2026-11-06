@@ -840,7 +840,9 @@ function registerEvents(runtime: Runtime): void {
 	runtime.pi.on("agent_end", (event, ctx) => {
 		try {
 			if (runtime.identity === null) load(runtime, ctx);
-			if (event.willContinue === true) return; // auto-continuation, not a settled run.
+			// A continuation the session schedules itself (reminder, retry, compaction) is not a settled run;
+			// a wait on background jobs hands control back, so pending reviews start here too.
+			if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
 			for (const state of runtime.states.values()) {
 				if (state.pending === 0) continue;
 				if (state.run.kind === "idle") start(runtime, state, ctx, undefined);
