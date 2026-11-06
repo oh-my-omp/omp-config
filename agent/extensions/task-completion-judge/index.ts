@@ -19,9 +19,12 @@
  * session still has pending or in-progress items is blocked once, asking the subagent
  * to bring the todo list up to date before yielding. Each bounce happens at
  * most once, so one session can see a NOT done bounce and later a todo
- * bounce. The verdict is logged, never attached to the result: the yield's
- * `data` follows the agent's output schema. Later yields in the same session
- * pass unjudged.
+ * bounce. The verdict is the reply's leading first-line token: `DONE`,
+ * `NOT_DONE` or `NOT DONE`, followed by the end of the line, whitespace or
+ * punctuation; the rest of the reply is the reason. It is logged, never
+ * attached to the result: the yield's `data` follows the agent's output
+ * schema. Once a yield passes, later yields in the same session pass
+ * unjudged.
  *
  * Registers `tool_call` and `session_shutdown`; it reads the host-managed session
  * branch for the assignment/tools and requests the independent Todo owner's
@@ -32,7 +35,8 @@
  * `completionJudge: true` are judged; other subagents and main sessions pass.
  * Every failure (agent not identified, definition not found or unreadable, Todo
  * owner unavailable, no model in either role, every model's provider failing,
- * unparseable answer, deadline) lets the yield pass as written. A provider
+ * unparseable answer, deadline) lets that yield pass as written and leaves the
+ * round open, so the next terminal yield is judged again. A provider
  * failure moves to the next model of the chain; an unparseable answer does not.
  * The deadline stays under the harness's 30 s `tool_call` handler timeout, which
  * would otherwise block the yield.
@@ -323,16 +327,27 @@ const renderPrompt = (ctx: ExtensionContext, transcript: Transcript, yieldCallId
 	return frame(kept, kept.length);
 };
 
+/**
+ * The verdict is the first line's leading token: `DONE`, `NOT_DONE` or `NOT DONE`
+ * (one ASCII space), after trimming and removing wrapping backticks/asterisks,
+ * compared case-insensitively. The token must be followed by the end of the
+ * line, whitespace, or Unicode punctuation other than `_` (an identifier
+ * character, so `NOT_DONE_X` is not a verdict). Whatever follows the token on
+ * that line, leading separators stripped, joins the remaining lines as the
+ * reason. Anything else is an unparseable answer.
+ */
+const VERDICT_HEAD = /^(NOT DONE|NOT_DONE|DONE)(?=$|(?!_)[\s\p{P}])/u;
+
 const parseAnswer = (text: string): Verdict => {
 	const lines = text.trim().split("\n");
-	const head = (lines[0] ?? "")
-		.trim()
-		.replace(/^[`*\s]+|[`*\s]+$/g, "")
-		.toUpperCase();
-	const reason = lines.slice(1).join("\n").trim();
-	if (head === "NOT_DONE") return { kind: "not_done", reason };
-	if (head === "DONE") return { kind: "done", reason };
-	return { kind: "unknown", why: `unparseable answer: ${text.slice(0, 80)}` };
+	const lead = (lines[0] ?? "").trim().replace(/^[`*\s]+/, "");
+	const head = lead.replace(/[`*\s]+$/, "").toUpperCase();
+	const match = VERDICT_HEAD.exec(head);
+	if (match === null) return { kind: "unknown", why: `unparseable answer: ${text.slice(0, 80)}` };
+	// The token is ASCII, so its length is the same offset in the un-uppercased lead.
+	const rest = lead.slice(match[0].length).replace(/^[`*\s\p{P}]+/u, "");
+	const reason = [rest, ...lines.slice(1)].join("\n").trim();
+	return match[1] === "DONE" ? { kind: "done", reason } : { kind: "not_done", reason };
 };
 
 const judge = async (ctx: ExtensionContext, prompt: string, signal: AbortSignal): Promise<Verdict> => {
@@ -413,7 +428,8 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 
 		switch (verdict.kind) {
 			case "unknown":
-				rounds.set(sessionFile, { kind: "settled" });
+				// No conclusion this time: only this yield passes; the next
+				// terminal yield is judged again.
 				return undefined;
 			case "not_done":
 				if (!round.bounced) {
