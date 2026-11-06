@@ -11,9 +11,11 @@
  * process groups can discover surviving members.
  * A process born and orphaned between observations without a known surviving group
  * anchor cannot be attributed retroactively from the process table.
- * Reads `thresholdGiB` from the `child-memory-warning` section of omomp.* every scan
- * (the main session cwd's `.omp/` copy wins over the agent-dir copy); without a valid
- * section, tracking continues but alerts pause, and each new config problem warns once.
+ * Reads the `child-memory-warning.thresholdGiB` plugin setting (omp-config;
+ * `/settings → Plugins → omp-config` or `omp plugin config`; the project's
+ * `.omp/plugin-overrides.json` wins over the machine value) every scan; an
+ * unreadable or invalid value pauses alerts while tracking continues, and each
+ * new config problem warns once.
  * No model calls, sampling subprocesses, signals, or automatic kills.
  * Unsupported platforms log once and never import the Darwin binding. Native/hook
  * failures warn without escaping into omp; delivery is attempted once per identity.
@@ -21,7 +23,7 @@
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
+import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
 import { type ProcessRecord, type ProcessSource, ProcessTracker } from "./tracker.ts";
 
 const POLL_MS = 2_000;
@@ -31,16 +33,14 @@ const configSchema = z
 		thresholdGiB: z.number().refine((value) => Number.isFinite(value) && value > 0, "a positive number"),
 	})
 	.strict();
-const omompSection = defineOmompSection(import.meta.dir, configSchema);
+const settingsSection = defineSettings(import.meta.dir, configSchema);
 
 interface Threshold {
 	readonly gib: number;
 	readonly bytes: bigint;
 }
 
-type ThresholdLoad =
-	| { readonly kind: "found"; readonly threshold: Threshold; readonly problem: string | null }
-	| { readonly kind: "none"; readonly problem: string };
+type ThresholdLoad = { readonly kind: "found"; readonly threshold: Threshold } | { readonly kind: "invalid"; readonly problem: string };
 
 interface Monitor {
 	readonly pi: ExtensionAPI;
@@ -69,22 +69,19 @@ function warn(pi: ExtensionAPI, message: string, error: unknown): void {
 	}
 }
 
-function loadThreshold(cwd: string): ThresholdLoad {
-	const loaded = loadOmompSection(omompSection, cwd);
-	const skipped = loaded.skipped
-		.map(({ path, reason }) => tr(`Skipped ${path}: ${reason}`, `跳过 ${path}：${reason}`))
-		.join(tr("; ", "；"));
+async function loadThreshold(cwd: string): Promise<ThresholdLoad> {
+	const loaded = await readSettings(settingsSection, { kind: "project", cwd });
 	switch (loaded.kind) {
-		case "found": {
+		case "ok": {
 			const gib = loaded.value.thresholdGiB;
-			return { kind: "found", threshold: { gib, bytes: BigInt(Math.round(gib * 1024 ** 3)) }, problem: skipped || null };
+			return { kind: "found", threshold: { gib, bytes: BigInt(Math.round(gib * 1024 ** 3)) } };
 		}
-		case "none":
+		case "invalid":
 			return {
-				kind: "none",
+				kind: "invalid",
 				problem: tr(
-					`No valid omomp ${omompSection.id} configuration section; alerts paused${skipped ? ` (${skipped})` : ""}`,
-					`没有有效的 omomp ${omompSection.id} 配置段，告警暂停${skipped ? `（${skipped}）` : ""}`,
+					`Invalid ${settingsSection.id} settings (${loaded.reason}); alerts paused`,
+					`${settingsSection.id} 设置无效（${loaded.reason}），告警暂停`,
 				),
 			};
 		default: {
@@ -136,7 +133,7 @@ function deliver(monitor: Monitor, current: ProcessRecord, bytes: bigint, comman
 	}
 }
 
-function sample(monitor: Monitor): void {
+async function sample(monitor: Monitor): Promise<void> {
 	try {
 		const result = monitor.source.snapshot();
 		if (result.kind === "unavailable") {
@@ -147,9 +144,9 @@ function sample(monitor: Monitor): void {
 		monitor.problem = null;
 		// Ownership tracking must see every scan, even while alerts are paused by config.
 		const owned = monitor.tracker.observe(result.snapshot);
-		const config = loadThreshold(monitor.ctx.cwd);
-		reportConfigProblem(monitor, config.problem);
-		if (config.kind === "none") return;
+		const config = await loadThreshold(monitor.ctx.cwd);
+		reportConfigProblem(monitor, config.kind === "invalid" ? config.problem : null);
+		if (config.kind === "invalid") return;
 		for (const tracked of owned) {
 			if (tracked.alerted) continue;
 			const { pid, startedAt } = tracked.identity;
@@ -191,12 +188,12 @@ async function start(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 		}
 		const tracker = new ProcessTracker(root);
 		const timer = ctx.setInterval(() => {
-			if (lifetime.kind === "active" && lifetime.monitor.pi === pi) sample(lifetime.monitor);
+			if (lifetime.kind === "active" && lifetime.monitor.pi === pi) void sample(lifetime.monitor);
 		}, POLL_MS);
 		const monitor: Monitor = { pi, ctx: starting.ctx, source, tracker, timer, problem: null, configProblem: null };
 		lifetime = { kind: "active", monitor };
 		source = null; // Ownership moves to the active monitor before its first sample.
-		sample(monitor);
+		await sample(monitor);
 	} catch (error) {
 		warn(pi, "monitor initialization failed", error);
 	} finally {

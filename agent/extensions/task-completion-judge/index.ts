@@ -26,9 +26,8 @@
  * Registers `tool_call` and `session_shutdown`; it reads the host-managed session
  * branch for the assignment/tools and requests the independent Todo owner's
  * synchronous read projection before and after judging. Its model is the OMP
- * model role `@task-completion-judge` (assign it in `/model`), then the role
- * named by `fallbackRole` in the `task-completion-judge` section of omomp.* (a
- * project copy wins), both resolved at every judgment, and it writes only
+ * model role `@task-completion-judge` (assign it in `/model`), then the
+ * `default` role's models, resolved at every judgment, and it writes only
  * in-memory round state. Only subagents whose definition file declares
  * `completionJudge: true` are judged; other subagents and main sessions pass.
  * Every failure (agent not identified, definition not found or unreadable, Todo
@@ -39,36 +38,24 @@
  * would otherwise block the yield.
  */
 
-import { readFile } from "node:fs/promises";
-import * as os from "node:os";
 import { basename } from "node:path";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
-import { type AgentSession, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discovery";
+import { declaresFlag } from "../_shared/agent-definition.ts";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
-import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
-import { modelLabel, roleModels, roleName } from "../_shared/roles.ts";
-import { parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+import { modelLabel, roleModels } from "../_shared/roles.ts";
 
-const configSchema = z.object({
-	/** OMP model role (`smol`, `@smol`, …) whose models answer when `@task-completion-judge` resolves none or all of its models fail. */
-	fallbackRole: z.string().min(1).optional(),
-});
-
-const omompSection = defineOmompSection(import.meta.dir, configSchema);
 /** The OMP model role this extension's judge model comes from: the extension's own name. */
-const ROLE = omompSection.id;
+const ROLE = basename(import.meta.dir);
 
 /** Effort when the role entry has no `:level` suffix. */
 const EFFORT = THINKING_EFFORTS.find((effort) => effort === "low");
 if (EFFORT === undefined) throw new Error("Host thinking efforts do not include low");
 const DEADLINE_MS = 25_000;
-/** Frontmatter key an agent definition sets to opt into completion judging. */
-const COMPLETION_JUDGE_KEY = "completionjudge";
 /** The judge model's input window in tokens; the whole request, system prompt included, must fit it. */
 const JUDGE_CONTEXT_TOKENS = 64_000;
 /** Headroom for token estimation error and the judge's reply. */
@@ -350,15 +337,13 @@ const parseAnswer = (text: string): Verdict => {
 };
 
 const judge = async (ctx: ExtensionContext, prompt: string, signal: AbortSignal): Promise<Verdict> => {
-	const config = loadOmompSection(omompSection, ctx.cwd);
-	const fallbackRole = config.kind === "found" ? config.value.fallbackRole : undefined;
 	const failures: string[] = [];
 	try {
-		const models = roleModels(ctx, fallbackRole === undefined ? [ROLE] : [ROLE, fallbackRole]);
+		const models = roleModels(ctx, [ROLE, "default"]);
 		if (models.length === 0) {
 			return {
 				kind: "unknown",
-				why: `no model: assign @${ROLE} in /model${fallbackRole === undefined ? "" : ` or @${roleName(fallbackRole)}`}`,
+				why: `no model: assign @${ROLE} or the default role in /model`,
 			};
 		}
 		for (const { model, level } of models) {
@@ -396,30 +381,6 @@ const openTodoItems = (todo: ReviewTodo): string[] =>
 	todo.openItems.map(
 		({ phase, title, explanation }) => `${phase}: ${title} — ${explanation ?? "(no explanation yet: add one with op explain)"}`,
 	);
-/**
- * Whether the agent definition behind this subagent run opts into completion
- * judging. `ref.displayName` is the definition name the task tool spawned
- * (`executor.ts` registers `agentDisplayName: agent.name`), so resolve it with
- * the same lookup the spawn preflight uses: `discoverAgents` over the spawning
- * session's cwd and extension roots plus that session's session agents, first
- * match wins. The host's parsed `AgentDefinition` drops unknown frontmatter
- * keys, so read the definition's `filePath` and check `completionJudge` there.
- * Anything unresolvable or unreadable fails open: the yield passes unjudged.
- */
-const isJudged = async (session: AgentSession | undefined, cwd: string, agentName: string): Promise<boolean> => {
-	try {
-		const { agents } = await discoverAgents(cwd, os.homedir(), session?.effectiveExtensionRoots);
-		const definition = getAgent([...agents, ...(session?.getSessionAgents() ?? [])], agentName);
-		const filePath = definition?.filePath;
-		if (filePath === undefined) return false;
-		const parsed = parseFrontmatter(await readFile(filePath, "utf8"));
-		if (parsed === null) return false;
-		return unquote(parsed.fields[COMPLETION_JUDGE_KEY] ?? "").toLowerCase() === "true";
-	} catch {
-		// Unresolvable or unreadable definition: let the yield pass unjudged.
-		return false;
-	}
-};
 
 export default function taskCompletionJudge(pi: ExtensionAPI): void {
 	const rounds = new Map<string, Round>();
@@ -448,7 +409,7 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 		// The caller's session is the spawning session: the same cwd, extension
 		// roots and session agents the task tool's spawn preflight resolved the
 		// definition against.
-		if (!(await isJudged(callerSession(ctx), ctx.sessionManager.getCwd(), agentName))) return undefined;
+		if (!(await declaresFlag(callerSession(ctx), ctx.sessionManager.getCwd(), agentName, "completionjudge"))) return undefined;
 
 		const transcript = readTranscript(ctx);
 		if (transcript === undefined) {

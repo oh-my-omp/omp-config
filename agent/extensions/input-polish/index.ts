@@ -15,12 +15,14 @@
 //
 // Polishing uses a dedicated in-memory helper: the OMP model role `@input-polish`
 // (assign it in `/model`; thinking per the entry's `:effort` suffix, off by
-// default), then the role named by `fallbackRole`, resolved at every polish; a
+// default), then the `default` role, resolved at every polish; a
 // provider failure moves to the next model of that chain with the preview
-// cleared. NO tools, empty system prompt, no MCP/LSP/extensions. Config (chord,
-// instruction, fallback role) is the `input-polish` section of omomp.*: the
-// project's `.omp/` copy wins over the agent-dir copy; a missing or invalid
-// section leaves the extension inert.
+// cleared. NO tools, empty system prompt, no MCP/LSP/extensions. Config —
+// the chord and the rewrite instruction — is the `input-polish.key` and
+// `input-polish.instruction` plugin settings of `omp-config` (`/settings →
+// Plugins → omp-config` or `omp plugin config`; the project's
+// `.omp/plugin-overrides.json` wins over the machine values); an unreadable
+// or invalid value warns and leaves the extension inert.
 //
 // Drafts that start with `/`, `!` or `$` (slash command, bash, python) and empty
 // drafts are not polished: the chord falls through to the host untouched.
@@ -35,32 +37,32 @@ import { type Component, isKeyRelease, matchesKey, truncateToWidth, visibleWidth
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
 import { tr } from "../_shared/i18n.ts";
-import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
-import { modelLabel, type RoleModel, roleModels, roleName } from "../_shared/roles.ts";
+import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
+import { modelLabel, type RoleModel, roleModels } from "../_shared/roles.ts";
 
-// --- config (`input-polish` section of omomp.yml) -----------------------------
+// --- config (`input-polish` plugin settings) --------------------------------
 
 const configSchema = z.object({
 	/** Chord that starts a polish. Ctrl+Enter is what a Windows keyboard sends; Alt+Enter is Option+Enter on macOS. */
-	key: z.enum(["ctrl+enter", "alt+enter"]).default("ctrl+enter"),
+	key: z.enum(["ctrl+enter", "alt+enter"]),
 	/** What the rewrite should do. The fidelity rules are always appended by the extension. */
 	instruction: z.string().min(1),
-	/** OMP model role (`smol`, `@smol`, …) whose models answer when `@input-polish` resolves none or all of its models fail. */
-	fallbackRole: z.string().min(1).optional(),
 });
 
-const omompSection = defineOmompSection(import.meta.dir, configSchema);
+const settingsSection = defineSettings(import.meta.dir, configSchema);
 /** The OMP model role the rewrite model comes from: the extension's own name. */
-const ROLE = omompSection.id;
+const ROLE = settingsSection.id;
 
 type PolishConfig = z.infer<typeof configSchema>;
 
-function loadConfig(cwd: string): PolishConfig | null {
-	const loaded = loadOmompSection(omompSection, cwd);
+// An unreadable or invalid value warns and leaves the extension inert.
+async function loadConfig(pi: ExtensionAPI, cwd: string): Promise<PolishConfig | null> {
+	const loaded = await readSettings(settingsSection, { kind: "project", cwd });
 	switch (loaded.kind) {
-		case "found":
+		case "ok":
 			return loaded.value;
-		case "none":
+		case "invalid":
+			pi.logger.warn(`input-polish: invalid settings (${loaded.reason}); inert`);
 			return null;
 		default: {
 			const unreachable: never = loaded;
@@ -298,29 +300,30 @@ export default function inputPolish(pi: ExtensionAPI): void {
 		unsubscribe = undefined;
 	};
 
-	const attach = (ctx: ExtensionContext): void => {
+	const attach = async (ctx: ExtensionContext): Promise<void> => {
 		detach();
 		if (ctx.mode !== "tui" || ctx.agent.kind !== "main") return;
-		const cfg = loadConfig(ctx.cwd);
+		const cfg = await loadConfig(pi, ctx.cwd);
 		if (!cfg) {
-			pi.logger.info("input-polish: no input-polish section in omomp.* found — inert");
+			pi.logger.info("input-polish: inert");
 			return;
 		}
-		pi.logger.info(
-			`input-polish: active (key=${cfg.key}, role=@${ROLE}${cfg.fallbackRole === undefined ? "" : `, fallback=@${roleName(cfg.fallbackRole)}`})`,
-		);
+		pi.logger.info(`input-polish: active (key=${cfg.key}, role=@${ROLE})`);
 
 		const start = (draft: string): void => {
 			let models: RoleModel[];
 			try {
-				models = roleModels(ctx, cfg.fallbackRole === undefined ? [ROLE] : [ROLE, cfg.fallbackRole]);
+				models = roleModels(ctx, [ROLE, "default"]);
 			} catch (error) {
 				ctx.ui.notify(tr(`input-polish: ${errorText(error)}`, `input-polish：${errorText(error)}`), "warning");
 				return;
 			}
 			if (models.length === 0) {
 				ctx.ui.notify(
-					tr(`input-polish: no model — assign @${ROLE} in /model`, `input-polish：未配置模型 — 在 /model 中指定 @${ROLE}`),
+					tr(
+						`input-polish: no model — assign @${ROLE} or the default role in /model`,
+						`input-polish：未配置模型 — 在 /model 中指定 @${ROLE} 或 default 角色`,
+					),
 					"warning",
 				);
 				return;
@@ -406,9 +409,9 @@ export default function inputPolish(pi: ExtensionAPI): void {
 		});
 	};
 
-	const onAttach = (_event: unknown, ctx: ExtensionContext): void => {
+	const onAttach = async (_event: unknown, ctx: ExtensionContext): Promise<void> => {
 		try {
-			attach(ctx);
+			await attach(ctx);
 		} catch (error) {
 			pi.logger.warn("input-polish: session attachment failed", { error: errorText(error) });
 		}

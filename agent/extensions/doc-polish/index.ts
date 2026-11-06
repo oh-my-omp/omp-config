@@ -1,4 +1,6 @@
-// Reads the doc-polish section of omomp.* (the project copy before the agent-dir copy); reads source
+// Reads the `doc-polish.concurrency` plugin setting (omp-config;
+// `/settings → Plugins → omp-config` or `omp plugin config`; the project's
+// `.omp/plugin-overrides.json` wins over the machine value); reads source
 // documents and writes original copies, split indexes, and reviews under /tmp/doc-polish.
 // Available in main and sub sessions. Models come only from OMP model roles; a failing
 // model hands the request to the next model of its role chain, while unparseable polish
@@ -29,7 +31,7 @@
 //                      rewrite preserved meaning.
 //
 // Roles: `@doc-polish.split`, `@doc-polish.polish`, `@doc-polish.check`, each
-// followed by the role named by `fallbackRole` in the doc-polish section. A
+// followed by the `default` role's models. A
 // check role with no model of its own uses the split chain. Each role entry's
 // `:effort` suffix sets that model's thinking level.
 // ============================================================================
@@ -40,8 +42,8 @@ import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
 import { tr } from "../_shared/i18n.ts";
-import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
-import { modelLabel, type RoleModel, roleModels, roleName } from "../_shared/roles.ts";
+import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
+import { modelLabel, type RoleModel, roleModels } from "../_shared/roles.ts";
 
 const BATCH_LIMIT = 5000; // code points per polish request; a block over this goes alone, never truncated.
 
@@ -97,28 +99,29 @@ const polishSchema = z.object({
 });
 
 const configSchema = z.object({
-	/** OMP model role (`default`, `@smol`, …) whose models follow every doc-polish role's own models. */
-	fallbackRole: z.string().min(1).optional(),
-	concurrency: z.number().int().min(1).optional(),
+	/** Parallel polish and check requests per document. */
+	concurrency: z.number().int().min(1),
 });
 
-const omompSection = defineOmompSection(import.meta.dir, configSchema);
+const settingsSection = defineSettings(import.meta.dir, configSchema);
 
 type DocPolishConfig = z.infer<typeof configSchema>;
 
 /** The three sub-agent stages and the OMP model role each takes its models from. */
 type Stage = "split" | "polish" | "check";
-const stageRole = (stage: Stage): string => `${omompSection.id}.${stage}`;
+const stageRole = (stage: Stage): string => `${settingsSection.id}.${stage}`;
 
-// The machine-local `doc-polish` section of omomp.* (the project's `.omp/` copy
-// wins over the agent-dir copy) supplies the fallback role and concurrency.
-function loadConfig(cwd: string): DocPolishConfig {
-	const loaded = loadOmompSection(omompSection, cwd);
+// The `doc-polish` plugin settings (the project's `.omp/plugin-overrides.json`
+// wins over the machine value) supply the concurrency. An unreadable or
+// invalid value warns and uses the manifest defaults.
+async function loadConfig(pi: ExtensionAPI, cwd: string): Promise<DocPolishConfig> {
+	const loaded = await readSettings(settingsSection, { kind: "project", cwd });
 	switch (loaded.kind) {
-		case "found":
+		case "ok":
 			return loaded.value;
-		case "none":
-			return {};
+		case "invalid":
+			pi.logger.warn(`doc-polish: invalid settings (${loaded.reason}); using defaults`);
+			return { concurrency: 6 };
 		default: {
 			const exhaustive: never = loaded;
 			return exhaustive;
@@ -148,8 +151,7 @@ class DocPolishRuntimeError extends Error {
 		super(message);
 	}
 }
-
-function missingModelMessage(missing: readonly Stage[], fallbackRole: string | undefined): string {
+function missingModelMessage(missing: readonly Stage[]): string {
 	const list = missing.map((stage) => `- \`@${stageRole(stage)}\``).join("\n");
 	return [
 		"doc-polish 调用失败，未做任何处理（没有拆分、润色或写文件）：这些 OMP 模型角色没有解析到任何可用模型（只核对模型列表，未发送请求）：",
@@ -160,13 +162,11 @@ function missingModelMessage(missing: readonly Stage[], fallbackRole: string | u
 		`- \`@${stageRole("polish")}\`（润色）：在不改变原意的前提下，把每个批次重排/润色成工程师更易读的文本，并给出词表变更；无工具。`,
 		`- \`@${stageRole("check")}\`（校验）：对合并后的每个编组判断语义是否保持、如何理解；无工具。没有自己的模型时使用拆分角色的模型。`,
 		"",
-		fallbackRole === undefined
-			? "在 `/model` 里给这些角色指定模型后重新调用；或在 omomp 的 `doc-polish` 段设置 `fallbackRole`。"
-			: `在 \`/model\` 里给这些角色或回退角色 \`@${roleName(fallbackRole)}\` 指定模型后重新调用。`,
+		"在 `/model` 里给这些 `@doc-polish.<阶段>` 角色或 `default` 角色指定模型后重新调用。",
 	].join("\n");
 }
 
-function missingModelEnglishMessage(missing: readonly Stage[], fallbackRole: string | undefined): string {
+function missingModelEnglishMessage(missing: readonly Stage[]): string {
 	const list = missing.map((stage) => `- \`@${stageRole(stage)}\``).join("\n");
 	return [
 		"doc-polish failed; no work was performed (no splitting, polishing, or file writes): these OMP model roles resolved to no usable models (only the model list was checked; no request was sent):",
@@ -177,9 +177,7 @@ function missingModelEnglishMessage(missing: readonly Stage[], fallbackRole: str
 		`- \`@${stageRole("polish")}\` (polish): reorders/polishes each batch into text that is easier for engineers to read without changing its meaning, and reports glossary changes; no tools.`,
 		`- \`@${stageRole("check")}\` (check): judges whether each regrouped block preserves its meaning and how it should be understood; no tools. When it has no model of its own, it uses the split role's models.`,
 		"",
-		fallbackRole === undefined
-			? "Assign models to these roles in `/model` and call again, or set `fallbackRole` in the `doc-polish` section of omomp."
-			: `Assign models to these roles or the fallback role \`@${roleName(fallbackRole)}\` in \`/model\` and call again.`,
+		"Assign the `@doc-polish.<stage>` roles or the `default` role in `/model` and call again.",
 	].join("\n");
 }
 
@@ -306,8 +304,6 @@ function relevantKeywords(keywords: string[], batchText: string): string[] {
 	const haystack = batchText.toLowerCase();
 	return keywords.filter((k) => k.trim().length > 0 && haystack.includes(k.toLowerCase()));
 }
-
-const DEFAULT_CONCURRENCY = 6;
 
 // Structured concurrency: run `fn` over `items` with at most `limit` in flight,
 // await them all, and return results in input order. Splitting the document is
@@ -677,28 +673,24 @@ type PolishOptions = {
 };
 
 async function polishDocuments(
+	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	options: PolishOptions,
 	progress: Progress,
 ): Promise<{ source: string; review: string }[]> {
-	const config = loadConfig(ctx.cwd);
-	// Each stage's role, then the configured fallback role; resolved per call so `/model` changes apply.
-	const chain = (stage: Stage): RoleModel[] =>
-		roleModels(ctx, config.fallbackRole === undefined ? [stageRole(stage)] : [stageRole(stage), config.fallbackRole]);
+	const config = await loadConfig(pi, ctx.cwd);
+	// Each stage's role, then the `default` role's models; resolved per call so `/model` changes apply.
+	const chain = (stage: Stage): RoleModel[] => roleModels(ctx, [stageRole(stage), "default"]);
 	const split = chain("split");
 	const polish = chain("polish");
 	const missing: Stage[] = [];
 	if (split.length === 0) missing.push("split");
 	if (polish.length === 0) missing.push("polish");
-	if (missing.length > 0)
-		throw new DocPolishModelError(
-			missingModelMessage(missing, config.fallbackRole),
-			missingModelEnglishMessage(missing, config.fallbackRole),
-		);
+	if (missing.length > 0) throw new DocPolishModelError(missingModelMessage(missing), missingModelEnglishMessage(missing));
 	// A check role with no model of its own uses the whole split chain.
 	const check = roleModels(ctx, [stageRole("check")]).length === 0 ? split : chain("check");
 	const models: StageModels = { split, polish, check };
-	const concurrency = options.concurrency ?? config.concurrency ?? DEFAULT_CONCURRENCY;
+	const concurrency = options.concurrency ?? config.concurrency;
 	const results: { source: string; review: string }[] = [];
 	for (const p of options.paths) {
 		const abs = isAbsolute(p) ? p : resolvePath(ctx.cwd, p);
@@ -761,7 +753,7 @@ export default function docPolish(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params, _signal, onUpdate, ctx) {
 			const progress: Progress = (_english, chinese) => onUpdate?.({ content: [{ type: "text", text: chinese }] });
 			try {
-				const results = await polishDocuments(ctx, polishOptionsSchema.parse(params), progress);
+				const results = await polishDocuments(pi, ctx, polishOptionsSchema.parse(params), progress);
 				return {
 					content: [{ type: "text", text: buildAgentResultText(results) }],
 					details: { results, reviewPaths: results.map((r) => r.review), reference: true },
@@ -801,7 +793,9 @@ export default function docPolish(pi: ExtensionAPI): void {
 				"info",
 			);
 			try {
-				const results = await polishDocuments(ctx, { paths }, (english, chinese) => ctx.ui.setStatus?.("doc-polish", tr(english, chinese)));
+				const results = await polishDocuments(pi, ctx, { paths }, (english, chinese) =>
+					ctx.ui.setStatus?.("doc-polish", tr(english, chinese)),
+				);
 				// Human invocation differs from an LLM tool call: deliver the result to the
 				// current session's main agent as fresh input (it decides how to use the
 				// reference), rather than displaying it to the human.

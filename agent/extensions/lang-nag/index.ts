@@ -18,17 +18,20 @@
 //
 // Detection is one choice question on the sample's language, asked through
 // `openJudge` (`_shared/judge.ts`, purpose `lang-nag`): the chat models of the
-// `@lang-nag` model role when assigned, then the `judge` fallback role, as
-// prompted judges; otherwise OMP's JUDGE role chain (`modelRoles.judge`, then
-// `retry.fallbackChains.judge`; native, local or prompted chat) before that
-// fallback role. Config (target language + the literal instruction string) is
-// the `lang-nag` section of omomp.*: the project's `.omp/` copy first, then the
-// agent-dir copy.
+// `@lang-nag` model role as prompted judges when assigned; otherwise OMP's
+// JUDGE role chain (`modelRoles.judge`, then `retry.fallbackChains.judge`;
+// native, local or prompted chat). Config — the target language and the
+// literal instruction string — is the `lang-nag.language` and
+// `lang-nag.instruction` plugin settings of `omp-config` (`/settings →
+// Plugins → omp-config` or `omp plugin config`; the project's
+// `.omp/plugin-overrides.json` wins over the machine values); an unreadable
+// or invalid value warns and leaves the extension inert.
 //
 // Scope is the main session only, mirroring tool-policy-nag: subagents run
 // short decomposed slices where a language nag is noise. A judgment failure
-// (every chain candidate failed), no judge candidate, an unanswered question, or a missing config all degrade
-// to "no nag" — the extension never blocks or corrupts a turn.
+// (every chain candidate failed), no judge candidate, an unanswered question,
+// or an invalid config all degrade to "no nag" — the extension never blocks
+// or corrupts a turn.
 // Registers session_start/switch/branch/tree/compact, agent_end, and input
 // hooks. Reads only the config above; writes no files and sends no extra turns.
 // ============================================================================
@@ -38,7 +41,7 @@ import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding
 import { errorText } from "../_shared/errors.ts";
 import { type JudgeOpen, openJudge } from "../_shared/judge.ts";
 import { lastAssistantText } from "../_shared/messages.ts";
-import { defineOmompSection, loadOmompSection } from "../_shared/omomp.ts";
+import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
 
 const DETECT_CHAR_LIMIT = 200; // code points of the last paragraph handed to the judge; never more.
 
@@ -49,18 +52,18 @@ const configSchema = z.object({
 	instruction: z.string().min(1),
 });
 
-const omompSection = defineOmompSection(import.meta.dir, configSchema);
+const settingsSection = defineSettings(import.meta.dir, configSchema);
 
 type LangNagConfig = z.infer<typeof configSchema>;
 
-// Project `.omp/omomp.*` wins over the agent-dir copy; a missing or invalid
-// section leaves the extension inert.
-function loadConfig(cwd: string): LangNagConfig | null {
-	const result = loadOmompSection(omompSection, cwd);
+// An unreadable or invalid value warns and leaves the extension inert.
+async function loadConfig(pi: ExtensionAPI, cwd: string): Promise<LangNagConfig | null> {
+	const result = await readSettings(settingsSection, { kind: "project", cwd });
 	switch (result.kind) {
-		case "found":
+		case "ok":
 			return result.value;
-		case "none":
+		case "invalid":
+			pi.logger.warn(`lang-nag: invalid settings (${result.reason}); inert`);
 			return null;
 		default: {
 			const exhaustive: never = result;
@@ -180,15 +183,15 @@ export default function langNag(pi: ExtensionAPI): void {
 		detection = IDLE;
 	};
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		try {
 			cancelDetection();
-			config = ctx.agent.kind === "main" ? loadConfig(ctx.cwd) : null;
+			config = ctx.agent.kind === "main" ? await loadConfig(pi, ctx.cwd) : null;
 			if (ctx.agent.kind !== "main") return;
 			if (config) {
 				pi.logger.info(`lang-nag: active (language=${config.language})`);
 			} else {
-				pi.logger.info("lang-nag: no lang-nag section in omomp.* found — inert");
+				pi.logger.info("lang-nag: inert");
 			}
 		} catch (error) {
 			config = null;
@@ -196,10 +199,10 @@ export default function langNag(pi: ExtensionAPI): void {
 		}
 	});
 	// Switching sessions re-reads cwd-local config.
-	pi.on("session_switch", (_event, ctx) => {
+	pi.on("session_switch", async (_event, ctx) => {
 		try {
 			cancelDetection();
-			config = ctx.agent.kind === "main" ? loadConfig(ctx.cwd) : null;
+			config = ctx.agent.kind === "main" ? await loadConfig(pi, ctx.cwd) : null;
 		} catch (error) {
 			config = null;
 			pi.logger.warn("lang-nag: session switch failed", { error: errorText(error) });

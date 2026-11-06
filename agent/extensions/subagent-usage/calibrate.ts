@@ -252,8 +252,8 @@ export function stopCalibration(): void {
 	worker = undefined;
 }
 
-async function calibrateOnce(session: AgentSession, mode: CalibrationMode, consented: () => boolean): Promise<CalibrationOutcome> {
-	if (!consented()) return { kind: "declined" };
+async function calibrateOnce(session: AgentSession, mode: CalibrationMode, consented: () => Promise<boolean>): Promise<CalibrationOutcome> {
+	if (!(await consented())) return { kind: "declined" };
 	const scan = await scanTranscripts();
 	if (scan.kind === "failed") return { kind: "failed", reason: scan.reason };
 	const now = Date.now();
@@ -281,7 +281,7 @@ async function calibrateOnce(session: AgentSession, mode: CalibrationMode, conse
 		quota: quotaFrom(scan.spend, reports, history, tracked, trackedModels, sinceMs, now),
 	};
 	// Consent is re-read at commit: an `off` during the scan discards the result.
-	if (!consented()) return { kind: "declined" };
+	if (!(await consented())) return { kind: "declined" };
 	writeCalibration(calibration);
 	return { kind: "ready", calibration, files: scan.files, parsed: scan.parsed };
 }
@@ -292,7 +292,11 @@ let running: Promise<CalibrationOutcome> | undefined;
  * One calibration per process at a time; a caller arriving mid-run shares it. A `full` request that arrives
  * during a `quota` run runs again afterwards, so its priors are recomputed.
  */
-export async function calibrate(session: AgentSession, mode: CalibrationMode, consented: () => boolean): Promise<CalibrationOutcome> {
+export async function calibrate(
+	session: AgentSession,
+	mode: CalibrationMode,
+	consented: () => Promise<boolean>,
+): Promise<CalibrationOutcome> {
 	if (running) {
 		const shared = await running;
 		if (mode === "quota") return shared;
