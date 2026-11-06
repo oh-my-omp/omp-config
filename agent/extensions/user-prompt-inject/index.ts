@@ -42,7 +42,10 @@
 // messages on the root session's current branch (`getBranch()` keeps
 // pre-compaction entries) with `attribution: "user"` and not `synthetic`;
 // its ask answers are the `ask` tool results on that branch
-// (`_shared/ask-answers.ts`). Attribution is set by whoever sends the message,
+// (`_shared/ask-answers.ts`). A subagent OMP runs in a subagent worker thread
+// sees the root as a peer stub without `getBranch`; it reads the root's
+// persisted transcript instead and takes the path from its last entry.
+// Attribution is set by whoever sends the message,
 // so extensions that inject user-role messages must send them with
 // `attribution: "agent"`.
 //
@@ -60,7 +63,14 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import type { DeveloperMessage } from "@oh-my-pi/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import {
+	type AgentSession,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type FileEntry,
+	loadEntriesFromFile,
+	type SessionEntry,
+} from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { errorText } from "../_shared/errors.ts";
@@ -96,10 +106,11 @@ type SpecParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
+/** Why the root's prompts cannot be read; the context hook warns once per reason and injects nothing. */
+type MissingRoot = { readonly kind: "missing"; readonly reason: string };
+
 /** The root session's human prompts and, separately, the ask answers given there; both oldest first. */
-type RootPrompts =
-	| { readonly kind: "ok"; readonly prompts: readonly string[]; readonly answers: readonly string[] }
-	| { readonly kind: "missing"; readonly reason: string };
+type RootPrompts = { readonly kind: "ok"; readonly prompts: readonly string[]; readonly answers: readonly string[] } | MissingRoot;
 
 // --- discovery + parsing ----------------------------------------------------
 
@@ -242,8 +253,41 @@ function renderSpec(spec: InjectSpec, root: { readonly prompts: readonly string[
 
 // --- root prompt source -------------------------------------------------------
 
+/**
+ * The root session's current branch. A root on this thread is a live session; when this subagent
+ * runs in a subagent worker thread, the root is a peer stub whose session manager exposes its
+ * file and cwd but not `getBranch`, so its branch is read from its persisted transcript.
+ */
+async function rootBranch(
+	session: AgentSession,
+): Promise<{ readonly kind: "ok"; readonly entries: readonly SessionEntry[] } | MissingRoot> {
+	const manager = session.sessionManager;
+	if (typeof manager.getBranch === "function") return { kind: "ok", entries: manager.getBranch() };
+	const file = manager.getSessionFile();
+	if (!file) return { kind: "missing", reason: "root session on another thread has no persisted transcript" };
+	return { kind: "ok", entries: leafPath(await loadEntriesFromFile(file)) };
+}
+
+/** The persisted branch: from the last entry (the persisted leaf) back to the first, oldest first. */
+function leafPath(entries: readonly FileEntry[]): SessionEntry[] {
+	const byId = new Map<string, SessionEntry>();
+	let leaf: SessionEntry | undefined;
+	for (const entry of entries) {
+		if (entry.type === "session") continue;
+		byId.set(entry.id, entry);
+		leaf = entry;
+	}
+	const branch: SessionEntry[] = [];
+	const visited = new Set<string>();
+	for (let entry = leaf; entry && !visited.has(entry.id); entry = entry.parentId === null ? undefined : byId.get(entry.parentId)) {
+		visited.add(entry.id);
+		branch.push(entry);
+	}
+	return branch.reverse();
+}
+
 /** Walk the spawn tree from this subagent to the root main session and read its user prompts. */
-function rootPrompts(ctx: ExtensionContext): RootPrompts {
+async function rootPrompts(ctx: ExtensionContext): Promise<RootPrompts> {
 	const registry = AgentRegistry.global();
 	const visited = new Set<string>();
 	let id = ctx.agent.parentId;
@@ -254,9 +298,11 @@ function rootPrompts(ctx: ExtensionContext): RootPrompts {
 		if (!ref) return { kind: "missing", reason: `ancestor ${id} not in registry` };
 		if (ref.kind === "main") {
 			if (!ref.session) return { kind: "missing", reason: `root ${id} has no live session` };
+			const branch = await rootBranch(ref.session);
+			if (branch.kind === "missing") return branch;
 			const prompts: string[] = [];
 			const answers: string[] = [];
-			for (const entry of ref.session.sessionManager.getBranch()) {
+			for (const entry of branch.entries) {
 				if (entry.type !== "message") continue;
 				const message = entry.message;
 				if (message.role === "toolResult") {
@@ -326,10 +372,10 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("context", (event, ctx) => {
+	pi.on("context", async (event, ctx) => {
 		try {
 			if (active.length === 0) return;
-			const root = rootPrompts(ctx);
+			const root = await rootPrompts(ctx);
 			switch (root.kind) {
 				case "missing":
 					if (warnedReason !== root.reason) {

@@ -26,12 +26,16 @@
 // `session_start` awaits the load (bounded below the host's handler timeout) so
 // a `/compact` cannot race it; `before_agent_start` awaits the same in-flight
 // promise as a safety net. Registers no tools or commands and writes no files.
-// Scope: the root main session; the table is process-wide, so a process hosting
-// several top-level sessions shares one union. Failure policy: no Antigravity
-// model or credential is a silent no-op; when no account yields a usable list the
-// table keeps its previous contents, a warning goes to the log and the main UI,
-// and the next root session start retries. Nothing throws into omp.
+// Scope: the root main session; the table is process-wide per thread, so a
+// process hosting several top-level sessions shares one union. A subagent
+// worker thread loads its own copy of the provider module, so the first session
+// OMP places in each worker loads that thread's table the same way. Failure
+// policy: no Antigravity model or credential is a silent no-op; when no account
+// yields a usable list the table keeps its previous contents, a warning goes to
+// the log and the main UI, and the next root (or worker) session start retries.
+// Nothing throws into omp.
 
+import { isMainThread } from "node:worker_threads";
 import {
 	ANTIGRAVITY_MODEL_WIRE_PROFILES,
 	ensureAntigravityVersion,
@@ -232,7 +236,8 @@ export default function antigravityWireProfiles(pi: ExtensionAPI): void {
 	pi.setLabel(tr("Antigravity wire profiles", "Antigravity 线路配置"));
 
 	pi.on("session_start", async (_event, ctx) => {
-		if (ctx.agent.kind !== "main") return;
+		// The table is per thread: on the main thread only the root loads it; in a subagent worker the first session does.
+		if (ctx.agent.kind !== "main" && isMainThread) return;
 		if (state.kind === "idle") {
 			const done = load(pi, ctx).catch((error: unknown) => {
 				state = { kind: "idle" };

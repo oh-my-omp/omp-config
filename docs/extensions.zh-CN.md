@@ -26,7 +26,7 @@
 | 16 | `doc-polish` | [doc-polish](#doc-polish) | 主 + 子 | 否 | `omomp.yml#doc-polish`（本机） | 选择回退角色、并发数和 `@doc-polish.*` 模型绑定 |
 | 17 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
 | 18 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
-| 19 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话，进程全局表 | 是 | 提供商报告的模型元数据 | 有凭据时从 Antigravity 刷新输出容量；无本地策略文件 |
+| 19 | `antigravity-wire-profiles` | [antigravity-wire-profiles](#antigravity-wire-profiles) | 根主会话，以及每个子代理 worker 线程的第一个会话；按线程的表 | 是 | 提供商报告的模型元数据 | 有凭据时从 Antigravity 刷新输出容量；无本地策略文件 |
 | 20 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omomp.yml#omp-config-autoupdate`（本机） | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
 | 21 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | agent 目录的 `omomp.yml#omomp-lang` 或环境变量 | 在本机段选择界面语言，或用 `OMOMP_LANG` 覆盖 |
 | 22 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明与专题，重启 OMP 后加载 |
@@ -289,7 +289,7 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 
 OMP 的 `google-antigravity` provider 只对静态表 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（`@oh-my-pi/pi-catalog/wire/gemini-headers`）中已有的 wire id 替换调用方的 `maxTokens`；表抓包之后新增的 id（如 `gemini-4-argon-*`）不在其中，导致 compaction 的 512 token 摘要请求原样发出，额度被 thinking 耗尽并报错 `thought-only response without final output`。
 
-在根会话 `session_start`（最多等待 20 秒，`before_agent_start` 等待同一次加载）时，扩展用当前会话凭据和本机已存的全部 Antigravity 账号调用 `POST <baseUrl>/v1internal:fetchAvailableModels`，合并非 internal、非 disabled 且 `maxOutputTokens` 为正整数的条目，原地更新 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（只新增或覆盖，不删除条目）。若所有账号均获取失败，则保留原表内容，记日志并弹一次主 UI 警告，下次根会话启动时重试。
+在根会话 `session_start`（最多等待 20 秒，`before_agent_start` 等待同一次加载）时，扩展用当前会话凭据和本机已存的全部 Antigravity 账号调用 `POST <baseUrl>/v1internal:fetchAvailableModels`，合并非 internal、非 disabled 且 `maxOutputTokens` 为正整数的条目，原地更新 `ANTIGRAVITY_MODEL_WIRE_PROFILES`（只新增或覆盖，不删除条目）。这张表按线程存在：子代理 worker 线程（`task.workerThreads`）加载自己的一份 provider 模块，所以 OMP 放进每个 worker 的第一个会话会为该线程执行同样的加载。若所有账号均获取失败，则保留原表内容，记日志并弹一次主 UI 警告，下次根会话（或 worker 中的会话）启动时重试。
 
 ### argon-long-output
 

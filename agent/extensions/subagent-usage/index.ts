@@ -31,6 +31,7 @@
 // session_start/switch while enabled) and command `/subagent-usage` in main
 // and sub sessions. Failures are tool errors or UI warnings, never thrown into omp.
 // ============================================================================
+import { dirname } from "node:path";
 import { type AgentSession, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { worktreeSessionDirs } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { callerSession } from "../_shared/caller-session.ts";
@@ -125,7 +126,10 @@ async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
 			: [],
 	);
 	const root = rootSession(session).sessionManager;
-	const sessionDir = root.getSessionDir();
+	// A root on another thread (this subagent runs in a subagent worker) is a peer stub exposing its
+	// session file and cwd but not getSessionDir; a persisted main session's directory holds its file.
+	const rootFile = root.getSessionFile();
+	const sessionDir = rootFile ? dirname(rootFile) : root.getSessionDir();
 	const dirs = [sessionDir, ...(await worktreeSessionDirs(root.getCwd(), sessionDir))];
 	if (!consented()) {
 		return text("subagent_usage was disabled. Only a human can enable it with /subagent-usage on; do not retry.", true);
