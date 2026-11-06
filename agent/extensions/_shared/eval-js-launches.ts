@@ -1,12 +1,13 @@
 /**
  * JavaScript eval cells, parsed with omp's own Babel parser and the kernel's
  * options: the cell's module bindings (`import`, `require`, destructuring,
- * `Bun.file(…)` results) and the process launch a node starts. Mechanics only:
- * what to do with a parse error, a non-literal command or an alias is the
- * caller's decision. Used by delete-guard (fail closed) and tool-policy-nag's
- * pty lane (fail open).
+ * `Bun.file(…)` results), the launcher aliases it binds (`const $ = Bun.$`,
+ * `const e = require("child_process").execSync`, …) and the process launch a
+ * node starts. Mechanics only: what to do with a parse error, a non-literal
+ * command or an alias is the caller's decision. Used by delete-guard (fail
+ * closed) and tool-policy-nag's pty lane (fail open).
  */
-import type { Expression, Node, ObjectExpression, Program } from "@babel/types";
+import type { ArrayExpression, Expression, Node, ObjectExpression, ObjectProperty, Program } from "@babel/types";
 import { loadBabelParser } from "@oh-my-pi/pi-coding-agent/eval/js/shared/rewrite-imports";
 import type { LaunchVia, LaunchWord } from "./eval-py-launches.ts";
 
@@ -23,6 +24,10 @@ const { parse: babelParse } = await loadBabelParser();
  * (null text when it interpolates); `bridge`: `tool.bash({ command })` and
  * `tool.write` to `xd://bash`, which run as real `bash` tool calls. A `null`
  * command or word text is not a literal the code spells out.
+ * `indeterminate`: a launch whose command the source does not determine — a
+ * spread argument, a spread element in an argv array, or an argument object
+ * with a spread, method or accessor, computed non-literal key or duplicate key.
+ * `what` names the unreadable part.
  */
 export type JsLaunch =
 	| { readonly kind: "childScript"; readonly api: string; readonly via: LaunchVia; readonly text: string | null }
@@ -35,12 +40,26 @@ export type JsLaunch =
 	  }
 	| { readonly kind: "bunSpawn"; readonly words: readonly LaunchWord[] | null }
 	| { readonly kind: "bunShell"; readonly text: string | null }
-	| { readonly kind: "bridge"; readonly source: "bash" | "deviceWrite"; readonly command: string | null };
+	| { readonly kind: "bridge"; readonly source: "bash" | "deviceWrite"; readonly command: string | null }
+	| { readonly kind: "indeterminate"; readonly what: string };
 
 export type JsCell = { readonly program: Program; readonly bindings: Bindings };
 
-/** Parses a cell the way the kernel does; a syntax error Babel cannot recover from throws. */
-export function parseJs(code: string): JsCell {
+/**
+ * Module and launcher names a session's earlier cells bound and ran. Only the
+ * names that can reach a launcher are carried: `child_process` and `bun` module
+ * aliases, and launcher members.
+ */
+export type JsCarry = {
+	readonly modules: ReadonlyMap<string, Module>;
+	readonly members: ReadonlyMap<string, string>;
+};
+
+/** The carry of a session with no earlier cells. */
+export const EMPTY_CARRY: JsCarry = { modules: new Map(), members: new Map() };
+
+/** Parses a cell the way the kernel does; a syntax error Babel cannot recover from throws. `prior` seeds the names earlier cells of the session carried. */
+export function parseJs(code: string, prior: JsCarry = EMPTY_CARRY): JsCell {
 	const file = babelParse(code, {
 		sourceType: "module",
 		allowAwaitOutsideFunction: true,
@@ -52,7 +71,7 @@ export function parseJs(code: string): JsCell {
 		errorRecovery: true,
 		plugins: ["typescript"],
 	});
-	return { program: file.program, bindings: collectBindings(file.program) };
+	return { program: file.program, bindings: collectBindings(file.program, prior) };
 }
 
 /** The launch a node starts — a child_process, Bun or harness-bridge call, or a `Bun.$` template — or null. */
@@ -63,90 +82,147 @@ export function jsLaunchOf(node: Node, bindings: Bindings): JsLaunch | null {
 		return isShellTag ? { kind: "bunShell", text: literalString(node.quasi) } : null;
 	}
 	if (node.type !== "CallExpression" && node.type !== "OptionalCallExpression") return null;
+	const target = calleeApi(node.callee, bindings);
+	if (target === null) return null;
+	const { api, via } = target;
 	const args = node.arguments.filter((arg): arg is Expression => arg.type !== "SpreadElement" && arg.type !== "ArgumentPlaceholder");
-	const callee = node.callee;
-	let api: string | null = null;
-	let via: LaunchVia = "direct";
-	if (callee.type === "Identifier") {
-		const member = bindings.members.get(callee.name);
-		if (member !== undefined) {
-			api = member;
-			via = member.endsWith(`.${callee.name}`) ? "direct" : "alias";
-		} else if (DISTINCTIVE_LAUNCH.has(callee.name)) {
-			api = `child_process.${callee.name}`;
-			via = "distinctive";
-		}
-	} else if (callee.type === "MemberExpression" || callee.type === "OptionalMemberExpression") {
-		const property = propertyName(callee);
-		if (property === null) return null;
-		if (callee.object.type === "Identifier" && callee.object.name === "tool") return bridgeLaunch(property, args[0]);
-		if (isBunMember(callee, "spawn") || isBunMember(callee, "spawnSync")) return { kind: "bunSpawn", words: bunSpawnWords(args[0]) };
-		const module = receiverModule(callee.object, bindings);
-		if (module !== null) {
-			api = `${module}.${property}`;
-			via = callee.object.type === "Identifier" && callee.object.name !== module ? "alias" : "direct";
-		} else if (property === "execSync" || property === "spawnSync" || property === "execFileSync") {
-			api = `child_process.${property}`;
-			via = "distinctive";
-		}
-	}
+	// A spread argument reorders or widens every positional slot at runtime, so the
+	// command the call hands its launcher cannot be read from the source.
+	const opaque = args.length !== node.arguments.length;
 	switch (api) {
+		case "tool.bash":
+			return opaque ? unknownLaunch(api) : bashBridge(args[0]);
+		case "tool.write":
+			return opaque ? unknownLaunch(api) : deviceWriteBridge(args[0]);
 		case "child_process.exec":
 		case "child_process.execSync":
-			return { kind: "childScript", api, via, text: literalString(args[0]) };
+			return opaque ? unknownLaunch(api) : { kind: "childScript", api, via, text: literalString(args[0]) };
 		case "child_process.spawn":
 		case "child_process.spawnSync":
 		case "child_process.execFile":
-		case "child_process.execFileSync":
-			return { kind: "childSpawn", api, via, ...spawnArguments(args) };
+		case "child_process.execFileSync": {
+			if (opaque) return unknownLaunch(api);
+			const shape = spawnArguments(args);
+			return shape.kind === "indeterminate" ? unknownLaunch(`${api} options`) : { kind: "childSpawn", api, via, ...shape.value };
+		}
 		case "bun.spawn":
-		case "bun.spawnSync":
-			return { kind: "bunSpawn", words: bunSpawnWords(args[0]) };
+		case "bun.spawnSync": {
+			if (opaque) return unknownLaunch(api);
+			const words = bunSpawnWords(args[0]);
+			return words.kind === "indeterminate" ? unknownLaunch(`${api} command list`) : { kind: "bunSpawn", words: words.value };
+		}
 		default:
 			return null;
 	}
 }
 
-/** `tool.bash({ command })`, or `tool.write` to `xd://bash`; other `tool.*` calls and device paths start no shell. */
-function bridgeLaunch(property: string, arg: Node | undefined): JsLaunch | null {
-	if (property === "bash")
+/** The API a callee names, with how the cell reached it: a bound launcher name, `tool.*`, `Bun.spawn*`, or a module member. */
+function calleeApi(callee: Node, bindings: Bindings): { readonly api: string; readonly via: LaunchVia } | null {
+	if (callee.type === "Identifier") {
+		const member = bindings.members.get(callee.name);
+		if (member !== undefined) return { api: member, via: member.endsWith(`.${callee.name}`) ? "direct" : "alias" };
+		return DISTINCTIVE_LAUNCH.has(callee.name) ? { api: `child_process.${callee.name}`, via: "distinctive" } : null;
+	}
+	if (callee.type !== "MemberExpression" && callee.type !== "OptionalMemberExpression") return null;
+	const property = propertyName(callee);
+	if (property === null) return null;
+	if (callee.object.type === "Identifier" && callee.object.name === "tool") return { api: `tool.${property}`, via: "direct" };
+	if (isBunMember(callee, "spawn") || isBunMember(callee, "spawnSync")) return { api: `bun.${property}`, via: "direct" };
+	const module = receiverModule(callee.object, bindings);
+	if (module !== null)
 		return {
-			kind: "bridge",
-			source: "bash",
-			command: arg?.type === "ObjectExpression" ? literalString(objectProperty(arg, "command")) : null,
+			api: `${module}.${property}`,
+			via: callee.object.type === "Identifier" && callee.object.name !== module ? "alias" : "direct",
 		};
-	if (property !== "write" || arg?.type !== "ObjectExpression" || literalString(objectProperty(arg, "path")) !== "xd://bash") return null;
-	return { kind: "bridge", source: "deviceWrite", command: payloadCommand(objectProperty(arg, "content")) };
+	return DISTINCTIVE_LAUNCH.has(property) ? { api: `child_process.${property}`, via: "distinctive" } : null;
+}
+
+const unknownLaunch = (what: string): JsLaunch => ({ kind: "indeterminate", what });
+
+/** `tool.bash({ command })`; any other argument is a bridge with an unknown command. */
+function bashBridge(arg: Node | undefined): JsLaunch {
+	if (arg?.type !== "ObjectExpression") return { kind: "bridge", source: "bash", command: null };
+	const props = propsOf(arg);
+	if (props.kind === "indeterminate") return unknownLaunch("the `tool.bash` arguments");
+	return { kind: "bridge", source: "bash", command: literalString(props.value.get("command")) };
+}
+
+/** `tool.write` to `xd://bash`; other paths start no shell. */
+function deviceWriteBridge(arg: Node | undefined): JsLaunch | null {
+	if (arg?.type !== "ObjectExpression") return null;
+	const props = propsOf(arg);
+	if (props.kind === "indeterminate") return unknownLaunch("the `tool.write` arguments");
+	if (literalString(props.value.get("path")) !== "xd://bash") return null;
+	const command = payloadCommand(props.value.get("content"));
+	if (command.kind === "indeterminate") return unknownLaunch("the xd://bash payload");
+	return { kind: "bridge", source: "deviceWrite", command: command.value };
 }
 
 /** child_process spawn arguments: `(command, [args], options)` or `(command, options)`; an argument list that is not an array is unknown. */
-function spawnArguments(args: readonly Node[]): { readonly shell: boolean; readonly words: readonly LaunchWord[] | null } {
+function spawnArguments(args: readonly Expression[]): Read<{ readonly shell: boolean; readonly words: readonly LaunchWord[] | null }> {
 	const [command, second, third] = args;
-	if (second && second.type !== "ArrayExpression" && second.type !== "ObjectExpression") return { shell: false, words: null };
-	const list = second?.type === "ArrayExpression" ? second.elements : [];
-	const options = second?.type === "ArrayExpression" ? third : second;
-	const words = argvOf([command ?? null, ...list.map((item) => (item?.type === "SpreadElement" ? null : item))]);
-	return { shell: mayUseShell(options), words };
+	if (second !== undefined && second.type !== "ArrayExpression" && second.type !== "ObjectExpression") {
+		return read({ shell: false, words: null });
+	}
+	const list = second?.type === "ArrayExpression" ? second : null;
+	const options = list === null ? second : third;
+	const words = argvOf([command], list);
+	const shell = mayUseShell(options);
+	if (words.kind === "indeterminate" || shell.kind === "indeterminate") return UNKNOWN;
+	return read({ shell: shell.value, words: words.value });
 }
 
 /** `Bun.spawn([...])` or `Bun.spawn({ cmd: [...] })`; anything else is unknown. */
-function bunSpawnWords(arg: Node | undefined): readonly LaunchWord[] | null {
-	const list = arg?.type === "ArrayExpression" ? arg : arg?.type === "ObjectExpression" ? objectProperty(arg, "cmd") : null;
-	if (list?.type !== "ArrayExpression") return null;
-	return argvOf(list.elements.map((item) => (item?.type === "SpreadElement" ? null : item)));
+function bunSpawnWords(arg: Node | undefined): Read<readonly LaunchWord[] | null> {
+	if (arg?.type === "ArrayExpression") return argvOf([], arg);
+	if (arg?.type !== "ObjectExpression") return read(null);
+	const props = propsOf(arg);
+	if (props.kind === "indeterminate") return UNKNOWN;
+	const cmd = props.value.get("cmd");
+	return cmd?.type === "ArrayExpression" ? argvOf([], cmd) : read(null);
 }
 
 /** child_process launch names only it uses: matched as bare calls too, so imports from earlier cells are caught. */
 const DISTINCTIVE_LAUNCH: ReadonlySet<string> = new Set(["execSync", "spawnSync", "execFileSync"]);
 
-type Module = "fs" | "fs/promises" | "child_process" | "bun";
+/** Launcher members a binding may hold: a name bound to one of them is a launcher wherever it is called. */
+const LAUNCHER_MEMBERS: ReadonlySet<string> = new Set([
+	"bun.$",
+	"bun.spawn",
+	"bun.spawnSync",
+	"tool.bash",
+	"child_process.exec",
+	"child_process.execSync",
+	"child_process.spawn",
+	"child_process.spawnSync",
+	"child_process.execFile",
+	"child_process.execFileSync",
+]);
 
-/** Names bound in this cell: whole-module bindings, imported members (`module.export`), and `Bun.file(…)` results. */
-type Bindings = {
+/** Modules whose functions can start a process; their aliases are carried between cells. */
+const LAUNCHER_MODULES: ReadonlySet<Module> = new Set<Module>(["child_process", "bun"]);
+
+export type Module = "fs" | "fs/promises" | "child_process" | "bun";
+
+/** Names bound in this cell: whole-module bindings, imported or destructured members (`module.export`), launcher aliases, and `Bun.file(…)` results. */
+export type Bindings = {
 	readonly modules: Map<string, Module>;
 	readonly members: Map<string, string>;
 	readonly bunFiles: Set<string>;
 };
+
+/** The launcher-reaching names this cell binds, for the session's later cells. */
+export function carriedBindings(bindings: Bindings): JsCarry {
+	return {
+		modules: new Map([...bindings.modules].filter(([, module]) => LAUNCHER_MODULES.has(module))),
+		members: new Map([...bindings.members].filter(([, member]) => LAUNCHER_MEMBERS.has(member))),
+	};
+}
+
+/** A value the source determines, or a shape the runtime may change (spread, method, accessor, computed or duplicate key, spread array element). */
+type Read<T> = { readonly kind: "read"; readonly value: T } | { readonly kind: "indeterminate" };
+const read = <T>(value: T): Read<T> => ({ kind: "read", value });
+const UNKNOWN: { readonly kind: "indeterminate" } = { kind: "indeterminate" };
 
 function isNode(value: unknown): value is Node {
 	return typeof value === "object" && value !== null && "type" in value && typeof value.type === "string";
@@ -210,8 +286,34 @@ export function isBunFile(node: Node, bindings: Bindings): boolean {
 	return node.type === "CallExpression" && isBunMember(node.callee, "file");
 }
 
-function collectBindings(root: Node): Bindings {
-	const bindings: Bindings = { modules: new Map(), members: new Map(), bunFiles: new Set() };
+/** The launcher member a value names: `Bun.$`, `Bun.spawn`, `tool.bash`, a child_process function, or a launcher name already bound. */
+function launcherMemberOf(node: Node, bindings: Bindings): string | null {
+	let member: string | null = null;
+	if (node.type === "Identifier") member = bindings.members.get(node.name) ?? null;
+	else if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
+		const property = propertyName(node);
+		if (property !== null) {
+			if (isBunMember(node, "$") || isBunMember(node, "spawn") || isBunMember(node, "spawnSync")) member = `bun.${property}`;
+			else if (node.object.type === "Identifier" && node.object.name === "tool") member = `tool.${property}`;
+			else if (receiverModule(node.object, bindings) === "child_process") member = `child_process.${property}`;
+		}
+	}
+	return member !== null && LAUNCHER_MEMBERS.has(member) ? member : null;
+}
+
+/** Binds a declared or assigned name to the module, Bun file or launcher its value is. */
+function bindName(bindings: Bindings, name: string, init: Node, { launchersOnly }: { readonly launchersOnly: boolean }): void {
+	if (!launchersOnly) {
+		const module = receiverModule(init, bindings);
+		if (module !== null) bindings.modules.set(name, module);
+		if (isBunFile(init, bindings)) bindings.bunFiles.add(name);
+	}
+	const launcher = launcherMemberOf(init, bindings);
+	if (launcher !== null) bindings.members.set(name, launcher);
+}
+
+function collectBindings(root: Node, prior: JsCarry): Bindings {
+	const bindings: Bindings = { modules: new Map(prior.modules), members: new Map(prior.members), bunFiles: new Set() };
 	walk(root, null, (node) => {
 		if (node.type === "ImportDeclaration") {
 			const module = moduleOf(node.source.value);
@@ -224,15 +326,19 @@ function collectBindings(root: Node): Bindings {
 			}
 			return;
 		}
+		// Assignments to a name carry launcher aliases only: `s = Bun.spawn`.
+		if (node.type === "AssignmentExpression" && node.operator === "=" && node.left.type === "Identifier") {
+			bindName(bindings, node.left.name, node.right, { launchersOnly: true });
+			return;
+		}
 		if (node.type !== "VariableDeclarator" || !node.init) return;
 		if (node.id.type === "Identifier") {
-			const module = receiverModule(node.init, bindings);
-			if (module !== null) bindings.modules.set(node.id.name, module);
-			if (isBunFile(node.init, bindings)) bindings.bunFiles.add(node.id.name);
+			bindName(bindings, node.id.name, node.init, { launchersOnly: false });
 			return;
 		}
 		if (node.id.type !== "ObjectPattern") return;
-		const module = receiverModule(node.init, bindings);
+		// `const { spawn, $ } = Bun` destructures the global Bun object.
+		const module = node.init.type === "Identifier" && node.init.name === "Bun" ? "bun" : receiverModule(node.init, bindings);
 		if (module === null) return;
 		for (const property of node.id.properties) {
 			if (property.type !== "ObjectProperty" || property.key.type !== "Identifier") continue;
@@ -260,49 +366,64 @@ function literalString(node: Node | null | undefined): string | null {
 	return null;
 }
 
-function objectProperty(node: ObjectExpression, key: string): Node | null {
+/** The static key of an object property, or null when the runtime key is not fixed by the source. */
+function keyOf(property: ObjectProperty): string | null {
+	const key = property.key;
+	if (key.type === "Identifier") return property.computed ? null : key.name;
+	if (key.type === "NumericLiteral") return String(key.value);
+	return literalString(key);
+}
+
+/** An object literal's properties, or indeterminate when a spread, method, accessor, computed non-literal key or duplicate key makes the runtime value differ from the source. */
+function propsOf(node: ObjectExpression): Read<ReadonlyMap<string, Node>> {
+	const props = new Map<string, Node>();
 	for (const property of node.properties) {
-		if (property.type !== "ObjectProperty") continue;
-		const name =
-			property.key.type === "Identifier" && !property.computed
-				? property.key.name
-				: property.key.type === "StringLiteral"
-					? property.key.value
-					: null;
-		if (name === key) return property.value;
+		if (property.type !== "ObjectProperty") return UNKNOWN;
+		const name = keyOf(property);
+		if (name === null || props.has(name)) return UNKNOWN;
+		props.set(name, property.value);
 	}
-	return null;
+	return read(props);
 }
 
 /**
  * Whether child_process options may start a shell: a `shell` that is not literally `false`, `null` or `undefined`
- * (`shell: "/bin/sh"`, `shell: flag`), or options the code does not spell out (a variable, a spread).
+ * (`shell: "/bin/sh"`, `shell: flag`), or options the code does not spell out (a variable); indeterminate when the
+ * options object's shape is not fixed by the source.
  */
-function mayUseShell(options: Node | undefined): boolean {
-	if (options === undefined) return false;
-	if (options.type !== "ObjectExpression") return true;
-	if (options.properties.some((property) => property.type === "SpreadElement")) return true;
-	const shell = objectProperty(options, "shell");
-	if (shell === null) return false;
-	if (shell.type === "BooleanLiteral") return shell.value;
-	return shell.type !== "NullLiteral" && !(shell.type === "Identifier" && shell.name === "undefined");
+function mayUseShell(options: Node | undefined): Read<boolean> {
+	if (options === undefined) return read(false);
+	if (options.type !== "ObjectExpression") return read(true);
+	const props = propsOf(options);
+	if (props.kind === "indeterminate") return UNKNOWN;
+	const shell = props.value.get("shell");
+	if (shell === undefined) return read(false);
+	if (shell.type === "BooleanLiteral") return read(shell.value);
+	return read(shell.type !== "NullLiteral" && !(shell.type === "Identifier" && shell.name === "undefined"));
 }
 
-function argvOf(nodes: readonly (Node | null | undefined)[]): LaunchWord[] {
-	return nodes.map((node) => {
-		const text = literalString(node);
-		return text === null ? { text: "", literal: false } : { text, literal: true };
-	});
+const wordOf = (node: Node | null | undefined): LaunchWord => {
+	const text = literalString(node);
+	return text === null ? { text: "", literal: false } : { text, literal: true };
+};
+
+/** The argv words: `head` then `array`'s elements; a spread element makes the list indeterminate. */
+function argvOf(head: readonly (Node | null | undefined)[], array: ArrayExpression | null): Read<readonly LaunchWord[]> {
+	const elements = array?.elements ?? [];
+	if (elements.some((item) => item?.type === "SpreadElement")) return UNKNOWN;
+	return read([...head, ...elements].map(wordOf));
 }
 
 /** The command of an `xd://bash` payload written as a JSON string or as `JSON.stringify({ command: … })`. */
-function payloadCommand(content: Node | null): string | null {
+function payloadCommand(content: Node | null | undefined): Read<string | null> {
 	if (content?.type === "CallExpression" && isMember(content.callee, "JSON", "stringify")) {
 		const [object] = content.arguments;
-		return object?.type === "ObjectExpression" ? literalString(objectProperty(object, "command")) : null;
+		if (object?.type !== "ObjectExpression") return read(null);
+		const props = propsOf(object);
+		return props.kind === "indeterminate" ? UNKNOWN : read(literalString(props.value.get("command")));
 	}
 	const text = literalString(content);
-	return text === null ? null : bridgeCommand(text);
+	return read(text === null ? null : bridgeCommand(text));
 }
 
 /** The `command` of an `xd://bash` JSON payload, or null when it is not literal JSON with a string command. */

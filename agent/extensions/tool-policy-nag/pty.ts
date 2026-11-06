@@ -638,9 +638,9 @@ function pythonHit(code: string): PtyHit | null {
 }
 
 async function javascriptHit(code: string): Promise<PtyHit | null> {
-	let cell: Awaited<ReturnType<typeof parseJs>>;
+	let cell: ReturnType<typeof parseJs>;
 	try {
-		cell = await parseJs(code);
+		cell = parseJs(code);
 	} catch {
 		// A cell Babel cannot parse does not run: nothing to route.
 		return null;
@@ -667,6 +667,9 @@ async function javascriptHit(code: string): Promise<PtyHit | null> {
 				return;
 			case "bridge":
 				// The bridged command reaches the lane as its own `bash` call.
+				return;
+			case "indeterminate":
+				// The command cannot be read from the source; the pty lane fails open, as it does for unreadable launches.
 				return;
 			default: {
 				const unreachable: never = launch;

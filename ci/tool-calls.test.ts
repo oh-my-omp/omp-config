@@ -9,7 +9,7 @@ describe("host tool call boundary", () => {
 			expect(watchedCallOf(tool, { command: "date" })).toEqual(expected);
 			expect(watchedCallOf("write", { path: `xd://${tool}`, content: '{"command":"date"}' })).toEqual(expected);
 		}
-		expect(watchedCallOf("eval", { language: "py", code: "1 + 1" })).toEqual({ kind: "eval", language: "py", code: "1 + 1" });
+		expect(watchedCallOf("eval", { language: "py", code: "1 + 1" })).toEqual({ kind: "eval", language: "py", code: "1 + 1", reset: false });
 	});
 
 	test("ignores direct and device plugin calls regardless of payload", () => {

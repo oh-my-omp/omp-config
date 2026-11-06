@@ -1,13 +1,13 @@
 import { z } from "@oh-my-pi/pi-coding-agent";
 
-/** A host tool call that runs shell text or eval code, read from a `tool_call` event. */
+/** A host tool call that runs shell text or eval code, read from a `tool_call` event. `reset` is the eval cell's kernel reset flag. */
 export type WatchedCall =
 	| { readonly kind: "shell"; readonly tool: DeviceTool; readonly command: string }
-	| { readonly kind: "eval"; readonly language: string; readonly code: string };
+	| { readonly kind: "eval"; readonly language: string; readonly code: string; readonly reset: boolean };
 
 const shellSchema = z.object({ command: z.string() });
 const writeSchema = z.object({ path: z.string(), content: z.string() });
-const evalSchema = z.object({ language: z.string(), code: z.string() });
+const evalSchema = z.object({ language: z.string(), code: z.string(), reset: z.boolean().optional() });
 
 type DeviceTool = "bash" | "bash_bg";
 
@@ -48,7 +48,9 @@ export function watchedCallOf(toolName: string, input: unknown): WatchedCall | n
 		}
 		case "eval": {
 			const parsed = evalSchema.safeParse(input);
-			return parsed.success ? { kind: "eval", language: parsed.data.language, code: parsed.data.code } : null;
+			return parsed.success
+				? { kind: "eval", language: parsed.data.language, code: parsed.data.code, reset: parsed.data.reset === true }
+				: null;
 		}
 		default:
 			return null;

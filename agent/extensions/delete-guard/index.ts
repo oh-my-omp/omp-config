@@ -103,6 +103,13 @@
 //     or options not spelled out), `Bun.spawn|spawnSync` argv, `Bun.$`
 //     templates (posix), the `tool.bash({command})` bridge and
 //     `tool.write` to `xd://bash`.
+//     A launch whose command the source does not fix blocks as non-literal: a
+//     spread argument or argv element, or an argument object with a spread,
+//     method, accessor, computed non-literal or duplicate key. Launcher aliases
+//     (`const s = Bun.spawn`, `tool.bash`, child_process functions, and
+//     `child_process`/`bun` module aliases) judge as their launcher and carry to
+//     the session's later js cells until a `reset: true` cell, a `session_start`
+//     or `session_switch` (a new js kernel); a python reset does not clear them.
 // A command that is not a literal string (f-string or template with
 // placeholders, variable, concatenation) is blocked as non-literal. Names are
 // matched in the cell's text only: a generic name (`remove`, `run`, `exec`,
@@ -175,7 +182,7 @@ import { type ExtensionAPI, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { type Outcome, type Platform, runDeletion, supportedPlatform, trashUnavailable } from "./backends.ts";
-import { guardToolCall } from "./guard.ts";
+import { type EvalSession, guardToolCall, newEvalSession, resetEvalSession } from "./guard.ts";
 import { type Target, validateTargets } from "./targets.ts";
 
 const DELETE_TOOL = "delete";
@@ -284,9 +291,14 @@ async function runDelete(platform: Platform, rawParams: unknown, cwd: string, as
 }
 
 export default function deleteGuard(pi: ExtensionAPI): void {
+	// Launcher names the session's js cells bound: judged in order. The extension instance outlives omp
+	// sessions, but the js kernel does not: `session_start` and `session_switch` start a fresh kernel, so the names reset.
+	const evalSession: EvalSession = newEvalSession();
+	pi.on("session_start", () => resetEvalSession(evalSession));
+	pi.on("session_switch", () => resetEvalSession(evalSession));
 	pi.on("tool_call", async (event) => {
 		try {
-			return await guardToolCall(event.toolName, event.input, () => pi.getActiveTools().includes(DELETE_TOOL));
+			return await guardToolCall(event.toolName, event.input, () => pi.getActiveTools().includes(DELETE_TOOL), evalSession);
 		} catch (error) {
 			pi.logger.warn("delete-guard: guard failed; the call was blocked", { error: errorText(error) });
 			return { block: true, reason: `delete-guard: internal error (${errorText(error)}); the call was blocked.` };
