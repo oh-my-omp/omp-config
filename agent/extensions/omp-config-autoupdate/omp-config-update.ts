@@ -49,7 +49,23 @@
 // Untouched by every rule: keys and files the repo never had, app-managed
 // files (`// @orca-managed-pi-extension` first line, or the Otty marker
 // anywhere; see OTTY_MARKER), runtime state. A symlinked target is written
-// through to its resolved file.
+// through to its resolved file. The machine's own `omp-config-autoupdate.exclude`
+// omomp option (see EXCLUSIONS) overrides every rule below for the items it names.
+//
+// EXCLUSIONS. The machine lists items the updater never writes, creates or
+// deletes in `omp-config-autoupdate.exclude` of the agent dir's omomp file
+// (the section is machine-local; the repo never ships it). Entries are
+// agent-dir relative plain paths or globs (`agents/task-high.md`,
+// `extensions/foo/**`; a literal name covers its subtree, so `config.yml`
+// excludes the whole file) and, for structured files, `<file>:<dotted path>`
+// (`config.yml:task.agentModelOverrides`, `omomp.yml:lang-nag`). An invalid
+// option — ambiguous omomp files, a malformed entry — stops the whole apply
+// like every other preflight error. Excluded items keep their host copy and
+// their recorded base and are reported under `skipped`; excluding the updater
+// itself is only ever visible through that report. Excluded structured paths
+// merge like `local` ones (machine-owned), relocation and retirement ops that
+// touch an excluded path are dropped as whole operations, and a final
+// invariant check aborts the apply if any planned op still touches one.
 //
 // CUSTOMIZATIONS. A managed item other than machine-owned agent definitions
 // (MACHINE_OWNED_PLAIN, see OWNERSHIP) is merged three-way: host H, base B
@@ -440,6 +456,156 @@ function managedPlain(rel: string): boolean {
 const RESTART_SCOPED =
 	/^agent\/(SYSTEM_TEMPLATE\.md|APPEND_SYSTEM\.md|PERSONALITY\.md|extensions\/.+\.ts|extensions-last\/.+\.ts|extensions\/tool-topics\/(TOPIC|SURFACE)-[^/]+\.md)$/;
 
+// --- exclusions ---------------------------------------------------------------
+
+/**
+ * The machine's own `omp-config-autoupdate.exclude` list (omomp section): items
+ * the updater never writes, creates or deletes. Plain entries are agent-dir
+ * relative paths or globs (`agents/task-high.md`, `extensions/foo/**`, and a
+ * literal directory or file name covers everything under it, so `config.yml`
+ * excludes the whole structured file too); `<file>:<dotted.path>` excludes a
+ * field path inside a structured file (`config.yml:task.agentModelOverrides`).
+ * The section is machine-local: the repo never writes it and /sync-omp-config
+ * never carries it. `_shared/omomp.ts` cannot be imported here — this script
+ * runs standalone, where runtime host-package imports fail — so the section is
+ * located and checked by hand; the option's schema lives in index.ts.
+ * Excluded items keep their host copy and their recorded base untouched and are
+ * reported under `skipped`; the updater itself is only ever excluded visibly,
+ * through the same report.
+ */
+
+/** `field` names `path` or one of its ancestors; same contract as the `local` rule in merge.ts. */
+function coversPath(field: Path, path: Path): boolean {
+	return field.length <= path.length && field.every((part, index) => part === path[index]);
+}
+
+type ExcludeEntry =
+	| { readonly kind: "plain"; readonly match: (leaf: string) => boolean }
+	| { readonly kind: "field"; readonly item: string; readonly path: Path };
+
+interface Exclusions {
+	readonly entries: readonly ExcludeEntry[];
+	/** Structured rel (`agent/config.yml`) → excluded field paths. */
+	readonly fields: ReadonlyMap<string, readonly Path[]>;
+}
+
+/** Glob characters Bun.Glob treats as magic; a pattern without any matches literally and covers its subtree. */
+const GLOB_MAGIC = /[*?[\]{}!\\]/;
+
+/**
+ * The exclude entries of the agent dir's `omomp.*` files, as validated lists.
+ * One `omp-config-autoupdate` section across the omomp files is the machine's
+ * option; several sections or unreadable files make the machine's intent
+ * ambiguous and throw, so the apply stops before anything is planned. Entries
+ * normalize `agent/` prefixes and reject absolute paths, `..` and empty
+ * segments; `file:path` entries require a managed structured file. Anything
+ * invalid throws: an ambiguous option applies nothing.
+ */
+function readExclusions(agentDir: string): Exclusions {
+	/** One exclude operand as an agent-dir relative path: `agent/` dropped, root, `..` and empty segments refused. */
+	const normalize = (raw: string, path: string): string => {
+		const trimmed = raw.trim();
+		const parts = (trimmed.startsWith("agent/") ? trimmed.slice("agent/".length) : trimmed).split("/");
+		if (isAbsolute(trimmed) || parts.some((part) => part === "" || part === "." || part === ".."))
+			throw new Error(`${path}: invalid exclude entry ${JSON.stringify(raw)}: expected an agent-dir relative path or glob`);
+		return parts.join("/");
+	};
+	const entries: ExcludeEntry[] = [];
+	const fields = new Map<string, Path[]>();
+	const names = ["omomp.yml", "omomp.yaml", "omomp.json", "omomp.toml"].filter((rel) => lexists(join(agentDir, rel)));
+	let found: string | undefined;
+	for (const name of names) {
+		const path = join(agentDir, name);
+		let parsed: Mapping;
+		try {
+			const value: unknown = name.endsWith(".json")
+				? JSON.parse(readFileSync(path, "utf8"))
+				: name.endsWith(".toml")
+					? Bun.TOML.parse(readFileSync(path, "utf8"))
+					: Bun.YAML.parse(readFileSync(path, "utf8"));
+			if (!isMapping(value)) throw new Error("root is not a mapping");
+			parsed = value;
+		} catch {
+			// An unreadable omomp file holds no readable section for any consumer
+			// (loadOmompSection skips it the same way); whatever owns it reports it.
+			continue;
+		}
+		if (!Object.hasOwn(parsed, "omp-config-autoupdate")) continue;
+		if (found !== undefined) throw new Error(`${path}: omp-config-autoupdate also appears in ${found}; the exclude list is ambiguous`);
+		found = path;
+		const section: unknown = parsed["omp-config-autoupdate"];
+		if (!isMapping(section)) throw new Error(`${path}: section omp-config-autoupdate is not a mapping`);
+		const raw: unknown = section.exclude;
+		if (raw === undefined) continue;
+		if (!Array.isArray(raw) || !raw.every((entry): entry is string => typeof entry === "string"))
+			throw new Error(`${path}: omp-config-autoupdate.exclude must be a list of strings`);
+		for (const entry of raw) {
+			const colon = entry.indexOf(":");
+			if (colon >= 0) {
+				const file = normalize(entry.slice(0, colon), path);
+				const item = `agent/${file}`;
+				const field = entry.slice(colon + 1);
+				const segments = field.split(".");
+				if (!STRUCTURED.some((structured) => structured.rel === item) || field === "" || segments.some((segment) => segment === ""))
+					throw new Error(
+						`${path}: invalid exclude entry ${JSON.stringify(entry)}: use <structured file>:<dotted field path>, the file being config.yml or omomp.yml`,
+					);
+				entries.push({ kind: "field", item, path: segments });
+				(fields.get(item) ?? fields.set(item, []).get(item)!).push(segments);
+				continue;
+			}
+			const pattern = normalize(entry, path);
+			const match = GLOB_MAGIC.test(pattern)
+				? (leaf: string): boolean => new Bun.Glob(pattern).match(leaf)
+				: (leaf: string): boolean => leaf === pattern || leaf.startsWith(`${pattern}/`);
+			entries.push({ kind: "plain", match });
+		}
+	}
+	return { entries, fields };
+}
+
+/** `rel` (`agent/…`) is excluded by a plain entry: a literal pattern covers itself and its whole subtree. */
+function plainRelExcluded(rel: string, exclusions: Exclusions): boolean {
+	const leaf = rel.slice("agent/".length);
+	return exclusions.entries.some((entry) => entry.kind === "plain" && entry.match(leaf));
+}
+
+/** `path` inside the structured file `item` lies at or under an excluded field. */
+function fieldExcluded(item: string, path: Path, exclusions: Exclusions): boolean {
+	return (exclusions.fields.get(item) ?? []).some((field) => coversPath(field, path));
+}
+
+/** Report `rel` as excluded and return true; call sites drop the operation. */
+function skipExcluded(ctx: PlanContext, rel: string): boolean {
+	if (!plainRelExcluded(rel, ctx.exclusions)) return false;
+	ctx.report.skipped.push({ path: targetOf(rel, ctx.opts.agentDir), reason: EXCLUDED_REASON });
+	return true;
+}
+
+const EXCLUDED_REASON = "excluded by the machine (omomp-config-autoupdate.exclude)";
+
+/**
+ * Invariant over the finished plan: no op may write, create, move or delete an
+ * excluded path. A violation is a planner bug, so this throws and aborts the
+ * apply rather than filtering: filtering a `move` after its write side dropped
+ * would still delete the source.
+ */
+function assertNoExcludedOps(ctx: PlanContext, ops: readonly Op[]): void {
+	const root = resolve(ctx.opts.agentDir);
+	const relOf = (target: string): string | undefined =>
+		target.startsWith(`${root}/`) ? `agent/${target.slice(root.length + 1)}` : undefined;
+	for (const op of ops) {
+		const touched = [op.rel];
+		if (op.kind === "move") touched.push(relOf(op.from) ?? "", relOf(op.target) ?? "");
+		if (op.kind === "split") touched.push(...op.fragments.map((fragment) => relOf(fragment.target) ?? ""));
+		if (op.kind === "migrate-replacements")
+			touched.push(...op.writes.map((write) => write.rel), ...op.deletes.map((target) => relOf(target) ?? ""));
+		for (const rel of touched)
+			if (rel !== "" && plainRelExcluded(rel, ctx.exclusions))
+				throw new Error(`planned operation touches excluded item ${rel}; nothing applied`);
+	}
+}
+
 // --- report -----------------------------------------------------------------
 
 export interface ApplyOptions {
@@ -637,6 +803,8 @@ interface PlanContext {
 	/** No repo content ever reached this agent dir; see freshMachine. */
 	readonly freshMachine: boolean;
 	readonly replacementMigration: ReplacementMigration;
+	/** The machine's `omp-config-autoupdate.exclude` entries; read before planning (see the exclusions block). */
+	readonly exclusions: Exclusions;
 }
 
 const REPLACEMENT_RULES_REL = "agent/extensions-last/system-prompt-replace/REPLACE-SYSTEM-default.yml";
@@ -668,7 +836,13 @@ function unmodifiedReplacementSection(
 	return structuredHistory(history, item).some((version) => Bun.deepEquals(value, valueAt(version, path), true));
 }
 
-function planReplacementMigration(opts: ApplyOptions, report: ApplyReport, base: BaseRecord, history: RepoHistory): ReplacementMigration {
+function planReplacementMigration(
+	opts: ApplyOptions,
+	report: ApplyReport,
+	base: BaseRecord,
+	history: RepoHistory,
+	exclusions: Exclusions,
+): ReplacementMigration {
 	const files = ["omomp.yml", "omomp.yaml", "omomp.json", "omomp.toml"].filter((rel) => lexists(join(opts.agentDir, rel)));
 	const legacy = LEGACY_REPLACEMENT_RELS.filter((rel) => lexists(targetOf(rel, opts.agentDir)));
 	const blocked = (reason: string, skipOmomp = false): ReplacementMigration => {
@@ -700,6 +874,21 @@ function planReplacementMigration(opts: ApplyOptions, report: ApplyReport, base:
 		return blocked(`unsupported or ambiguous omomp files: ${files.map((rel) => join(opts.agentDir, rel)).join(", ")}`, true);
 	const hasSection = root !== undefined && Object.hasOwn(root, "system-prompt-replace");
 	if (!hasSection && legacy.length === 0) return { kind: "none" };
+	// The migration is one operation (destination write, section removal,
+	// legacy deletion); an excluded path or the removed field leaves all of it
+	// in place, reported like any other excluded item.
+	const migrationExcluded =
+		plainRelExcluded(REPLACEMENT_RULES_REL, exclusions) ||
+		plainRelExcluded("agent/omomp.yml", exclusions) ||
+		fieldExcluded("agent/omomp.yml", ["system-prompt-replace"], exclusions) ||
+		legacy.some((rel) => plainRelExcluded(rel, exclusions));
+	if (migrationExcluded) {
+		for (const rel of [REPLACEMENT_RULES_REL, "agent/omomp.yml", ...legacy])
+			if (plainRelExcluded(rel, exclusions)) report.skipped.push({ path: targetOf(rel, opts.agentDir), reason: EXCLUDED_REASON });
+		if (fieldExcluded("agent/omomp.yml", ["system-prompt-replace"], exclusions))
+			report.skipped.push({ path: `${join(opts.agentDir, "omomp.yml")}:system-prompt-replace`, reason: EXCLUDED_REASON });
+		return { kind: "none" };
+	}
 	const destination = targetOf(REPLACEMENT_RULES_REL, opts.agentDir);
 	if (lexists(destination)) return blocked(`${destination} already exists`);
 	if (files.some((rel) => isAppManaged(join(opts.agentDir, rel))))
@@ -909,6 +1098,7 @@ function planPlain(ctx: PlanContext): Op[] {
 	);
 	const ops: Op[] = [];
 	for (const rel of shipped) {
+		if (skipExcluded(ctx, rel)) continue;
 		const migration = ctx.replacementMigration;
 		if (rel === REPLACEMENT_RULES_REL && migration.kind === "blocked") continue;
 		const projected =
@@ -934,17 +1124,20 @@ function planPlain(ctx: PlanContext): Op[] {
 		if (known.has(rel)) continue;
 		if (rel === REPLACEMENT_RULES_REL && ctx.replacementMigration.kind === "blocked") continue;
 		known.add(rel);
+		if (skipExcluded(ctx, rel)) continue;
 		// A rel no longer managed stays the host's, and retired leaves have their own planner: only the record goes.
 		if (!managedPlain(rel) || retiring(ctx, rel)) ops.push({ kind: "base", rel, change: { kind: "plain-drop", rel } });
 		else ops.push(...planPlainItem(ctx, rel, undefined));
 	}
-	for (const [rel, content] of droppedBeforeBase(ctx)) if (!known.has(rel)) ops.push(...planPlainItem(ctx, rel, undefined, content));
+	for (const [rel, content] of droppedBeforeBase(ctx))
+		if (!known.has(rel) && !skipExcluded(ctx, rel)) ops.push(...planPlainItem(ctx, rel, undefined, content));
 	// Machine-authored agent definitions the repo never shipped: record their
 	// presence too, so removing one stays removed if the repo ever ships the name.
 	try {
 		for (const entry of readdirSync(join(opts.agentDir, "agents"), { withFileTypes: true })) {
 			const rel = `agent/agents/${entry.name}`;
-			if (!entry.isFile() || known.has(rel) || entry.name.startsWith(".") || !MACHINE_OWNED_PLAIN.test(rel)) continue;
+			if (!entry.isFile() || known.has(rel) || entry.name.startsWith(".") || !MACHINE_OWNED_PLAIN.test(rel) || skipExcluded(ctx, rel))
+				continue;
 			const target = targetOf(rel, opts.agentDir);
 			if (isAppManaged(target) || ctx.base.plain(rel).kind !== "none") continue;
 			ops.push({ kind: "base", rel, change: { kind: "plain-unknown", rel } });
@@ -1001,6 +1194,7 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 	const { opts, report } = ctx;
 	const ops: Op[] = [];
 	for (const { item, text, repo } of sources) {
+		if (skipExcluded(ctx, item.rel)) continue;
 		const migration = ctx.replacementMigration;
 		if (item.rel === "agent/omomp.yml" && migration.kind === "blocked" && migration.skipOmomp) continue;
 		const projectedText = item.rel === "agent/omomp.yml" && migration.kind === "ready" ? migration.omomp : undefined;
@@ -1024,6 +1218,7 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 			const present = legacy.rels.filter((rel) => lexists(targetOf(rel, opts.agentDir)));
 			const [first] = present;
 			if (first === undefined) continue;
+			if (fieldExcluded(item.rel, [legacy.section], ctx.exclusions)) continue;
 			if (host !== undefined && Object.hasOwn(host, legacy.section)) {
 				for (const rel of present) report.notes.push(`${rel} left in place: ${item.rel} already has section ${legacy.section}`);
 				continue;
@@ -1051,7 +1246,20 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 				: host === undefined || ctx.freshMachine
 					? { kind: "empty" }
 					: { kind: "history", versions: structuredHistory(ctx.history, item) };
-		const merged = mergeStructured(host, repo, source, item.rules);
+		const fields = ctx.exclusions.fields.get(item.rel) ?? [];
+		const rules =
+			fields.length === 0 ? item.rules : { ...item.rules, local: [...item.rules.local, ...fields.map((field) => field.join("."))] };
+		const merged = mergeStructured(host, repo, source, rules);
+		// An excluded field merges like a `local` one (machine-owned, never
+		// written); its recorded base and unknown marks are restored afterward so
+		// removing the entry later resumes from the old base, not a new conflict.
+		if (recorded !== undefined) {
+			for (const field of fields) {
+				setAt(merged.base, field, valueAt(recorded.value, field));
+				for (const unknown of recorded.unknown)
+					if (related(unknown, field) && !merged.unknown.some((path) => related(path, unknown))) merged.unknown.push(unknown);
+			}
+		}
 		for (const { path, reason } of merged.conflicts) {
 			const id = `${item.rel}#${pointer(path)}@${digest(canonical(valueAt(repo, path)))}`;
 			report.conflicts.push({ kind: "key", id, rel: item.rel, target, path: [...path], reason });
@@ -1059,6 +1267,13 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 		const record: StructuredRecord = { value: merged.base, unknown: merged.unknown };
 		const change: BaseChange | undefined =
 			recorded !== undefined && Bun.deepEquals(recorded, record, true) ? undefined : { kind: "structured", rel: item.rel, record };
+		for (const field of fields)
+			if (
+				valueAt(host, field) !== undefined ||
+				valueAt(repo, field) !== undefined ||
+				(recorded !== undefined && valueAt(recorded.value, field) !== undefined)
+			)
+				report.skipped.push({ path: `${target}:${field.join(".")}`, reason: EXCLUDED_REASON });
 		if (projectedText === undefined && consumed.length === 0 && host !== undefined && Bun.deepEquals(host, merged.host, true)) {
 			if (change !== undefined) ops.push({ kind: "base", rel: item.rel, change });
 			continue;
@@ -1071,7 +1286,7 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 					? text
 					: serialize(merged.host, item.format);
 		ops.push({ kind: "write", rel: item.rel, target, content, base: change });
-		for (const rel of consumed) ops.push({ kind: "delete", rel, target: targetOf(rel, opts.agentDir) });
+		for (const rel of consumed) if (!skipExcluded(ctx, rel)) ops.push({ kind: "delete", rel, target: targetOf(rel, opts.agentDir) });
 	}
 	return ops;
 }
@@ -1112,9 +1327,12 @@ function inspectTodoRetirement(agentDir: string, rel: string): RetirementInspect
 	}
 }
 
-function planRetirements(opts: ApplyOptions, report: ApplyReport, leaves: readonly string[]): Op[] {
+function planRetirements(ctx: PlanContext, leaves: readonly string[]): Op[] {
+	const { opts, report } = ctx;
 	const ops: Op[] = [];
 	for (const rel of leaves) {
+		// Only an existing leaf is reported; absent ones have nothing to keep.
+		if (!lexists(join(opts.agentDir, rel)) || skipExcluded(ctx, `agent/${rel}`)) continue;
 		const inspected = inspectTodoRetirement(opts.agentDir, rel);
 		switch (inspected.kind) {
 			case "missing":
@@ -1139,11 +1357,13 @@ function previouslyShipped(opts: ApplyOptions, rel: string): boolean {
 	return opts.previousCommit !== undefined && git(opts.source, ["cat-file", "-e", `${opts.previousCommit}:${rel}`]).ok;
 }
 
-function planLegacyModelSplits(opts: ApplyOptions, report: ApplyReport, from: readonly string[], toDir: string): Op[] {
+function planLegacyModelSplits(ctx: PlanContext, from: readonly string[], toDir: string): Op[] {
+	const { opts, report } = ctx;
 	const candidates: { rel: string; target: string; fragments: { target: string; content: string }[] }[] = [];
 	for (const rel of from) {
 		const source = join(opts.agentDir, rel);
 		if (!lexists(source)) continue;
+		if (skipExcluded(ctx, `agent/${rel}`)) continue;
 		if (isAppManaged(source)) {
 			report.skipped.push({ path: source, reason: "app-managed" });
 			continue;
@@ -1190,6 +1410,13 @@ function planLegacyModelSplits(opts: ApplyOptions, report: ApplyReport, from: re
 			report.notes.push(`${candidate.target} left in place: ${shipped.target} is a managed source file`);
 			continue;
 		}
+		// The split is one operation: an excluded source or fragment target keeps everything in place.
+		if (
+			candidate.fragments.some((fragment) => plainRelExcluded(`agent/${fragment.target.slice(opts.agentDir.length + 1)}`, ctx.exclusions))
+		) {
+			report.skipped.push({ path: candidate.target, reason: EXCLUDED_REASON });
+			continue;
+		}
 		ops.push({ kind: "split", ...candidate });
 	}
 	return ops;
@@ -1201,7 +1428,7 @@ function planRelocations(ctx: PlanContext): Op[] {
 	const ops: Op[] = [];
 	for (const { from, by } of SUPERSEDED) {
 		const target = join(opts.agentDir, from);
-		if (!lexists(target) || !existsSync(join(opts.source, "agent", by))) continue;
+		if (!lexists(target) || !existsSync(join(opts.source, "agent", by)) || skipExcluded(ctx, `agent/${from}`)) continue;
 		if (isAppManaged(target)) {
 			report.errors.push(`${target} is app-managed and would load beside ${join(opts.agentDir, by)}; remove one of them`);
 			continue;
@@ -1212,7 +1439,7 @@ function planRelocations(ctx: PlanContext): Op[] {
 	for (const entry of DATA_MOVES) {
 		switch (entry.kind) {
 			case "split-model":
-				ops.push(...planLegacyModelSplits(opts, report, entry.from, entry.toDir));
+				ops.push(...planLegacyModelSplits(ctx, entry.from, entry.toDir));
 				break;
 			case "pattern": {
 				let names: string[];
@@ -1237,6 +1464,7 @@ function planRelocations(ctx: PlanContext): Op[] {
 		const source = join(opts.agentDir, from);
 		const target = join(opts.agentDir, to);
 		if (!lexists(source)) continue;
+		if (skipExcluded(ctx, `agent/${from}`) || skipExcluded(ctx, `agent/${to}`)) continue;
 		if (isAppManaged(source)) {
 			report.skipped.push({ path: source, reason: "app-managed" });
 			continue;
@@ -1580,12 +1808,13 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 	// Planned with the rest so blocked ownership stops the apply before plugins install; used only once the plugin carries src/ctx.
 	let ctxRetirements: Op[] = [];
 	try {
+		const exclusions = readExclusions(opts.agentDir);
 		const sources = parseSources(opts, report);
 		declared = declaredPlugins(opts.source).required;
 		todoRequired = declared.includes(TODO_PLUGIN_URL);
 		base = BaseRecord.load(opts.agentDir);
 		const history = new RepoHistory(opts.source, !opts.check);
-		const replacementMigration = planReplacementMigration(opts, report, base, history);
+		const replacementMigration = planReplacementMigration(opts, report, base, history, exclusions);
 		const ctx: PlanContext = {
 			opts,
 			report,
@@ -1594,18 +1823,20 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 			todoRequired,
 			freshMachine: freshMachine(opts.agentDir, base),
 			replacementMigration,
+			exclusions,
 		};
 		const planned = [
 			...planRelocations(ctx),
 			...planPlain(ctx),
 			...planStructured(ctx, sources),
-			...(todoRequired ? planRetirements(opts, report, TODO_RETIREMENTS) : []),
+			...(todoRequired ? planRetirements(ctx, TODO_RETIREMENTS) : []),
 		];
-		ctxRetirements = todoRequired ? planRetirements(opts, report, CTX_RETIREMENTS) : [];
+		ctxRetirements = todoRequired ? planRetirements(ctx, CTX_RETIREMENTS) : [];
 		report.notes.push(...history.notes);
 		// Moves first, managed writes next, deletions after them, base records last; Todo retirement requires all preceding operations to succeed.
 		const rank: Record<Op["kind"], number> = { move: 0, split: 0, "migrate-replacements": 0, write: 1, delete: 2, base: 3 };
 		ops = groupReplacementMigration(opts, replacementMigration, planned).toSorted((a, b) => rank[a.kind] - rank[b.kind]);
+		assertNoExcludedOps(ctx, ops);
 	} catch (error) {
 		report.errors.push(errorText(error));
 		return report;
@@ -1734,6 +1965,7 @@ export function scanConflicts(source: string, agentDir: string): ConflictScan {
 	const opts: ApplyOptions = { source, agentDir, previousCommit: undefined, check: true, plugins: false };
 	const report = newReport();
 	try {
+		const exclusions = readExclusions(agentDir);
 		const sources = parseSources(opts, report);
 		const todoRequired = declaredPlugins(source).required.includes(TODO_PLUGIN_URL);
 		const base = BaseRecord.load(agentDir);
@@ -1745,7 +1977,8 @@ export function scanConflicts(source: string, agentDir: string): ConflictScan {
 			history,
 			todoRequired,
 			freshMachine: freshMachine(agentDir, base),
-			replacementMigration: planReplacementMigration(opts, report, base, history),
+			replacementMigration: planReplacementMigration(opts, report, base, history, exclusions),
+			exclusions,
 		};
 		planPlain(ctx);
 		planStructured(ctx, sources);

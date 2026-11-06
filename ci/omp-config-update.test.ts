@@ -319,6 +319,135 @@ describe("structured files", () => {
 	});
 });
 
+describe("exclusions", () => {
+	const writeExclusions = (agentDir: string, entries: readonly string[], keep = ""): void =>
+		writeTree(agentDir, {
+			"omomp.yml": `${keep}omp-config-autoupdate:\n  enabled: false\n  exclude:\n${entries.map((entry) => `    - ${JSON.stringify(entry)}`).join("\n")}\n`,
+		});
+
+	test("an excluded plain file is kept and reported while its siblings update; un-excluding resumes cleanly", async () => {
+		const src = source();
+		const agentDir = temp("omp-excl-");
+		src.commit({ "agent/PERSONALITY.md": "p1\n", "agent/APPEND_SYSTEM.md": "a1\n" });
+		await apply(src.dir, agentDir);
+		writeExclusions(agentDir, ["PERSONALITY.md"]);
+		src.commit({ "agent/PERSONALITY.md": "p2\n", "agent/APPEND_SYSTEM.md": "a2\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(host(agentDir, "PERSONALITY.md")).toBe("p1\n");
+		expect(host(agentDir, "APPEND_SYSTEM.md")).toBe("a2\n");
+		expect(report.skipped).toEqual([{ path: join(agentDir, "PERSONALITY.md"), reason: expect.stringContaining("exclude") }]);
+		// The recorded base never advanced, so removing the entry takes the repo value without a conflict.
+		writeTree(agentDir, { "omomp.yml": null });
+		const next = await apply(src.dir, agentDir);
+		expect(next.conflicts).toEqual([]);
+		expect(host(agentDir, "PERSONALITY.md")).toBe("p2\n");
+	});
+
+	test("an excluded structured field is kept and reported while other keys update", async () => {
+		const src = source();
+		const agentDir = temp("omp-excl-");
+		src.commit({ "agent/config.yml": "task:\n  eager: preferred\nlsp:\n  enabled: false\n" });
+		await apply(src.dir, agentDir);
+		writeExclusions(agentDir, ["config.yml:task.eager"]);
+		src.commit({ "agent/config.yml": "task:\n  eager: never\nlsp:\n  enabled: true\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({ task: { eager: "preferred" }, lsp: { enabled: true } });
+		expect(report.skipped).toEqual([{ path: `${join(agentDir, "config.yml")}:task.eager`, reason: expect.stringContaining("exclude") }]);
+		// The base kept the pre-exclusion value, so un-excluding takes the next repo value without a conflict.
+		writeTree(agentDir, { "omomp.yml": null });
+		src.commit({ "agent/config.yml": "task:\n  eager: later\nlsp:\n  enabled: true\n" });
+		const next = await apply(src.dir, agentDir);
+		expect(next.errors).toEqual([]);
+		expect(next.conflicts).toEqual([]);
+		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({ task: { eager: "later" }, lsp: { enabled: true } });
+	});
+
+	test("an excluded omomp field is kept while sibling sections update", async () => {
+		const src = source();
+		const agentDir = temp("omp-excl-");
+		src.commit({ "agent/omomp.yml": "judge:\n  fallbackRole: a\ntool-policy-nag:\n  extra: 1\n" });
+		await apply(src.dir, agentDir);
+		writeExclusions(agentDir, ["omomp.yml:tool-policy-nag"], "judge:\n  fallbackRole: a\ntool-policy-nag:\n  extra: 1\n");
+		src.commit({ "agent/omomp.yml": "judge:\n  fallbackRole: b\ntool-policy-nag:\n  extra: 2\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(Bun.YAML.parse(host(agentDir, "omomp.yml"))).toEqual({
+			judge: { fallbackRole: "b" },
+			"tool-policy-nag": { extra: 1 },
+			"omp-config-autoupdate": { enabled: false, exclude: ["omomp.yml:tool-policy-nag"] },
+		});
+		expect(report.skipped).toEqual([
+			{ path: `${join(agentDir, "omomp.yml")}:tool-policy-nag`, reason: expect.stringContaining("exclude") },
+		]);
+	});
+
+	test("a literal directory entry covers its subtree; a bare structured file name excludes the whole file", async () => {
+		const src = source();
+		const agentDir = temp("omp-excl-");
+		src.commit({ "agent/extensions/foo/index.ts": "v1\n" });
+		await apply(src.dir, agentDir);
+		writeExclusions(agentDir, ["extensions/foo", "config.yml"]);
+		src.commit({ "agent/extensions/foo/index.ts": "v2\n", "agent/config.yml": "lsp:\n  enabled: false\n", "agent/PERSONALITY.md": "p\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(host(agentDir, "extensions/foo/index.ts")).toBe("v1\n");
+		expect(existsSync(join(agentDir, "config.yml"))).toBe(false);
+		expect(host(agentDir, "PERSONALITY.md")).toBe("p\n");
+		expect(report.skipped.map((entry) => entry.path).toSorted()).toEqual(
+			[join(agentDir, "config.yml"), join(agentDir, "extensions/foo/index.ts")].toSorted(),
+		);
+	});
+
+	test("an excluded file is not deleted when the source drops it", async () => {
+		const src = source();
+		const agentDir = temp("omp-excl-");
+		src.commit({ "agent/PERSONALITY.md": "p1\n" });
+		await apply(src.dir, agentDir);
+		writeExclusions(agentDir, ["PERSONALITY.md"]);
+		src.commit({ "agent/PERSONALITY.md": null });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts).toEqual([]);
+		expect(host(agentDir, "PERSONALITY.md")).toBe("p1\n");
+	});
+
+	test("an excluded relocation is kept: the superseded flat module is not deleted", async () => {
+		const src = source();
+		const agentDir = temp("omp-excl-");
+		src.commit({ "agent/extensions/lang-nag/index.ts": "x\n" });
+		writeTree(agentDir, { "extensions/lang-nag.ts": "// old flat\n" });
+		writeExclusions(agentDir, ["extensions/lang-nag.ts"]);
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(host(agentDir, "extensions/lang-nag.ts")).toBe("// old flat\n");
+		expect(report.skipped).toEqual([{ path: join(agentDir, "extensions/lang-nag.ts"), reason: expect.stringContaining("exclude") }]);
+	});
+
+	test("an invalid exclude entry stops the whole apply before anything is written", async () => {
+		const src = source();
+		const agentDir = temp("omp-excl-");
+		writeExclusions(agentDir, ["PERSONALITY.md:field"]);
+		src.commit({ "agent/PERSONALITY.md": "p1\n", "agent/agents/x.md": "x\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors.length).toBeGreaterThan(0);
+		expect(existsSync(join(agentDir, "PERSONALITY.md"))).toBe(false);
+		expect(existsSync(join(agentDir, "agents/x.md"))).toBe(false);
+		expect(existsSync(join(agentDir, ".omp-config-base"))).toBe(false);
+	});
+
+	test("a non-list exclude option is an error and applies nothing", async () => {
+		const src = source();
+		const agentDir = temp("omp-excl-");
+		writeTree(agentDir, { "omomp.yml": "omp-config-autoupdate:\n  enabled: false\n  exclude: no\n" });
+		src.commit({ "agent/PERSONALITY.md": "p1\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors.length).toBeGreaterThan(0);
+		expect(existsSync(join(agentDir, "PERSONALITY.md"))).toBe(false);
+	});
+});
+
 describe("machines without a base", () => {
 	test("a host copy equal to a committed version updates; one equal to none conflicts until resolved", async () => {
 		const src = source();

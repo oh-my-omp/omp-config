@@ -77,7 +77,20 @@ flowchart LR
 
 源码：`agent/extensions/omp-config-autoupdate/`。
 
-启动时从 agent 目录的 `omomp.*` 读取一次 `omp-config-autoupdate` 段：`enabled`（`true` 或 `false`，默认关闭）与 `conflicts`（默认 `notify`，或 `agent`）：
+启动时从 agent 目录的 `omomp.*` 读取一次 `omp-config-autoupdate` 段：`enabled`（`true` 或 `false`，默认关闭）与 `conflicts`（默认 `notify`，或 `agent`）。第三个选项 `exclude` 由更新器在每次运行时读取（启动自动更新与 `/update-omp` 手动更新同样生效），不经过本扩展：
+
+```yaml
+omp-config-autoupdate:
+  enabled: true
+  exclude:
+    - agents/task-high.md              # 受管文件：完全保留本机副本
+    - extensions/my-tool/**            # 支持 glob；字面量目录名覆盖其下全部文件
+    - config.yml                       # 文件名本身即排除整个结构化文件
+    - config.yml:task.eager            # 结构化文件里的单个字段路径
+    - omomp.yml:lang-nag               # omomp.yml 的段同理
+```
+
+被排除的项从不被写入、创建或删除，已记录的基准也保持原样，因此之后移除条目会从原位继续更新；每个被保留的项都列在报告的 skipped 部分。无效条目（路径写法错误、`file:field` 指定的文件不是 `config.yml`/`omomp.yml`、或 exclude 不是字符串列表）与其他预检错误一样让整个更新中止。
 
 | 命令 | 行为 |
 |---|---|
@@ -136,7 +149,7 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 3. **辅助会话传入 `taskDepth: 1`**：除 `runHelperPrompt` 外，直接调用 `createAgentSession` 的扩展（如 `fork-task` 的 `shake`）必须传 `taskDepth: 1`。不传会让 SDK 把辅助会话当成主会话，在 `dispose()` 时销毁全局 `AgentLifecycleManager`，导致所有空闲或 parked 子代理变成 `Unknown agent`。
 4. **宿主包导入与真机加载验证**：只导入 OMP 宿主根包（`pi-agent-core`、`pi-ai`、`pi-catalog`、`pi-coding-agent`、`pi-natives`、`pi-tui`、`pi-utils`）、Node/Bun 内置模块和带 `.ts` 后缀的相对路径（平台相关的 native binding 先做平台判断再加载）。`tsc` 从开发目录的 `node_modules/` 解析类型，测不出未映射的宿主子路径（如 `@oh-my-pi/pi-tui/thinking` 在运行期会报错），改完扩展后需经 `/update-omp` 应用到 `~/.omp/agent`、重启 `omp` 并实际触发验证。
 
-`bun run test`（`bun test ci`）运行 `ci/` 下的单元测试：`delete-guard` 的测试（`delete` 工具的拒绝集、Linux 回收站布局与永久删除；posix 分类器、嵌套 PowerShell/cmd 方言与 py/js eval 分析器的拦截/放行表；`tool_call` 的 reason 与出错即拦截路径），以及更新器三方应用的测试（`ci/omp-config-update.test.ts`：未改的项随上游更新、本机定制被合并或在解决前一直是冲突、播种与本机路径保持不动、代码以仓库为准、删除、无基准机器按历史匹配、在 omp 首次启动写下的 `config.yml` 上首次安装、只读的 `--check`）；CI 在 `code` job 中于 `bun run check` 之后运行它。`delete-guard` 在真实会话中的 Windows 行为由 [delete-guard Windows 验收](../ci/README.zh-CN.md#delete-guard-windows-验收) 单独检查。
+`bun run test`（`bun test ci`）运行 `ci/` 下的单元测试：`delete-guard` 的测试（`delete` 工具的拒绝集、Linux 回收站布局与永久删除；posix 分类器、嵌套 PowerShell/cmd 方言与 py/js eval 分析器的拦截/放行表；`tool_call` 的 reason 与出错即拦截路径），以及更新器三方应用的测试（`ci/omp-config-update.test.ts`：未改的项随上游更新、本机定制被合并或在解决前一直是冲突、播种与本机路径保持不动、代码以仓库为准、删除、无基准机器按历史匹配、在 omp 首次启动写下的 `config.yml` 上首次安装、本机 `exclude` 条目保留被排除的文件与字段而兄弟项照常更新、只读的 `--check`）；CI 在 `code` job 中于 `bun run check` 之后运行它。`delete-guard` 在真实会话中的 Windows 行为由 [delete-guard Windows 验收](../ci/README.zh-CN.md#delete-guard-windows-验收) 单独检查。
 
 ### 工具专题
 

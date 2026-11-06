@@ -4,10 +4,14 @@
 //
 // SWITCH. Off by default. `/omp-config-autoupdate on|off` writes section
 // `omp-config-autoupdate` ({"enabled": true|false, "conflicts"?: "notify" |
-// "agent"}) of the agent dir's omomp.* file; `/omp-config-autoupdate` or
-// `… status` shows it. A missing or invalid section means off. The section is
-// machine-local: the updater does not manage it and /sync-omp-config does not
-// carry it. Read at each start, so a change applies from the next OMP start.
+// "agent", "exclude"?: string[]}) of the agent dir's omomp.* file;
+// `/omp-config-autoupdate` or `… status` shows it. A missing or invalid
+// section means off. The section is machine-local: the updater does not
+// manage it and /sync-omp-config does not carry it. Read at each start, so a
+// change applies from the next OMP start. The updater reads `exclude` at each
+// run (apply and auto): agent-dir relative paths/globs and structured
+// `file:path` entries it never writes, creates or deletes; see EXCLUSIONS in
+// omp-config-update.ts.
 //
 // CONFLICTS. The updater keeps a local customization that conflicts with an
 // upstream change and reports it (see CUSTOMIZATIONS in omp-config-update.ts).
@@ -51,7 +55,9 @@ type Switch =
 	| { readonly kind: "off"; readonly conflicts: ConflictMode }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-const switchSchema = z.object({ enabled: z.boolean(), conflicts: z.enum(["notify", "agent"]).optional() }).strict();
+const switchSchema = z
+	.object({ enabled: z.boolean(), conflicts: z.enum(["notify", "agent"]).optional(), exclude: z.array(z.string()).optional() })
+	.strict();
 type SwitchValue = z.infer<typeof switchSchema>;
 const switchSection = defineOmompSection(import.meta.dir, switchSchema);
 

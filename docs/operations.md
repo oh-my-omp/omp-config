@@ -77,7 +77,20 @@ Run slash commands inside `omp` started at the repository root:
 
 Source: `agent/extensions/omp-config-autoupdate/`.
 
-Reads the agent-dir `omomp.*` section `omp-config-autoupdate` once at startup: `enabled` (`true` or `false`, off by default) and `conflicts` (`notify`, the default, or `agent`):
+Reads the agent-dir `omomp.*` section `omp-config-autoupdate` once at startup: `enabled` (`true` or `false`, off by default) and `conflicts` (`notify`, the default, or `agent`). A third option, `exclude`, is read by the updater on every run (startup auto-update and `/update-omp` apply alike), not by this extension:
+
+```yaml
+omp-config-autoupdate:
+  enabled: true
+  exclude:
+    - agents/task-high.md              # a managed file: kept exactly as the machine has it
+    - extensions/my-tool/**            # globs work; a literal name covers its subtree
+    - config.yml                       # a bare name excludes a whole structured file
+    - config.yml:task.eager            # one field path inside a structured file
+    - omomp.yml:lang-nag               # same for omomp.yml sections
+```
+
+Excluded items are never written, created or deleted and keep their recorded base, so removing an entry later resumes updates from where it left off; every kept item is listed in the report's skipped section. An invalid entry (a malformed path, `file:field` naming a file other than `config.yml`/`omomp.yml`, or a section that is not a list of strings) stops the whole apply like any other preflight error.
 
 | Command | Behavior |
 |---|---|
@@ -136,7 +149,7 @@ Code rules checked by `bun run check` (`biome check . && tsc --noEmit`):
 3. **`taskDepth: 1` on helper sessions**: any extension calling `createAgentSession` directly (such as `fork-task` during `shake`) must pass `taskDepth: 1`. Without it, `dispose()` treats the helper as a main session and tears down `AgentLifecycleManager`, disconnecting all idle and parked subagents (`Unknown agent`).
 4. **Imports and runtime load testing**: import only OMP host package roots (`pi-agent-core`, `pi-ai`, `pi-catalog`, `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins, and `.ts` relative paths (guard platform-specific native bindings by platform). Because `tsc` resolves packages from `node_modules/`, it does not catch unmapped host subpaths such as `@oh-my-pi/pi-tui/thinking`; apply changes to `~/.omp/agent`, restart `omp`, and trigger the modified extension in a real session.
 
-`bun run test` (`bun test ci`) runs the unit tests in `ci/`: the `delete-guard` tests (the `delete` tool's refusal set, Linux trash layout and permanent deletion; the posix classifier's, the nested PowerShell/cmd dialects' and the py/js eval analyzers' block/allow tables; the `tool_call` reason and fail-closed paths), and the updater's three-way apply tests (`ci/omp-config-update.test.ts`: unmodified items update, customizations merge or conflict until resolved, seed and machine-owned paths stay, code stays repo-wins, deletions, matching a machine without a base against history, a first install over omp's own first-run `config.yml`, read-only `--check`); CI runs it in the `code` job after `bun run check`. The Windows behavior of `delete-guard` in real sessions is checked separately by the [delete-guard Windows acceptance](../ci/README.md#delete-guard-windows-acceptance).
+`bun run test` (`bun test ci`) runs the unit tests in `ci/`: the `delete-guard` tests (the `delete` tool's refusal set, Linux trash layout and permanent deletion; the posix classifier's, the nested PowerShell/cmd dialects' and the py/js eval analyzers' block/allow tables; the `tool_call` reason and fail-closed paths), and the updater's three-way apply tests (`ci/omp-config-update.test.ts`: unmodified items update, customizations merge or conflict until resolved, seed and machine-owned paths stay, code stays repo-wins, deletions, matching a machine without a base against history, a first install over omp's own first-run `config.yml`, machine `exclude` entries keeping excluded files and fields while siblings update, read-only `--check`); CI runs it in the `code` job after `bun run check`. The Windows behavior of `delete-guard` in real sessions is checked separately by the [delete-guard Windows acceptance](../ci/README.md#delete-guard-windows-acceptance).
 
 ### Tool Topics
 
