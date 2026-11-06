@@ -1,27 +1,22 @@
 // ============================================================================
-// system-prompt-replace — text replacement over the final system prompt, from
-// rule files with per-rule session conditions.
+// system-prompt-replace — wording-level edits of OMP's system prompt, from
+// rule files with per-rule session conditions, delivered as a delta message
+// beside the system prompt, which stays as OMP built it.
 //
 // WHY THIS EXISTS. SYSTEM_TEMPLATE.md owns the base workflow. Whole tool
-// descriptions are rewritten by the tool-topics extension (surface + topic
-// index, keyed by tool name); this extension makes the remaining wording-level
-// edits over the final prompt — template lines, and sentences inside tool
-// descriptions that keep their native text — instead of repeating them in the
-// base template or APPEND_SYSTEM.md. A new rule, global or for one model or
-// agent, is a file edit, not new code.
+// descriptions belong to the tool-topics extension (surface + topic index,
+// keyed by tool name); this extension states the remaining wording-level
+// edits — template lines, and sentences inside tool descriptions that keep
+// their native text — instead of repeating them in the base template or
+// APPEND_SYSTEM.md. A new rule, global or for one model or agent, is a file
+// edit, not new code.
 //
-// ORDER. `before_agent_start` handlers run one extension after another in
-// load order, each receiving the prompt the previous one returned. Load order
-// is: native discovery (`<agent dir>/extensions/`, settings.json `extensions`),
-// then hooks, then plugin extensions, then CLI `-e` paths, then config.yml
-// `extensions` in list order, then OMP's inline factories (SDK-supplied
-// extensions, autoresearch, the custom-tools wrapper). This file therefore
-// lives outside `<agent dir>/extensions/` and is registered as the LAST
-// `extensions` entry of config.yml and of config-light.yml, so it sees every
-// path-loaded extension's additions in both modes. Inline factories still run
-// after it; autoresearch rewrites the prompt only in autoresearch mode.
-// Placing this file in `extensions/` would load it with the native batch, and
-// the config entry would be dropped as a duplicate path.
+// ORDER. This file lives outside `<agent dir>/extensions/` and is the LAST
+// `extensions` entry of config.yml and of config-light.yml
+// (agent/extensions-last/README.md), so its `before_agent_start` runs after
+// every path-loaded extension and its delta follows theirs in a prompt's
+// messages. Placing this file in `extensions/` would load it with the native
+// batch, and the config entry would be dropped as a duplicate path.
 //
 // FILES. `REPLACE-SYSTEM-<label>.yml` (or `.yaml`), discovered by
 // `_shared/spec-files.ts`: beside this module (rule files the repo ships and
@@ -48,25 +43,44 @@
 // current model, for text OMP renders only under some tiers. A `model` /
 // `provider` string is the regex source exactly as YAML decodes it. Any other
 // key makes the file invalid. Files apply in discovery order and rules in file
-// order, each to the output of the previous one, across every system-prompt
-// block.
+// order, each to the text the previous one left, across every system-prompt
+// block; that text exists only to find the next rule's matches.
 //
-// TIMING. Every `before_agent_start`, in the main session and in every
-// subagent, each matched against its own identity, cwd, model and mode. Files
-// are re-read per prompt, so edits apply from the next prompt without restart.
+// INPUT. The system prompt this extension is handed, never changed:
+// `event.systemPrompt` at a prompt, `ctx.getSystemPrompt()` after a tool call.
 //
-// FAILURE POLICY. No file means no replacement. An unreadable or invalid file
-// is skipped on its own and warned once per path and reason; the other files
+// TIMING. Rules are re-read and matched at every prompt (`before_agent_start`)
+// and after every tool call (`tool_result`), in the main session and in every
+// subagent, each matched against its own identity, cwd, model and mode. Edits
+// to rule files and `/model` switches apply from the next of those points;
+// until then requests keep the delta already in the conversation. A revive's
+// `before_agent_start` is skipped, because OMP discards its result.
+//
+// OUTPUT. One delta of `_shared/context-delta.ts` with source
+// `omp-config/system-prompt-replace`: a hidden `<system-reminder>` message
+// appended to the conversation (after the prompt, or after the tool batch)
+// that lists, in rule order, each distinct matched passage and its replaced
+// text, or that the passage does not apply when the replacement is empty. A
+// rule without a match adds nothing. It is sent only when it differs from the
+// source's effective delta in the current context; a changed list supersedes
+// the earlier delta, and when no rule matches any longer a delta saying so
+// supersedes it.
+//
+// FAILURE POLICY. No file means no delta. An unreadable or invalid file is
+// skipped on its own and warned once per path and reason; the other files
 // still apply. A rule that applies to the main session and finds no target
 // (template drift after an OMP upgrade, or a typo) warns once per rule per
 // process. Subagents are not checked: their prompts legitimately lack text
 // such as the `task` tool description. Warnings are a UI notification, or
-// stderr when headless, plus a log line. The prompt is never blocked.
+// stderr when headless, plus a log line. The prompt and tool results are
+// never blocked. It registers `before_agent_start`, `tool_result` and the
+// delta stream's `turn_start`, and writes no files.
 // ============================================================================
 
 import { readFileSync } from "node:fs";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { createDeltaStream, type Delta } from "../../extensions/_shared/context-delta.ts";
 import { errorText } from "../../extensions/_shared/errors.ts";
 import { tr } from "../../extensions/_shared/i18n.ts";
 import {
@@ -93,7 +107,15 @@ interface Rule {
 	readonly conditions: SessionConditions;
 }
 
+/** One distinct passage a rule matched and the text it becomes; an empty replacement removes the passage. */
+interface Edit {
+	readonly original: string;
+	readonly replacement: string;
+}
+
 type Parse<T> = { readonly kind: "ok"; readonly value: T } | { readonly kind: "invalid"; readonly reason: string };
+
+const PREAMBLE = "OMP's system prompt keeps its original text. In this session, read it with these edits, applied in the order listed:";
 
 /** `path\0reason` of invalid files and labels of target-less rules already reported, shared by every session in this process. */
 const reported = new Set<string>();
@@ -201,21 +223,37 @@ function warn(pi: ExtensionAPI, ctx: ExtensionContext, key: string, english: str
 	else process.stderr.write(`${notice}\n`);
 }
 
-/** The blocks after `rule`, and how many times it matched. */
-function applyRule(blocks: readonly string[], rule: Rule): { readonly blocks: string[]; readonly hits: number } {
+/** What `pattern` with `replace` turns its match `match` of `block` into; a sticky copy keeps `$\``, `$'` and lookarounds exact. */
+function replacementOf(block: string, pattern: RegExp, match: RegExpExecArray, replace: string): string {
+	const at = new RegExp(pattern.source, "y");
+	at.lastIndex = match.index;
+	const replaced = block.replace(at, replace);
+	return replaced.slice(match.index, replaced.length - (block.length - match.index - match[0].length));
+}
+
+/** The blocks after `rule`, how many times it matched, and its distinct edits in match order. */
+function applyRule(blocks: readonly string[], rule: Rule): { readonly blocks: string[]; readonly hits: number; readonly edits: Edit[] } {
 	let hits = 0;
+	const edits = new Map<string, Edit>();
+	const record = (original: string, replacement: string): void => {
+		if (original !== replacement) edits.set(`${original}\0${replacement}`, { original, replacement });
+	};
 	const matcher = rule.matcher;
 	const next = blocks.map((block) => {
 		switch (matcher.kind) {
 			case "literal": {
 				const pieces = block.split(matcher.text);
+				if (pieces.length === 1) return block;
 				hits += pieces.length - 1;
+				record(matcher.text, rule.replace);
 				return pieces.join(rule.replace);
 			}
 			case "regex": {
-				const count = block.match(matcher.pattern)?.length ?? 0;
-				hits += count;
-				return count === 0 ? block : block.replace(matcher.pattern, rule.replace);
+				const matches = [...block.matchAll(matcher.pattern)];
+				if (matches.length === 0) return block;
+				hits += matches.length;
+				for (const match of matches) record(match[0], replacementOf(block, matcher.pattern, match, rule.replace));
+				return block.replace(matcher.pattern, rule.replace);
 			}
 			default: {
 				const unreachable: never = matcher;
@@ -223,47 +261,68 @@ function applyRule(blocks: readonly string[], rule: Rule): { readonly blocks: st
 			}
 		}
 	});
-	return { blocks: next, hits };
+	return { blocks: next, hits, edits: [...edits.values()] };
+}
+
+function renderEdit(edit: Edit): string {
+	const passage = `The passage\n<original>\n${edit.original}\n</original>\n`;
+	return edit.replacement === ""
+		? `${passage}does not apply in this session.`
+		: `${passage}reads instead\n<replacement>\n${edit.replacement}\n</replacement>`;
+}
+
+/** The edits of every rule that applies to this session, matched against `systemPrompt`, as one delta. */
+function replacementDelta(pi: ExtensionAPI, ctx: ExtensionContext, systemPrompt: readonly string[]): Delta {
+	let blocks = systemPrompt;
+	const edits: Edit[] = [];
+	const delegation = ctx.model === undefined ? undefined : resolveDelegationBias(ctx.model);
+	for (const path of discoverSpecFiles(FILE_PATTERN, import.meta.dir, ctx.cwd)) {
+		const parsed = parseRuleFile(path);
+		if (parsed.kind === "invalid") {
+			warn(
+				pi,
+				ctx,
+				`${path}\0${parsed.reason}`,
+				`system-prompt-replace: skipped ${path}: ${parsed.reason}`,
+				`system-prompt-replace：跳过 ${path}：${parsed.reason}`,
+			);
+			continue;
+		}
+		for (const rule of parsed.value) {
+			if (!conditionsApply(rule.conditions, ctx, delegation)) continue;
+			const result = applyRule(blocks, rule);
+			blocks = result.blocks;
+			edits.push(...result.edits);
+			if (result.hits === 0 && ctx.agent.kind === "main") {
+				warn(
+					pi,
+					ctx,
+					rule.label,
+					`system-prompt-replace: ${rule.label} found no target in the system prompt`,
+					`system-prompt-replace：系统提示词中未找到 ${rule.label} 的目标`,
+				);
+			}
+		}
+	}
+	return edits.length === 0 ? { kind: "none" } : { kind: "text", body: [PREAMBLE, ...edits.map(renderEdit)].join("\n\n") };
 }
 
 export default function systemPromptReplace(pi: ExtensionAPI): void {
+	const deltas = createDeltaStream(pi, "system-prompt-replace");
 	pi.on("before_agent_start", (event, ctx) => {
+		// OMP discards the result of a revive.
+		if (event.reason === "revive") return;
 		try {
-			let blocks: readonly string[] = event.systemPrompt;
-			let changed = false;
-			const delegation = ctx.model === undefined ? undefined : resolveDelegationBias(ctx.model);
-			for (const path of discoverSpecFiles(FILE_PATTERN, import.meta.dir, ctx.cwd)) {
-				const parsed = parseRuleFile(path);
-				if (parsed.kind === "invalid") {
-					warn(
-						pi,
-						ctx,
-						`${path}\0${parsed.reason}`,
-						`system-prompt-replace: skipped ${path}: ${parsed.reason}`,
-						`system-prompt-replace：跳过 ${path}：${parsed.reason}`,
-					);
-					continue;
-				}
-				for (const rule of parsed.value) {
-					if (!conditionsApply(rule.conditions, ctx, delegation)) continue;
-					const result = applyRule(blocks, rule);
-					blocks = result.blocks;
-					if (result.hits > 0) changed = true;
-					else if (ctx.agent.kind === "main") {
-						warn(
-							pi,
-							ctx,
-							rule.label,
-							`system-prompt-replace: ${rule.label} found no target in the system prompt`,
-							`system-prompt-replace：系统提示词中未找到 ${rule.label} 的目标`,
-						);
-					}
-				}
-			}
-			if (!changed) return;
-			return { systemPrompt: [...blocks] };
+			return deltas.atPrompt(ctx, replacementDelta(pi, ctx, event.systemPrompt));
 		} catch (error) {
-			pi.logger.warn("system-prompt-replace: before_agent_start failed", { error: errorText(error) });
+			pi.logger.warn("system-prompt-replace: cannot deliver edits", { error: errorText(error) });
+		}
+	});
+	pi.on("tool_result", (_event, ctx) => {
+		try {
+			return deltas.afterTools(ctx, replacementDelta(pi, ctx, ctx.getSystemPrompt()));
+		} catch (error) {
+			pi.logger.warn("system-prompt-replace: cannot deliver edits", { error: errorText(error) });
 		}
 	});
 }
