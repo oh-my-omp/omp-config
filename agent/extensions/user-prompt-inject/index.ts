@@ -45,6 +45,7 @@
 // (`_shared/ask-answers.ts`). A subagent OMP runs in a subagent worker thread
 // sees the root as a peer stub without `getBranch`; it reads the root's
 // persisted transcript instead and takes the path from its last entry.
+// The derived prompts and answers are cached per root file path and refreshed when its size or mtime changes.
 // Attribution is set by whoever sends the message,
 // so extensions that inject user-role messages must send them with
 // `attribution: "agent"`.
@@ -61,6 +62,7 @@
 // ============================================================================
 
 import { readFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import type { DeveloperMessage } from "@oh-my-pi/pi-ai";
 import {
@@ -253,18 +255,55 @@ function renderSpec(spec: InjectSpec, root: { readonly prompts: readonly string[
 
 // --- root prompt source -------------------------------------------------------
 
+/** The prompts and ask answers a root contributes, oldest first. */
+type RootTexts = { readonly prompts: readonly string[]; readonly answers: readonly string[] };
+
+/** Derived root texts per root file path, stamped with the file state they were derived from. */
+type RootCache = Map<string, { readonly size: number; readonly mtimeMs: number; readonly texts: RootTexts }>;
+
+/** Prompts and answers on one branch (oldest first): user prompts, and the `ask` tool results. */
+function promptsAndAnswers(entries: readonly SessionEntry[]): RootTexts {
+	const prompts: string[] = [];
+	const answers: string[] = [];
+	for (const entry of entries) {
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (message.role === "toolResult") {
+			const answered = askAnswers(message);
+			if (answered !== null) answers.push(formatAskAnswers(answered));
+			continue;
+		}
+		if (message.role !== "user" || message.attribution !== "user" || message.synthetic === true) continue;
+		const text = textOf(message.content, "\n").trim();
+		if (text !== "") prompts.push(text);
+	}
+	return { prompts, answers };
+}
+
 /**
- * The root session's current branch. A root on this thread is a live session; when this subagent
- * runs in a subagent worker thread, the root is a handle homed on another thread whose session
- * manager exposes its file and cwd but not `getBranch`, so its branch is read from its persisted transcript.
+ * The root session's prompts and answers on its current branch. A root on this thread is a live session;
+ * when this subagent runs in a subagent worker thread, the root is a handle homed on another thread whose
+ * session manager exposes its file and cwd but not `getBranch`, so its branch comes from its persisted transcript.
  */
-async function rootBranch(
-	session: AgentSessionHandle,
-): Promise<{ readonly kind: "ok"; readonly entries: readonly SessionEntry[] } | MissingRoot> {
-	if (isLocalAgentSession(session)) return { kind: "ok", entries: session.sessionManager.getBranch() };
+async function rootTexts(session: AgentSessionHandle, cache: RootCache): Promise<({ readonly kind: "ok" } & RootTexts) | MissingRoot> {
+	if (isLocalAgentSession(session)) return { kind: "ok", ...promptsAndAnswers(session.sessionManager.getBranch()) };
 	const file = session.sessionManager.getSessionFile();
 	if (!file) return { kind: "missing", reason: "root session on another thread has no persisted transcript" };
-	return { kind: "ok", entries: leafPath(await loadEntriesFromFile(file)) };
+	return { kind: "ok", ...(await fileTexts(file, cache)) };
+}
+
+/**
+ * Texts of a persisted root file, derived once per file state. The stamp is read before the file, so a write
+ * that lands mid-parse makes the next call re-derive instead of serving stale texts. A file that cannot be
+ * stat'd is parsed without caching.
+ */
+async function fileTexts(file: string, cache: RootCache): Promise<RootTexts> {
+	const state = await stat(file).catch(() => null);
+	const cached = cache.get(file);
+	if (state && cached && cached.size === state.size && cached.mtimeMs === state.mtimeMs) return cached.texts;
+	const texts = promptsAndAnswers(leafPath(await loadEntriesFromFile(file)));
+	if (state) cache.set(file, { size: state.size, mtimeMs: state.mtimeMs, texts });
+	return texts;
 }
 
 /** The persisted branch: from the last entry (the persisted leaf) back to the first, oldest first. */
@@ -286,7 +325,7 @@ function leafPath(entries: readonly FileEntry[]): SessionEntry[] {
 }
 
 /** Walk the spawn tree from this subagent to the root main session and read its user prompts. */
-async function rootPrompts(ctx: ExtensionContext): Promise<RootPrompts> {
+async function rootPrompts(ctx: ExtensionContext, cache: RootCache): Promise<RootPrompts> {
 	const registry = AgentRegistry.global();
 	const visited = new Set<string>();
 	let id = ctx.agent.parentId;
@@ -297,23 +336,7 @@ async function rootPrompts(ctx: ExtensionContext): Promise<RootPrompts> {
 		if (!ref) return { kind: "missing", reason: `ancestor ${id} not in registry` };
 		if (ref.kind === "main") {
 			if (!ref.session) return { kind: "missing", reason: `root ${id} has no live session` };
-			const branch = await rootBranch(ref.session);
-			if (branch.kind === "missing") return branch;
-			const prompts: string[] = [];
-			const answers: string[] = [];
-			for (const entry of branch.entries) {
-				if (entry.type !== "message") continue;
-				const message = entry.message;
-				if (message.role === "toolResult") {
-					const answered = askAnswers(message);
-					if (answered !== null) answers.push(formatAskAnswers(answered));
-					continue;
-				}
-				if (message.role !== "user" || message.attribution !== "user" || message.synthetic === true) continue;
-				const text = textOf(message.content, "\n").trim();
-				if (text !== "") prompts.push(text);
-			}
-			return { kind: "ok", prompts, answers };
+			return rootTexts(ref.session, cache);
 		}
 		id = ref.parentId;
 	}
@@ -340,6 +363,8 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 	let active: InjectSpec[] = [];
 	/** Last root-resolution failure already logged, so a broken chain warns once per reason. */
 	let warnedReason: string | null = null;
+	/** Derived root texts, shared by this subagent's model calls; see fileTexts. */
+	const rootCache: RootCache = new Map();
 
 	pi.on("session_start", (_event, ctx) => {
 		active = [];
@@ -374,7 +399,7 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 	pi.on("context", async (event, ctx) => {
 		try {
 			if (active.length === 0) return;
-			const root = await rootPrompts(ctx);
+			const root = await rootPrompts(ctx, rootCache);
 			switch (root.kind) {
 				case "missing":
 					if (warnedReason !== root.reason) {
