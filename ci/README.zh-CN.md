@@ -127,7 +127,7 @@ flowchart TB
 `.github/workflows/config-check.yml`：
 
 - 事件：`push` 到 `main`、`pull_request`、每天 03:17 UTC 的 `schedule`、`workflow_dispatch`。不使用 `pull_request_target`。
-- 权限：`contents: read`；checkout 不保留凭据（`persist-credentials: false`）；不引用任何 secret。
+- 权限：`contents: read`；checkout 不保留凭据（`persist-credentials: false`）；不引用任何 secret。`code` job 取完整历史（`fetch-depth: 0`），因为 `ci/omp-config-update.test.ts` 用 `git show` 从早期提交读取旧布局的测试数据。
 - 并发：同一事件、同一 ref 的新运行取消旧运行。
 - Actions 按提交 SHA 固定版本；Bun 取最新版。
 
