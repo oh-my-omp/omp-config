@@ -26,9 +26,11 @@
  *
  * Memory is per process, keyed by check + sha256 of the item prompt.
  * The model is the OMP model role `@task-split-check` (assign it in `/model`), then the `default`
- * role chain, both resolved at every request; a provider failure moves to the next model of that
- * chain. Every failure (no model in either role, provider errors, aborted, unparseable answer)
- * is a warning-level note that lets the call run; only `flagged` verdicts block.
+ * role chain, both resolved at every request; the chain's models are tried in order, each attempt
+ * limited to the remaining budget divided over the models not yet tried, so a provider failure or
+ * a hanging model costs only its own share and the chain moves to the next model.
+ * Every failure (no model in either role, provider errors, attempt timeouts, aborted,
+ * unparseable answer) is a warning-level note that lets the call run; only `flagged` verdicts block.
  * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise
  * block the call.
  */
@@ -190,7 +192,13 @@ type Reply = { readonly kind: "text"; readonly text: string } | { readonly kind:
 type ItemVerdicts = { readonly label: string; readonly verdicts: ReadonlyMap<Check, Verdict> };
 
 export default function taskSplitCheck(pi: ExtensionAPI): void {
-	const ask = async (ctx: ExtensionContext, systemPrompt: string, prompt: string, signal: AbortSignal): Promise<Reply> => {
+	const ask = async (
+		ctx: ExtensionContext,
+		systemPrompt: string,
+		prompt: string,
+		signal: AbortSignal,
+		deadlineAt: number,
+	): Promise<Reply> => {
 		const failures: string[] = [];
 		try {
 			const models = roleModels(ctx, [ROLE, "default"]);
@@ -200,8 +208,12 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 					why: `no model: assign @${ROLE} or the default role in /model`,
 				};
 			}
-			for (const { model, level } of models) {
+			for (const [position, { model, level }] of models.entries()) {
 				if (signal.aborted) return { kind: "failed", why: "deadline" };
+				// An attempt's timeout is the remaining overall budget split over the models
+				// not yet tried (this one included), so a hanging model costs only its own
+				// share and the chain keeps moving until the whole deadline is spent.
+				const attempt = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, (deadlineAt - Date.now()) / (models.length - position)))]);
 				try {
 					const reply = await completeSimple(
 						model,
@@ -210,10 +222,14 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 							messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 						},
 						level === "off"
-							? { apiKey: ctx.modelRegistry.resolver(model), disableReasoning: true, signal }
-							: { apiKey: ctx.modelRegistry.resolver(model), reasoning: level ?? EFFORT, signal },
+							? { apiKey: ctx.modelRegistry.resolver(model), disableReasoning: true, signal: attempt }
+							: { apiKey: ctx.modelRegistry.resolver(model), reasoning: level ?? EFFORT, signal: attempt },
 					);
-					if (reply.stopReason === "aborted") return { kind: "failed", why: "aborted" };
+					if (reply.stopReason === "aborted") {
+						if (signal.aborted) return { kind: "failed", why: "deadline" };
+						failures.push(`${modelLabel(model)}: attempt timeout`);
+						continue;
+					}
 					if (reply.stopReason === "error") {
 						failures.push(`${modelLabel(model)}: ${reply.errorMessage ?? "error"}`);
 						continue;
@@ -237,6 +253,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		checks: readonly Check[],
 		prompt: string,
 		signal: AbortSignal,
+		deadlineAt: number,
 	): Promise<ReadonlyMap<Check, Verdict>> => {
 		const hash = createHash("sha256").update(prompt).digest("hex");
 		const keyOf = (check: Check): string => `${check.id}:${hash}`;
@@ -249,7 +266,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		}
 		if (pending.length === 0) return verdicts;
 
-		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal);
+		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal, deadlineAt);
 		for (const check of pending) {
 			const verdict: Verdict = reply.kind === "text" ? parseAnswer(reply.text, check) : { kind: "unknown", why: reply.why };
 			memorize(check, keyOf(check), verdict);
@@ -266,6 +283,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		const call = parseTaskCall(input);
 		if (call === null) return null;
 		const deadline = AbortSignal.timeout(DEADLINE_MS);
+		const deadlineAt = Date.now() + DEADLINE_MS;
 		const judged: ItemVerdicts[] = (
 			await Promise.all(
 				call.items.map(async (item, index): Promise<ItemVerdicts | undefined> => {
@@ -274,7 +292,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 					if (covered.length === 0) return undefined;
 					return {
 						label: itemLabel(item, index),
-						verdicts: await judgeItem(ctx, covered, renderPrompt(call.context, item), deadline),
+						verdicts: await judgeItem(ctx, covered, renderPrompt(call.context, item), deadline, deadlineAt),
 					};
 				}),
 			)
