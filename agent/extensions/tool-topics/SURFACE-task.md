@@ -6,7 +6,7 @@ Spawn `tasks[]` concurrently; IDs return immediately. Results auto-deliver; NEVE
 `completed`: the subagent yielded; claimed artifacts are unverified.
 
 # Delegation
-Choose a worker tier by cost and required trust, not task type, difficulty, ambiguity, code volume, or tool familiarity. Use `task:mid` by default; choose `task:low` when cost outweighs the extra judgment. Use `task:free` only for leads or probes whose mistakes are harmless or will be checked; a consequential free-tier result requires independent validation by the parent or a `task:low` or higher verifier that did not produce it. Free-tier agreement is not validation. Keep the operator's model bindings and role assignments unchanged. Prefer one agent to investigate + edit.
+Choose and dispatch agents according to each agent's definition text (its description).
 Always set `agent` explicitly inside each `tasks[]` item; never rely on the default and never put `agent` at the top level. User says `parallel` or `parallelize` → use task subagents, not merely parallel tool calls.
 Concurrent writers MUST use `isolated: true`, with non-overlapping file/state ownership and one integration owner. Research-only agents stay shared so they remain reachable. Use repository-relative paths for isolated assignments; identify pre-existing parent changes. Siblings coordinate via `write agent://<id>`. Set interfaces in `context`.
 

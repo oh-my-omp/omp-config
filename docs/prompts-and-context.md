@@ -42,7 +42,7 @@ Active rules in the shipped `REPLACE-SYSTEM-default.yml`, each limited to `mode:
 
 | Target | Change |
 |---|---|
-| Subagent Todo instruction (`target: subagents`) | Removes `"No TODO tracking, no progress updates."` from the native child prompt so it does not conflict with worker Todo or `fork_task` verification. The task-side sentences (tier choice, explicit `agent`, concurrent writers, the removed "skip build/lint/tests" line) now live in [tool-topics](extensions.md#tool-topics)' `SURFACE-task.md`. |
+| Subagent Todo instruction (`target: subagents`) | Removes `"No TODO tracking, no progress updates."` from the native child prompt so it does not conflict with worker Todo or `fork_task` verification. The task-side sentences (choosing agents by their definition text, explicit `agent`, concurrent writers, the removed "skip build/lint/tests" line) now live in [tool-topics](extensions.md#tool-topics)' `SURFACE-task.md`. |
 | User-reported errors | Clarifies that not rerunning checks to doubt a user report still leaves reproducing to find the cause and verifying the fix in place. |
 | Compiled-code rule | Fixes the missing verb (`NEVER add avoidable allocation...`). |
 | `eval` tool description | Prohibits reading, listing, or searching local files through `eval` (`read`, `glob`, and `grep` handle file inspection). |
