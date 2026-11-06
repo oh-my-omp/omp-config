@@ -238,7 +238,7 @@ Source: `agent/extensions/child-memory-warning/`. macOS (Darwin) only; enabled i
 
 On the first main session's `session_start`, opens `libproc`/`sysctl` via Bun FFI and samples every 2 s (non-Darwin platforms log one `未启用` info entry; main shutdown clears the timer and closes the library):
 
-- Reads `ri_phys_footprint` from `proc_pid_rusage` and keys processes by `PID + kernel start time`. Tracks owned descendant OS processes of the OMP process and process groups created by observed descendants; reparented orphans (`PPID === 1`) stay tracked until exit. Subagents running in-process — on the main thread, or in a Bun worker thread once concurrency reaches `SUBAGENT_WORKER_THRESHOLD` (9) — share the OMP process's memory and are not tracked here.
+- Reads `ri_phys_footprint` from `proc_pid_rusage` and keys processes by `PID + kernel start time`. Tracks owned descendant OS processes of the OMP process and process groups created by observed descendants; reparented orphans (`PPID === 1`) stay tracked until exit. Subagents running in-process — on the main thread, or in a worker thread when more than 8 subagents run concurrently and `task.workerThreads` is greater than 0 — share the OMP process's memory and are not tracked here.
 - Reads `omomp.yml#child-memory-warning.thresholdGiB` (shipped `4`; project `.omp/omomp.*` wins over agent-dir `omomp.*`) on every 2 s scan. If the section is missing or invalid, tracking continues while alerts pause and each new config problem warns once.
 - When an owned process exceeds `thresholdGiB`, warns once per process identity (one main-UI warning and one `attribution: "agent"` message with PID, PPID, orphan status, GiB/bytes, threshold, and 240-char command). Never signals or kills processes.
 
