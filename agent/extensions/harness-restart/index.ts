@@ -28,6 +28,7 @@
 import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, InteractiveMode, z } from "@oh-my-pi/pi-coding-agent";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { applyActiveTools } from "../_shared/active-tools.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 
@@ -162,7 +163,7 @@ async function activate(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 	if (ctx.mode !== "tui" || ctx.agent.kind !== "main") return;
 	const active = pi.getActiveTools();
 	if (active.includes(TOOL)) return;
-	await pi.setActiveTools([...active, TOOL]);
+	await applyActiveTools(pi, [...active, TOOL]);
 }
 
 function blocker(runtime: Runtime, ctx: ExtensionContext): string | undefined {

@@ -71,6 +71,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { cfgWorktreeCleanSource } from "@oh-my-pi/pi-coding-agent/task/settings";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { applyActiveTools } from "../_shared/active-tools.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { captureInteractiveMode, describeShown, runSlashCommand } from "./interactive.ts";
@@ -254,11 +255,9 @@ function arm(runtime: Runtime, ctx: ExtensionContext, request: Request): void {
 
 async function activate(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	if (!isEligible(ctx)) return;
-	const active = new Set(pi.getActiveTools());
-	if (active.has(CREATE_TOOL) && active.has(REMOVE_TOOL)) return;
-	active.add(CREATE_TOOL);
-	active.add(REMOVE_TOOL);
-	await pi.setActiveTools([...active]);
+	const active = pi.getActiveTools();
+	if (active.includes(CREATE_TOOL) && active.includes(REMOVE_TOOL)) return;
+	await applyActiveTools(pi, [...active, CREATE_TOOL, REMOVE_TOOL]);
 }
 
 /** Why the calling session cannot queue a request, if it cannot. */
