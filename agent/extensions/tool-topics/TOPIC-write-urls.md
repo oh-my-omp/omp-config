@@ -7,7 +7,7 @@ upstream: pi-coding-agent@18.13.2 src/internal-urls/{agent,proc,cfg,local,ssh,va
 ---
 # Writing to internal URLs
 
-- `agent://<id>`: sends `content` (non-empty) as a message to that agent; `agent://all` broadcasts to visible live peers. No `/<json-path>` suffix. The receipt confirms delivery; it does not wait for a reply.
+- `agent://<id>`: sends `content` (non-empty) as a message to that agent; `agent://all` broadcasts to visible live peers (main agent only; a subagent's broadcast fails). No `/<json-path>` suffix. The receipt confirms delivery; it does not wait for a reply.
 - `proc://<id>/kill`: cancels a job or owned agent; `content` is optional and ignored. Service stdin (`proc://<name>`) and `proc://<name>/mode` need named services, which are disabled here (`launch.enabled: false`). `proc://<id>/streams` is read-only.
 - `cfg://<setting>`: sets one setting leaf for this session (value parsed by the setting's type); `cfg://<setting>/save` persists it. Needs an interactive top-level session and user approval; refused in subagents and headless sessions. A higher-precedence layer or environment variable can shadow the value: check the result.
 - `local://<path>`: a file in the session's shared scratch area (also visible to subagents); writes stay inside it.

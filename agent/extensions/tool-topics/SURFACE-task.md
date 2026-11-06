@@ -2,7 +2,7 @@
 tool: task
 upstream: pi-coding-agent@18.13.2 src/prompts/tools/task.md, src/prompts/tools/task-async-contract.md
 ---
-Spawn `tasks[]` concurrently; IDs return immediately. Results auto-deliver; NEVER poll. Completely blocked? Call `wait`. Coordinate while peers run via `write agent://<id>` (`agent://all` broadcasts).
+Spawn `tasks[]` concurrently; IDs return immediately. Results auto-deliver; NEVER poll. Completely blocked? Call `wait`. Coordinate while peers run via `write agent://<id>` (`agent://all` broadcasts; main agent only).
 `completed`: the subagent yielded; claimed artifacts are unverified.
 
 # Delegation
