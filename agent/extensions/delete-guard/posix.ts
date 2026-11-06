@@ -1,5 +1,5 @@
-import { classifyShellInvocation, programName, shellKind } from "./nested.ts";
-import { parsePosix, type Script, type SimpleCommand, type StdinSource, type Word } from "./posix-parse.ts";
+import { classifyNestedProgram, programName } from "./nested.ts";
+import { parsePosix, type Script, type SimpleCommand, STDIN_SCRIPT, type StdinSource, stdinLabel, type Word } from "./posix-parse.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
 /** The posix deletion commands; names are compared lowercased (case-insensitive filesystems run `RM`). */
@@ -11,8 +11,6 @@ const SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh", "dash", "ksh"]
 const OMP_SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh"]);
 
 /** Paths that make `source`/`.` read its script from standard input. */
-const STDIN_SCRIPT = /^\/dev\/(?:stdin|fd\/\d+)$|^\/proc\/self\/fd\/\d+$/;
-
 /** Words that open or close compound commands; the command follows them. A Set: a `then` key reads as a thenable to Biome. */
 const RESERVED: ReadonlySet<string> = new Set([
 	"!",
@@ -302,26 +300,6 @@ function resolveFind(ctx: Context, words: readonly Word[], start: number): Verdi
 	return ALLOW;
 }
 
-function stdinLabel(stdin: StdinSource | null): string {
-	if (stdin === null) return "no script given";
-	switch (stdin.kind) {
-		case "pipe":
-			return "a pipe";
-		case "file":
-			return "a file";
-		case "other":
-			return "a duplicated descriptor";
-		case "herestring":
-			return "a here-string";
-		case "heredoc":
-			return stdin.quoted ? "a quoted here-document" : "an unquoted here-document";
-		default: {
-			const unreachable: never = stdin;
-			return unreachable;
-		}
-	}
-}
-
 type ShellState = { readonly commandMode: boolean; readonly stdinMode: boolean; readonly noExec: boolean };
 
 /** Long shell options that print and exit without running any script. */
@@ -519,8 +497,8 @@ function resolveCommand(ctx: Context, words: readonly Word[], start: number): Ve
 	const prefix = PREFIXES.get(name);
 	if (prefix !== undefined) return resolvePrefix(ctx, words, start + 1, prefix, AMBIGUITY_BUDGET);
 	if (SHELLS.has(name)) return resolveShell(ctx, words, start + 1);
-	const kind = shellKind(word.text);
-	if (kind !== null) return classifyShellInvocation(kind, word, words.slice(start + 1), ctx.depth, ctx.fragment);
+	const nested = classifyNestedProgram(word, words.slice(start + 1), ctx.depth, ctx.fragment, ctx.stdin);
+	if (nested !== null) return nested;
 	switch (name) {
 		case "find":
 			return resolveFind(ctx, words, start + 1);

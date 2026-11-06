@@ -8,6 +8,7 @@ const DISTINCTIVE_DELETE: ReadonlySet<string> = new Set(["rmtree", "removedirs",
 type Context = {
 	readonly code: string;
 	readonly scan: PyScan;
+	readonly depth: number;
 	readonly shell: Dialect;
 	readonly brush: Dialect;
 };
@@ -28,13 +29,13 @@ function judgeLaunch(ctx: Context, launch: PyLaunch, fragment: string): Verdict 
 		case "bridge":
 			return launch.command === null
 				? nonLiteral("the bash bridge command")
-				: classify(ctx.brush, { kind: "script", text: launch.command }, 1);
+				: classify(ctx.brush, { kind: "script", text: launch.command }, ctx.depth + 1);
 		case "script":
 			return launch.text === null
 				? nonLiteral("the command handed to a shell")
-				: classify(ctx.shell, { kind: "script", text: launch.text }, 1);
+				: classify(ctx.shell, { kind: "script", text: launch.text }, ctx.depth + 1);
 		case "argv":
-			return launch.words === null ? nonLiteral("the command") : classify(ctx.brush, { kind: "argv", words: launch.words }, 1);
+			return launch.words === null ? nonLiteral("the command") : classify(ctx.brush, { kind: "argv", words: launch.words }, ctx.depth + 1);
 		default: {
 			const unreachable: never = launch;
 			return unreachable;
@@ -86,7 +87,7 @@ export function classifyPy(code: string, shell: Dialect, brush: Dialect, depth =
 		const verdict = classify(shell, { kind: "script", text: script }, 1);
 		if (verdict.kind === "block") return verdict;
 	}
-	const verdict = judgeTokens({ code, scan, shell, brush });
+	const verdict = judgeTokens({ code, scan, shell, brush, depth });
 	if (verdict.kind === "block") return verdict;
 	if (depth >= 8)
 		return scan.pythonSnippets.length > 0

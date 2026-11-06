@@ -34,6 +34,16 @@
 //     without a value. Here-document bodies on any descriptor are scanned for
 //     substitutions, and inside double quotes `'` does not quote
 //     (`"${x:-'$(…)'}"` runs the substitution).
+//   - deletion inside an interpreter's inline code (`python`/`python3 -c`,
+//     `node`/`bun -e|--eval|-p|--print`, `deno eval`, `perl -e|-E|-M`,
+//     `ruby -e`, and a quoted here-document fed to one of them): Python and
+//     JavaScript code are judged as eval cells; Perl and Ruby by a name scan
+//     (`unlink`, `rmtree`, `remove_tree`, `File.delete`, `FileUtils.rm*`);
+//   - non-literal interpreter input: inline code, a script file, or an option
+//     value from an expansion before the script; stdin that is a pipe,
+//     here-string, unquoted here-document or inherited (a file redirect and a
+//     quoted here-document are read); a script that is a URL (`data:`, `http(s):`,
+//     `ftp:`, `blob:`) or a stdin alias (`/dev/stdin`, `/dev/fd/N`).
 // Words that are only arguments pass (`echo rm -rf /`, `git rm`), and so do
 // programs with their own deletion semantics (`rsync --delete`, `git clean`).
 //

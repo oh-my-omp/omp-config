@@ -10,6 +10,30 @@
 /** `literal`: no expansion, substitution, glob or brace pattern, so the runtime text is `text`. */
 export type Word = { readonly text: string; readonly raw: string; readonly literal: boolean };
 
+/** Paths that name the process's own standard input, not a file: reading them reads the stdin source. */
+export const STDIN_SCRIPT = /^\/dev\/(?:stdin|fd\/\d+)$|^\/proc\/self\/fd\/\d+$/;
+
+/** Names a command's stdin source in block reasons; `null` means no source was given. */
+export function stdinLabel(stdin: StdinSource | null): string {
+	if (stdin === null) return "no script given";
+	switch (stdin.kind) {
+		case "pipe":
+			return "a pipe";
+		case "file":
+			return "a file";
+		case "other":
+			return "a descriptor other than a file";
+		case "herestring":
+			return "a here-string";
+		case "heredoc":
+			return stdin.quoted ? "a quoted here-document" : "an unquoted here-document";
+		default: {
+			const unreachable: never = stdin;
+			return unreachable;
+		}
+	}
+}
+
 export type StdinSource =
 	| { readonly kind: "pipe" }
 	| { readonly kind: "file" }
@@ -277,7 +301,8 @@ class Parser {
 		switch (op) {
 			case "<":
 			case "<>":
-				command.stdin = { kind: "file" };
+				// A redirect from a stdin alias reads the pipe or the caller's stdin, not a file the call names.
+				command.stdin = target.literal && STDIN_SCRIPT.test(target.text) ? { kind: "other" } : { kind: "file" };
 				break;
 			case "<<<":
 				command.stdin = { kind: "herestring" };

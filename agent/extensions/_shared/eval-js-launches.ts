@@ -10,6 +10,10 @@ import type { Expression, Node, ObjectExpression, Program } from "@babel/types";
 import { loadBabelParser } from "@oh-my-pi/pi-coding-agent/eval/js/shared/rewrite-imports";
 import type { LaunchVia, LaunchWord } from "./eval-py-launches.ts";
 
+// Loaded once when this module loads, so the parser is synchronous for every caller (delete-guard classifies bash
+// calls on the hook path, which cannot await).
+const { parse: babelParse } = await loadBabelParser();
+
 /**
  * A process launch at one node. `childScript`: child_process `exec`/`execSync`
  * text for the system shell; `childSpawn`: `spawn`/`spawnSync`/`execFile`/
@@ -36,9 +40,8 @@ export type JsLaunch =
 export type JsCell = { readonly program: Program; readonly bindings: Bindings };
 
 /** Parses a cell the way the kernel does; a syntax error Babel cannot recover from throws. */
-export async function parseJs(code: string): Promise<JsCell> {
-	const { parse } = await loadBabelParser();
-	const file = parse(code, {
+export function parseJs(code: string): JsCell {
+	const file = babelParse(code, {
 		sourceType: "module",
 		allowAwaitOutsideFunction: true,
 		allowReturnOutsideFunction: true,

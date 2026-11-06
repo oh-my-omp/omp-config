@@ -1,5 +1,5 @@
 import type { ArgvWord } from "./classify.ts";
-import { classifyShellInvocation, programName, shellKind } from "./nested.ts";
+import { classifyNestedProgram, programName } from "./nested.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
 /** `Remove-Item` and its built-in aliases. A Set: a plain object would also match `constructor`. */
@@ -296,8 +296,8 @@ function classifyStatement(statement: PsStatement, depth: number): Verdict {
 	if (DELETE_COMMANDS.has(name)) return block("delete", statement.raw, `\`${command.text}\` deletes files`);
 	if (name === "invoke-expression" || name === "iex")
 		return block("nonLiteral", statement.raw, "`Invoke-Expression` runs a string as code");
-	const kind = shellKind(command.text);
-	if (kind !== null) return classifyShellInvocation(kind, command, words.slice(i + 1), depth, statement.raw);
+	const nested = classifyNestedProgram(command, words.slice(i + 1), depth, statement.raw, null);
+	if (nested !== null) return nested;
 	return ALLOW;
 }
 
