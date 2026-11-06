@@ -131,7 +131,7 @@
 
 源码：`agent/extensions/watchdog-agent/`。
 
-按 `WATCHDOG-<label>.md` 文件定期审阅目标会话（扫描 `~/.omp/agent/extensions/watchdog-agent/` 及会话当前 `cwd` 至 git 根各层的 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`；归本机，不同步）。链接工作树使用自己的根目录；`/move` 后，下一条 prompt 或 `/watchdog` 命令从目标目录重新发现并匹配文件。发现文件不等于运行：会话必须同时匹配 `target` 和可选 `cwd`；之后由 `watchModel` / `watchProvider` 决定哪些助手消息计入 `every`。
+按 `WATCHDOG-<label>.md` 文件定期审阅目标会话（扫描 `~/.omp/agent/extensions/watchdog-agent/` 及会话当前 `cwd` 至 git 根或家目录先到者（含）各层（向上未遇边界即达文件系统根时只扫 `cwd`）的 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`（归本机，不同步）。链接工作树使用自己的根目录；`/move` 后，下一条 prompt 或 `/watchdog` 命令从目标目录重新发现并匹配文件。发现文件不等于运行：会话必须同时匹配 `target` 和可选 `cwd`；之后由 `watchModel` / `watchProvider` 决定哪些助手消息计入 `every`。
 
 `target`、`cwd` 与消息来源正则 `watchModel`、`watchProvider` 使用 `agent/extensions/_shared/session-filter.ts` 中与 `turn-judge` 共用的会话筛选：同一个键内的多个值任一匹配即可，不同键之间取 AND。
 
@@ -169,7 +169,7 @@ cwd: /absolute/path/to/leader-checkout
 
 源码：`agent/extensions/turn-judge/`。
 
-扫描扩展目录及 `cwd` 至 git 根各层的 `TURN-JUDGE-<label>.md`。在目标会话每次由模型自己结束回合（`stopReason: "stop"` 且有非空文字；`task.structured` 关闭时含子代理最终报告与 IRC 回复）后，对每个匹配文件发起一次 JUDGE 请求。仓库自带 `TURN-JUDGE-gpt-talk-only.md`，本机自建文件归本机。
+扫描扩展目录及 `cwd` 至 git 根或家目录先到者（含）各层（向上未遇边界即达文件系统根时只扫 `cwd`）的 `TURN-JUDGE-<label>.md`。在目标会话每次由模型自己结束回合（`stopReason: "stop"` 且有非空文字；`task.structured` 关闭时含子代理最终报告与 IRC 回复）后，对每个匹配文件发起一次 JUDGE 请求。仓库自带 `TURN-JUDGE-gpt-talk-only.md`，本机自建文件归本机。
 
 - **匹配条件**：`target`（默认 `main`）、`cwd`（逗号分隔、绝对路径或以 `~/` 开头的 glob，匹配会话 cwd），以及匹配当前回复自身 `model`/`provider` 的不锚定 JavaScript 正则，使用与 `watchdog-agent` 共用的会话筛选：同一键内多个值任一匹配即可，不同键取 AND。另有逗号分隔的 `skipTools`：上一轮 `stop` 之后若调用过其中任一工具，本轮跳过。
 - **配置与输入**：frontmatter 含 `name`、`enabled`（默认 `true`）、`target`、`cwd`、`model`、`provider`、`skipTools`、`inject`（默认 `system`，或 `user`）、`maxChars`（默认 `30000`）、至少一个 Noul 问题 `question.<id>`（可选 `question.<id>.true` / `.false` 说明是与否的含义）、至少一条规则 `when.<名称>`（合取式，如 `a >= 0.6 & b < 0.5`，每个值在 $(0, 1]$ 内）以及必填的 `prompt`；id 与规则名为 `[a-z0-9_]+`，每个问题都必须出现在某条规则中，正文保持为空。一个文件的全部问题在同一次请求里交给 `openJudge`，state 为 `{ 时间线: [{ 类型, 内容 }], 本轮回复 }`：`时间线` 从分支上最后一条人类输入开始，依次列出 `用户说`、`用户在ask中回答`（用户在 `ask` 里选的或自己写的答案，每个已作答的问题一行 `问题 → 答案`，由 `_shared/ask-answers.ts` 从工具结果读出；取消、被拒或未作答的 ask 不加条目）、`提醒`（`attribution: "agent"` 的 user 消息，以及 `watchdog` / `turn-judge` 自定义消息，每条前 400 字）、`模型想`（不含 redacted 块）、`模型说` 和 `模型调用工具`（`工具名：intent`，不含参数与结果），总长超过 `maxChars` 时从 `用户说` 之后最早的条目整条丢弃。

@@ -131,7 +131,7 @@ Reads the `tool-policy-nag.*` settings of `omp-config` on every watched call (th
 
 Source: `agent/extensions/watchdog-agent/`.
 
-Runs periodic reviews configured by `WATCHDOG-<label>.md` files in `~/.omp/agent/extensions/watchdog-agent/` and `<dir>/WATCHDOG-*.md` or `<dir>/.omp/WATCHDOG-*.md` from the live session `cwd` up to its git root (machine-local, not synced). Linked worktrees use their own root; after `/move`, discovery and matching use the destination on the next prompt or `/watchdog` command. A discovered file runs only when its `target` and optional `cwd` both match the session; `watchModel` / `watchProvider` then decide which assistant messages count toward `every`.
+Runs periodic reviews configured by `WATCHDOG-<label>.md` files in `~/.omp/agent/extensions/watchdog-agent/` and `<dir>/WATCHDOG-*.md` or `<dir>/.omp/WATCHDOG-*.md` from the live session `cwd` up to its git root or home directory, whichever comes first — only `cwd` when neither bounds the walk (machine-local, not synced). Linked worktrees use their own root; after `/move`, discovery and matching use the destination on the next prompt or `/watchdog` command. A discovered file runs only when its `target` and optional `cwd` both match the session; `watchModel` / `watchProvider` then decide which assistant messages count toward `every`.
 
 `target`, `cwd` and the producer regexes use the session filter in `agent/extensions/_shared/session-filter.ts`, shared with `turn-judge`: values inside one key are alternatives, keys combine with AND.
 

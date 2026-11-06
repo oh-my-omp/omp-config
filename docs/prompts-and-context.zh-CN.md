@@ -26,7 +26,7 @@
 
 `before_agent_start` 处理器按扩展加载顺序串行执行：native 发现（`~/.omp/agent/extensions/` 与 `settings.json` 模块）→ hooks → 插件扩展 → `-e` 路径 → `config.yml` `extensions` → OMP 内置 inline 扩展。把该扩展放在 `extensions/` 之外的 `extensions-last/` 并排在 `extensions` 列表末项，可使它在两种模式下都在所有按路径加载的扩展之后运行，它的增量在一条 prompt 的消息中排在这些扩展的增量之后（详见 [`agent/extensions-last/README.zh-CN.md`](../agent/extensions-last/README.zh-CN.md)）。
 
-每条 prompt 时与每次工具调用之后（主会话与每个子代理各按自身匹配），扩展读取同目录下的全部 `REPLACE-SYSTEM-<label>.yml`（仓库自带与本机自建文件放在同一目录），以及从会话 cwd 到 git 根每层目录及其 `.omp/` 中的同名模式文件；`config.yml` 的 `inlineToolDescriptors: "on"` 把工具说明内联渲染进 system prompt，规则才能匹配到其中的句子。一个文件是一个由规则组成的 YAML 序列：
+每条 prompt 时与每次工具调用之后（主会话与每个子代理各按自身匹配），扩展读取同目录下的全部 `REPLACE-SYSTEM-<label>.yml`（仓库自带与本机自建文件放在同一目录），以及从会话 cwd 向上至 git 根或家目录先到者（含）每层目录及其 `.omp/` 中的同名模式文件（向上未遇边界即达文件系统根时只扫 `cwd`）；`config.yml` 的 `inlineToolDescriptors: "on"` 把工具说明内联渲染进 system prompt，规则才能匹配到其中的句子。一个文件是一个由规则组成的 YAML 序列：
 
 ```yaml
 - literal: "原文"
@@ -63,7 +63,7 @@ system prompt 本身从不改动。规则匹配扩展拿到的提示（prompt �
 
 源码：`agent/extensions/append-system-model/`，键与匹配规则以其文件头注释为准。
 
-每条 prompt 开始时与每次工具调用之后（主会话与每个子代理各按自身匹配），扩展读取同目录下的全部 `APPEND-SYSTEM-<label>.md`（仓库自带与本机自建文件放在同一目录），以及从会话 cwd 到 git 根每层目录及其 `.omp/` 中的同名模式文件。所有命中的片段都会采用，不按名称覆盖；命中的正文按发现顺序拼成一条来源为 `omp-config/append-system-model` 的[增量消息](#提示词文件)，system prompt 保持不变。文件每次都重读，新增或修改片段、`/model` 切换都从下一条 prompt 或下一个工具批次起生效，无需重启，以取代先前增量的新增量送达；子代理被 IRC 唤醒的轮次沿用其对话中已有的增量。
+每条 prompt 开始时与每次工具调用之后（主会话与每个子代理各按自身匹配），扩展读取同目录下的全部 `APPEND-SYSTEM-<label>.md`（仓库自带与本机自建文件放在同一目录），以及从会话 cwd 向上至 git 根或家目录先到者（含）每层目录及其 `.omp/` 中的同名模式文件（向上未遇边界即达文件系统根时只扫 `cwd`）。所有命中的片段都会采用，不按名称覆盖；命中的正文按发现顺序拼成一条来源为 `omp-config/append-system-model` 的[增量消息](#提示词文件)，system prompt 保持不变。文件每次都重读，新增或修改片段、`/model` 切换都从下一条 prompt 或下一个工具批次起生效，无需重启，以取代先前增量的新增量送达；子代理被 IRC 唤醒的轮次沿用其对话中已有的增量。
 
 片段由 `---` 包围的 frontmatter 与其后的提示词正文组成：
 
@@ -138,7 +138,7 @@ OMP 的 `agents-md` 与 `claude-md` provider 把独立的 `AGENTS.md` / `CLAUDE.
 
 源码：`agent/extensions/model-compaction/`。
 
-OMP 原生的 `compaction.modelThresholds` 只支持精确 `provider/id` 或 `*` 前缀。该扩展在主会话每次 `before_agent_start` 时重新发现并读取 `COMPACTION-<label>.md` 文件：扩展自己的目录（本机规则）加上会话 cwd 到 git 根的每一层目录及各自的 `.omp/`（项目规则）。一个文件一条规则，`---` 包围的 frontmatter 含 `provider` 和/或 `model` 的 JavaScript 正则（不锚定；`"model": ".*"` 匹配全部模型）与正整数 `thresholdTokens`：
+OMP 原生的 `compaction.modelThresholds` 只支持精确 `provider/id` 或 `*` 前缀。该扩展在主会话每次 `before_agent_start` 时重新发现并读取 `COMPACTION-<label>.md` 文件：扩展自己的目录（本机规则）加上会话 cwd 向上至 git 根或家目录先到者（含）的每一层目录及各自的 `.omp/`（向上未遇边界即达文件系统根时只扫 `cwd`；项目规则）。一个文件一条规则，`---` 包围的 frontmatter 含 `provider` 和/或 `model` 的 JavaScript 正则（不锚定；`"model": ".*"` 匹配全部模型）与正整数 `thresholdTokens`：
 
 ```markdown
 ---
