@@ -35,11 +35,33 @@ function toolCallSummaries(content: unknown): string[] {
 	return calls;
 }
 
+/** Tool calls in one message's content, counted without serializing their arguments. */
+function toolCallCount(content: unknown): number {
+	if (!Array.isArray(content)) return 0;
+	let count = 0;
+	for (const b of content) {
+		if (hasKey(b, "type") && b.type === "toolCall") count += 1;
+	}
+	return count;
+}
+
+/** Whether the content carries a text block with a non-whitespace character, without joining or copying the text. */
+function hasText(content: unknown): boolean {
+	const nonBlank = /\S/;
+	if (typeof content === "string") return nonBlank.test(content);
+	if (!Array.isArray(content)) return false;
+	for (const b of content) {
+		if (!hasKey(b, "type") || b.type !== "text") continue;
+		if (hasKey(b, "text") && typeof b.text === "string" && nonBlank.test(b.text)) return true;
+	}
+	return false;
+}
+
 /** Watched actions in one message: each assistant tool call plus one for a nonempty text reply. */
 export function countActions(message: unknown): number {
 	if (!hasKey(message, "role") || message.role !== "assistant") return 0;
 	const content = hasKey(message, "content") ? message.content : undefined;
-	return toolCallSummaries(content).length + (textBlocks(content).trim() === "" ? 0 : 1);
+	return toolCallCount(content) + (hasText(content) ? 1 : 0);
 }
 
 export function messageTimestamp(message: unknown): number | undefined {
@@ -102,26 +124,39 @@ export function branchMessages(entries: ReadonlyArray<unknown>): unknown[] {
 }
 
 /**
- * Messages a run reviews. `full` = every branch message; `window` = those stamped after
- * `after`. `tail` is the message that triggered a mid-run review: `message_end` persistence
- * is queued concurrently with the event, so it is appended when the branch lacks it yet.
+ * The transcript one review covers, and the newest message timestamp in it. `full` covers every
+ * branch message, `window` those stamped after `after`; the entries are walked once and nothing
+ * but the rendered text is built. `tail` is the message that triggered a mid-run review:
+ * `message_end` persistence is queued concurrently with the event, so it is added when the branch
+ * lacks it yet — after the branch messages for `full`, inside the window for `window`.
  */
-export function selectMessages(entries: ReadonlyArray<unknown>, scope: Scope, after: number, tail: unknown): unknown[] {
-	const all = branchMessages(entries);
+export function reviewTranscript(
+	entries: ReadonlyArray<unknown>,
+	scope: Scope,
+	after: number,
+	tail: unknown,
+	ownNotes: Pick<ReadonlySet<string>, "has">,
+): { readonly transcript: string; readonly reviewed: number } {
 	const tailStamp = messageTimestamp(tail);
-	if (tail !== undefined && tailStamp !== undefined && !all.some((m) => messageTimestamp(m) === tailStamp)) all.push(tail);
-	if (scope === "full") return all;
-	return all.filter((m) => (messageTimestamp(m) ?? 0) > after);
-}
-
-/** Full, untruncated rendering of the given messages, oldest first. System-mode notes are custom messages, never branch messages, so only user-mode notes need `ownNotes`. */
-export function renderTranscript(messages: ReadonlyArray<unknown>, ownNotes: Pick<ReadonlySet<string>, "has">): string {
 	const parts: string[] = [];
-	for (const m of messages) {
-		const part = renderMessage(m, ownNotes);
+	let onBranch = false;
+	let reviewed = after;
+	for (const entry of entries) {
+		if (!hasKey(entry, "type") || entry.type !== "message" || !hasKey(entry, "message")) continue;
+		const message = entry.message;
+		const stamp = messageTimestamp(message) ?? 0;
+		if (tailStamp !== undefined && stamp === tailStamp) onBranch = true;
+		if (scope === "window" && stamp <= after) continue;
+		if (stamp > reviewed) reviewed = stamp;
+		const part = renderMessage(message, ownNotes);
 		if (part !== undefined) parts.push(part);
 	}
-	return parts.join("\n");
+	if (tail !== undefined && tailStamp !== undefined && !onBranch && (scope === "full" || tailStamp > after)) {
+		const part = renderMessage(tail, ownNotes);
+		if (part !== undefined) parts.push(part);
+		if (tailStamp > reviewed) reviewed = tailStamp;
+	}
+	return { transcript: parts.join("\n"), reviewed };
 }
 
 // --- model specs ------------------------------------------------------------

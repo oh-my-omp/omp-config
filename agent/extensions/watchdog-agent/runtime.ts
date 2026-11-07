@@ -22,10 +22,9 @@ import {
 	isOwnUserNote,
 	messageTimestamp,
 	producerOf,
-	renderTranscript,
+	reviewTranscript,
 	runJev,
 	runReviewer,
-	selectMessages,
 } from "./review.ts";
 import {
 	type DeliverAs,
@@ -50,6 +49,8 @@ type Runtime = {
 	overrides: Map<string, boolean>;
 	states: Map<string, WatchdogState>;
 	branchOf: () => ReadonlyArray<unknown>;
+	/** User-mode note index over the branch, folded as the branch grows. */
+	notes: NoteIndex;
 	nextTurnQueue: QueuedNote[];
 	userTurnArmed: boolean;
 	/** Set by `session_shutdown` until the next session boundary: in-flight reviews abort and nothing new starts. */
@@ -65,6 +66,7 @@ export function registerWatchdog(pi: ExtensionAPI): void {
 		overrides: new Map(),
 		states: new Map(),
 		branchOf: () => [],
+		notes: { count: 0, anchor: undefined, index: new Map() },
 		nextTurnQueue: [],
 		userTurnArmed: false,
 		closed: false,
@@ -158,16 +160,33 @@ function filePathsOf(data: unknown): readonly string[] {
 	return data.filePaths.filter((path): path is string => typeof path === "string");
 }
 
-/** Trimmed user-mode note text → the watchdog files it came from, from the index entries on the branch. */
-function userNoteIndex(entries: ReadonlyArray<unknown>): Map<string, readonly string[]> {
-	const out = new Map<string, readonly string[]>();
-	for (const e of entries) {
-		if (!hasKey(e, "type") || e.type !== "custom" || !hasKey(e, "customType") || e.customType !== USER_NOTE_ENTRY_TYPE) continue;
-		const data = hasKey(e, "data") ? e.data : undefined;
-		if (!hasKey(data, "text") || typeof data.text !== "string") continue;
-		out.set(data.text.trim(), filePathsOf(data));
+/** User-mode note index over the branch prefix folded so far, and the entry that prefix ends at. */
+type NoteIndex = { count: number; anchor: unknown; index: Map<string, readonly string[]> };
+
+/** Fold one branch entry into the note index: its trimmed text → the watchdog files it came from. */
+function foldNote(entry: unknown, out: Map<string, readonly string[]>): void {
+	if (!hasKey(entry, "type") || entry.type !== "custom" || !hasKey(entry, "customType") || entry.customType !== USER_NOTE_ENTRY_TYPE)
+		return;
+	const data = hasKey(entry, "data") ? entry.data : undefined;
+	if (!hasKey(data, "text") || typeof data.text !== "string") return;
+	out.set(data.text.trim(), filePathsOf(data));
+}
+
+/**
+ * The note index up to the end of `entries`, folded incrementally: entries already folded are
+ * not rescanned. An anchor that no longer sits where it was folded (a replaced or shortened
+ * branch) rebuilds the index from the start.
+ */
+function noteIndexOf(runtime: Runtime, entries: ReadonlyArray<unknown>): Map<string, readonly string[]> {
+	const notes = runtime.notes;
+	if (notes.count > entries.length || (notes.count > 0 && entries[notes.count - 1] !== notes.anchor)) {
+		notes.count = 0;
+		notes.index = new Map();
 	}
-	return out;
+	for (let i = notes.count; i < entries.length; i++) foldNote(entries[i], notes.index);
+	notes.count = entries.length;
+	notes.anchor = entries[entries.length - 1];
+	return notes.index;
 }
 
 /** Watchdog files a branch entry carries a delivered note of: a system-mode custom message, or an indexed user-mode message. */
@@ -182,8 +201,11 @@ function noteFiles(entry: unknown, index: ReadonlyMap<string, readonly string[]>
 }
 
 /** Notes of the watchdog file delivered on the branch since its last compaction. */
-function deliveredSinceCompaction(entries: ReadonlyArray<unknown>, filePath: string): number {
-	const index = userNoteIndex(entries);
+function deliveredSinceCompaction(
+	entries: ReadonlyArray<unknown>,
+	filePath: string,
+	index: ReadonlyMap<string, readonly string[]>,
+): number {
 	let count = 0;
 	for (const e of entries) {
 		if (hasKey(e, "type") && e.type === "compaction") count = 0;
@@ -224,8 +246,11 @@ function refresh(runtime: Runtime, warn: boolean): void {
 	}
 	runtime.roster = specs;
 	const next = new Map<string, WatchdogState>();
-	const branch = runtime.branchOf();
-	const cursors = cursorsFromBranch(branch);
+	// Only a new state is rebuilt from the branch: an existing one carries its own cursor, so a
+	// later turn reads no branch entries at all. Directories are enumerated on every call.
+	let branch: ReadonlyArray<unknown> | undefined;
+	let cursors: Map<string, number> | undefined;
+	let notes: Map<string, readonly string[]> | undefined;
 	for (const spec of specs) {
 		if (!targetsHere(runtime, spec) || !effectiveEnabled(runtime, spec)) continue;
 		const prev = runtime.states.get(spec.filePath);
@@ -234,13 +259,16 @@ function refresh(runtime: Runtime, warn: boolean): void {
 			next.set(spec.filePath, prev);
 			continue;
 		}
+		branch ??= runtime.branchOf();
+		cursors ??= cursorsFromBranch(branch);
+		notes ??= noteIndexOf(runtime, branch);
 		const cursor = cursors.get(spec.filePath) ?? 0;
 		next.set(spec.filePath, {
 			spec,
 			pending: actionsAfter(branch, cursor, spec.filter),
 			cursor,
 			run: { kind: "idle" },
-			sent: deliveredSinceCompaction(branch, spec.filePath),
+			sent: deliveredSinceCompaction(branch, spec.filePath, notes),
 		});
 	}
 	runtime.states = next;
@@ -264,6 +292,7 @@ function load(runtime: Runtime, ctx: ExtensionContext): void {
 	runtime.cwd = () => ctx.sessionManager.getCwd();
 	runtime.branchOf = () => ctx.sessionManager.getBranch();
 	runtime.overrides = overridesFromBranch(runtime.branchOf());
+	runtime.notes = { count: 0, anchor: undefined, index: new Map() };
 	runtime.states = new Map();
 	runtime.nextTurnQueue = [];
 	runtime.userTurnArmed = false;
@@ -348,11 +377,8 @@ function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, ta
 	state.pending = 0;
 	if (state.sent >= spec.maxPerContext) return;
 	const branch = ctx.sessionManager.getBranch();
-	const messages = selectMessages(branch, spec.scope, state.cursor, tail);
-	let reviewed = state.cursor;
-	for (const m of messages) reviewed = Math.max(reviewed, messageTimestamp(m) ?? 0);
-	const transcript = renderTranscript(messages, userNoteIndex(branch));
-	if (transcript.trim() === "") {
+	const { transcript, reviewed } = reviewTranscript(branch, spec.scope, state.cursor, tail, noteIndexOf(runtime, branch));
+	if (!/\S/.test(transcript)) {
 		advanceCursor(runtime, state, reviewed);
 		return;
 	}
@@ -872,9 +898,13 @@ function registerEvents(runtime: Runtime): void {
 			if (runtime.closed) return;
 			// Registration can precede the first session boundary; initialize lazily.
 			if (runtime.identity === null) load(runtime, ctx);
+			// One count per message, shared by every watchdog; only the filter test is per watchdog.
+			const actions = countActions(event.message);
+			if (actions === 0) return;
+			const producer = producerOf(event.message);
+			if (producer === null) return;
 			for (const state of runtime.states.values()) {
-				const actions = watchedActions(state.spec.filter, event.message);
-				if (actions === 0) continue;
+				if (!producerMatches(state.spec.filter, producer)) continue;
 				state.pending += actions;
 				if (state.run.kind === "idle" && state.pending >= state.spec.every) start(runtime, state, ctx, event.message);
 			}

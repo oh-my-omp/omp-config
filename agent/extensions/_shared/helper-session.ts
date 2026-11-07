@@ -31,6 +31,25 @@ type HelperResult =
 	/** Session creation or the prompt itself threw. */
 	| { readonly kind: "failed"; readonly message: string };
 
+/** What a finished helper run leaves behind: the last assistant turn's failure, and the last assistant text. */
+type FinalAnswer = { readonly stopReason: unknown; readonly errorMessage: string; readonly text: string };
+
+/** The judged parts of a finished run; the message list itself is not retained. */
+function finalAnswer(messages: unknown): FinalAnswer {
+	let stopReason: unknown;
+	let errorMessage = "";
+	if (Array.isArray(messages)) {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const message: unknown = messages[i];
+			if (typeof message !== "object" || message === null || !("role" in message) || message.role !== "assistant") continue;
+			stopReason = "stopReason" in message ? message.stopReason : undefined;
+			errorMessage = "errorMessage" in message && typeof message.errorMessage === "string" ? message.errorMessage : "";
+			break;
+		}
+	}
+	return { stopReason, errorMessage, text: lastAssistantText(messages) };
+}
+
 /**
  * Run one prompt in a fresh, restricted, in-memory helper session and dispose
  * it. Never throws. The session is classified as a subagent (`taskDepth: 1`):
@@ -62,7 +81,8 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 	}
 
 	let partial = "";
-	let finalMessages: unknown;
+	/** Set by the terminal `agent_end`; held as a property so the subscription's assignment is seen after it. */
+	const final: { answer: FinalAnswer | null } = { answer: null };
 	const unsubscribe = session.subscribe((event) => {
 		if (event.type === "message_update") {
 			const update = event.assistantMessageEvent;
@@ -71,7 +91,7 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 				if (!signal?.aborted) request.onText?.(partial);
 			}
 		} else if (event.type === "agent_end" && event.isTerminal !== false) {
-			finalMessages = event.messages;
+			final.answer = finalAnswer(event.messages);
 		}
 	});
 
@@ -97,16 +117,7 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 	if (signal?.aborted) return { kind: "canceled" };
 
 	// A provider failure does not reject prompt(); it lands as an assistant turn with stopReason "error".
-	if (Array.isArray(finalMessages)) {
-		for (let i = finalMessages.length - 1; i >= 0; i--) {
-			const message: unknown = finalMessages[i];
-			if (typeof message !== "object" || message === null || !("role" in message) || message.role !== "assistant") continue;
-			if ("stopReason" in message && message.stopReason === "error") {
-				const detail = "errorMessage" in message && typeof message.errorMessage === "string" ? message.errorMessage : "";
-				return { kind: "provider-error", message: detail };
-			}
-			break;
-		}
-	}
-	return { kind: "text", text: partial.trim() || lastAssistantText(finalMessages).trim() };
+	const answer = final.answer;
+	if (answer !== null && answer.stopReason === "error") return { kind: "provider-error", message: answer.errorMessage };
+	return { kind: "text", text: partial.trim() || (answer === null ? "" : answer.text.trim()) };
 }
