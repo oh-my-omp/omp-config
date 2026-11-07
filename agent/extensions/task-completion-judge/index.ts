@@ -478,30 +478,45 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 const sharedContextOf = (ctx: ExtensionContext): string => {
 	const pieces = ctx.getSystemPrompt();
 	const marker = "§ Context\n";
-	const markerNoNl = "§ Context";
-	/** The body joined from the section pieces; a `"\n§ "` heading inside one of them, or one whose text opens after the seam with `"§ "`, ends the body exactly where the whole-join path would slice it. */
-	const bodyFrom = (firstPiece: string, restIndex: number): string => {
-		let accumulated = "";
-		let open = true; // nothing consumed yet: the next piece contributes without a seam
+	const bodyEnd = "\n§ ";
+	/**
+	 * The body streams the pieces joined with `"\n"`. The heading's `"\n"` lies
+	 * either inside a piece (an `indexOf` hit is authoritative downstream) or on
+	 * the seam before a piece whose text opens with `"§ "` — everything after
+	 * the marker (in `carry`, from the marker-containing piece or `""` when the
+	 * marker straddled the seam) joins the first body piece without a seam, so
+	 * that piece contributes exactly `carry + piece` to the joined body.
+	 */
+	const bodyOf = (carry: string, restIndex: number): string => {
+		// The body streams rest pieces joined by the seam "\n", with the
+		// marker piece's `carry` fused into the first of them (one joined
+		// piece's two halves). `held` holds the body's exact joined text.
+		// The heading's `"\n"` lies inside a piece (`indexOf` there is
+		// exact) or rides the seam before a piece that opens with `"§ "`;
+		// the seam check runs on every rest piece (the marker ate its own
+		// `"\n"`, but the seam between two rest pieces belongs to the
+		// joined body just like any other).
+		let held = carry; // body prefixes consumed so far
 		for (let index = restIndex; index < pieces.length; index++) {
 			const piece = pieces[index] ?? "";
-			// From the second piece on, a piece opening with "§ " carries the
-			// heading's "\n" on the seam before it: the body ends there.
-			if (!open && piece.startsWith("§ ")) return accumulated.slice(0, accumulated.length - 1).trim();
-			const inside = piece.indexOf("\n§ ");
-			if (inside !== -1) return (accumulated + piece.slice(0, inside)).trim();
-			accumulated += open ? firstPiece : `\n${piece}`;
-			open = false;
+			// Heading riding the seam into this piece.
+			if (piece.startsWith("§ ")) return held.trim();
+			const inside = piece.indexOf(bodyEnd);
+			if (inside !== -1) return (index === restIndex ? carry + piece.slice(0, inside) : `${held}\n${piece.slice(0, inside)}`).trim();
+			held = `${held}\n${piece}`;
 		}
-		return accumulated.trim();
+		// No heading anywhere in the rest pieces: the body is `held` — `carry`
+		// alone when there were no rest pieces, the fused rest otherwise (the
+		// marker piece was also the body's last).
+		return held.trim();
 	};
 	for (let index = 0; index < pieces.length; index++) {
 		const piece = pieces[index] ?? "";
 		const at = piece.indexOf(marker);
-		if (at !== -1) return bodyFrom(piece.slice(at + marker.length), index + 1);
-		// Straddling: this piece ends with the marker's text, the seam carries
-		// the marker's "\n", the body starts inside the next piece.
-		if (index + 1 < pieces.length && piece.endsWith(markerNoNl)) return bodyFrom("", index + 1);
+		if (at !== -1) return bodyOf(piece.slice(at + marker.length), index + 1);
+		// Straddling: this piece ends with the marker's text; the seam carries
+		// the marker's `"\n"`, the body starts inside the next piece.
+		if (index + 1 < pieces.length && piece.endsWith("§ Context")) return bodyOf("", index + 1);
 	}
 	return "";
 };
