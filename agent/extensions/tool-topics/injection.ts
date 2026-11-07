@@ -43,10 +43,10 @@ export function installToolTopicInjection(
 	},
 ): void {
 	if (!options.owner.trim()) throw new Error("Topic injection owner must be non-empty");
-	const claimDelivery = createContextDelivery(pi);
+	const claimDeliveries = createContextDelivery(pi);
 	pi.on("tool_result", async (event, ctx) => {
-		const parts: string[] = [];
 		try {
+			const ready: { rendered: string; marker: string }[] = [];
 			for (const rule of options.rules) {
 				if (event.toolName !== rule.tool) continue;
 				const argument = stringArgument(event.input, rule.parameter);
@@ -58,15 +58,20 @@ export function installToolTopicInjection(
 					const resource = await InternalUrlRouter.instance().resolve(rule.topic);
 					const rendered = `${marker}topic="${rule.topic}">\n${resource.content}\n</tool-topic-injection>`;
 					if (!resource.content.trim()) throw new Error(`Topic '${rule.topic}' is empty`);
-					// Claim after loading, and recheck after await: parallel calls may have delivered it meanwhile.
-					if (claimDelivery(ctx, marker)) parts.push(rendered);
+					ready.push({ rendered, marker });
 				} catch (error) {
 					pi.logger.warn("tool-topic-injection: topic unavailable", { owner: options.owner, rule: rule.id, error: errorText(error) });
 				}
 			}
+			// Claim after loading, and only once every topic resolved: parallel calls may have delivered a marker meanwhile.
+			const claims = claimDeliveries(
+				ctx,
+				ready.map((entry) => entry.marker),
+			);
+			const parts = ready.filter((_, i) => claims[i]).map((entry) => entry.rendered);
+			if (parts.length > 0) return { additionalContext: parts.join("\n\n") };
 		} catch (error) {
 			pi.logger.warn("tool-topic-injection: rules unavailable", { owner: options.owner, error: errorText(error) });
 		}
-		if (parts.length > 0) return { additionalContext: parts.join("\n\n") };
 	});
 }
