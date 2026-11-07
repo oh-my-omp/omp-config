@@ -34,12 +34,13 @@
  * materializing text. Each call the budget keeps is rendered once, from its
  * arguments and result through `stringifyWithin` and `textWithin`. Their output
  * is windowed to a bounded head and tail, so a rendered call stays within the
- * character limits however large its arguments or result. A long string is
- * written in bounded chunks, each copied only when it has a character to escape;
- * a short string or a run of short primitives is one native call. A leaf-dense
- * value still pays a per-leaf emit cost. Values outside JSON data take the native
- * serialization, so the rendered arguments equal `truncate(stringify(value), limit)`
- * for every value. The first call that
+ * character limits however large its arguments or result. Only a string longer
+ * than STRING_CHUNK is written in pieces: in chunks, each copied only when it has
+ * a character to escape. Any JSON-data subtree without such a string, however
+ * large, is one native call, the same allocation the plain serialization makes;
+ * so are runs of such items in an array that also holds long strings. Values
+ * outside JSON data take the native serialization, so the rendered arguments
+ * equal `truncate(stringify(value), limit)` for every value. The first call that
  * does not fit the budget is rendered as well, then dropped. The `§ Context`
  * section is located per system-prompt piece, and the submission is truncated
  * once at its source. Requests the independent Todo owner's synchronous read
@@ -80,8 +81,8 @@ const JUDGE_RESERVED_TOKENS = 4_000;
 const ARGS_CHAR_LIMIT = 800;
 const RESULT_CHAR_LIMIT = 800;
 const SUBMISSION_CHAR_LIMIT = 6_000;
-/** Mixed array items written per native JSON.stringify call while they are primitives. */
-const PRIMITIVE_RUN = 256;
+/** Containers `isShortJson` follows before it gives up and leaves the value to the walk. */
+const SHORT_JSON_DEPTH = 64;
 /** Code units of a string written per native JSON.stringify call; a longer string is written in chunks of this size. */
 const STRING_CHUNK = 4096;
 
@@ -315,16 +316,42 @@ const isJsonObject = (value: object): value is JsonRecord => {
 /** An array with the Array prototype and no `toJSON`: JSON.stringify writes it as an array. */
 const isJsonArray = (value: object): boolean => !("toJSON" in value) && Object.getPrototypeOf(value) === Array.prototype;
 
-/** Whether one native JSON.stringify call writes this item whole: a primitive, and a string no longer than STRING_CHUNK. */
-const isNativeItem = (item: unknown): boolean =>
-	item === null || typeof item === "number" || typeof item === "boolean" || (typeof item === "string" && item.length <= STRING_CHUNK);
-
-/** The end of the run of native items that starts at `from`, at most PRIMITIVE_RUN long. */
-const primitiveRunEnd = (items: readonly unknown[], from: number): number => {
-	let end = from;
-	while (end < items.length && end - from < PRIMITIVE_RUN && isNativeItem(items[end])) end++;
-	return end;
-};
+/**
+ * Whether `value` is JSON data that holds no string longer than STRING_CHUNK,
+ * nested at most `depth` containers deep. JSON data here is null, a boolean, a
+ * number, a string, and an array or plain object holding only JSON data; an
+ * array hole, any other value or a `toJSON` method gives false. Such a value is
+ * written by one native JSON.stringify call, the same text the walk would emit
+ * with nothing to chunk. A cycle reaches the depth limit and gives false, so the
+ * walk meets it and rejects it.
+ */
+function isShortJson(value: unknown, depth: number): boolean {
+	if (value === null) return true;
+	switch (typeof value) {
+		case "boolean":
+		case "number":
+			return true;
+		case "string":
+			return value.length <= STRING_CHUNK;
+		case "object":
+			break;
+		case "undefined":
+		case "function":
+		case "symbol":
+		case "bigint":
+			return false;
+	}
+	if (depth === 0) return false;
+	if (Array.isArray(value)) {
+		if (!isJsonArray(value)) return false;
+		const items: readonly unknown[] = value;
+		for (let index = 0; index < items.length; index++) if (!isShortJson(items[index], depth - 1)) return false;
+		return true;
+	}
+	if (!isJsonObject(value)) return false;
+	for (const key in value) if (Object.hasOwn(value, key) && !isShortJson(value[key], depth - 1)) return false;
+	return true;
+}
 
 /**
  * Writes a string as JSON.stringify writes it. A string of at most STRING_CHUNK
@@ -356,9 +383,10 @@ const writeString = (text: string, emit: (part: string) => void): void => {
 /**
  * Streams `JSON.stringify(value)` for a JSON-data value: null, a boolean, a number,
  * a string, an array or a plain object. Any other value throws `NotJsonData`, and
- * so does a cycle, since `stack` holds the containers still being written. An
- * array of only native items is one native JSON.stringify call. In other arrays,
- * runs of native items are written by native calls and every other item is walked.
+ * so does a cycle, since `stack` holds the containers still being written. A
+ * container that `isShortJson` accepts is one native JSON.stringify call. In
+ * other arrays, each run of consecutive items it accepts is one native call and
+ * every other item is walked.
  */
 function walkJson(value: unknown, emit: (part: string) => void, stack: object[]): void {
 	if (value === null) {
@@ -383,23 +411,27 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: object[])
 		case "bigint":
 			throw new NotJsonData();
 	}
+	if (isShortJson(value, SHORT_JSON_DEPTH)) {
+		emit(JSON.stringify(value));
+		return;
+	}
 	if (Array.isArray(value)) {
 		if (!isJsonArray(value) || stack.includes(value)) throw new NotJsonData();
 		const items: readonly unknown[] = value;
-		// Holes are null in JSON.stringify and `every` skips them, so an all-native array is native output.
-		if (items.every(isNativeItem)) {
-			emit(JSON.stringify(items));
-			return;
-		}
 		stack.push(value);
 		emit("[");
-		for (let index = 0; index < items.length; index++) {
+		let index = 0;
+		while (index < items.length) {
 			if (index > 0) emit(",");
-			const runEnd = primitiveRunEnd(items, index);
-			if (runEnd > index) {
-				emit(JSON.stringify(items.slice(index, runEnd)).slice(1, -1));
-				index = runEnd - 1;
-			} else walkJson(items[index], emit, stack);
+			let end = index;
+			while (end < items.length && isShortJson(items[end], SHORT_JSON_DEPTH)) end++;
+			if (end > index) {
+				emit(JSON.stringify(items.slice(index, end)).slice(1, -1));
+				index = end;
+			} else {
+				walkJson(items[index], emit, stack);
+				index++;
+			}
 		}
 		emit("]");
 	} else {
@@ -431,8 +463,8 @@ const stringify = (value: unknown): string => {
 
 /**
  * `truncate(stringify(value), limit)` in one bounded pass over `walkJson`'s output.
- * JSON data is walked; a long string is emitted in chunks, while a short string or
- * an array of only short primitives is serialized whole by one native call. Any
+ * JSON data is walked; a string longer than STRING_CHUNK is emitted in chunks,
+ * while any subtree or array run without one is serialized by one native call. Any
  * other value, and any value the walk cannot finish (a cycle, a BigInt, nesting
  * deep enough to exhaust the stack), takes `stringify` and its full text. That
  * fallback reads the value again, so an accessor property the walk already read is
