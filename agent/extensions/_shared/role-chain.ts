@@ -13,8 +13,9 @@ import { modelLabel, type RoleModel, roleModels } from "./roles.ts";
 export type AnswerStopReason = "stop" | "length" | "toolUse";
 
 /**
- * Outcome of one pass over a role chain. `deadline` means the caller's signal
- * aborted; `aborted` means the provider replied with `stopReason: "aborted"`
+ * Outcome of one pass over a role chain. `deadline` means the time of the pass
+ * ran out: the caller's signal aborted, or under `split` the last model's attempt
+ * budget (which is the time left to `deadlineAt`) ran out; `aborted` means the provider replied with `stopReason: "aborted"`
  * under the `whole` budget. The caller maps each variant to its own wording and
  * verdict. `text` carries the provider's stop reason so the caller can see how
  * the answer ended. `failures` holds one `provider/id: reason` line per model
@@ -40,7 +41,8 @@ export type RoleChainReply =
  * `split`: each attempt also gets a timeout of the remaining time to `deadlineAt`
  * divided over the models not yet tried (this one included), so a hanging model
  * costs only its own share; an attempt that times out records a failure line and
- * the chain moves on.
+ * the chain moves on. The last model's share is the whole remaining time, so its
+ * timeout is the deadline itself: the pass ends as `deadline`, not as a model failure.
  */
 export type AttemptBudget = { readonly kind: "whole" } | { readonly kind: "split"; readonly deadlineAt: number };
 
@@ -73,6 +75,7 @@ export async function completeRoleChain(
 		for (const [position, candidate] of models.entries()) {
 			const { model, level } = candidate;
 			if (signal.aborted) return { kind: "deadline" };
+			const isLast = models.length - position === 1;
 			const attempt = attemptSignal(signal, budget, models.length - position);
 			try {
 				const reply = await completeSimple(
@@ -105,7 +108,7 @@ export async function completeRoleChain(
 						continue;
 					case "aborted":
 						if (budget.kind === "whole") return { kind: "aborted" };
-						if (signal.aborted) return { kind: "deadline" };
+						if (signal.aborted || (isLast && attempt.aborted)) return { kind: "deadline" };
 						failures.push(`${modelLabel(model)}: attempt timeout`);
 						continue;
 					default: {
@@ -114,7 +117,7 @@ export async function completeRoleChain(
 					}
 				}
 			} catch (error) {
-				if (signal.aborted) return { kind: "deadline" };
+				if (signal.aborted || (isLast && attempt.aborted)) return { kind: "deadline" };
 				failures.push(`${modelLabel(model)}: ${errorText(error)}`);
 			}
 		}
