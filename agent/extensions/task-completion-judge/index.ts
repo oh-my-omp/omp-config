@@ -489,13 +489,11 @@ const sharedContextOf = (ctx: ExtensionContext): string => {
 	 */
 	const bodyOf = (carry: string, restIndex: number): string => {
 		// The body streams rest pieces joined by the seam "\n", with the
-		// marker piece's `carry` fused into the first of them (one joined
-		// piece's two halves). `held` holds the body's exact joined text.
-		// The heading's `"\n"` lies inside a piece (`indexOf` there is
-		// exact) or rides the seam before a piece that opens with `"§ "`;
-		// the seam check runs on every rest piece (the marker ate its own
-		// `"\n"`, but the seam between two rest pieces belongs to the
-		// joined body just like any other).
+		// marker piece's `carry` fused into the first of them. The heading
+		// may cut the carry itself (marker and heading in one piece), then
+		// an inside piece, or ride a seam into one that opens with "§ ".
+		const carryMac = carry.indexOf(bodyEnd);
+		if (carryMac !== -1) return carry.slice(0, carryMac).trim();
 		let held = carry; // body prefixes consumed so far
 		for (let index = restIndex; index < pieces.length; index++) {
 			const piece = pieces[index] ?? "";
@@ -505,9 +503,8 @@ const sharedContextOf = (ctx: ExtensionContext): string => {
 			if (inside !== -1) return (index === restIndex ? carry + piece.slice(0, inside) : `${held}\n${piece.slice(0, inside)}`).trim();
 			held = `${held}\n${piece}`;
 		}
-		// No heading anywhere in the rest pieces: the body is `held` — `carry`
-		// alone when there were no rest pieces, the fused rest otherwise (the
-		// marker piece was also the body's last).
+		// No heading anywhere: the body is `held` — the carry alone when
+		// there were no rest pieces, the fused stream otherwise.
 		return held.trim();
 	};
 	for (let index = 0; index < pieces.length; index++) {
