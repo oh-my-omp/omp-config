@@ -93,11 +93,25 @@ import {
 import { discoverSpecFiles } from "../../extensions/_shared/spec-files.ts";
 
 const FILE_PATTERN = /^REPLACE-SYSTEM-.+\.ya?ml$/i;
+const DIGIT = /^[0-9]$/;
 
 const mappingSchema = z.record(z.string(), z.unknown()).refine((value) => !Array.isArray(value));
 const CONDITION_KEY_SET: ReadonlySet<string> = new Set(CONDITION_KEYS);
 
-type Matcher = { readonly kind: "literal"; readonly text: string } | { readonly kind: "regex"; readonly pattern: RegExp };
+type Matcher =
+	| { readonly kind: "literal"; readonly text: string }
+	| { readonly kind: "regex"; readonly pattern: RegExp; readonly tokens: readonly Token[] };
+
+/** One piece of a regex rule's `replace` template: literal text, or a substitution `String.prototype.replace` spells with `$`. */
+type Token =
+	| { readonly kind: "text"; readonly text: string }
+	| { readonly kind: "match" }
+	| { readonly kind: "before" }
+	| { readonly kind: "after" }
+	/** `$1`–`$99` as written: which capture it names depends on the pattern's group count, known per match. */
+	| { readonly kind: "group"; readonly digits: string }
+	/** `$<name>`, with the `<name>` text re-read as a template when the pattern has no named groups. */
+	| { readonly kind: "named"; readonly name: string; readonly fallback: readonly Token[] };
 
 interface Rule {
 	/** `path#index matcher`, the warning and dedupe identity. */
@@ -147,7 +161,7 @@ function describeProblem(problem: ConditionProblem): string {
 	}
 }
 
-function parseMatcher(record: Readonly<Record<string, unknown>>, at: string): Parse<Matcher> {
+function parseMatcher(record: Readonly<Record<string, unknown>>, at: string, replace: string): Parse<Matcher> {
 	const { literal, regex } = record;
 	if ((literal === undefined) === (regex === undefined)) {
 		return { kind: "invalid", reason: tr(`${at}: set exactly one of literal and regex`, `${at}：literal 与 regex 必须且只能设置一个`) };
@@ -162,7 +176,7 @@ function parseMatcher(record: Readonly<Record<string, unknown>>, at: string): Pa
 		return { kind: "invalid", reason: tr(`${at}: regex must be a non-empty string`, `${at}：regex 必须是非空字符串`) };
 	}
 	try {
-		return { kind: "ok", value: { kind: "regex", pattern: new RegExp(regex, "g") } };
+		return { kind: "ok", value: { kind: "regex", pattern: new RegExp(regex, "g"), tokens: parseTemplate(replace) } };
 	} catch (error) {
 		const detail = errorText(error);
 		return { kind: "invalid", reason: tr(`${at}: invalid regex: ${detail}`, `${at}：正则无效：${detail}`) };
@@ -184,7 +198,7 @@ function parseRule(value: unknown, path: string, index: number): Parse<Rule> {
 	if (typeof record.replace !== "string") {
 		return { kind: "invalid", reason: tr(`${at}: replace must be a string`, `${at}：replace 必须是字符串`) };
 	}
-	const matcher = parseMatcher(record, at);
+	const matcher = parseMatcher(record, at, record.replace);
 	if (matcher.kind === "invalid") return matcher;
 	const conditions = parseSessionConditions(fields, { kind: "default", targets: [{ kind: "all" }] }, "yaml");
 	if (conditions.kind === "invalid") return { kind: "invalid", reason: `${at}: ${describeProblem(conditions.problem)}` };
@@ -223,45 +237,195 @@ function warn(pi: ExtensionAPI, ctx: ExtensionContext, key: string, english: str
 	else process.stderr.write(`${notice}\n`);
 }
 
-/** What `pattern` with `replace` turns its match `match` of `block` into; a sticky copy keeps `$\``, `$'` and lookarounds exact. */
-function replacementOf(block: string, pattern: RegExp, match: RegExpExecArray, replace: string): string {
-	const at = new RegExp(pattern.source, "y");
-	at.lastIndex = match.index;
-	const replaced = block.replace(at, replace);
-	return replaced.slice(match.index, replaced.length - (block.length - match.index - match[0].length));
-}
-
-/** The blocks after `rule`, how many times it matched, and its distinct edits in match order. */
-function applyRule(blocks: readonly string[], rule: Rule): { readonly blocks: string[]; readonly hits: number; readonly edits: Edit[] } {
-	let hits = 0;
-	const edits = new Map<string, Edit>();
-	const record = (original: string, replacement: string): void => {
-		if (original !== replacement) edits.set(`${original}\0${replacement}`, { original, replacement });
+/** The tokens of one `replace` template: literal text and the `$` substitutions `String.prototype.replace` defines. */
+function parseTemplate(template: string): readonly Token[] {
+	const tokens: Token[] = [];
+	let text = "";
+	let at = 0;
+	const flush = (): void => {
+		if (text === "") return;
+		tokens.push({ kind: "text", text });
+		text = "";
 	};
-	const matcher = rule.matcher;
-	const next = blocks.map((block) => {
-		switch (matcher.kind) {
-			case "literal": {
-				const pieces = block.split(matcher.text);
-				if (pieces.length === 1) return block;
-				hits += pieces.length - 1;
-				record(matcher.text, rule.replace);
-				return pieces.join(rule.replace);
-			}
-			case "regex": {
-				const matches = [...block.matchAll(matcher.pattern)];
-				if (matches.length === 0) return block;
-				hits += matches.length;
-				for (const match of matches) record(match[0], replacementOf(block, matcher.pattern, match, rule.replace));
-				return block.replace(matcher.pattern, rule.replace);
+	while (at < template.length) {
+		const char = template.charAt(at);
+		const next = template.charAt(at + 1);
+		if (char !== "$" || next === "") {
+			text += char;
+			at += 1;
+			continue;
+		}
+		switch (next) {
+			case "$":
+				text += "$";
+				at += 2;
+				continue;
+			case "&":
+				flush();
+				tokens.push({ kind: "match" });
+				at += 2;
+				continue;
+			case "`":
+				flush();
+				tokens.push({ kind: "before" });
+				at += 2;
+				continue;
+			case "'":
+				flush();
+				tokens.push({ kind: "after" });
+				at += 2;
+				continue;
+			case "<": {
+				const close = template.indexOf(">", at + 2);
+				if (close < 0) {
+					text += "$";
+					at += 1;
+					continue;
+				}
+				flush();
+				const name = template.slice(at + 2, close);
+				tokens.push({ kind: "named", name, fallback: parseTemplate(`<${name}>`) });
+				at = close + 1;
+				continue;
 			}
 			default: {
-				const unreachable: never = matcher;
+				if (!DIGIT.test(next)) {
+					text += "$";
+					at += 1;
+					continue;
+				}
+				const second = template.charAt(at + 2);
+				const digits = DIGIT.test(second) ? `${next}${second}` : next;
+				flush();
+				tokens.push({ kind: "group", digits });
+				at += 1 + digits.length;
+				continue;
+			}
+		}
+	}
+	flush();
+	return tokens;
+}
+
+/** Whether `value` is the named-captures object `String.prototype.replace` passes when a pattern names its groups. */
+function isNamedCaptures(value: unknown): value is Readonly<Record<string, string | undefined>> {
+	return typeof value === "object" && value !== null;
+}
+
+/** `value` as text: an absent capture, or any other non-string, contributes nothing. */
+function textAt(value: unknown): string {
+	return typeof value === "string" ? value : "";
+}
+
+/** `tokens` applied to one replacer call: `args` as `String.prototype.replace` passed them, `block` the text being replaced. */
+function expand(tokens: readonly Token[], args: readonly unknown[], block: string): string {
+	const last = args[args.length - 1];
+	const groups = isNamedCaptures(last) ? last : undefined;
+	// `args` is the matched text, its captures, the offset and the input, then the named captures.
+	const captures = args.length - 3 - (groups === undefined ? 0 : 1);
+	const offsetArg = args[captures + 1];
+	const offset = typeof offsetArg === "number" ? offsetArg : 0;
+	const matched = textAt(args[0]);
+	let out = "";
+	for (const token of tokens) {
+		switch (token.kind) {
+			case "text":
+				out += token.text;
+				break;
+			case "match":
+				out += matched;
+				break;
+			case "before":
+				out += block.slice(0, offset);
+				break;
+			case "after":
+				out += block.slice(offset + matched.length);
+				break;
+			case "group": {
+				// `$nn` needs a group that exists; otherwise `$n` plus the second digit as text.
+				const two = token.digits.length === 2 ? Number(token.digits) : 0;
+				if (two > 0 && two <= captures) {
+					out += textAt(args[two]);
+					break;
+				}
+				const one = Number(token.digits.charAt(0));
+				if (one > 0 && one <= captures) {
+					out += textAt(args[one]);
+					if (token.digits.length === 2) out += token.digits.charAt(1);
+					break;
+				}
+				out += `$${token.digits}`;
+				break;
+			}
+			case "named":
+				out += groups === undefined ? `$${expand(token.fallback, args, block)}` : (groups[token.name] ?? "");
+				break;
+			default: {
+				const unreachable: never = token;
 				return unreachable;
 			}
 		}
-	});
-	return { blocks: next, hits, edits: [...edits.values()] };
+	}
+	return out;
+}
+
+/** One rule applied to one block, recording each matched passage, and how often it matched there. */
+function replaceIn(
+	block: string,
+	rule: Rule,
+	record: (original: string, replacement: string) => void,
+): { readonly text: string; readonly hits: number } {
+	const matcher = rule.matcher;
+	switch (matcher.kind) {
+		case "literal": {
+			const pieces = block.split(matcher.text);
+			if (pieces.length === 1) return { text: block, hits: 0 };
+			record(matcher.text, rule.replace);
+			return { text: pieces.join(rule.replace), hits: pieces.length - 1 };
+		}
+		case "regex": {
+			let hits = 0;
+			const text = block.replace(matcher.pattern, (...args: unknown[]): string => {
+				hits += 1;
+				const replacement = expand(matcher.tokens, args, block);
+				record(textAt(args[0]), replacement);
+				return replacement;
+			});
+			return { text, hits };
+		}
+		default: {
+			const unreachable: never = matcher;
+			return unreachable;
+		}
+	}
+}
+
+/** The blocks after `rule`, how many times it matched, and its distinct edits in match order. */
+function applyRule(
+	blocks: readonly string[],
+	rule: Rule,
+): { readonly blocks: readonly string[]; readonly hits: number; readonly edits: Edit[] } {
+	let hits = 0;
+	const edits: Edit[] = [];
+	const known = new Map<string, Set<string>>();
+	const record = (original: string, replacement: string): void => {
+		if (original === replacement) return;
+		const replacements = known.get(original);
+		if (replacements === undefined) known.set(original, new Set([replacement]));
+		else if (replacements.has(replacement)) return;
+		else replacements.add(replacement);
+		edits.push({ original, replacement });
+	};
+	// Unmatched blocks stay the same references, and a rule that matches nothing copies no array.
+	let next: string[] | undefined;
+	for (const [index, block] of blocks.entries()) {
+		const applied = replaceIn(block, rule, record);
+		hits += applied.hits;
+		if (applied.hits === 0) continue;
+		next ??= [...blocks];
+		next[index] = applied.text;
+	}
+	return { blocks: next ?? blocks, hits, edits };
 }
 
 function renderEdit(edit: Edit): string {
@@ -304,7 +468,10 @@ function replacementDelta(pi: ExtensionAPI, ctx: ExtensionContext, systemPrompt:
 			}
 		}
 	}
-	return edits.length === 0 ? { kind: "none" } : { kind: "text", body: [PREAMBLE, ...edits.map(renderEdit)].join("\n\n") };
+	if (edits.length === 0) return { kind: "none" };
+	let body = PREAMBLE;
+	for (const edit of edits) body += `\n\n${renderEdit(edit)}`;
+	return { kind: "text", body };
 }
 
 export default function systemPromptReplace(pi: ExtensionAPI): void {
