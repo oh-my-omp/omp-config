@@ -156,7 +156,7 @@ checkpoint:
   enabled: true
 eval:
   tools:
-    enabled: false
+    enabled: true
 edit:
   mode: hashline
 readLineNumbers: true
