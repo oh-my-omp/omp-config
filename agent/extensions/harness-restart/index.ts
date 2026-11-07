@@ -134,10 +134,13 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 		}
 	} catch (error) {
 		// Before the marker exists there is nothing to consume: report and stop.
-		// After it exists, failures belong to fail() above and keep their existing path.
-		if (marked) throw error;
-		runtime.pi.logger.warn("harness-restart: queued restart failed before marker", { error: errorText(error) });
-		runtime.pi.sendUserMessage(`The queued harness restart failed: ${errorText(error)}`, { attribution: "agent" });
+		// After it exists, fail() owns the outcome; here we only log, so nothing escapes the hook.
+		if (marked) {
+			runtime.pi.logger.warn("harness-restart: failed after marker", { error: errorText(error) });
+		} else {
+			runtime.pi.logger.warn("harness-restart: queued restart failed before marker", { error: errorText(error) });
+			runtime.pi.sendUserMessage(`The queued harness restart failed: ${errorText(error)}`, { attribution: "agent" });
+		}
 	} finally {
 		runtime.state = { kind: "idle" };
 	}
