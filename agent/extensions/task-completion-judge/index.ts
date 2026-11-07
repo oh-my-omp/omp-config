@@ -34,10 +34,12 @@
  * materializing text. Each call the budget keeps is rendered once, from its
  * arguments and result through `stringifyWithin` and `textWithin`. Their output
  * is windowed to a bounded head and tail, so a rendered call stays within the
- * character limits however large its arguments or result. A single leaf string
- * or primitive array is copied whole while it is written. Values outside JSON
- * data take the native serialization, so the rendered arguments equal
- * `truncate(stringify(value), limit)` for every value. The first call that
+ * character limits however large its arguments or result. A long string is
+ * written in bounded chunks, each copied only when it has a character to escape;
+ * a short string or a run of short primitives is one native call. A leaf-dense
+ * value still pays a per-leaf emit cost. Values outside JSON data take the native
+ * serialization, so the rendered arguments equal `truncate(stringify(value), limit)`
+ * for every value. The first call that
  * does not fit the budget is rendered as well, then dropped. The `§ Context`
  * section is located per system-prompt piece, and the submission is truncated
  * once at its source. Requests the independent Todo owner's synchronous read
@@ -80,6 +82,8 @@ const RESULT_CHAR_LIMIT = 800;
 const SUBMISSION_CHAR_LIMIT = 6_000;
 /** Mixed array items written per native JSON.stringify call while they are primitives. */
 const PRIMITIVE_RUN = 256;
+/** Code units of a string written per native JSON.stringify call; a longer string is written in chunks of this size. */
+const STRING_CHUNK = 4096;
 
 const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not be empty");
 const todoReadSchema = z.union([
@@ -307,7 +311,7 @@ class NotJsonData {}
 /** A plain object's own data, read by key. */
 type JsonRecord = Readonly<Record<string, unknown>>;
 
-/** Whether JSON.stringify writes a property name unchanged between quotes: no quote, backslash, control code unit or surrogate. */
+/** Whether JSON.stringify writes a string's characters unchanged between quotes: no quote, backslash, control code unit or surrogate. */
 const NEEDS_ESCAPE = /["\\]|[^ -\ud7ff\ue000-\uffff]/;
 
 /** A plain object (prototype `Object.prototype` or null) with no `toJSON`: JSON.stringify writes it as an object. */
@@ -320,23 +324,50 @@ const isJsonObject = (value: object): value is JsonRecord => {
 /** An array with the Array prototype and no `toJSON`: JSON.stringify writes it as an array. */
 const isJsonArray = (value: object): boolean => !("toJSON" in value) && Object.getPrototypeOf(value) === Array.prototype;
 
-/** Whether JSON.stringify writes this item without calling toJSON or walking into it. */
-const isPrimitiveItem = (item: unknown): boolean =>
-	item === null || typeof item === "string" || typeof item === "number" || typeof item === "boolean";
+/** Whether one native JSON.stringify call writes this item whole: a primitive, and a string no longer than STRING_CHUNK. */
+const isNativeItem = (item: unknown): boolean =>
+	item === null || typeof item === "number" || typeof item === "boolean" || (typeof item === "string" && item.length <= STRING_CHUNK);
 
-/** The end of the run of primitive items that starts at `from`, at most PRIMITIVE_RUN long. */
+/** The end of the run of native items that starts at `from`, at most PRIMITIVE_RUN long. */
 const primitiveRunEnd = (items: readonly unknown[], from: number): number => {
 	let end = from;
-	while (end < items.length && end - from < PRIMITIVE_RUN && isPrimitiveItem(items[end])) end++;
+	while (end < items.length && end - from < PRIMITIVE_RUN && isNativeItem(items[end])) end++;
 	return end;
+};
+
+/**
+ * Writes a string as JSON.stringify writes it. A string of at most STRING_CHUNK
+ * code units is one native call. A longer one is written in chunks of that size.
+ * A chunk with no character to escape is its own JSON body and is emitted as a
+ * slice of the string, which copies nothing; any other chunk goes through
+ * JSON.stringify. A surrogate pair cut between two chunks moves whole to the next
+ * chunk, so every chunk escapes exactly as it does inside the whole string.
+ */
+const writeString = (text: string, emit: (part: string) => void): void => {
+	if (text.length <= STRING_CHUNK) {
+		emit(JSON.stringify(text));
+		return;
+	}
+	emit('"');
+	let start = 0;
+	while (start < text.length) {
+		let end = Math.min(start + STRING_CHUNK, text.length);
+		const before = text.charCodeAt(end - 1);
+		const after = text.charCodeAt(end);
+		if (end < text.length && before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) end--;
+		const chunk = text.slice(start, end);
+		emit(NEEDS_ESCAPE.test(chunk) ? JSON.stringify(chunk).slice(1, -1) : chunk);
+		start = end;
+	}
+	emit('"');
 };
 
 /**
  * Streams `JSON.stringify(value)` for a JSON-data value: null, a boolean, a number,
  * a string, an array or a plain object. Any other value throws `NotJsonData`, and
  * so does a cycle, since `stack` holds the containers still being written. An
- * array of only primitives is one native JSON.stringify call. In other arrays,
- * runs of primitive items are written by native calls and every other item is walked.
+ * array of only native items is one native JSON.stringify call. In other arrays,
+ * runs of native items are written by native calls and every other item is walked.
  */
 function walkJson(value: unknown, emit: (part: string) => void, stack: object[]): void {
 	if (value === null) {
@@ -351,7 +382,7 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: object[])
 			emit(Number.isFinite(value) ? String(value) : "null");
 			return;
 		case "string":
-			emit(JSON.stringify(value));
+			writeString(value, emit);
 			return;
 		case "object":
 			break;
@@ -364,8 +395,8 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: object[])
 	if (Array.isArray(value)) {
 		if (!isJsonArray(value) || stack.includes(value)) throw new NotJsonData();
 		const items: readonly unknown[] = value;
-		// Holes are null in JSON.stringify and `every` skips them, so an all-primitive array is native output.
-		if (items.every(isPrimitiveItem)) {
+		// Holes are null in JSON.stringify and `every` skips them, so an all-native array is native output.
+		if (items.every(isNativeItem)) {
 			emit(JSON.stringify(items));
 			return;
 		}
