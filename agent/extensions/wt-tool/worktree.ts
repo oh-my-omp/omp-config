@@ -22,29 +22,65 @@ export type WorktreeCheck = {
 	readonly untracked: readonly string[];
 	readonly ignored: readonly string[];
 	/** Branch commits not reachable from the main checkout's HEAD. */
-	readonly unmergedCommits: readonly string[];
-	/** Live users of the worktree that removal would pull it out from under. */
+	readonly unmergedCount: number;
+	/** The first unmergedCount commits, capped at LIST_LIMIT. */
+	readonly unmergedPreview: readonly string[];
 	readonly blockers: readonly string[];
 };
 
 type CheckResult = { readonly kind: "ok"; readonly check: WorktreeCheck } | { readonly kind: "error"; readonly reason: string };
 type Recheck = { readonly kind: "ok"; readonly check: WorktreeCheck } | { readonly kind: "stop"; readonly why: string };
-type StatusEntry = { readonly x: string; readonly y: string; readonly shown: string };
+type PorcelainLists = { readonly staged: readonly string[]; readonly unstaged: readonly string[]; readonly untracked: readonly string[] };
 
-/** Parse git status --porcelain=v1 -z; rename/copy entries have a second source-path field. */
-export function parsePorcelain(raw: string): StatusEntry[] {
-	const fields = raw.split("\0");
-	const entries: StatusEntry[] = [];
-	for (let i = 0; i < fields.length; i++) {
-		const field = fields[i];
-		if (field === undefined || field.length < 4) continue;
-		const x = field.charAt(0);
-		const y = field.charAt(1);
-		const file = field.slice(3);
-		const shown = x === "R" || x === "C" ? `${fields[++i]} -> ${file}` : file;
-		entries.push({ x, y, shown });
+/**
+ * Walk git status --porcelain=v1 -z without materializing its fields. Each visit sees one status
+ * field's x/y chars and path; a rename/copy field is followed by its source path, which this walk
+ * consumes as part of the record. `source` is undefined only when no source field follows.
+ */
+function forEachPorcelainEntry(raw: string, visit: (x: string, y: string, file: string, source: string | undefined) => void): void {
+	let start = 0;
+	while (start < raw.length) {
+		const end = raw.indexOf("\0", start);
+		const last = end === -1 ? raw.length : end;
+		if (last - start >= 4) {
+			const x = raw.charAt(start);
+			let source: string | undefined;
+			let next = end === -1 ? raw.length : end + 1;
+			if ((x === "R" || x === "C") && next < raw.length) {
+				const sourceEnd = raw.indexOf("\0", next);
+				source = raw.slice(next, sourceEnd === -1 ? raw.length : sourceEnd);
+				next = sourceEnd === -1 ? raw.length : sourceEnd + 1;
+			}
+			visit(x, raw.charAt(start + 1), raw.slice(start + 3, last), source);
+			start = next;
+		} else {
+			start = end === -1 ? raw.length : end + 1;
+		}
 	}
-	return entries;
+}
+
+/** The number of entries git status --porcelain=v1 -z reports, counted without building them. */
+export function porcelainCount(raw: string): number {
+	let count = 0;
+	forEachPorcelainEntry(raw, () => count++);
+	return count;
+}
+
+/** The staged/unstaged/untracked lists wt_remove shows, folded out of one porcelain pass. */
+function porcelainLists(raw: string): PorcelainLists {
+	const staged: string[] = [];
+	const unstaged: string[] = [];
+	const untracked: string[] = [];
+	forEachPorcelainEntry(raw, (x, y, file, source) => {
+		const shown = x === "R" || x === "C" ? `${source} -> ${file}` : file;
+		if (x === "?") {
+			untracked.push(shown);
+		} else {
+			if (x !== " ") staged.push(`${x} ${shown}`);
+			if (y !== " ") unstaged.push(`${y} ${shown}`);
+		}
+	});
+	return { staged, unstaged, untracked };
 }
 
 function isWithin(child: string, parent: string): boolean {
@@ -60,8 +96,8 @@ export async function git(pi: ExtensionAPI, cwd: string, args: string[]): Promis
 	return result.stdout;
 }
 
-/** Upstream's worktree fingerprint plus ignored files, which its snapshot does not see. */
-async function fingerprint(worktree: SessionWorktree, ignored: readonly string[]): Promise<string> {
+/** Upstream's worktree fingerprint plus ignored files, which its snapshot does not see. `ignoredJoined` is `ignored.join("\\0")`. */
+async function fingerprint(worktree: SessionWorktree, ignoredJoined: string): Promise<string> {
 	const warnings: string[] = [];
 	const plan = await planWorktreeExit(
 		[worktree],
@@ -71,13 +107,14 @@ async function fingerprint(worktree: SessionWorktree, ignored: readonly string[]
 	);
 	const approved = plan[0]?.approvedFingerprint;
 	if (approved === undefined) throw new Error(`could not inspect the worktree: ${warnings.join("; ") || "no snapshot"}`);
-	return Bun.hash([worktree.path, worktree.branch, approved, ...ignored].join("\0")).toString(16);
+	const joined = `${worktree.path}\0${worktree.branch}\0${approved}`;
+	return Bun.hash(ignoredJoined === "" ? joined : `${joined}\0${ignoredJoined}`).toString(16);
 }
 
-async function ignoredEntries(pi: ExtensionAPI, worktree: string): Promise<string[]> {
-	return (await git(pi, worktree, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]))
-		.split("\0")
-		.filter(Boolean);
+/** The ignored listing `ls-files -z` reports, as one string: the fields joined by NUL, without the trailing NUL. */
+async function ignoredJoined(pi: ExtensionAPI, worktree: string): Promise<string> {
+	const raw = await git(pi, worktree, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]);
+	return raw.endsWith("\0") ? raw.slice(0, -1) : raw;
 }
 
 async function blockersFor(ctx: ExtensionContext, worktree: string): Promise<string[]> {
@@ -111,16 +148,18 @@ export async function inspect(pi: ExtensionAPI, ctx: ExtensionContext, dir: stri
 		const tip = await repository.headSha();
 		if (!tip) return { kind: "error", reason: `${worktree} has no commits.` };
 		const record: SessionWorktree = { path: worktree, branch, sourceCwd: mainDir, baseCommit: tip, keptChanges: true };
-		const before = await fingerprint(record, await ignoredEntries(pi, worktree));
-		const entries = parsePorcelain(await git(pi, worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
-		const untracked = entries.filter((entry) => entry.x === "?").map((entry) => entry.shown);
-		const tracked = entries.filter((entry) => entry.x !== "?");
-		const staged = tracked.filter((entry) => entry.x !== " ").map((entry) => `${entry.x} ${entry.shown}`);
-		const unstaged = tracked.filter((entry) => entry.y !== " ").map((entry) => `${entry.y} ${entry.shown}`);
-		const ignored = await ignoredEntries(pi, worktree);
+		const before = await fingerprint(record, await ignoredJoined(pi, worktree));
+		const { staged, unstaged, untracked } = porcelainLists(
+			await git(pi, worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
+		);
 		const mainHead = (await git(pi, mainDir, ["rev-parse", "HEAD"])).trim();
-		const unmergedCommits = (await git(pi, worktree, ["log", "--format=%h %s", `${mainHead}..${tip}`])).split("\n").filter(Boolean);
-		const after = await fingerprint(record, ignored);
+		const range = `${mainHead}..${tip}`;
+		const unmergedCount = Number((await git(pi, worktree, ["rev-list", "--count", range])).trim());
+		const unmergedPreview = (await git(pi, worktree, ["log", `--max-count=${LIST_LIMIT}`, "--format=%h %s", range]))
+			.split("\n")
+			.filter(Boolean);
+		const afterJoined = await ignoredJoined(pi, worktree);
+		const after = await fingerprint(record, afterJoined);
 		if (after !== before) return { kind: "error", reason: `${worktree} changed while it was being checked; check again.` };
 		return {
 			kind: "ok",
@@ -132,8 +171,9 @@ export async function inspect(pi: ExtensionAPI, ctx: ExtensionContext, dir: stri
 				staged,
 				unstaged,
 				untracked,
-				ignored,
-				unmergedCommits,
+				ignored: afterJoined === "" ? [] : afterJoined.split("\0"),
+				unmergedCount,
+				unmergedPreview,
 				blockers: await blockersFor(ctx, worktree),
 			},
 		};
@@ -143,7 +183,11 @@ export async function inspect(pi: ExtensionAPI, ctx: ExtensionContext, dir: stri
 }
 
 /** Reinspect a confirmed worktree: unchanged and unblocked, otherwise the reason to stop. */
-export async function recheck(pi: ExtensionAPI, ctx: ExtensionContext, confirmed: WorktreeCheck): Promise<Recheck> {
+export async function recheck(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	confirmed: Pick<WorktreeCheck, "worktree" | "confirm">,
+): Promise<Recheck> {
 	const current = await inspect(pi, ctx, confirmed.worktree);
 	if (current.kind === "error") return { kind: "stop", why: current.reason };
 	if (current.check.confirm !== confirmed.confirm) {
@@ -156,11 +200,11 @@ export async function recheck(pi: ExtensionAPI, ctx: ExtensionContext, confirmed
 	return { kind: "ok", check: current.check };
 }
 
-function listing(title: string, items: readonly string[]): string {
+function listing(title: string, items: readonly string[], total: number = items.length): string {
 	if (items.length === 0) return `${title}: none`;
 	const shownItems = items.slice(0, LIST_LIMIT).map((item) => `  ${item}`);
-	const rest = items.length > LIST_LIMIT ? [`  … and ${items.length - LIST_LIMIT} more`] : [];
-	return [`${title} (${items.length}):`, ...shownItems, ...rest].join("\n");
+	const rest = total > LIST_LIMIT ? [`  … and ${total - LIST_LIMIT} more`] : [];
+	return [`${title} (${total}):`, ...shownItems, ...rest].join("\n");
 }
 
 export function formatCheck(check: WorktreeCheck): string {
@@ -181,7 +225,11 @@ export function formatCheck(check: WorktreeCheck): string {
 		listing("Unstaged changes (deleted)", check.unstaged),
 		listing("Untracked files (deleted)", check.untracked),
 		listing("Ignored files and directories (deleted)", check.ignored),
-		listing(`Commits on ${check.branch} not reachable from the main checkout's HEAD (kept on the branch)`, check.unmergedCommits),
+		listing(
+			`Commits on ${check.branch} not reachable from the main checkout's HEAD (kept on the branch)`,
+			check.unmergedPreview,
+			check.unmergedCount,
+		),
 		`confirm: ${check.confirm}`,
 	].join("\n");
 }

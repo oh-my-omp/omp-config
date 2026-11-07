@@ -72,7 +72,7 @@ import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { captureInteractiveMode, type InteractiveModeFailure } from "../_shared/interactive-mode.ts";
 import { describeShown, runSlashCommand } from "./interactive.ts";
-import { formatCheck, git, inspect, parsePorcelain, realpathOr, recheck, type WorktreeCheck } from "./worktree.ts";
+import { formatCheck, git, inspect, porcelainCount, realpathOr, recheck, type WorktreeCheck } from "./worktree.ts";
 
 const CREATE_TOOL = "wt";
 const REMOVE_TOOL = "wt_remove";
@@ -109,9 +109,12 @@ const removeParams = z.object({
 	confirm: z.string().optional().describe("Omit to check. To remove, the `confirm` value from the latest check."),
 });
 
+/** The fields a queued removal needs: where the worktree is and the state it must still match. The reported file lists are not kept. */
+type ConfirmedRemoval = Pick<WorktreeCheck, "worktree" | "branch" | "mainDir" | "confirm">;
+
 type Request =
 	| { readonly kind: "create"; readonly sessionId: string; readonly branch: string | undefined }
-	| { readonly kind: "remove"; readonly sessionId: string; readonly check: WorktreeCheck };
+	| { readonly kind: "remove"; readonly sessionId: string; readonly check: ConfirmedRemoval };
 
 /** Lifecycle of the one queued request: queued by a tool, armed after a terminal `agent_end`, then run once. */
 type State =
@@ -173,7 +176,7 @@ async function runCreate(pi: ExtensionAPI, mode: InteractiveModeContext, branch:
 		: `No worktree was created; the session is still in \`${before}\`.\n${describeShown(shown)}`;
 }
 
-async function runRemove(pi: ExtensionAPI, ctx: ExtensionContext, mode: InteractiveModeContext, check: WorktreeCheck): Promise<string> {
+async function runRemove(pi: ExtensionAPI, ctx: ExtensionContext, mode: InteractiveModeContext, check: ConfirmedRemoval): Promise<string> {
 	const beforeMove = await recheck(pi, ctx, check);
 	if (beforeMove.kind === "stop") {
 		return `Worktree removal stopped before anything changed: ${beforeMove.why}\nThe session is still in \`${mode.sessionManager.getCwd()}\` and \`${check.worktree}\` is untouched.`;
@@ -213,10 +216,10 @@ async function runRemove(pi: ExtensionAPI, ctx: ExtensionContext, mode: Interact
 		);
 	if (branchKept === undefined) return `${removedText} Could not check whether branch \`${check.branch}\` still exists.`;
 	if (!branchKept) return `${removedText} Branch \`${check.branch}\` no longer exists.`;
-	const unmerged = afterMove.check.unmergedCommits;
+	const unmerged = afterMove.check.unmergedCount;
 	const commits =
-		unmerged.length > 0
-			? `It has ${unmerged.length} commit(s) not reachable from the main checkout's HEAD.`
+		unmerged > 0
+			? `It has ${unmerged} commit(s) not reachable from the main checkout's HEAD.`
 			: "All its commits are reachable from the main checkout's HEAD.";
 	return `${removedText} Branch \`${check.branch}\` is kept. ${commits}`;
 }
@@ -255,13 +258,11 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 function arm(runtime: Runtime, ctx: ExtensionContext, request: Request): void {
 	const tick = (): void => {
 		if (runtime.state.kind !== "armed" || runtime.state.request !== request) return;
-		if (!ctx.isIdle() || ctx.hasPendingMessages()) {
-			runtime.state = { kind: "armed", request, timer: ctx.setTimeout(tick, IDLE_POLL_MS) };
-			return;
-		}
+		if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
+		ctx.clearTimer(runtime.state.timer);
 		void execute(runtime, ctx, request);
 	};
-	runtime.state = { kind: "armed", request, timer: ctx.setTimeout(tick, IDLE_POLL_MS) };
+	runtime.state = { kind: "armed", request, timer: ctx.setInterval(tick, IDLE_POLL_MS) };
 }
 
 async function activate(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
@@ -302,7 +303,7 @@ async function currentWorktree(
 	const mainDir = await realpathOr(linked.primaryRoot);
 	const branch = (await git(pi, worktree, ["branch", "--show-current"])).trim();
 	const head = (await git(pi, worktree, ["log", "-1", "--format=%h %s"])).trim();
-	const changed = parsePorcelain(await git(pi, worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).length;
+	const changed = porcelainCount(await git(pi, worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
 	const capture = captureInteractiveMode(ctx);
 	const cleanSource = capture.kind === "ok" && cfgWorktreeCleanSource.get(capture.mode.settings) === true;
 	const report = [
@@ -355,7 +356,14 @@ async function remove(runtime: Runtime, ctx: ExtensionContext, rawParams: unknow
 		);
 	}
 	if (check.blockers.length > 0) return fail(`${REMOVE_TOOL}: the worktree is in use; nothing was queued.\n${check.blockers.join("\n")}`);
-	runtime.state = { kind: "queued", request: { kind: "remove", sessionId: ctx.sessionManager.getSessionId(), check } };
+	runtime.state = {
+		kind: "queued",
+		request: {
+			kind: "remove",
+			sessionId: ctx.sessionManager.getSessionId(),
+			check: { worktree: check.worktree, branch: check.branch, mainDir: check.mainDir, confirm: check.confirm },
+		},
+	};
 	return text(
 		`Queued removal of \`${check.worktree}\` (branch \`${check.branch}\` is kept). End your turn now without further tool calls: once the session is idle it moves to \`${check.mainDir}\` and the worktree is removed, unless anything in it changed since the check. The outcome arrives as the next message.`,
 	);
