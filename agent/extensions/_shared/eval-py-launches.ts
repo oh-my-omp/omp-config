@@ -74,9 +74,24 @@ export function pyLaunchAt(scan: PyScan, k: number): PyLaunch | null {
 	const previous = tokens[k - 1];
 	// `def exec(…)` and `class run(…)` declare a name; they call nothing.
 	if (previous?.kind === "name" && (previous.value === "def" || previous.value === "class")) return null;
-	const args = callArgs(tokens, k + 1);
+	// The callee is checked before the arguments are read: a call that cannot
+	// launch never pays for an argument walk. An unrecognized callee still needs
+	// one look at the argument list: a `shell=` it spells would make it a script
+	// launch (`launchOf` keeps that rule), so the scan looks for the keyword only.
 	const callee = qualifiedCallee(tokens, k, bindings);
 	const qualified = callee.names.join(".");
+	const known: LaunchKind | null = SCRIPT_CALLS.has(qualified) ? "script" : ARGV_CALLS.has(qualified) ? "argv" : null;
+	const kind = known ?? DISTINCTIVE_LAUNCH.get(nameToken.value) ?? null;
+	const needsArgs =
+		qualified === "tool.bash" ||
+		qualified === "tool.write" ||
+		EXEC_EVAL.has(qualified) ||
+		qualified === "__import__" ||
+		qualified === "importlib.import_module" ||
+		kind !== null ||
+		keywordArg(tokens, k + 1, "shell") !== null;
+	if (!needsArgs) return null;
+	const args = callArgs(tokens, k + 1);
 	const imported = importCall(qualified, args);
 	if (imported?.kind === "opaque") return { kind: "opaque", api: qualified };
 	if (imported !== null) return null;
@@ -362,10 +377,14 @@ class Lexer {
 		const raw = /r/i.test(prefix);
 		const formatted = /f/i.test(prefix);
 		this.i += delimiter.length;
+		// The value is the run of source characters between decodes: one slice per run
+		// instead of one append per character. `last` starts each run.
+		let last = this.i;
 		let value = "";
 		let literal = true;
 		while (this.i < this.src.length) {
 			if (this.src.startsWith(delimiter, this.i)) {
+				if (last < this.i) value += this.src.slice(last, this.i);
 				this.i += delimiter.length;
 				this.tokens.push({ kind: "string", value, literal, start });
 				return;
@@ -374,29 +393,40 @@ class Lexer {
 			if (!triple && ch === "\n") this.fail("unterminated string");
 			if (ch === "\\") {
 				const next = this.src.charAt(this.i + 1);
-				if (raw) value += `\\${next}`;
-				else if (next === "x") {
-					value += String.fromCharCode(Number.parseInt(this.src.slice(this.i + 2, this.i + 4), 16));
+				if (raw) {
+					// Raw strings keep both characters; they stay inside the current run.
 					this.i += 2;
+					continue;
+				}
+				if (last < this.i) value += this.src.slice(last, this.i);
+				if (next === "x") {
+					value += String.fromCharCode(Number.parseInt(this.src.slice(this.i + 2, this.i + 4), 16));
+					this.i += 4;
 				} else if (next === "u") {
 					value += String.fromCharCode(Number.parseInt(this.src.slice(this.i + 2, this.i + 6), 16));
-					this.i += 4;
-				} else if (next !== "\n") value += ESCAPES.get(next) ?? next;
-				this.i += 2;
+					this.i += 6;
+				} else {
+					if (next !== "\n") value += ESCAPES.get(next) ?? next;
+					this.i += 2;
+				}
+				last = this.i;
 				continue;
 			}
 			if (formatted && (ch === "{" || ch === "}")) {
 				if (this.src.charAt(this.i + 1) === ch) {
+					if (last < this.i) value += this.src.slice(last, this.i);
 					value += ch;
 					this.i += 2;
+					last = this.i;
 					continue;
 				}
 				if (ch === "}") this.fail("single `}` in f-string");
+				if (last < this.i) value += this.src.slice(last, this.i);
 				this.pythonSnippets.push(...this.readPlaceholder());
 				literal = false;
+				last = this.i;
 				continue;
 			}
-			value += ch;
 			this.i++;
 		}
 		this.fail("unterminated string");
@@ -518,15 +548,17 @@ type CallArgs = {
 	readonly keywords: ReadonlyMap<string, Arg>;
 	/** A `**` expansion among the arguments: keywords it carries are unknown. */
 	readonly keywordSplat: boolean;
-	readonly end: number;
 };
 
 export const isOp = (token: Token | undefined, value: string): boolean => token?.kind === "op" && token.value === value;
 
-/** Splits `tokens[from, to)` at top-level commas. */
-function splitTopLevel(tokens: readonly Token[], from: number, to: number): Token[][] {
-	const parts: Token[][] = [];
-	let current: Token[] = [];
+/** One top-level comma-separated argument as a token range: `[start, end)` inside `tokens`. */
+type Part = readonly [start: number, end: number];
+
+/** The `[start, end)` ranges `tokens[from, to)` splits into at top-level commas, without copying the tokens. */
+function partRanges(tokens: readonly Token[], from: number, to: number): Part[] {
+	const parts: Part[] = [];
+	let start = from;
 	let depth = 0;
 	for (let k = from; k < to; k++) {
 		const token = tokens[k];
@@ -534,13 +566,11 @@ function splitTopLevel(tokens: readonly Token[], from: number, to: number): Toke
 		if (token.kind === "op" && "([{".includes(token.value)) depth++;
 		if (token.kind === "op" && ")]}".includes(token.value)) depth--;
 		if (depth === 0 && isOp(token, ",")) {
-			parts.push(current);
-			current = [];
-			continue;
+			parts.push([start, k]);
+			start = k + 1;
 		}
-		current.push(token);
 	}
-	if (current.length > 0) parts.push(current);
+	if (start < to) parts.push([start, to]);
 	return parts;
 }
 
@@ -572,59 +602,112 @@ function openingOf(tokens: readonly Token[], close: number): number | null {
 	return null;
 }
 
-function argOf(tokens: readonly Token[]): Arg {
-	const [first] = tokens;
+/**
+ * The value range of the `name` keyword among the top-level arguments of the
+ * call whose `(` is at `open`, or null when the call does not spell it: the
+ * same boundaries `callArgs` reads, without building the arguments.
+ */
+function keywordArg(tokens: readonly Token[], open: number, name: string): Part | null {
+	let depth = 0;
+	let start = open + 1;
+	let k = open + 1;
+	for (; k < tokens.length; k++) {
+		const token = tokens[k];
+		if (token === undefined) break;
+		if (token.kind === "op" && ")]}".includes(token.value)) {
+			if (depth === 0) break;
+			depth--;
+		} else if (token.kind === "op" && "([{".includes(token.value)) depth++;
+		if (depth === 0 && isOp(token, ",")) {
+			const first = tokens[start];
+			if (first?.kind === "name" && first.value === name && isOp(tokens[start + 1], "=")) return [start + 2, k];
+			start = k + 1;
+		}
+	}
+	const first = tokens[start];
+	return first?.kind === "name" && first.value === name && isOp(tokens[start + 1], "=") ? [start + 2, k] : null;
+}
+
+function argOf(tokens: readonly Token[], from: number, to: number): Arg {
+	// An empty range (`json.dumps()`, an empty part) is an expression, never the token after it.
+	if (from >= to) return { kind: "expr" };
+	const first = tokens[from];
 	if (first === undefined) return { kind: "expr" };
-	if (tokens.every((token) => token.kind === "string")) {
-		const strings = tokens.filter((token): token is Extract<Token, { kind: "string" }> => token.kind === "string");
-		return { kind: "string", value: strings.map((token) => token.value).join(""), literal: strings.every((token) => token.literal) };
+	// Implicit concatenation (`'a' 'b'`) joins every string in the range.
+	let strings = first.kind === "string";
+	let joined = "";
+	let literal = true;
+	if (strings) {
+		for (let k = from; k < to; k++) {
+			const token = tokens[k];
+			if (token?.kind !== "string") {
+				strings = false;
+				break;
+			}
+			joined += token.value;
+			literal = literal && token.literal;
+		}
 	}
-	if (tokens.length === 1 && first.kind === "name" && first.value === "True") return { kind: "true" };
-	if (tokens.length === 1 && first.kind === "name" && (first.value === "False" || first.value === "None")) return { kind: "false" };
-	const last = tokens[tokens.length - 1];
-	if (
-		first.kind === "op" &&
-		(first.value === "[" || first.value === "(") &&
-		closing(tokens, 0) === tokens.length - 1 &&
-		last !== undefined
-	) {
-		return { kind: "seq", items: splitTopLevel(tokens, 1, tokens.length - 1).map(argOf) };
+	if (strings) return { kind: "string", value: joined, literal };
+	if (to - from === 1 && first.kind === "name" && first.value === "True") return { kind: "true" };
+	if (to - from === 1 && first.kind === "name" && (first.value === "False" || first.value === "None")) return { kind: "false" };
+	if (first.kind === "op" && (first.value === "[" || first.value === "(") && closing(tokens, from) === to - 1) {
+		return { kind: "seq", items: partRanges(tokens, from + 1, to - 1).map(([start, end]) => argOf(tokens, start, end)) };
 	}
-	if (isOp(first, "{") && closing(tokens, 0) === tokens.length - 1) {
+	if (isOp(first, "{") && closing(tokens, from) === to - 1) {
 		const entries = new Map<string, Arg>();
-		for (const part of splitTopLevel(tokens, 1, tokens.length - 1)) {
-			const colon = part.findIndex((token) => isOp(token, ":"));
-			const key = part[0];
-			if (colon === 1 && key?.kind === "string" && key.literal) entries.set(key.value, argOf(part.slice(2)));
+		for (const [start, end] of partRanges(tokens, from + 1, to - 1)) {
+			const key = tokens[start];
+			if (isOp(tokens[start + 1], ":") && key?.kind === "string" && key.literal) entries.set(key.value, argOf(tokens, start + 2, end));
 		}
 		return { kind: "dict", entries };
 	}
 	if (
 		first.kind === "name" &&
 		first.value === "json" &&
-		isOp(tokens[1], ".") &&
-		nameAt(tokens, 2) === "dumps" &&
-		isOp(tokens[3], "(") &&
-		closing(tokens, 3) === tokens.length - 1
+		isOp(tokens[from + 1], ".") &&
+		nameAt(tokens, from + 2) === "dumps" &&
+		isOp(tokens[from + 3], "(") &&
+		closing(tokens, from + 3) === to - 1
 	) {
-		const [payload] = splitTopLevel(tokens, 4, tokens.length - 1);
-		return { kind: "dumps", payload: argOf(payload ?? []) };
+		const [payload] = partRanges(tokens, from + 4, to - 1);
+		return { kind: "dumps", payload: payload === undefined ? argOf(tokens, 0, 0) : argOf(tokens, payload[0], payload[1]) };
 	}
 	return { kind: "expr" };
 }
 
+/**
+ * The arguments of the call whose `(` is at `open`, read in one pass: the call's
+ * closing bracket and the top-level commas are found while classifying each
+ * part, so nested calls re-read only their own argument spans.
+ */
 function callArgs(tokens: readonly Token[], open: number): CallArgs {
-	const end = closing(tokens, open);
 	const positional: Arg[] = [];
 	const keywords = new Map<string, Arg>();
 	let keywordSplat = false;
-	for (const part of splitTopLevel(tokens, open + 1, end)) {
-		const [first, second] = part;
+	let depth = 0;
+	let start = open + 1;
+	let k = open + 1;
+	const part = (end: number): void => {
+		const first = tokens[start];
 		if (isOp(first, "**")) keywordSplat = true;
-		else if (first?.kind === "name" && isOp(second, "=")) keywords.set(first.value, argOf(part.slice(2)));
-		else positional.push(argOf(part));
+		else if (first?.kind === "name" && isOp(tokens[start + 1], "=")) keywords.set(first.value, argOf(tokens, start + 2, end));
+		else positional.push(argOf(tokens, start, end));
+	};
+	for (; k < tokens.length; k++) {
+		const token = tokens[k];
+		if (token === undefined) break;
+		if (token.kind === "op" && ")]}".includes(token.value)) {
+			if (depth === 0) break;
+			depth--;
+		} else if (token.kind === "op" && "([{".includes(token.value)) depth++;
+		if (depth === 0 && isOp(token, ",")) {
+			part(k);
+			start = k + 1;
+		}
 	}
-	return { positional, keywords, keywordSplat, end };
+	if (start < k) part(k);
+	return { positional, keywords, keywordSplat };
 }
 
 type Bindings = { readonly modules: ReadonlyMap<string, string>; readonly members: ReadonlyMap<string, string> };

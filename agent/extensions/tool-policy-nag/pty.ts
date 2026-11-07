@@ -647,30 +647,29 @@ async function javascriptHit(code: string): Promise<PtyHit | null> {
 	}
 	let hit: PtyHit | null = null;
 	walk(cell.program, null, (node) => {
-		if (hit !== null) return;
 		const launch = jsLaunchOf(node, cell.bindings);
-		if (launch === null) return;
+		if (launch === null) return false;
 		switch (launch.kind) {
 			case "bunShell":
 				hit = scriptHit(launch.text);
-				return;
+				return hit !== null;
 			case "bunSpawn":
 				hit = argvHit(launch.words);
-				return;
+				return hit !== null;
 			case "childScript":
 				if (launch.via === "direct") hit = scriptHit(launch.text);
-				return;
+				return hit !== null;
 			case "childSpawn":
-				if (launch.via !== "direct") return;
+				if (launch.via !== "direct") return false;
 				if (!launch.shell) hit = argvHit(launch.words);
 				else if (launch.words?.every((word) => word.literal)) hit = ptyShellHit(launch.words.map((word) => word.text).join(" "));
-				return;
+				return hit !== null;
 			case "bridge":
 				// The bridged command reaches the lane as its own `bash` call.
-				return;
+				return false;
 			case "indeterminate":
 				// The command cannot be read from the source; the pty lane fails open, as it does for unreadable launches.
-				return;
+				return false;
 			default: {
 				const unreachable: never = launch;
 				return unreachable;

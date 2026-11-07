@@ -43,7 +43,7 @@ export type JsLaunch =
 	| { readonly kind: "bridge"; readonly source: "bash" | "deviceWrite"; readonly command: string | null }
 	| { readonly kind: "indeterminate"; readonly what: string };
 
-export type JsCell = { readonly program: Program; readonly bindings: Bindings };
+export type JsCell = { readonly program: Program; readonly bindings: Bindings; readonly carry: JsCarry };
 
 /**
  * Module and launcher names a session's earlier cells bound and ran. Only the
@@ -71,14 +71,14 @@ export function parseJs(code: string, prior: JsCarry = EMPTY_CARRY): JsCell {
 		errorRecovery: true,
 		plugins: ["typescript"],
 	});
-	return { program: file.program, bindings: collectBindings(file.program, prior) };
+	return collectBindings(file.program, prior);
 }
 
 /** The launch a node starts — a child_process, Bun or harness-bridge call, or a `Bun.$` template — or null. */
 export function jsLaunchOf(node: Node, bindings: Bindings): JsLaunch | null {
 	if (node.type === "TaggedTemplateExpression") {
 		const tag = node.tag;
-		const isShellTag = isBunMember(tag, "$") || (tag.type === "Identifier" && bindings.members.get(tag.name) === "bun.$");
+		const isShellTag = isBunMember(tag, "$") || (tag.type === "Identifier" && memberName(bindings, tag.name) === "bun.$");
 		return isShellTag ? { kind: "bunShell", text: literalString(node.quasi) } : null;
 	}
 	if (node.type !== "CallExpression" && node.type !== "OptionalCallExpression") return null;
@@ -119,7 +119,7 @@ export function jsLaunchOf(node: Node, bindings: Bindings): JsLaunch | null {
 /** The API a callee names, with how the cell reached it: a bound launcher name, `tool.*`, `Bun.spawn*`, or a module member. */
 function calleeApi(callee: Node, bindings: Bindings): { readonly api: string; readonly via: LaunchVia } | null {
 	if (callee.type === "Identifier") {
-		const member = bindings.members.get(callee.name);
+		const member = memberName(bindings, callee.name);
 		if (member !== undefined) return { api: member, via: member.endsWith(`.${callee.name}`) ? "direct" : "alias" };
 		return DISTINCTIVE_LAUNCH.has(callee.name) ? { api: `child_process.${callee.name}`, via: "distinctive" } : null;
 	}
@@ -204,20 +204,24 @@ const LAUNCHER_MODULES: ReadonlySet<Module> = new Set<Module>(["child_process", 
 
 export type Module = "fs" | "fs/promises" | "child_process" | "bun";
 
-/** Names bound in this cell: whole-module bindings, imported or destructured members (`module.export`), launcher aliases, and `Bun.file(…)` results. */
+/**
+ * Names bound in this cell only: whole-module bindings, imported or destructured
+ * members (`module.export`), launcher aliases, and `Bun.file(…)` results, plus
+ * `prior`, the names earlier cells carried. Reads fall through to `prior`, so a
+ * fresh cell does not copy the names it was seeded with.
+ */
 export type Bindings = {
 	readonly modules: Map<string, Module>;
 	readonly members: Map<string, string>;
 	readonly bunFiles: Set<string>;
+	readonly prior: JsCarry;
 };
 
-/** The launcher-reaching names this cell binds, for the session's later cells. */
-export function carriedBindings(bindings: Bindings): JsCarry {
-	return {
-		modules: new Map([...bindings.modules].filter(([, module]) => LAUNCHER_MODULES.has(module))),
-		members: new Map([...bindings.members].filter(([, member]) => LAUNCHER_MEMBERS.has(member))),
-	};
-}
+/** The module `name` resolves to: this cell's binding, else the carried one. */
+const moduleName = (bindings: Bindings, name: string): Module | undefined => bindings.modules.get(name) ?? bindings.prior.modules.get(name);
+
+/** The member `name` resolves to: this cell's binding, else the carried one. */
+const memberName = (bindings: Bindings, name: string): string | undefined => bindings.members.get(name) ?? bindings.prior.members.get(name);
 
 /** A value the source determines, or a shape the runtime may change (spread, method, accessor, computed or duplicate key, spread array element). */
 type Read<T> = { readonly kind: "read"; readonly value: T } | { readonly kind: "indeterminate" };
@@ -258,7 +262,7 @@ export function propertyName(node: Node): string | null {
 
 /** The module an object expression stands for: a bound name, `<fs>.promises`, or a module expression. */
 export function receiverModule(node: Node, bindings: Bindings): Module | null {
-	if (node.type === "Identifier") return bindings.modules.get(node.name) ?? null;
+	if (node.type === "Identifier") return moduleName(bindings, node.name) ?? null;
 	if (node.type === "AwaitExpression") return receiverModule(node.argument, bindings);
 	if ((node.type === "MemberExpression" || node.type === "OptionalMemberExpression") && propertyName(node) === "promises")
 		return receiverModule(node.object, bindings) === "fs" ? "fs/promises" : null;
@@ -289,7 +293,7 @@ export function isBunFile(node: Node, bindings: Bindings): boolean {
 /** The launcher member a value names: `Bun.$`, `Bun.spawn`, `tool.bash`, a child_process function, or a launcher name already bound. */
 function launcherMemberOf(node: Node, bindings: Bindings): string | null {
 	let member: string | null = null;
-	if (node.type === "Identifier") member = bindings.members.get(node.name) ?? null;
+	if (node.type === "Identifier") member = memberName(bindings, node.name) ?? null;
 	else if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
 		const property = propertyName(node);
 		if (property !== null) {
@@ -312,8 +316,13 @@ function bindName(bindings: Bindings, name: string, init: Node, { launchersOnly 
 	if (launcher !== null) bindings.members.set(name, launcher);
 }
 
-function collectBindings(root: Node, prior: JsCarry): Bindings {
-	const bindings: Bindings = { modules: new Map(prior.modules), members: new Map(prior.members), bunFiles: new Set() };
+/**
+ * The cell's own bindings and the carry it leaves later cells. `bindings`
+ * records only what this cell binds; `carry` is `prior` itself when the cell
+ * binds nothing launcher-reaching, so a session of plain cells copies nothing.
+ */
+function collectBindings(root: Program, prior: JsCarry): JsCell {
+	const bindings: Bindings = { modules: new Map(), members: new Map(), bunFiles: new Set(), prior };
 	walk(root, null, (node) => {
 		if (node.type === "ImportDeclaration") {
 			const module = moduleOf(node.source.value);
@@ -345,17 +354,52 @@ function collectBindings(root: Node, prior: JsCarry): Bindings {
 			if (property.value.type === "Identifier") bindMember(bindings, property.value.name, module, property.key.name);
 		}
 	});
-	return bindings;
+	return { program: root, bindings, carry: carryOf(bindings) };
 }
 
-/** Visits every node depth first with its parent. */
-export function walk(node: Node, parent: Node | null, visit: (node: Node, parent: Node | null) => void): void {
-	visit(node, parent);
-	for (const value of Object.values(node)) {
-		if (Array.isArray(value)) {
-			for (const item of value) if (isNode(item)) walk(item, node, visit);
-		} else if (isNode(value)) walk(value, node, visit);
+/**
+ * The launcher-reaching names `bindings` leaves for later cells: `prior`
+ * unchanged when the cell binds nothing, else `prior` with this cell's names
+ * applied — a name the cell binds to a launcher is kept, a name it rebinds to a
+ * non-launcher module (or member) is dropped from the same kind of entry, the
+ * rest of `prior` survives. A name rebound to a plain value, or to the other
+ * kind (a module for a member name, a member for a module name), keeps its
+ * `prior` entry, as it did before the carry was incremental.
+ */
+function carryOf(bindings: Bindings): JsCarry {
+	const { modules, members, prior } = bindings;
+	if (modules.size === 0 && members.size === 0) return prior;
+	const carryModules = new Map(prior.modules);
+	for (const [name, module] of modules) {
+		if (LAUNCHER_MODULES.has(module)) carryModules.set(name, module);
+		else carryModules.delete(name);
 	}
+	const carryMembers = new Map(prior.members);
+	for (const [name, member] of members) {
+		if (LAUNCHER_MEMBERS.has(member)) carryMembers.set(name, member);
+		else carryMembers.delete(name);
+	}
+	return { modules: carryModules, members: carryMembers };
+}
+
+/**
+ * Visits every node depth first with its parent, returning `true` once a visit
+ * ended the walk: a visit returning `true` visits no sibling or descendant
+ * after it, and the stop propagates to the caller. Children come from the
+ * node's own fields in declaration order — the same order `Object.values`
+ * enumerated, without the per-node array; `Object.hasOwn` drops inherited
+ * helpers such as Babel's `__clone`.
+ */
+export function walk(node: Node, parent: Node | null, visit: (node: Node, parent: Node | null) => boolean | undefined): boolean {
+	if (visit(node, parent) === true) return true;
+	for (const key in node as Node & Record<string, unknown>) {
+		if (!Object.hasOwn(node, key)) continue;
+		const value = (node as Node & Record<string, unknown>)[key];
+		if (Array.isArray(value)) {
+			for (const item of value) if (isNode(item) && walk(item, node, visit)) return true;
+		} else if (isNode(value) && walk(value, node, visit)) return true;
+	}
+	return false;
 }
 
 /** A string the code spells out completely: a string literal or a template without `${}`. */
