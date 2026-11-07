@@ -1,8 +1,9 @@
 // ============================================================================
 // watchdog-agent — a per-target reviewer ("watchdog") driven by `WATCHDOG-*.md`
 // files, complementing OMP's native advisor.
-// Registers /watchdog plus session/branch/tree/compaction, tool_result, input,
-// before_agent_start, message_end and agent_end hooks; no tools.
+// Registers /watchdog plus session lifecycle (start, switch, branch, tree,
+// compaction, shutdown), tool_result, input, before_agent_start, message_end
+// and agent_end hooks; no tools.
 // Reads specs and session branch entries; global toggles/removal
 // update spec files; cursors, overrides and user-note index records append
 // session entries. Main and sub.
@@ -104,6 +105,10 @@
 // and the counter from the watched actions after the cursor. Reviews never read
 // the watchdog's own notes: custom messages are not transcript messages, and
 // indexed user messages are skipped.
+// Shutdown and switch end the session the reviews belong to: every in-flight
+// review (chat and JUDGE) is aborted and its verdict dropped, and a closed
+// session starts nothing new. Branch and tree moves keep in-flight reviews
+// running and only drop their late verdicts.
 //
 // COMMANDS. `/watchdog [list]` lists every discovered file with its global
 // (`enabled`), session state, filters and inject form.

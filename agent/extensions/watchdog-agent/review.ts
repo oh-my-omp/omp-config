@@ -220,12 +220,13 @@ function interpretVerdict(answer: string, delivery: DeliverAs): Verdict | null {
 	return { kind: "advice", severity, note, delivery };
 }
 
-/** Runs one reviewer session over the transcript. Never throws; failures → null. */
+/** Runs one reviewer session over the transcript. Never throws; failures → null. `signal` aborts on a session boundary; the review timeout still applies. */
 export async function runReviewer(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	spec: ChatWatchdog,
 	transcript: string,
+	signal: AbortSignal,
 ): Promise<Verdict | null> {
 	const reviewer = resolveReviewer(ctx, spec);
 	if (!reviewer) {
@@ -244,7 +245,7 @@ export async function runReviewer(
 		prompt: buildReviewPrompt(spec.guidance, transcript, spec.inject),
 		systemPrompt: "default",
 		toolNames: spec.tools,
-		signal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),
+		signal: AbortSignal.any([signal, AbortSignal.timeout(REVIEW_TIMEOUT_MS)]),
 	});
 	switch (result.kind) {
 		case "text":
@@ -264,9 +265,15 @@ export async function runReviewer(
 	}
 }
 
-/** JUDGE answers a typed choice; the chosen option supplies the injected text. */
-export async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevWatchdog, transcript: string): Promise<Verdict | null> {
-	const signal = AbortSignal.timeout(REVIEW_TIMEOUT_MS);
+/** JUDGE answers a typed choice; the chosen option supplies the injected text. `signal` aborts on a session boundary; the review timeout still applies. */
+export async function runJev(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	spec: JevWatchdog,
+	transcript: string,
+	signal: AbortSignal,
+): Promise<Verdict | null> {
+	const deadline = AbortSignal.any([signal, AbortSignal.timeout(REVIEW_TIMEOUT_MS)]);
 	const opened = openJudge(ctx, "watchdog-agent");
 	if (opened.kind === "inactive") return null;
 	const { judge } = opened;
@@ -278,7 +285,7 @@ export async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevW
 				state: { guidance: spec.guidance, transcript },
 				questions: { review: { type: "choice", instructions: spec.instructions, criteria } },
 			},
-			{ signal },
+			{ signal: deadline },
 		);
 		pi.logger?.info?.(`watchdog "${spec.name}": judge usage`, {
 			provider: result.provider,
