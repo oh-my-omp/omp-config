@@ -37,7 +37,7 @@
  * character limits however large its arguments or result. Only a string longer
  * than STRING_CHUNK is written in pieces: in chunks, each copied only when it has
  * a character to escape. Any JSON-data subtree without such a string, however
- * large, is one native call, the same allocation the plain serialization makes;
+ * large or deep, is one native call, the same allocation the plain serialization makes;
  * so are runs of such items in an array that also holds long strings. Values
  * outside JSON data take the native serialization, so the rendered arguments
  * equal `truncate(stringify(value), limit)` for every value. The first call that
@@ -81,10 +81,8 @@ const JUDGE_RESERVED_TOKENS = 4_000;
 const ARGS_CHAR_LIMIT = 800;
 const RESULT_CHAR_LIMIT = 800;
 const SUBMISSION_CHAR_LIMIT = 6_000;
-/** Containers `isShortJson` follows before it gives up and leaves the value to the walk. */
-const SHORT_JSON_DEPTH = 64;
 /** Code units of a string written per native JSON.stringify call; a longer string is written in chunks of this size. */
-const STRING_CHUNK = 4096;
+const STRING_CHUNK = 65_536;
 
 const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not be empty");
 const todoReadSchema = z.union([
@@ -317,15 +315,17 @@ const isJsonObject = (value: object): value is JsonRecord => {
 const isJsonArray = (value: object): boolean => !("toJSON" in value) && Object.getPrototypeOf(value) === Array.prototype;
 
 /**
- * Whether `value` is JSON data that holds no string longer than STRING_CHUNK,
- * nested at most `depth` containers deep. JSON data here is null, a boolean, a
- * number, a string, and an array or plain object holding only JSON data; an
- * array hole, any other value or a `toJSON` method gives false. Such a value is
- * written by one native JSON.stringify call, the same text the walk would emit
- * with nothing to chunk. A cycle reaches the depth limit and gives false, so the
- * walk meets it and rejects it.
+ * One pass over `value` that adds to `long` every container one native
+ * JSON.stringify call must not write whole, and returns whether `value` itself
+ * may be. A value may be written whole when it is JSON data holding no string
+ * longer than STRING_CHUNK: null, a boolean, a number, a short string, or an
+ * array or plain object holding only such values. An array hole, any other
+ * value, a `toJSON` method or a cycle makes it, and every container above it,
+ * not whole; `stack` holds the containers above `value`. A container outside JSON
+ * data is marked without being entered, and the walk rejects it when it gets
+ * there. Each node is visited once, so the walk never rescans a subtree.
  */
-function isShortJson(value: unknown, depth: number): boolean {
+function markLong(value: unknown, stack: object[], long: Set<object>): boolean {
 	if (value === null) return true;
 	switch (typeof value) {
 		case "boolean":
@@ -341,17 +341,25 @@ function isShortJson(value: unknown, depth: number): boolean {
 		case "bigint":
 			return false;
 	}
-	if (depth === 0) return false;
+	if (stack.includes(value)) return false;
+	let whole = true;
+	stack.push(value);
 	if (Array.isArray(value)) {
-		if (!isJsonArray(value)) return false;
 		const items: readonly unknown[] = value;
-		for (let index = 0; index < items.length; index++) if (!isShortJson(items[index], depth - 1)) return false;
-		return true;
-	}
-	if (!isJsonObject(value)) return false;
-	for (const key in value) if (Object.hasOwn(value, key) && !isShortJson(value[key], depth - 1)) return false;
-	return true;
+		whole = isJsonArray(value);
+		if (whole) for (let index = 0; index < items.length; index++) if (!markLong(items[index], stack, long)) whole = false;
+	} else if (!isJsonObject(value)) whole = false;
+	else for (const key in value) if (Object.hasOwn(value, key) && !markLong(value[key], stack, long)) whole = false;
+	stack.pop();
+	if (!whole) long.add(value);
+	return whole;
 }
+
+/** Whether `markLong` found that one native JSON.stringify call writes `item` whole. */
+const isWhole = (item: unknown, long: ReadonlySet<object>): boolean =>
+	typeof item === "object" && item !== null
+		? !long.has(item)
+		: item === null || typeof item === "number" || typeof item === "boolean" || (typeof item === "string" && item.length <= STRING_CHUNK);
 
 /**
  * Writes a string as JSON.stringify writes it. A string of at most STRING_CHUNK
@@ -384,11 +392,13 @@ const writeString = (text: string, emit: (part: string) => void): void => {
  * Streams `JSON.stringify(value)` for a JSON-data value: null, a boolean, a number,
  * a string, an array or a plain object. Any other value throws `NotJsonData`, and
  * so does a cycle, since `stack` holds the containers still being written. A
- * container that `isShortJson` accepts is one native JSON.stringify call. In
- * other arrays, each run of consecutive items it accepts is one native call and
- * every other item is walked.
+ * container that `long` does not hold is one native JSON.stringify call. In
+ * other containers, each run of consecutive items or entries written whole is
+ * one native call and every other item or entry is walked. An object's run is
+ * copied into a null-prototype object first, so `__proto__` stays an ordinary
+ * key and the run keeps the order JSON.stringify gives the whole object.
  */
-function walkJson(value: unknown, emit: (part: string) => void, stack: object[]): void {
+function walkJson(value: unknown, emit: (part: string) => void, stack: object[], long: ReadonlySet<object>): void {
 	if (value === null) {
 		emit("null");
 		return;
@@ -411,7 +421,7 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: object[])
 		case "bigint":
 			throw new NotJsonData();
 	}
-	if (isShortJson(value, SHORT_JSON_DEPTH)) {
+	if (isWhole(value, long)) {
 		emit(JSON.stringify(value));
 		return;
 	}
@@ -424,12 +434,12 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: object[])
 		while (index < items.length) {
 			if (index > 0) emit(",");
 			let end = index;
-			while (end < items.length && isShortJson(items[end], SHORT_JSON_DEPTH)) end++;
+			while (end < items.length && isWhole(items[end], long)) end++;
 			if (end > index) {
 				emit(JSON.stringify(items.slice(index, end)).slice(1, -1));
 				index = end;
 			} else {
-				walkJson(items[index], emit, stack);
+				walkJson(items[index], emit, stack, long);
 				index++;
 			}
 		}
@@ -438,14 +448,28 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: object[])
 		if (!isJsonObject(value) || stack.includes(value)) throw new NotJsonData();
 		stack.push(value);
 		emit("{");
-		let first = true;
+		let wrote = false;
+		let run: Record<string, unknown> | undefined;
 		for (const key in value) {
 			if (!Object.hasOwn(value, key)) continue;
-			if (!first) emit(",");
-			first = false;
-			emit(NEEDS_ESCAPE.test(key) ? `${JSON.stringify(key)}:` : `"${key}":`);
-			walkJson(value[key], emit, stack);
+			const item = value[key];
+			if (isWhole(item, long)) {
+				// `Object.create(null)` is typed `any`; the run holds JSON data only.
+				const batch: Record<string, unknown> = run ?? Object.create(null);
+				batch[key] = item;
+				run = batch;
+				continue;
+			}
+			if (run !== undefined) {
+				emit(`${wrote ? "," : ""}${JSON.stringify(run).slice(1, -1)}`);
+				wrote = true;
+				run = undefined;
+			}
+			emit(`${wrote ? "," : ""}${NEEDS_ESCAPE.test(key) ? JSON.stringify(key) : `"${key}"`}:`);
+			wrote = true;
+			walkJson(item, emit, stack, long);
 		}
+		if (run !== undefined) emit(`${wrote ? "," : ""}${JSON.stringify(run).slice(1, -1)}`);
 		emit("}");
 	}
 	stack.pop();
@@ -472,7 +496,11 @@ const stringify = (value: unknown): string => {
  */
 const stringifyWithin = (value: unknown, limit: number): string => {
 	try {
-		return boundedText((emit) => walkJson(value, emit, []), limit);
+		return boundedText((emit) => {
+			const long = new Set<object>();
+			markLong(value, [], long);
+			walkJson(value, emit, [], long);
+		}, limit);
 	} catch {
 		return truncate(stringify(value), limit);
 	}
