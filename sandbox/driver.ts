@@ -6,6 +6,11 @@
 // every tool call is recorded, then `finalAssertion` runs there in sh and the declared call and
 // reply assertions are checked. The driver reads the scenario and never interprets what it means.
 //
+// Every model request of the session is recorded by the sandbox recorder (sandbox/recorder.ts) into
+// EVIDENCE_DIR/<name>.requests.jsonl. The driver names that file to the recorder through
+// /sandbox/.requests-sink for the session's duration and refuses to start without a live recorder.
+// The file is empty when the session sent no request.
+//
 // Scenario file (JSON):
 //   name            [a-z0-9][a-z0-9._-]*; names the evidence files
 //   init            sh command, exit 0 required
@@ -26,12 +31,16 @@
 //   harness-error  init failed, omp exited before its ready frame for another reason, the prompt
 //                  was rejected, the session timed out, omp exited nonzero, or no session file was written
 //
-// Writes EVIDENCE_DIR/<name>.driver.json, <name>.events.jsonl (every RPC frame, streamed) and
-// <name>.session.jsonl (the session file omp reports through get_state). Exit 0 for pass and
-// untested, 1 otherwise, 2 for a malformed invocation.
+// Writes EVIDENCE_DIR/<name>.driver.json, <name>.events.jsonl (every RPC frame, streamed),
+// <name>.session.jsonl (the session file omp reports through get_state) and <name>.requests.jsonl
+// (every model request). Exit 0 for pass and untested, 1 otherwise, 2 for a malformed invocation.
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+// The recorder's readiness marker and sink pointer, both beside this file in /sandbox.
+const RECORDER_READY = join(import.meta.dir, "recorder.ready");
+const SINK_POINTER = join(import.meta.dir, ".requests-sink");
 
 export interface Matcher {
 	readonly tool: readonly string[];
@@ -293,8 +302,15 @@ async function main(argv: readonly string[]): Promise<number> {
 	mkdirSync(cwd, { recursive: true });
 	const init = shell(scenario.init, cwd);
 	if (init.code !== 0) return write({ kind: "harness-error", reason: `init exited ${init.code}: ${init.out}` }, { cwd });
-
-	const session = await runSession(model, scenario.prompt, cwd, evidence("events.jsonl"));
+	if (!existsSync(RECORDER_READY))
+		return write(
+			{ kind: "harness-error", reason: "the model request recorder is not running (/sandbox/recorder.ready is missing)" },
+			{ cwd },
+		);
+	// Empty until the session sends a request: an empty file means no request was made.
+	writeFileSync(evidence("requests.jsonl"), "");
+	writeFileSync(SINK_POINTER, evidence("requests.jsonl"));
+	const session = await runSession(model, scenario.prompt, cwd, evidence("events.jsonl")).finally(() => writeFileSync(SINK_POINTER, ""));
 	const finalState = shell(scenario.finalAssertion, cwd);
 	const lastReply = textOf(session.replies.at(-1));
 	const outcome = classify(model, session, assertionFailures(scenario, session.calls, finalState.code, lastReply));

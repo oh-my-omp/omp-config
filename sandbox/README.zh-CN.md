@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-`sandbox/` 在本机 OrbStack 上建一个一次性 Linux 容器，在里面用本机 `~/.omp` 配置与凭据的副本和待测的 omp-config 工作树跑真实的 `omp` 会话。不能在宿主机上试的改动在这里验证，例如可能拦不住 `rm -rf "$X"/…` 的删除拦截：改动出错时受影响的只有容器；运行结束时，容器、网络连同其中的凭据副本一起删除。
+`sandbox/` 在本机 OrbStack 上建一个一次性 Linux 容器，在里面用本机 `~/.omp` 配置的副本（凭据只保留记录代理覆盖的 provider）和待测的 omp-config 工作树跑真实的 `omp` 会话。不能在宿主机上试的改动在这里验证，例如可能拦不住 `rm -rf "$X"/…` 的删除拦截：改动出错时受影响的只有容器；运行结束时，容器、网络连同其中的凭据副本一起删除。
 
 沙箱运行在装有 OrbStack（或其他 Docker 引擎）的 macOS 上，宿主机需要 `bun`、`git` 与 `tar`。CI 不使用沙箱：凭据不进公开仓库的 CI。
 
@@ -34,7 +34,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 内容以 tar 流或经 stdin 管道进入 `docker exec`，宿主机磁盘上不暂存任何含凭据的东西：
 
 - `~/.omp/agent`，不含 `sessions/`、`blobs/`、`terminal-sessions/`、`custom-session-files/`、`predict/`、`cache/`、`history.db*`、锁文件与 `agent.db*`。`~/.omp/logs` 不复制。
-- `agent.db`：对宿主机数据库的只读连接做 SQLite 序列化。序列化在同一个读事务内完成，因此包含尚未 checkpoint 的 WAL 帧。镜像被标成回滚日志库（头部第 18–19 字节），逐字节写入容器，在容器内改回 WAL，再执行 `integrity_check`。随后宿主机读回容器内的副本，在内存里与快照逐表、逐行、逐字段比较，任何差异都让构建失败。只打印表名、行数与「every field equal」，从不打印值或摘要。
+- `agent.db`：对宿主机数据库的只读连接做 SQLite 序列化。序列化在同一个读事务内完成，因此包含尚未 checkpoint 的 WAL 帧。镜像被标成回滚日志库（头部第 18–19 字节），逐字节写入容器，在容器内改回 WAL，再执行 `integrity_check`。随后宿主机读回容器内的副本，在内存里与快照逐表、逐行、逐字段比较，任何差异都让构建失败。只打印表名、行数与「every field equal」，从不打印值或摘要。在这次比较之后，只有容器内的副本会删去 provider 没有记录代理目标的 `auth_credentials` 行（见下文「凭据」）；宿主机数据库不变。
 - `~/.omp/plugins`，包含锁文件，不含 `node_modules/`（为 macOS 构建）；容器内 `bun install` 按锁文件为 Linux 装同样的版本。
 - `~/.claude/rules`、`~/.claude/skills`、`~/.claude/CLAUDE.md`，存在才复制。
 - 工作树放到 `/repo`：已跟踪与未跟踪的文件，含未提交改动，不含被忽略的文件。
@@ -43,7 +43,17 @@ bun sandbox/sandbox.ts down RUN                                              # �
 
 ### 凭据
 
-凭据副本原样使用：不改写、不刷新、不筛选，模型绑定与宿主机配置相同。某个模型在沙箱里调用不成功时记为未测，沙箱不排查原因。若某个服务商会轮换 refresh token，沙箱内的会话刷新它之后，宿主机那份可能失效；沙箱不防范这一点。
+凭据副本原样使用：`apiKey` 与 `models.yml` 的其余字段和宿主机相同，模型绑定与宿主机配置相同。容器内的副本只有两处改动：各 provider 的 `baseUrl` 指向下面的记录代理；没有记录代理目标的 provider 的 `auth_credentials` 行从容器内的 `agent.db` 删除，因为这类 provider 的请求会绕过记录代理直达上游。删除之后构建会检查剩下的每一行的 provider 都有目标，否则失败。因此沙箱里没有 `baseUrl` 的 provider 没有凭据，它的模型记为未测。某个模型在沙箱里调用不成功时记为未测，沙箱不排查原因。若某个服务商会轮换 refresh token，沙箱内的会话刷新它之后，宿主机那份可能失效；沙箱不防范这一点。
+
+### 模型请求记录代理
+
+容器内每个 omp 会话发出的模型请求都经过一个在容器内运行的记录代理（`sandbox/recorder.ts`，由 `sandbox.ts` 在复制 `~/.omp/agent` 之后启动）。`setup` 为每个声明了 `baseUrl` 的 provider 在容器内的 `models.yml` 中指定一个回环地址（`http://127.0.0.1:9400`、`9401`……），并把映射写入 `/sandbox/recorder-targets.json`。它会重新解析改写后的文件，除 `baseUrl` 外任一 provider 与原文不一致则构建失败。没有 `baseUrl` 的 provider（例如只设置 `modelOverrides` 的）不被改动。
+
+`serve` 监听各端口。每个请求先向证据文件追加一行，再把方法、路径、查询串、请求头和请求体原样转发到记录下来的上游，并把响应流式回传。证据行为 `{"seq", "provider", "tools", "body"}`：`tools` 取请求体 `tools[]` 每项的 `name`，缺则取 `function.name`；请求体没有 `tools` 时为 `[]`。请求头从不记录，因为它们携带凭据。若无法写入该行，请求得到 500 且不被转发，因此没有请求会在未被记录的情况下到达服务商。
+
+驱动在一次会话期间通过 `/sandbox/.requests-sink` 把当前场景的 `<name>.requests.jsonl` 告知记录代理，会话结束后清空该指针；驱动会话之外发出的请求（`hold`、交互式 `omp`）写入容器内的 `/evidence/interactive.requests.jsonl`，`matrix` 不复制它。`/sandbox/recorder.ready` 缺失时驱动拒绝启动会话。
+
+扩展内部创建的 helper 会话（例如不经 RPC 的 `runHelperPrompt`）使用同一批 provider，因此也出现在同一文件中。`seq` 计数记录代理收到的每个请求，所以序号的空缺意味着某个请求未被记录。
 
 ## 场景与 RPC 驱动
 
@@ -70,7 +80,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 | `untested` | omp 不认识该模型（`Model "…" not found`），或所有助手回复都在服务商处失败且没有运行任何工具 |
 | `harness-error` | `init` 失败、omp 因其他原因在 ready 帧之前退出、prompt 被拒绝、会话超过 600 秒上限、omp 以非零退出，或 omp 没有报告会话文件 |
 
-证据写到 `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`。通常会生成 `<name>.driver.json` 报告（结果、每次工具调用的输入、`isError` 与结果前 400 字符、终态断言输出，以及最后一条回复的前 1,000 字符）。`<name>.events.jsonl`（每个 RPC 帧）在 RPC 会话启动时创建；只有 omp 报告了存在的会话文件时，才复制为 `<name>.session.jsonl`。若 `init` 失败，只写驱动报告。宿主机对每个模型只复制实际存在的上述证据文件；`agent.db` 与 `models.yml` 不离开容器。事件与会话文件包含模型看到的一切，所以场景不得读取凭据文件。
+证据写到 `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`。通常会生成 `<name>.driver.json` 报告（结果、每次工具调用的输入、`isError` 与结果前 400 字符、终态断言输出，以及最后一条回复的前 1,000 字符）。`<name>.events.jsonl`（每个 RPC 帧）在 RPC 会话启动时创建；只有 omp 报告了存在的会话文件时，才复制为 `<name>.session.jsonl`。`<name>.requests.jsonl` 每行对应会话的一个模型请求，包含 helper 会话（见上文记录代理）；驱动启动会话时即存在，无请求时为空。若 `init` 失败，只写驱动报告。宿主机对每个模型只复制实际存在的上述证据文件；`agent.db` 与 `models.yml` 不离开容器。事件、会话文件与请求体包含模型看到的一切，所以场景不得读取凭据文件。
 
 ## 提示缓存报告
 
@@ -96,4 +106,4 @@ OrbStack 台账是目录 `~/Ext/work/orbstack/`；沙箱运行在其中有自己
 
 - 容器隔离的是宿主机文件，不是远端服务：会话持有真实凭据并可以出网。不要写会作用于不该被改动的远端系统或账号的场景。
 - 一次运行一个沙箱，运行不复用。运行 id 是构建时间的 36 进制表示。
-- `sandbox/*.ts` 保持自包含：容器内的 `/sandbox` 是本目录的副本，`driver.ts`、`cache.ts`、`db.ts` 与 `autoupdate-off.ts` 只靠 Bun 在那里运行。
+- `sandbox/*.ts` 保持自包含：容器内的 `/sandbox` 是本目录的副本，`driver.ts`、`cache.ts`、`db.ts`、`autoupdate-off.ts` 与 `recorder.ts` 只靠 Bun 在那里运行。
