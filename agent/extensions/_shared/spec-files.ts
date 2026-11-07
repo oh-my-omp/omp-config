@@ -41,8 +41,7 @@ export function discoverSpecFiles(pattern: RegExp, extensionDir: string, cwd: st
 			// Absent or unreadable: nothing to discover here.
 			continue;
 		}
-		for (const name of names.sort()) {
-			if (!pattern.test(name)) continue;
+		for (const name of names.filter((name) => pattern.test(name)).sort()) {
 			const path = join(directory, name);
 			if (seen.has(path)) continue;
 			seen.add(path);
