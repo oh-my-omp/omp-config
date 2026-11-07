@@ -105,6 +105,7 @@ function pendingMarker(ctx: ExtensionContext): Marker | undefined {
 
 async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request): Promise<void> {
 	runtime.state = { kind: "running", request };
+	let marked = false;
 	try {
 		if (ctx.sessionManager.getSessionId() !== request.sessionId) return;
 		const live = captureInteractiveMode(ctx);
@@ -115,6 +116,7 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 			return;
 		}
 		runtime.pi.appendEntry(ENTRY_TYPE, request.marker);
+		marked = true;
 		const fail = (detail: string): void => {
 			// Every path that does not relaunch must consume the marker written above.
 			runtime.pi.appendEntry(ENTRY_TYPE, { consumed: true, at: Date.now() });
@@ -130,6 +132,12 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 		} catch (error) {
 			fail(errorText(error));
 		}
+	} catch (error) {
+		// Before the marker exists there is nothing to consume: report and stop.
+		// After it exists, failures belong to fail() above and keep their existing path.
+		if (marked) throw error;
+		runtime.pi.logger.warn("harness-restart: queued restart failed before marker", { error: errorText(error) });
+		runtime.pi.sendUserMessage(`The queued harness restart failed: ${errorText(error)}`, { attribution: "agent" });
 	} finally {
 		runtime.state = { kind: "idle" };
 	}
