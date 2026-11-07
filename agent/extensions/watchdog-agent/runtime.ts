@@ -99,7 +99,8 @@ type WatchdogState = {
 	sent: number;
 	/**
 	 * `full` scope: the transcript rendered so far, the branch entries it covers, and the last of
-	 * them — a branch that no longer holds that entry (a move the session did not announce) drops it.
+	 * them — a branch that no longer holds that entry (a move the session did not announce), or a
+	 * compaction (which may rewrite messages in place), drops it.
 	 */
 	full: { readonly text: string; readonly count: number; readonly anchor: unknown } | null;
 };
@@ -886,11 +887,13 @@ function registerEvents(runtime: Runtime): void {
 
 	// Compaction starts a new context on the same transcript: only the per-context budget
 	// (`maxPerContext` count) resets. Accumulated actions, the `window` cursor and
-	// in-flight reviews carry over.
+	// in-flight reviews carry over. The retained `full` rendering is dropped: a compaction
+	// may rewrite branch messages in place, which no other event announces.
 	runtime.pi.on("session_compact", () => {
 		try {
 			for (const state of runtime.states.values()) {
 				state.sent = 0;
+				state.full = null;
 			}
 		} catch (error) {
 			runtime.pi.logger.warn(`watchdog ${"session_compact"} handler failed`, { error: errorText(error) });
