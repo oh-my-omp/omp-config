@@ -45,27 +45,56 @@ export function limitKey(provider: string, accountKey: string, limit: UsageLimit
 	return `${provider}|${account}|${limit.id}|${limit.window?.id ?? ""}`;
 }
 
+/** Usage-history rows grouped by provider: one pass over the history instead of one filter per report or provider. */
+export function historyByProvider(history: readonly UsageHistoryEntry[]): ReadonlyMap<string, readonly UsageHistoryEntry[]> {
+	const grouped = new Map<string, UsageHistoryEntry[]>();
+	for (const entry of history) {
+		const rows = grouped.get(entry.provider);
+		if (rows === undefined) grouped.set(entry.provider, [entry]);
+		else rows.push(entry);
+	}
+	return grouped;
+}
+
+/** The usage-history `accountKey` of the account behind each live report, matched once per report within its rows. */
+export function accountKeysOf(
+	reports: readonly UsageReport[],
+	history: ReadonlyMap<string, readonly UsageHistoryEntry[]>,
+): ReadonlyMap<UsageReport, string | undefined> {
+	const keys = new Map<UsageReport, string | undefined>();
+	for (const report of reports) keys.set(report, accountKeyOf(report, history.get(report.provider) ?? []));
+	return keys;
+}
+
+/** The one account key among the rows `test` accepts; undefined when none or several distinct keys match. */
+function onlyAccountKey(rows: readonly UsageHistoryEntry[], test: (entry: UsageHistoryEntry) => boolean): string | undefined {
+	let found: string | undefined;
+	for (const entry of rows) {
+		if (!test(entry)) continue;
+		if (found === undefined) found = entry.accountKey;
+		else if (found !== entry.accountKey) return undefined;
+	}
+	return found;
+}
+
 /**
- * The usage-history `accountKey` of the account behind a live report: the history rows carrying the report's
- * account id, else its email, else its fetch time (each fetch is recorded with `recordedAt = fetchedAt`).
- * Undefined unless exactly one account matches.
+ * The usage-history `accountKey` of the account behind a live report, from its provider's rows: the rows carrying
+ * the report's account id, else its email, else its fetch time (each fetch is recorded with
+ * `recordedAt = fetchedAt`). Undefined unless exactly one account matches.
  */
-export function accountKeyOf(report: UsageReport, history: readonly UsageHistoryEntry[]): string | undefined {
+function accountKeyOf(report: UsageReport, own: readonly UsageHistoryEntry[]): string | undefined {
 	const metadata = report.metadata ?? {};
 	const accountId = typeof metadata.accountId === "string" ? metadata.accountId : report.limits[0]?.scope.accountId;
 	const email = typeof metadata.email === "string" ? metadata.email : undefined;
-	const own = history.filter((entry) => entry.provider === report.provider);
-	const matches = [
-		accountId === undefined ? [] : own.filter((entry) => entry.accountId === accountId),
-		email === undefined ? [] : own.filter((entry) => entry.email === email),
-		own.filter((entry) => entry.recordedAt === report.fetchedAt),
-	];
-	for (const rows of matches) {
-		const keys = new Set(rows.map((entry) => entry.accountKey));
-		const [only] = keys;
-		if (keys.size === 1 && only !== undefined) return only;
+	if (accountId !== undefined) {
+		const key = onlyAccountKey(own, (entry) => entry.accountId === accountId);
+		if (key !== undefined) return key;
 	}
-	return undefined;
+	if (email !== undefined) {
+		const key = onlyAccountKey(own, (entry) => entry.email === email);
+		if (key !== undefined) return key;
+	}
+	return onlyAccountKey(own, (entry) => entry.recordedAt === report.fetchedAt);
 }
 
 /** The applicable limit that leaves an account the least USD. */
@@ -109,7 +138,7 @@ function accountQuota(
 /** One entry per live account report of `provider` that may serve `modelId` (plan gate). */
 export function poolFor(
 	reports: readonly UsageReport[],
-	history: readonly UsageHistoryEntry[],
+	accountKeys: ReadonlyMap<UsageReport, string | undefined>,
 	quota: Calibration["quota"],
 	provider: string,
 	modelId: string,
@@ -121,6 +150,6 @@ export function poolFor(
 	if (own.length === 0) return { kind: "unreported" };
 	return {
 		kind: "accounts",
-		accounts: own.map((report) => accountQuota(report, strategy, modelId, accountKeyOf(report, history), quota, now)),
+		accounts: own.map((report) => accountQuota(report, strategy, modelId, accountKeys.get(report), quota, now)),
 	};
 }

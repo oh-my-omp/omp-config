@@ -28,7 +28,7 @@ export type ScanResult =
 			readonly spend: Readonly<Record<string, Readonly<Record<string, number>>>>;
 			readonly dispatches: readonly ScannedDispatch[];
 			readonly files: number;
-			/** Transcripts parsed this run; the rest came from the per-file cache. */
+			/** Transcripts read this run, from where their cache entry stopped; the rest came from the per-file cache. */
 			readonly parsed: number;
 	  }
 	| { readonly kind: "failed"; readonly reason: string };

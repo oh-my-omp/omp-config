@@ -6,8 +6,8 @@ import type { UsageHistoryEntry, UsageReport } from "@oh-my-pi/pi-ai";
 import { defaultRankingStrategy } from "@oh-my-pi/pi-ai/usage/registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { getSessionsDir } from "@oh-my-pi/pi-utils";
-import { channelOf, providerChannel } from "./channels.ts";
-import { accountKeyOf, limitKey, reserveUsageLimits } from "./quota.ts";
+import { channelsOf } from "./channels.ts";
+import { accountKeysOf, historyByProvider, limitKey, reserveUsageLimits } from "./quota.ts";
 import type { ScannedDispatch, ScanRequest, ScanResult } from "./records.ts";
 import { eligible } from "./samples.ts";
 import { type Calibration, type Prior, readCalibration, scanCachePath, writeCalibration } from "./store.ts";
@@ -31,38 +31,59 @@ const MIN_QUALIFYING_DAYS = 3;
 type CalibrationMode = "full" | "quota";
 
 export type CalibrationOutcome =
-	| { readonly kind: "ready"; readonly calibration: Calibration; readonly files: number; readonly parsed: number }
+	| {
+			readonly kind: "ready";
+			readonly calibration: Calibration;
+			readonly files: number;
+			readonly parsed: number;
+			/** The scan this run used, so a caller that also needs the aggregates does not scan a second time. */
+			readonly scan?: ScanResult;
+	  }
 	/** Consent was off when the run would have started or committed; nothing was written. */
 	| { readonly kind: "declined" }
 	| { readonly kind: "failed"; readonly reason: string };
 
-/** Mean USD per eligible dispatch by agent+model+thinking and model+thinking, and the pooled log spread. */
+/** Running totals of a group's dispatch costs; the per-agent log values feed the pooled spread. */
+type Totals = { n: number; total: number };
+type Spread = Totals & { logs: number[] };
+
+/**
+ * Mean USD per eligible dispatch by agent+model+thinking and model+thinking, and the pooled log spread.
+ * Each group accumulates its total in dispatch order, so the means match summing the whole list.
+ */
 function priorsFrom(dispatches: readonly ScannedDispatch[], trackedModels: ReadonlySet<string>, now: number): Calibration["dispatch"] {
-	const byAgent = new Map<string, number[]>();
-	const byModel = new Map<string, number[]>();
+	const byAgent = new Map<string, Spread>();
+	const byModel = new Map<string, Totals>();
 	for (const dispatch of dispatches) {
 		const counted = eligible(dispatch, now);
 		if (!counted || !trackedModels.has(counted.model)) continue;
 		const agentKey = `${dispatch.agent}|${counted.model}|${counted.thinking}`;
+		const agent = byAgent.get(agentKey);
+		if (agent === undefined) {
+			byAgent.set(agentKey, { n: 1, total: counted.usd, logs: counted.usd > 0 ? [Math.log(counted.usd)] : [] });
+		} else {
+			agent.n += 1;
+			agent.total += counted.usd;
+			if (counted.usd > 0) agent.logs.push(Math.log(counted.usd));
+		}
 		const modelKey = `${counted.model}|${counted.thinking}`;
-		const agentCosts = byAgent.get(agentKey) ?? [];
-		agentCosts.push(counted.usd);
-		byAgent.set(agentKey, agentCosts);
-		const modelCosts = byModel.get(modelKey) ?? [];
-		modelCosts.push(counted.usd);
-		byModel.set(modelKey, modelCosts);
+		const model = byModel.get(modelKey);
+		if (model === undefined) byModel.set(modelKey, { n: 1, total: counted.usd });
+		else {
+			model.n += 1;
+			model.total += counted.usd;
+		}
 	}
-	const table = (groups: ReadonlyMap<string, readonly number[]>): Record<string, Prior> => {
+	const table = (groups: ReadonlyMap<string, Totals>): Record<string, Prior> => {
 		const out: Record<string, Prior> = {};
-		for (const [key, costs] of groups) {
-			if (costs.length >= MIN_PRIOR_SAMPLES) out[key] = { usd: costs.reduce((sum, cost) => sum + cost, 0) / costs.length, n: costs.length };
+		for (const [key, totals] of groups) {
+			if (totals.n >= MIN_PRIOR_SAMPLES) out[key] = { usd: totals.total / totals.n, n: totals.n };
 		}
 		return out;
 	};
 	let squares = 0;
 	let freedom = 0;
-	for (const costs of byAgent.values()) {
-		const logs = costs.filter((cost) => cost > 0).map(Math.log);
+	for (const { logs } of byAgent.values()) {
 		if (logs.length < MIN_SIGMA_GROUP) continue;
 		const mean = logs.reduce((sum, value) => sum + value, 0) / logs.length;
 		squares += logs.reduce((sum, value) => sum + (value - mean) ** 2, 0);
@@ -71,13 +92,22 @@ function priorsFrom(dispatches: readonly ScannedDispatch[], trackedModels: Reado
 	return { generatedAt: now, sigma: freedom >= 10 ? Math.sqrt(squares / freedom) : null, byAgent: table(byAgent), byModel: table(byModel) };
 }
 
-type Series = { readonly delta: Map<number, number>; readonly covered: Set<number> };
+type Series = { readonly delta: Map<number, number>; readonly covered: Set<number>; readonly active: Set<number> };
 type AccountActivity = { readonly active: Set<number>; readonly covered: Set<number>; readonly moved: Map<number, number> };
 
-/** Hourly increase of one limit's used fraction from same-reset snapshot pairs at most 3 h apart. */
+/**
+ * Hourly increase of one limit's used fraction from same-reset snapshot pairs at most 3 h apart, plus the hours
+ * near its snapshots and the hours its pairs cover. One call per limit feeds both the account's activity and the
+ * constant, which read the same series twice before.
+ */
 function seriesOf(entries: readonly UsageHistoryEntry[]): Series {
 	const delta = new Map<number, number>();
 	const covered = new Set<number>();
+	const active = new Set<number>();
+	for (const entry of entries) {
+		const hour = Math.floor(entry.recordedAt / HOUR_MS);
+		for (let offset = -3; offset <= 3; offset++) active.add(hour + offset);
+	}
 	for (let index = 1; index < entries.length; index++) {
 		const before = entries[index - 1];
 		const after = entries[index];
@@ -96,22 +126,18 @@ function seriesOf(entries: readonly UsageHistoryEntry[]): Series {
 			covered.add(hour);
 		}
 	}
-	return { delta, covered };
+	return { delta, covered, active };
 }
 
 /** Per account: hours near any snapshot, hours covered by some limit's pairs, and summed movement per hour. */
-function activityOf(seriesByLimit: ReadonlyMap<string, readonly UsageHistoryEntry[]>): AccountActivity {
+function activityOf(limits: Iterable<Series>): AccountActivity {
 	const active = new Set<number>();
 	const covered = new Set<number>();
 	const moved = new Map<number, number>();
-	for (const entries of seriesByLimit.values()) {
-		for (const entry of entries) {
-			const hour = Math.floor(entry.recordedAt / HOUR_MS);
-			for (let offset = -3; offset <= 3; offset++) active.add(hour + offset);
-		}
-		const series = seriesOf(entries);
-		for (const hour of series.covered) covered.add(hour);
-		for (const [hour, value] of series.delta) moved.set(hour, (moved.get(hour) ?? 0) + value);
+	for (const limit of limits) {
+		for (const hour of limit.active) active.add(hour);
+		for (const hour of limit.covered) covered.add(hour);
+		for (const [hour, value] of limit.delta) moved.set(hour, (moved.get(hour) ?? 0) + value);
 	}
 	return { active, covered, moved };
 }
@@ -131,7 +157,8 @@ function lowQuartile(values: readonly number[]): number {
 function quotaFrom(
 	spend: Readonly<Record<string, Readonly<Record<string, number>>>>,
 	reports: readonly UsageReport[],
-	history: readonly UsageHistoryEntry[],
+	history: ReadonlyMap<string, readonly UsageHistoryEntry[]>,
+	accountKeys: ReadonlyMap<UsageReport, string | undefined>,
 	trackedProviders: ReadonlySet<string>,
 	trackedModels: ReadonlySet<string>,
 	sinceMs: number,
@@ -143,30 +170,38 @@ function quotaFrom(
 		const own = reports.filter((report) => report.provider === provider);
 		if (own.length === 0) continue;
 		const strategy = defaultRankingStrategy(provider);
-		const series = new Map<string, Map<string, UsageHistoryEntry[]>>();
-		for (const entry of history) {
-			if (entry.provider !== provider || entry.usedFraction === undefined) continue;
-			const limits = series.get(entry.accountKey) ?? new Map<string, UsageHistoryEntry[]>();
+		const limitsByAccount = new Map<string, Map<string, UsageHistoryEntry[]>>();
+		for (const entry of history.get(provider) ?? []) {
+			if (entry.usedFraction === undefined) continue;
+			const limits = limitsByAccount.get(entry.accountKey) ?? new Map<string, UsageHistoryEntry[]>();
 			const id = `${entry.limitId}|${entry.windowLabel ?? ""}`;
 			const entries = limits.get(id) ?? [];
 			entries.push(entry);
 			limits.set(id, entries);
-			series.set(entry.accountKey, limits);
+			limitsByAccount.set(entry.accountKey, limits);
 		}
-		for (const limits of series.values()) for (const entries of limits.values()) entries.sort((a, b) => a.recordedAt - b.recordedAt);
-		const activity = new Map([...series].map(([account, limits]) => [account, activityOf(limits)]));
+		// One series per limit, shared by the account's activity and by the constant computed from it.
+		const series = new Map<string, Map<string, Series>>();
+		const activity = new Map<string, AccountActivity>();
+		for (const [account, limits] of limitsByAccount) {
+			for (const entries of limits.values()) entries.sort((a, b) => a.recordedAt - b.recordedAt);
+			const computed = new Map<string, Series>();
+			for (const [id, entries] of limits) computed.set(id, seriesOf(entries));
+			series.set(account, computed);
+			activity.set(account, activityOf(computed.values()));
+		}
 		const models = Object.keys(spend)
 			.filter((key) => key.startsWith(`${provider}/`) && trackedModels.has(key))
 			.map((key) => key.slice(provider.length + 1));
 		for (const report of own) {
-			const account = accountKeyOf(report, history);
+			const account = accountKeys.get(report);
 			if (account === undefined) continue;
 			const others = [...activity].filter(([key]) => key !== account).map(([, value]) => value);
 			for (const limit of report.limits) {
 				if (!limit.window) continue;
 				const key = limitKey(provider, account, limit);
-				const entries = series.get(account)?.get(`${limit.id}|${limit.window.label}`);
-				if (!entries) {
+				const limitSeries = series.get(account)?.get(`${limit.id}|${limit.window.label}`);
+				if (!limitSeries) {
 					missing[key] = "no usage history for this limit in the window";
 					continue;
 				}
@@ -175,7 +210,6 @@ function quotaFrom(
 						(scoped) => scoped.id === limit.id && scoped.window?.id === limit.window?.id,
 					),
 				);
-				const limitSeries = seriesOf(entries);
 				let usd = 0;
 				let moved = 0;
 				let hours = 0;
@@ -234,7 +268,7 @@ function runScan(): Promise<ScanResult> {
 }
 
 /**
- * Every transcript's aggregate, re-reading only files changed since the cached scan. One scan per process at
+ * Every transcript's aggregate, reading only the bytes appended since the cached scan. One scan per process at
  * a time: callers arriving mid-scan share it, so two workers never write the cache together.
  */
 export function scanTranscripts(): Promise<ScanResult> {
@@ -260,16 +294,19 @@ async function calibrateOnce(session: AgentSession, mode: CalibrationMode, conse
 	const sinceMs = now - QUOTA_WINDOW_MS;
 	const reports = (await session.fetchUsageReports()) ?? [];
 	const history = session.modelRegistry.authStorage.usage.history({ sinceMs });
+	const index = historyByProvider(history);
+	const accountKeys = accountKeysOf(reports, index);
+	const channels = channelsOf(session);
 	const providers = new Set([
 		...reports.map((report) => report.provider),
 		...Object.keys(scan.spend).map((key) => key.split("/")[0] ?? ""),
 	]);
-	const tracked = new Set([...providers].filter((provider) => provider && providerChannel(session, provider).kind === "tracked"));
+	const tracked = new Set([...providers].filter((provider) => provider && channels.provider(provider).kind === "tracked"));
 	const models = new Set([...scan.dispatches.flatMap((dispatch) => dispatch.models), ...Object.keys(scan.spend)]);
 	const trackedModels = new Set(
 		[...models].filter((model) => {
 			const separator = model.indexOf("/");
-			return channelOf(session, { provider: model.slice(0, separator), id: model.slice(separator + 1) }).kind === "tracked";
+			return channels.model({ provider: model.slice(0, separator), id: model.slice(separator + 1) }).kind === "tracked";
 		}),
 	);
 	const stored = readCalibration();
@@ -278,12 +315,13 @@ async function calibrateOnce(session: AgentSession, mode: CalibrationMode, conse
 	const calibration: Calibration = {
 		schema: 1,
 		dispatch,
-		quota: quotaFrom(scan.spend, reports, history, tracked, trackedModels, sinceMs, now),
+		quota: quotaFrom(scan.spend, reports, index, accountKeys, tracked, trackedModels, sinceMs, now),
 	};
 	// Consent is re-read at commit: an `off` during the scan discards the result.
 	if (!(await consented())) return { kind: "declined" };
 	writeCalibration(calibration);
-	return { kind: "ready", calibration, files: scan.files, parsed: scan.parsed };
+	// The scan rides along so the tool call that triggered this calibration does not read the transcripts again.
+	return { kind: "ready", calibration, files: scan.files, parsed: scan.parsed, scan };
 }
 
 let running: Promise<CalibrationOutcome> | undefined;

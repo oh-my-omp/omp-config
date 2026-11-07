@@ -24,9 +24,12 @@ type Eligible = { readonly model: string; readonly provider: string; readonly th
 
 /** Splits `openai-codex/gpt-5.6-sol:high@route` into `openai-codex/gpt-5.6-sol` and `high`. */
 function parseResolved(resolvedModel: string): { readonly model: string; readonly thinking: string } {
-	const thinking = THINKING.exec(resolvedModel)?.[1] ?? "";
-	const model = resolvedModel.replace(THINKING, "").split("@")[0] ?? "";
-	return { model, thinking };
+	const matched = THINKING.exec(resolvedModel);
+	const thinking = matched?.[1] ?? "";
+	// One pass: drop the thinking suffix, then cut at the route marker instead of splitting the string.
+	const named = matched === null ? resolvedModel : resolvedModel.replace(THINKING, "");
+	const at = named.indexOf("@");
+	return { model: at === -1 ? named : named.slice(0, at), thinking };
 }
 
 export function eligible(dispatch: ScannedDispatch, now: number): Eligible | undefined {
