@@ -144,9 +144,10 @@
 //     default then installs as a normal managed template. Only customized host
 //     rules are converted into the destination's normal managed-template merge.
 //     Successful migration removes only that omomp.yml section and legacy JSON.
-//     Occupied destinations, invalid custom data, ambiguous layouts and other
-//     omomp formats stay in place with a note; the default template is not
-//     installed while such a migration is blocked.
+//     Occupied destinations, a section coexisting with legacy JSON, invalid
+//     custom data, ambiguous layouts and other omomp formats stay in place with
+//     a note; the default template is not installed while such a migration is
+//     blocked.
 //   - DATA_MOVES split the host's old APPEND_SYSTEM_MODEL.md (at the agent
 //     root or beside append-system-model) into APPEND-SYSTEM-model-NN.md files
 //     in block order, with target: * preserving main/subagent scope. Every
@@ -862,6 +863,10 @@ function planReplacementMigration(
 	if (files.some((rel) => isAppManaged(join(opts.agentDir, rel)))) return blocked(`${targetOf(OMOMP_REL, opts.agentDir)} is app-managed`);
 	const managedLegacy = legacy.find((rel) => isAppManaged(targetOf(rel, opts.agentDir)));
 	if (managedLegacy !== undefined) return blocked(`${targetOf(managedLegacy, opts.agentDir)} is app-managed`);
+	// A section and legacy JSON are two authorities whose merge order is
+	// undefined, so both stay in place with a note naming every file.
+	if (hasSection && legacy.length > 0)
+		return blocked(`the section and legacy JSON coexist: ${[OMOMP_REL, ...legacy].map((rel) => targetOf(rel, opts.agentDir)).join(", ")}`);
 	let value: unknown = root?.["system-prompt-replace"];
 	if (!hasSection) {
 		if (legacy.length !== 1) return blocked(`multiple legacy JSON files: ${legacy.join(", ")}`);
