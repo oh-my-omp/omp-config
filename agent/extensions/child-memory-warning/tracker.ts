@@ -9,7 +9,7 @@ export interface ProcessRecord extends ProcessIdentity {
 	readonly groupId: number;
 }
 
-export interface ProcessSnapshot {
+interface ProcessSnapshot {
 	/** Two-pass verified non-zombie rows only; an enumerated PID alone is not a live anchor. */
 	readonly processes: ReadonlyMap<number, ProcessRecord>;
 	/** Includes PIDs whose BSD info was unavailable; absence alone proves exit. */

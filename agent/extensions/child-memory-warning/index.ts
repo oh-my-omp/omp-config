@@ -150,10 +150,9 @@ async function sample(monitor: Monitor): Promise<void> {
 		// Threshold IO is per-need, not per-tick: only an unwarned owned process can use it.
 		// owned aliases the tracker's reused result buffer; consume it synchronously here.
 		const pending = owned.some((tracked) => !tracked.alerted);
-		if (!pending) {
-			reportConfigProblem(monitor, null);
-			return;
-		}
+		// No threshold read and no config-problem bookkeeping on this tick:
+		// a quiet interval must neither clear a recorded problem nor re-warn it later (§3).
+		if (!pending) return;
 		const config = await loadThreshold(monitor.ctx.cwd);
 		// The session may have shut down while the settings read was suspended:
 		// a stopped lifetime means libproc is already closed and delivery is over.

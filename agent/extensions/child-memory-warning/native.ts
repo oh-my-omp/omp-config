@@ -6,7 +6,7 @@ import type { ProcessRecord, ProcessSource, SnapshotResult } from "./tracker.ts"
 const BSD_INFO_SIZE = 136;
 const RUSAGE_SIZE = 96;
 const ZOMBIE_STATUS = 5; // sys/proc.h: SZOMB; rusage can return terminal accounting for zombies.
-const NANOSECONDS_PER_UNIT = 4294967296n; // 2^32: DataView has no u64 compare, so raw halves stay numbers.
+const HI_HALF_UNIT = 4294967296n; // 2^32: one u64 is kept as two u32 halves for allocation-free compare.
 const decoder = new TextDecoder();
 
 const LIBPROC_ABI = {
@@ -23,14 +23,14 @@ type NativeSymbols = Library<typeof LIBPROC_ABI>["symbols"];
 interface RawIdentity {
 	parentPid: number;
 	groupId: number;
-	startSecHi: number;
 	startSecLo: number;
-	startUsecHi: number;
+	startSecHi: number;
 	startUsecLo: number;
+	startUsecHi: number;
 }
 
 function freshIdentity(): RawIdentity {
-	return { parentPid: 0, groupId: 0, startSecHi: 0, startSecLo: 0, startUsecHi: 0, startUsecLo: 0 };
+	return { parentPid: 0, groupId: 0, startSecLo: 0, startSecHi: 0, startUsecLo: 0, startUsecHi: 0 };
 }
 
 /** One BSD info row into `out`; false when unavailable, recycled, or a zombie. Allocates nothing. */
@@ -39,10 +39,10 @@ function readIdentityInto(symbols: NativeSymbols, bytes: Uint8Array, view: DataV
 	if (view.getUint32(12, true) !== pid || view.getUint32(4, true) === ZOMBIE_STATUS) return false;
 	out.parentPid = view.getUint32(16, true);
 	out.groupId = view.getUint32(100, true);
-	out.startSecHi = view.getUint32(120, true);
-	out.startSecLo = view.getUint32(124, true);
-	out.startUsecHi = view.getUint32(128, true);
-	out.startUsecLo = view.getUint32(132, true);
+	out.startSecLo = view.getUint32(120, true);
+	out.startSecHi = view.getUint32(124, true);
+	out.startUsecLo = view.getUint32(128, true);
+	out.startUsecHi = view.getUint32(132, true);
 	return true;
 }
 
@@ -58,8 +58,8 @@ function sameIdentity(a: RawIdentity, b: RawIdentity): boolean {
 }
 
 function startedAtOf(raw: RawIdentity): bigint {
-	const sec = BigInt(raw.startSecHi) * NANOSECONDS_PER_UNIT + BigInt(raw.startSecLo);
-	const usec = BigInt(raw.startUsecHi) * NANOSECONDS_PER_UNIT + BigInt(raw.startUsecLo);
+	const sec = BigInt(raw.startSecHi) * HI_HALF_UNIT + BigInt(raw.startSecLo);
+	const usec = BigInt(raw.startUsecHi) * HI_HALF_UNIT + BigInt(raw.startUsecLo);
 	return sec * 1_000_000n + usec;
 }
 
