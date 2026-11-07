@@ -30,13 +30,16 @@
  * session branch for the assignment/tools — the memoized branch view when the
  * host exposes one (its `getBranchView()`), a copied branch through
  * `getBranch()` otherwise — and walks only the suffix after the latest
- * `session_init`, never the whole branch. Result and assistant text are
- * materialized only for the calls the render window keeps, plus the yield
- * call's own assistant text; sizes feed the window choice through bounded
- * length arithmetic instead of whole-run rendering, so the walk's allocations
- * stay proportional to the prompt's window, not the run's length. Requests
- * the independent Todo owner's synchronous read projection before and after
- * judging. Its model is the OMP model role `@task-completion-judge` (assign
+ * `session_init`, recording call metadata and result entry references without
+ * materializing text. Result and assistant text are materialized only for the
+ * calls the budget window keeps, plus the yield call's own assistant text;
+ * every rendered text passes through the windowing helpers (`stringifyWithin`
+ * with each leaf string escaped by JSON.stringify itself, `textWithin`), so a
+ * call's allocation stays bounded by the character limits no matter what it
+ * carried, sizing rides the same bounded windows, the `§ Context` section is
+ * located per system-prompt piece, and the submission is truncated once at
+ * its source. Requests the independent Todo owner's synchronous read projection
+ * before and after judging. Its model is the OMP model role `@task-completion-judge` (assign
  * it in `/model`), then the `default` role's models, resolved at every
  * judgment, and it writes only in-memory round state. Only subagents whose
  * definition file declares `completionJudge: true` are judged; other
@@ -193,11 +196,11 @@ const truncate = (text: string, limit: number): string => {
 };
 
 /**
- * Bounded `truncate(workTextOf(content, separator), limit)` in one bounded
- * pass: keep the first `head` characters of the joined text as the head
- * window, a rolling native `slice(-tail)` string keeps the last `tail`
- * characters, and the running total drives the omitted count. Byte-identical
- * to the whole-join-then-slice path; the joined middle is never held.
+ * Bounded `truncate(textOf(content, separator), limit)` in one bounded pass:
+ * the head window keeps the first `head` characters, a rolling native
+ * `slice(-tail)` string keeps the last `tail`, and the running total drives
+ * the omitted count. Byte-identical to the whole-join-then-slice path; the
+ * joined middle is never held.
  */
 const textWithin = (content: unknown, separator: string, limit: number): string => {
 	const blocks: string[] =
@@ -267,16 +270,6 @@ const textOfExactly = (content: unknown): string => {
 	return texts.join("");
 };
 
-const JSON_ESCAPES = new Map<number, string>([
-	[0x22, '\\"'],
-	[0x5c, "\\\\"],
-	[0x08, "\\b"],
-	[0x09, "\\t"],
-	[0x0a, "\\n"],
-	[0x0c, "\\f"],
-	[0x0d, "\\r"],
-]);
-
 /**
  * Conservative token estimate without a tokenizer: one token per ASCII character
  * and two per other character. Calibrated against the judge helper's
@@ -287,13 +280,6 @@ const JSON_ESCAPES = new Map<number, string>([
 const estimateTokens = (text: string): number => {
 	let tokens = 0;
 	for (const char of text) tokens += char.charCodeAt(0) < 128 ? 1 : 2;
-	return tokens;
-};
-
-/** `estimateTokens` of a pre-truncated window: weight the code points the window holds; a split surrogate half counts as its own. */
-const weightOf = (window: string): number => {
-	let tokens = 0;
-	for (const char of window) tokens += char.charCodeAt(0) < 128 ? 1 : 2;
 	return tokens;
 };
 
@@ -311,9 +297,14 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 		case "number":
 			emit(Number.isFinite(value) ? String(value) : "null");
 			return;
-		case "string":
-			writeJsonString(value, emit);
+		case "string": {
+			// Leaf escaping is exactly JSON.stringify's own: call it on the string
+			// and let the emit windows do the bounding — whole-leaf transient like
+			// the old whole-serialize path, never joined across leaves.
+			const leaf = JSON.stringify(value) as string;
+			emit(leaf);
 			return;
+		}
 		case "bigint":
 			throw new TypeError("Do not know how to serialize a BigInt");
 		case "object":
@@ -348,81 +339,43 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 		if (item === undefined || typeof item === "function" || typeof item === "symbol") continue;
 		if (!firstProp) emit(",");
 		firstProp = false;
-		writeJsonString(key, emit);
+		emit(JSON.stringify(key) as string);
 		emit(":");
 		walkJson(item, emit, inner);
 	}
 	emit("}");
 }
 
-function writeJsonString(text: string, emit: (part: string) => void): void {
-	emit('"');
-	let runStart = 0;
-	const escapeAt = (i: number): void => {
-		const code = text.charCodeAt(i);
-		const jsonEscape = JSON_ESCAPES.get(code);
-		emit(jsonEscape ?? `\\u${code.toString(16).padStart(4, "0")}`);
-	};
-	const needsEscape = (i: number): boolean => {
-		const code = text.charCodeAt(i);
-		const jsonEscape = JSON_ESCAPES.get(code);
-		if (jsonEscape !== undefined || code < 0x20) return true;
-		// Well-formed JSON.stringify: a lone surrogate escapes as \uXXXX; a
-		// complete pair stays literal.
-		if (code >= 0xd800 && code <= 0xdbff) return !(text.charCodeAt(i + 1) >= 0xdc00 && text.charCodeAt(i + 1) <= 0xdfff);
-		if (code >= 0xdc00 && code <= 0xdfff) return i === 0 || !(text.charCodeAt(i - 1) >= 0xd800 && text.charCodeAt(i - 1) <= 0xdbff);
-		return false;
-	};
-	for (let i = 0; i < text.length; i++) {
-		if (!needsEscape(i)) continue;
-		if (runStart < i) emit(text.slice(runStart, i));
-		escapeAt(i);
-		runStart = i + 1;
-	}
-	if (runStart < text.length) emit(text.slice(runStart));
-	emit('"');
-}
-
 /**
- * Bounded `truncate(JSON.stringify(value) ?? String(value), limit)` in
- * one bounded pass: the walker streams the exact JSON.stringify byte
- * sequence, the emit keeps the first `limit` characters (the head
- * window), a rolling native `slice(-tail)` string keeps the last `tail`
- * characters, and the total length drives the omitted count. Only the
- * window lives across the walk, never the whole serialization; cycles
- * and BigInt keep the `truncate(String(value), limit)` fallback
- * (F106/F107: truncation happens before full serialization exists).
+ * Bounded `truncate(JSON.stringify(value) ?? String(value), limit)` in one
+ * pass: the walker streams the exact JSON.stringify sequence — each leaf
+ * string through JSON.stringify itself (toJSON with its key argument,
+ * array `null`-ification, undefined/function/symbol property skips, cycle
+ * and BigInt throws, `String(value)` fallback) — while emit keeps the first
+ * `head` characters, a rolling native `slice(-tail)` string keeps the last
+ * `tail`, and the running total drives the omitted count. The screens meet
+ * in the middle once, so the short case reassembles the whole text without
+ * a second walk; the whole serialization is never held (F106/F107).
  */
 const stringifyWithin = (value: unknown, limit: number): string => {
 	const head = Math.ceil(limit * 0.6);
 	const tail = limit - head;
-	// `tail === 0` must keep an empty tail window, not the whole string;
-	// the rolling `slice(-0)` below would return the full string.
 	try {
-		let kept = "";
+		let seen = 0;
+		let held = "";
 		let tailBuffer = "";
-		let total = 0;
 		const emit = (part: string): void => {
-			total += part.length;
-			if (kept.length < head) kept += part.length + kept.length <= head ? part : part.slice(0, head - kept.length);
+			seen += part.length;
+			if (held.length < head) held += part.length + held.length <= head ? part : part.slice(0, head - held.length);
 			if (tail > 0) tailBuffer = (tailBuffer + part).slice(-tail);
 		};
 		walkJson(value, emit, []);
-		if (total <= limit) {
-			// Fits whole: replay into a plain builder; bounded by `limit`.
-			let full = "";
-			const fullEmit = (part: string): void => {
-				full += part;
-			};
-			walkJson(value, fullEmit, []);
-			return full;
-		}
-		return kept + "\n…[" + String(total - limit) + " chars omitted]…\n" + tailBuffer;
+		if (seen <= limit) return tail > 0 && seen > head ? held + tailBuffer.slice(Math.max(0, head - (seen - tailBuffer.length))) : held;
+		return `${held}\n…[${seen - limit} chars omitted]…\n${tailBuffer}`;
 	} catch {
 		return truncate(String(value), limit);
 	}
 };
-
 const classifyYield = (input: YieldInput): YieldCall => {
 	if (input.key !== undefined && input.key !== null) return { kind: "not_terminal" };
 	if (typeof input.error === "string" && input.error.trim() !== "") return { kind: "not_terminal" };
@@ -512,52 +465,43 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 	return { assignment, calls, callById, resultsByCallId };
 };
 
-/** The batch's shared `context` is rendered into the subagent system prompt as its `§ Context` section. */
+/**
+ * The batch's shared `context` is rendered into the subagent system prompt as its
+ * `§ Context` section — located and extracted without joining the whole prompt
+ * (F108). Extraction equals `getSystemPrompt().join("\n")` + `indexOf("§ Context\n")`
+ * + slice to the next `"\n§ "` heading + `trim()`: marker and heading each hold
+ * exactly one `"\n"`, the same character the join uses as the separator, so a
+ * straddling match must carry its `"\n"` on a seam. A piece-internal `indexOf`
+ * match always starts earlier in the stream than a seam after the same piece, so
+ * the scan checks each piece directly and each seam with `endsWith`/`startsWith`.
+ */
 const sharedContextOf = (ctx: ExtensionContext): string => {
-	// F108: § Context is located without materializing the joined prompt. The
-	// scan reads at most the marker-sized seam window between two pieces (a
-	// marker straddles at most one seam of the "\n" join) and accumulates the
-	// body one joined piece at a time until the next "\n§ " heading; work
-	// stays proportional to the section, not the prompt, and body extraction
-	// stays byte-identical to whole-join\u2011then\u2011slice.
-	const marker = "§ Context\n";
-	const markerLen = marker.length;
 	const pieces = ctx.getSystemPrompt();
-	/** Accumulate the body from here through the next "\n§ " heading, joining pieces with the prompt's "\n" seam. */
-	const readBody = (leader: string, nextIndex: number): string => {
-		// A "\u00a7 " terminator can straddle the leader\u2019s trailing separator
-		// and the next piece\u2019s first characters; its "\n" then belongs to the
-		// seam, so the body ends at the leader minus that separator.
-		if ((pieces[nextIndex] ?? "").startsWith("\u00a7 ") && leader.endsWith("\n")) {
-			return leader.slice(0, leader.length - "\n".length).trim();
+	const marker = "§ Context\n";
+	const markerNoNl = "§ Context";
+	/** The body joined from the section pieces; a `"\n§ "` heading inside one of them, or one whose text opens after the seam with `"§ "`, ends the body exactly where the whole-join path would slice it. */
+	const bodyFrom = (firstPiece: string, restIndex: number): string => {
+		let accumulated = "";
+		let open = true; // nothing consumed yet: the next piece contributes without a seam
+		for (let index = restIndex; index < pieces.length; index++) {
+			const piece = pieces[index] ?? "";
+			// From the second piece on, a piece opening with "§ " carries the
+			// heading's "\n" on the seam before it: the body ends there.
+			if (!open && piece.startsWith("§ ")) return accumulated.slice(0, accumulated.length - 1).trim();
+			const inside = piece.indexOf("\n§ ");
+			if (inside !== -1) return (accumulated + piece.slice(0, inside)).trim();
+			accumulated += open ? firstPiece : `\n${piece}`;
+			open = false;
 		}
-		let rest = leader;
-		for (let used = nextIndex; used < pieces.length; used++) {
-			const piece = pieces[used] ?? "";
-			const inside = piece.indexOf("\n\u00a7 ");
-			if (inside !== -1) return (rest + piece.slice(0, inside)).trim();
-			// The terminator\u2019s "\n" may also be the seam before this piece.
-			if (used > nextIndex && piece.startsWith("\u00a7 ")) {
-				return rest.slice(0, rest.length - 1).trim();
-			}
-			rest += piece + "\n";
-		}
-		return rest.trim();
+		return accumulated.trim();
 	};
 	for (let index = 0; index < pieces.length; index++) {
 		const piece = pieces[index] ?? "";
 		const at = piece.indexOf(marker);
-		if (at !== -1) {
-			return readBody(piece.slice(at + markerLen) + "\n", index + 1);
-		}
-		if (piece.length < markerLen - 1) continue;
-		for (const cover of [pieces[index + 1]]) {
-			if (cover === undefined) break;
-			const candidate = piece.slice(-(markerLen - 1)) + "\n" + cover;
-			const at2 = candidate.indexOf(marker);
-			if (at2 === -1) break;
-			return readBody(candidate.slice(at2 + markerLen), index + 2);
-		}
+		if (at !== -1) return bodyFrom(piece.slice(at + marker.length), index + 1);
+		// Straddling: this piece ends with the marker's text, the seam carries
+		// the marker's "\n", the body starts inside the next piece.
+		if (index + 1 < pieces.length && piece.endsWith(markerNoNl)) return bodyFrom("", index + 1);
 	}
 	return "";
 };
@@ -581,74 +525,66 @@ const renderCall = (call: ToolCallRecord, n: number, results: ResultsByCallId): 
 
 /**
  * `estimateTokens` over the exact `truncate(serialized, limit)` output,
- * computed from the streamed source without materializing it: the head
- * window's weight is tallied while streaming, the marker's weight is a
- * fixed string, and the tail window's weight rides a bounded rolling pair
- * of the serialization's last `tail` characters. Byte-weight parity with
- * the render pass keeps the budget walk's kept set identical to the old
- * render-first walk's, and a call that falls outside the window never
+ * computed from a single streaming pass: the emit keeps the first `limit`
+ * characters (the head window), a bounded rolling `slice(-tail)` string keeps
+ * the last `tail`, and the running total drives the omitted count. The middle
+ * is never held, and the token weights come from the two windows alone. Byte
+ * weights equal the render pass's, so the budget walk keeps the same calls
+ * windowed by `fitToolCalls`, and a call that falls outside the window never
  * materializes its text.
  */
 const truncatedTokensOf = (
 	produce: (emit: (piece: string) => void) => void,
 	limit: number,
-	// A value uses String() on throw; a function materializes the exact
-	// pre-truncation text only when the walk itself failed.
-	fallbackSource: unknown | (() => string),
+	// Walk fails only on cycles and BigInt; then String(value) keeps the old
+	// fallback shape and the caller passes the value for it.
+	fallbackValue: unknown,
 ): number => {
-	const head = Math.ceil(limit * 0.6);
-	const tail = limit - head;
-	// The estimator weights a code point: 1 per ASCII character, 2 per other
-	// character, and a split surrogate half weighs 2 as a lone half. Only the
-	// rendered windows carry weight — the middle is cut, so its weight never
-	// enters the total. Both windows ride a bounded rolling native slice; a
-	// straddling code point that loses one half stays in the window: it was
-	// emitted whole and its weight is what the window's text counts.
 	try {
-		let kept = "";
-		let tailBuffer = "";
+		const head = Math.ceil(limit * 0.6);
+		const tail = limit - head;
 		let seen = 0;
-		let totalWeight = 0;
+		let held = ""; // leading window, up to `head` characters
+		let tailBuffer = ""; // trailing window, last `tail` characters when tail > 0
 		const emit = (piece: string): void => {
-			for (const ch of piece) {
-				const weight = ch.charCodeAt(0) < 128 ? 1 : 2;
-				seen += ch.length;
-				totalWeight += weight;
-			}
-			if (kept.length < head) kept += piece.length + kept.length <= head ? piece : piece.slice(0, head - kept.length);
+			seen += piece.length;
+			if (held.length < head) held += piece.length + held.length <= head ? piece : piece.slice(0, head - held.length);
 			if (tail > 0) tailBuffer = (tailBuffer + piece).slice(-tail);
 		};
 		produce(emit);
-		const headWeight = weightOf(kept);
-		const tailWeight = weightOf(tailBuffer);
-		if (seen <= limit) return totalWeight;
-		return headWeight + estimateTokens(`\n…[${seen - limit} chars omitted]…\n`) + tailWeight;
+		if (seen <= limit) {
+			// Short serialization: the render is the whole serialization. Both
+			// windows hold a single unbroken coordinate range of it — the first
+			// `head` characters in `held`, the last min(`tail`, seen) in
+			// `tailBuffer` — and their overlap closes exactly once in the middle
+			// when they meet; appending the tail's slice past `held`'s end
+			// rebuilds the full text with no second walk.
+			return estimateTokens(tail > 0 && seen > head ? held + tailBuffer.slice(Math.max(0, head - (seen - tailBuffer.length))) : held);
+		}
+		const marker = `\n…[${seen - limit} chars omitted]…\n`;
+		return estimateTokens(held) + estimateTokens(marker) + estimateTokens(tailBuffer);
 	} catch {
-		// Serialization itself throws (cycle, BigInt): the old code fed
-		// String(value) through truncate; the exact weights of that rendered
-		// text are what the budget walk needs here.
-		const materialized = typeof fallbackSource === "function" ? fallbackSource() : String(fallbackSource);
-		return estimateTokens(truncate(materialized, limit));
+		// Cycles and BigInt: String(value) keeps the old fallback shape.
+		return estimateTokens(truncate(String(fallbackValue), limit));
 	}
 };
 
 /**
- * Exact `estimateTokens` the budget walk needs, per call, without rendering
- * any call: the fixed header glue's weight, plus both bounded text windows
- * (args through the JSON walk, result through the text blocks) via
- * `truncatedTokensOf`. A call outside the window never materializes its
- * texts; sizing rides the same rendering shape the prompt carries.
+ * Exact `estimateTokens` the budget walk needs, per call, without rendering the
+ * call: the fixed header glue's weight, plus both bounded windows (args through
+ * the JSON walk, result through the text blocks) via `truncatedTokensOf`. A
+ * call value walks once here; texts materialize only through the windows, and
+ * the walk's `String()` fallback reads the source text only when the walk itself
+ * failed (D3: a call outside the window never holds its text).
  */
 const renderedCallTokens = (call: ToolCallRecord, n: number, results: ResultsByCallId): number => {
 	const result = results.get(call.id);
 	const status = result === undefined ? "no result" : result.isError ? "error" : "ok";
 	const headerTokens = estimateTokens(`<call n="${n}" tool="${call.name}" status="${status}">\n<args></args>\n<result></result>\n</call>`);
 	const argsTokens = truncatedTokensOf((emit) => walkJson(call.args, emit, []), ARGS_CHAR_LIMIT, call.args);
-	const resultTokens =
-		result === undefined ? 0 : truncatedTokensOf(emitStringBlocks(result.entry), RESULT_CHAR_LIMIT, () => textOfExactly(result.entry));
+	const resultTokens = result === undefined ? 0 : truncatedTokensOf(emitStringBlocks(result.entry), RESULT_CHAR_LIMIT, result.entry);
 	return headerTokens + argsTokens + resultTokens;
 };
-
 const emitStringBlocks =
 	(content: unknown) =>
 	(emit: (piece: string) => void): void => {
@@ -695,14 +631,7 @@ const fitToolCalls = (prior: readonly ToolCallRecord[], results: ResultsByCallId
 	return kept.reverse();
 };
 
-const renderPrompt = (
-	ctx: ExtensionContext,
-	transcript: Transcript,
-	yieldCallId: string,
-	submission: string,
-	todo: ReviewTodo,
-	submissionReady = false,
-): string => {
+const renderPrompt = (ctx: ExtensionContext, transcript: Transcript, yieldCallId: string, submission: string, todo: ReviewTodo): string => {
 	const prior = transcript.calls.filter((call) => call.id !== yieldCallId);
 	const frame = (calls: readonly string[], shown: number): string =>
 		[
@@ -719,7 +648,7 @@ const renderPrompt = (
 			...calls,
 			"</tool-calls>",
 			"<submitted-result>",
-			submissionReady ? submission : truncate(submission, SUBMISSION_CHAR_LIMIT),
+			submission,
 			"</submitted-result>",
 		].join("\n");
 	// Everything but the tool calls is counted first; the calls get what is left of the window.
@@ -731,7 +660,6 @@ const renderPrompt = (
 	const calls = window.map((call, index) => renderCall(call, prior.length - window.length + index + 1, transcript.resultsByCallId));
 	return frame(calls, calls.length);
 };
-
 /**
  * The verdict is the first line's leading token: `DONE`, `NOT_DONE` or `NOT DONE`
  * (one ASCII space), after trimming and removing wrapping backticks/asterisks,
@@ -819,33 +747,18 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 			rounds.set(sessionFile, { kind: "settled" });
 			return undefined;
 		}
-		// Text-kind submission: the assistant message that carries the yield
-		// call, its full text — the render below truncates once, exactly the
-		// old single-truncate shape. Data-kind: `stringifyWithin` truncates
-		// within the same limit with the exact omitted count, so the render's
-		// `truncate` is a byte-for-byte no-op (a shrunk string cannot shrink
-		// again): both yield kinds end at one truncation with unchanged
-		// rendered submission text.
-		// The assistant entry carrying this yield call; `undefined` when the
-		// walk found none (an unstructured or errored yield handle) — its
-		// text-kind submission is then the empty string, as before.
+		// The submission is truncated exactly once, here at its source (D9): the
+		// text kind is the yield call's own assistant message text, the data kind
+		// the bounded serialization of `input.data` — `stringifyWithin` at the
+		// submission limit already outputs the exact `truncate(whole, limit)`
+		// shape, so the frame takes `submission` verbatim.
 		const yieldEntry = transcript.callById.get(toolCallId)?.assistantEntry;
 		const submission =
 			call.kind === "text"
 				? truncate(textOfExactly(contentOf(yieldEntry)), SUBMISSION_CHAR_LIMIT)
 				: stringifyWithin(input.data, SUBMISSION_CHAR_LIMIT);
-		// Data-kind: `stringifyWithin` already applied the single truncation
-		// with the exact omitted count (one truncate, exactly like the old
-		// whole-serialize-then-truncate path); `submissionReady` keeps the
-		// render from truncating a second time. Text-kind keeps the old shape:
-		// the full assistant text enters the frame, which truncates once.
-		const submissionReady = call.kind === "data";
 		const todo = requireReviewTodo(pi, ctx.agent.id);
-		const verdict = await judge(
-			ctx,
-			renderPrompt(ctx, transcript, toolCallId, submission, todo, submissionReady),
-			AbortSignal.timeout(DEADLINE_MS),
-		);
+		const verdict = await judge(ctx, renderPrompt(ctx, transcript, toolCallId, submission, todo), AbortSignal.timeout(DEADLINE_MS));
 		pi.logger.info("task-completion-judge verdict", {
 			agent: basename(sessionFile, ".jsonl"),
 			agentName,
