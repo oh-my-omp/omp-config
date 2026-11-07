@@ -44,7 +44,13 @@
 // its ask answers are the `ask` tool results on that branch
 // (`_shared/ask-answers.ts`). A subagent OMP runs in a subagent worker thread
 // sees the root as a peer stub without `getBranch`; it reads the root's
-// persisted transcript instead and takes the path from its last entry.
+// persisted transcript instead and takes the path from its last entry. That
+// transcript is read incrementally (`transcript.ts`): a cursor per file keeps
+// the parsed byte offset and where every record sits, so a model call parses
+// only the bytes appended since the previous call and re-derives only the
+// records a template indexes. The cursor is dropped and the file read from the
+// start when the file is replaced, shrinks or is rewritten at its size (see
+// `transcript.ts` for what is detected).
 // Attribution is set by whoever sends the message,
 // so extensions that inject user-role messages must send them with
 // `attribution: "agent"`.
@@ -63,19 +69,14 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import type { DeveloperMessage } from "@oh-my-pi/pi-ai";
-import {
-	type ExtensionAPI,
-	type ExtensionContext,
-	type FileEntry,
-	loadEntriesFromFile,
-	type SessionEntry,
-} from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { type AgentSessionHandle, isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
+import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+import { type BranchNeed, createTranscriptReader, type PromptSource, type TranscriptReader } from "./transcript.ts";
 
 const FILE_PATTERN = /^PROMPT-INJECT-.+\.md$/i;
 /** Any `{{ user_prompt … }}` or `{{ ask_answers … }}` occurrence; the inner text is parsed separately. */
@@ -109,8 +110,11 @@ type SpecParse =
 /** Why the root's prompts cannot be read; the context hook warns once per reason and injects nothing. */
 type MissingRoot = { readonly kind: "missing"; readonly reason: string };
 
-/** The root session's human prompts and, separately, the ask answers given there; both oldest first. */
-type RootPrompts = { readonly kind: "ok"; readonly prompts: readonly string[]; readonly answers: readonly string[] } | MissingRoot;
+/**
+ * The root session's human prompts (resolved per index, so only the positions a template names are
+ * read) and the ask answers given there; both oldest first.
+ */
+type RootPrompts = { readonly kind: "ok"; readonly prompts: PromptSource; readonly answers: readonly string[] } | MissingRoot;
 
 // --- discovery + parsing ----------------------------------------------------
 
@@ -208,14 +212,14 @@ function clampBound(bound: number, length: number): number {
 	return Math.min(Math.max(n, 0), length);
 }
 
-function renderSegment(segment: Segment, root: { readonly prompts: readonly string[]; readonly answers: readonly string[] }): string {
+function renderSegment(segment: Segment, root: { readonly prompts: PromptSource; readonly answers: readonly string[] }): string {
 	const { prompts } = root;
 	switch (segment.kind) {
 		case "text":
 			return segment.text;
 		case "scalar": {
 			const i = segment.index < 0 ? prompts.length + segment.index : segment.index;
-			return prompts[i] ?? "";
+			return i >= 0 && i < prompts.length ? prompts.at(i) : "";
 		}
 		case "slice": {
 			const start = clampBound(segment.start, prompts.length);
@@ -233,7 +237,7 @@ function renderSegment(segment: Segment, root: { readonly prompts: readonly stri
 				}
 			}
 			const parts: string[] = [];
-			for (let i = start; i < end; i++) parts.push(`<user_prompt index="${i}">\n${prompts[i]}\n</user_prompt>`);
+			for (let i = start; i < end; i++) parts.push(`<user_prompt index="${i}">\n${prompts.at(i)}\n</user_prompt>`);
 			return parts.join("\n");
 		}
 		case "answers":
@@ -245,7 +249,7 @@ function renderSegment(segment: Segment, root: { readonly prompts: readonly stri
 	}
 }
 
-function renderSpec(spec: InjectSpec, root: { readonly prompts: readonly string[]; readonly answers: readonly string[] }): string {
+function renderSpec(spec: InjectSpec, root: { readonly prompts: PromptSource; readonly answers: readonly string[] }): string {
 	const body = spec.segments.map((s) => renderSegment(s, root)).join("");
 	const name = spec.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 	return `<user-prompt-inject name="${name}">\n${body}\n</user-prompt-inject>`;
@@ -254,39 +258,12 @@ function renderSpec(spec: InjectSpec, root: { readonly prompts: readonly string[
 // --- root prompt source -------------------------------------------------------
 
 /**
- * The root session's current branch. A root on this thread is a live session; when this subagent
- * runs in a subagent worker thread, the root is a handle homed on another thread whose session
- * manager exposes its file and cwd but not `getBranch`, so its branch is read from its persisted transcript.
+ * Walk the spawn tree from this subagent to the root main session and read the prompts and ask
+ * answers the active templates name. A root on this thread is a live session whose branch the host
+ * already holds; a root homed on another thread (this subagent runs in a subagent worker thread)
+ * exposes its transcript file instead, read incrementally.
  */
-async function rootBranch(
-	session: AgentSessionHandle,
-): Promise<{ readonly kind: "ok"; readonly entries: readonly SessionEntry[] } | MissingRoot> {
-	if (isLocalAgentSession(session)) return { kind: "ok", entries: session.sessionManager.getBranch() };
-	const file = session.sessionManager.getSessionFile();
-	if (!file) return { kind: "missing", reason: "root session on another thread has no persisted transcript" };
-	return { kind: "ok", entries: leafPath(await loadEntriesFromFile(file)) };
-}
-
-/** The persisted branch: from the last entry (the persisted leaf) back to the first, oldest first. */
-function leafPath(entries: readonly FileEntry[]): SessionEntry[] {
-	const byId = new Map<string, SessionEntry>();
-	let leaf: SessionEntry | undefined;
-	for (const entry of entries) {
-		if (entry.type === "session") continue;
-		byId.set(entry.id, entry);
-		leaf = entry;
-	}
-	const branch: SessionEntry[] = [];
-	const visited = new Set<string>();
-	for (let entry = leaf; entry && !visited.has(entry.id); entry = entry.parentId === null ? undefined : byId.get(entry.parentId)) {
-		visited.add(entry.id);
-		branch.push(entry);
-	}
-	return branch.reverse();
-}
-
-/** Walk the spawn tree from this subagent to the root main session and read its user prompts. */
-async function rootPrompts(ctx: ExtensionContext): Promise<RootPrompts> {
+function rootPrompts(ctx: ExtensionContext, need: BranchNeed, reader: TranscriptReader): RootPrompts {
 	const registry = AgentRegistry.global();
 	const visited = new Set<string>();
 	let id = ctx.agent.parentId;
@@ -297,27 +274,48 @@ async function rootPrompts(ctx: ExtensionContext): Promise<RootPrompts> {
 		if (!ref) return { kind: "missing", reason: `ancestor ${id} not in registry` };
 		if (ref.kind === "main") {
 			if (!ref.session) return { kind: "missing", reason: `root ${id} has no live session` };
-			const branch = await rootBranch(ref.session);
-			if (branch.kind === "missing") return branch;
-			const prompts: string[] = [];
-			const answers: string[] = [];
-			for (const entry of branch.entries) {
-				if (entry.type !== "message") continue;
-				const message = entry.message;
-				if (message.role === "toolResult") {
-					const answered = askAnswers(message);
-					if (answered !== null) answers.push(formatAskAnswers(answered));
-					continue;
-				}
-				if (message.role !== "user" || message.attribution !== "user" || message.synthetic === true) continue;
-				const text = textOf(message.content, "\n").trim();
-				if (text !== "") prompts.push(text);
-			}
-			return { kind: "ok", prompts, answers };
+			if (isLocalAgentSession(ref.session)) return livePrompts(ref.session.sessionManager.getBranch(), need);
+			const file = ref.session.sessionManager.getSessionFile();
+			if (!file) return { kind: "missing", reason: "root session on another thread has no persisted transcript" };
+			const branch = reader.read(file, need);
+			return { kind: "ok", prompts: branch.prompts, answers: need.answers ? branch.answers() : [] };
 		}
 		id = ref.parentId;
 	}
 	return { kind: "missing", reason: "no main ancestor" };
+}
+
+/**
+ * The same two windows over the host's live branch: a prompt position resolves to its entry when a
+ * template names it, so no prompt text is collected for the rest of the branch.
+ */
+function livePrompts(branch: readonly SessionEntry[], need: BranchNeed): RootPrompts {
+	// Only the content of each prompt is kept: the text stays derived, at read time.
+	const prompts: unknown[] = [];
+	const answers: string[] = [];
+	for (const entry of branch) {
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (message.role === "toolResult") {
+			if (!need.answers) continue;
+			const answered = askAnswers(message);
+			if (answered !== null) answers.push(formatAskAnswers(answered));
+			continue;
+		}
+		if (!need.prompts) continue;
+		if (message.role !== "user" || message.attribution !== "user" || message.synthetic === true) continue;
+		// Emptiness decides the prompt index, so it is tested here; the text itself is left to `at`.
+		if (textOf(message.content, "\n").trim() === "") continue;
+		prompts.push(message.content);
+	}
+	return {
+		kind: "ok",
+		prompts: {
+			length: prompts.length,
+			at: (index) => textOf(prompts[index], "\n").trim(),
+		},
+		answers,
+	};
 }
 
 // --- extension --------------------------------------------------------------
@@ -335,22 +333,42 @@ function targets(spec: InjectSpec, agentName: string): boolean {
 	}
 }
 
+/** Which root facts the given templates read, so a model call skips what none of them names. */
+function needOf(specs: readonly InjectSpec[]): BranchNeed {
+	let prompts = false;
+	let answers = false;
+	for (const spec of specs) {
+		for (const segment of spec.segments) {
+			if (segment.kind === "answers") answers = true;
+			else if (segment.kind !== "text") prompts = true;
+		}
+	}
+	return { prompts, answers };
+}
+
 export default function userPromptInject(pi: ExtensionAPI): void {
 	/** Specs targeting this session; empty for main sessions and non-targets. */
 	let active: InjectSpec[] = [];
+	/** Which root facts those specs name; set together with them so a call never reads the other. */
+	let need: BranchNeed = { prompts: false, answers: false };
+	/** The root transcript cursor this session's calls advance. */
+	const reader = createTranscriptReader();
 	/** Last root-resolution failure already logged, so a broken chain warns once per reason. */
 	let warnedReason: string | null = null;
 
 	pi.on("session_start", (_event, ctx) => {
 		active = [];
+		need = { prompts: false, answers: false };
 		warnedReason = null;
+		reader.reset();
 		try {
 			if (ctx.agent.kind !== "sub") return;
+			const found: InjectSpec[] = [];
 			for (const path of discoverSpecFiles(FILE_PATTERN, import.meta.dir, ctx.cwd)) {
 				const parsed = parseSpecFile(path);
 				switch (parsed.kind) {
 					case "ok":
-						if (targets(parsed.spec, ctx.agent.name)) active.push(parsed.spec);
+						if (targets(parsed.spec, ctx.agent.name)) found.push(parsed.spec);
 						break;
 					case "disabled":
 						break;
@@ -363,6 +381,8 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 					}
 				}
 			}
+			active = found;
+			need = needOf(found);
 			if (active.length > 0) {
 				pi.logger.info(`user-prompt-inject: ${ctx.agent.name} (${ctx.agent.id}) ← ${active.map((s) => s.name).join(", ")}`);
 			}
@@ -371,10 +391,10 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("context", async (event, ctx) => {
+	pi.on("context", (event, ctx) => {
 		try {
 			if (active.length === 0) return;
-			const root = await rootPrompts(ctx);
+			const root = rootPrompts(ctx, need, reader);
 			switch (root.kind) {
 				case "missing":
 					if (warnedReason !== root.reason) {
@@ -399,6 +419,8 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 			return { messages: [message, ...event.messages] };
 		} catch (error) {
 			pi.logger.warn("user-prompt-inject: context failed", { error: errorText(error) });
+		} finally {
+			reader.release();
 		}
 	});
 }
