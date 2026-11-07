@@ -360,8 +360,11 @@ function collectBindings(root: Program, prior: JsCarry): JsCell {
 /**
  * The launcher-reaching names `bindings` leaves for later cells: `prior`
  * unchanged when the cell binds nothing, else `prior` with this cell's names
- * applied — a name the cell binds to a launcher is kept, a name it binds to
- * anything else is dropped, the rest of `prior` survives.
+ * applied — a name the cell binds to a launcher is kept, a name it rebinds to a
+ * non-launcher module (or member) is dropped from the same kind of entry, the
+ * rest of `prior` survives. A name rebound to a plain value, or to the other
+ * kind (a module for a member name, a member for a module name), keeps its
+ * `prior` entry, as it did before the carry was incremental.
  */
 function carryOf(bindings: Bindings): JsCarry {
 	const { modules, members, prior } = bindings;
