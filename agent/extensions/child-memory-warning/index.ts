@@ -14,9 +14,9 @@
  * anchor cannot be attributed retroactively from the process table.
  * Reads the `child-memory-warning.thresholdGiB` plugin setting (omp-config;
  * `/settings → Plugins → omp-config` or `omp plugin config`; the project's
- * `.omp/plugin-overrides.json` wins over the machine value) every scan; an
- * unreadable or invalid value pauses alerts while tracking continues, and each
- * new config problem warns once.
+ * `.omp/plugin-overrides.json` wins over the machine value) only when an
+ * unwarned owned process exists; an unreadable or invalid value pauses alerts
+ * while tracking continues, and each new config problem warns once.
  * No model calls, sampling subprocesses, signals, or automatic kills.
  * Unsupported platforms log once and never import the Darwin binding. Native/hook
  * failures warn without escaping into omp; delivery is attempted once per identity.
@@ -148,6 +148,7 @@ async function sample(monitor: Monitor): Promise<void> {
 		// Ownership tracking must see every scan, even while alerts are paused by config.
 		const owned = monitor.tracker.observe(result.snapshot);
 		// Threshold IO is per-need, not per-tick: only an unwarned owned process can use it.
+		// owned aliases the tracker's reused result buffer; consume it synchronously here.
 		const pending = owned.some((tracked) => !tracked.alerted);
 		if (!pending) {
 			reportConfigProblem(monitor, null);
