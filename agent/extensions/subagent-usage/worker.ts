@@ -1,5 +1,5 @@
 // Bun Worker: reads every session transcript under the sessions root, continuing each file from the byte position
-// its cache entry records when the file is still the same one (same inode) and the bytes before that position
+// its cache entry records when the file is still the same one (same inode) and the last bytes before that position
 // are unchanged, so a later run reads only the bytes appended since then, and returns hourly spend per model plus
 // one record per subagent transcript. Pure fs/JSON: host packages are not importable from a worker.
 import * as fs from "node:fs";
@@ -12,7 +12,7 @@ const HOUR_MS = 3_600_000;
 const CHUNK = 1 << 20;
 // 2: `size` became the number of bytes read (the resume position), not the size stat reported before the read.
 // 3: entries also record `ino`, so a transcript replaced by a rewrite (temp file and rename) is read again.
-// 4: entries also record `tail`, the hash of the bytes before `size`, so a transcript rewritten in place is too.
+// 4: entries also record `tail`, the hash of the bytes before `size`, so a transcript rewritten in place that shifts those bytes is too.
 const CACHE_VERSION = 4;
 
 /** One transcript's contribution: spend as [provider/model, hour, usd] and, for a subagent, its dispatch record. */
@@ -22,7 +22,7 @@ type FileAggregate = {
 	readonly mtimeMs: number;
 	/** Inode of the file those bytes came from; a rewrite replaces the file, so the number changes. */
 	readonly ino: number;
-	/** Hash of the bytes before `size`; a rewrite shifts them, so the mark stops matching and the file is re-read. */
+	/** Hash of the last bytes before `size`; a rewrite that shifts them stops the mark matching and the file is re-read. */
 	readonly tail: string;
 	readonly spend: readonly (readonly [string, number, number])[];
 	readonly dispatch: DispatchRecord | null;
@@ -125,8 +125,10 @@ const tail = Buffer.allocUnsafe(TAIL_BYTES);
 
 /**
  * Mark of the bytes ending at `position`: their hash, or "" when they do not end a line, a torn last entry that
- * no later append can be read after. Resuming requires the same mark, so a rewrite — which shifts the bytes
- * before the position — sends the transcript back to a full read, while a plain append leaves the mark intact.
+ * no later append can be read after. Resuming requires the same mark, so a rewrite that shifts the last bytes
+ * before the position sends the transcript back to a full read, while a plain append leaves the mark intact. An
+ * in-place rewrite that leaves those bytes untouched is not seen; the host only appends, replaces the file, or
+ * rewrites the fixed-size title slot at the start.
  */
 function tailMark(file: string, position: number): string {
 	const start = Math.max(0, position - TAIL_BYTES);
@@ -393,8 +395,8 @@ function scan(request: ScanRequest): ScanResult {
 			continue;
 		}
 		// A transcript that only grew continues from where the last scan stopped, provided that file is still the
-		// same one (a rewrite replaces it, so the inode changes) and the bytes before that position are unchanged
-		// (a rewrite in place shifts them, a plain append does not); one that shrank, was rewritten, or ended in a
+		// same one (a rewrite replaces it, so the inode changes) and the last bytes before that position are unchanged
+		// (an in-place rewrite that shifts them changes the mark, a plain append does not); one that shrank, was rewritten, or ended in a
 		// cut-off entry is read again from its start.
 		try {
 			let resumed: FileAggregate | undefined;
