@@ -3,7 +3,7 @@
 import type { UsageHistoryEntry, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Binding } from "./agents.ts";
 import type { Channel } from "./channels.ts";
-import { type AccountQuota, type Binding as LimitBinding, poolFor } from "./quota.ts";
+import { type AccountQuota, accountKeysOf, historyByProvider, type Binding as LimitBinding, poolFor } from "./quota.ts";
 import { OBSERVED_WINDOW_DAYS } from "./samples.ts";
 import type { Calibration } from "./store.ts";
 
@@ -106,6 +106,7 @@ function pooledLine(
 
 export function formatReport(input: ReportInput): string {
 	const { now, calibration } = input;
+	const accountKeys = accountKeysOf(input.reports, historyByProvider(input.history));
 	const pools = new Map<string, string[]>();
 	const pending: string[] = [];
 	const untracked: string[] = [];
@@ -119,7 +120,7 @@ export function formatReport(input: ReportInput): string {
 			untracked.push(`  - ${label}: ${channel?.reason ?? "untracked"}`);
 			continue;
 		}
-		const pool = poolFor(input.reports, input.history, calibration.quota, binding.model.provider, binding.model.id, now);
+		const pool = poolFor(input.reports, accountKeys, calibration.quota, binding.model.provider, binding.model.id, now);
 		if (pool.kind === "unreported") {
 			pending.push(`  - ${label}: no live quota report for ${binding.model.provider} right now`);
 			continue;

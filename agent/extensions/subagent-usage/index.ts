@@ -12,8 +12,9 @@
 // before every calibration, before committing its result and in every tool
 // call. No model is ever called: calibration is deterministic code.
 //
-// Calibration (calibrate.ts, worker.ts): a Bun Worker reads every transcript
-// under the sessions root once and keeps a per-file aggregate cache
+// Calibration (calibrate.ts, worker.ts): a Bun Worker reads the transcripts
+// under the sessions root, continuing each file from the byte position its
+// cache entry records, and keeps a per-file aggregate cache
 // (<agentDir>/cache/subagent-usage/); the main thread derives, from this
 // machine's data only, per-dispatch averages (on `on` and `recalibrate`) and
 // per-account USD-per-quota-limit constants over the trailing 21 days
@@ -43,7 +44,8 @@ import { tr } from "../_shared/i18n.ts";
 import { defineSettings, readSettings, writeSetting } from "../_shared/plugin-settings.ts";
 import { availableAgents, bindAgent, rootSession } from "./agents.ts";
 import { type CalibrationOutcome, calibrate, QUOTA_MAX_AGE_MS, QUOTA_WINDOW_MS, scanTranscripts, stopCalibration } from "./calibrate.ts";
-import { channelOf } from "./channels.ts";
+import { channelsOf } from "./channels.ts";
+import type { ScanResult } from "./records.ts";
 import { formatReport } from "./report.ts";
 import { observedCosts, type Target } from "./samples.ts";
 import { type Calibration, calibrationPath, deleteStoredData, readCalibration } from "./store.ts";
@@ -105,9 +107,11 @@ async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
 	if (!session) return text("subagent_usage: could not resolve the calling session in the agent registry.", true);
 	const outcome = await freshCalibration(session);
 	let calibration: Calibration;
+	let scanned: ScanResult | undefined;
 	switch (outcome.kind) {
 		case "ready":
 			calibration = outcome.calibration;
+			scanned = outcome.scan;
 			break;
 		case "declined":
 			return text("subagent_usage was disabled while calibrating. Only a human can enable it with /subagent-usage on; do not retry.", true);
@@ -119,9 +123,10 @@ async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
 		}
 	}
 	await session.modelRegistry.awaitBackgroundRefresh();
+	const channels = channelsOf(session);
 	const bindings = (await availableAgents(session, ctx.sessionManager.getCwd())).map((agent) => {
 		const binding = bindAgent(session, agent);
-		return { binding, channel: binding.kind === "resolved" ? channelOf(session, binding.model) : undefined };
+		return { binding, channel: binding.kind === "resolved" ? channels.model(binding.model) : undefined };
 	});
 	const targets: Target[] = bindings.flatMap(({ binding, channel }) =>
 		binding.kind === "resolved" && channel?.kind === "tracked"
@@ -143,7 +148,8 @@ async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
 	if (!(await consented())) {
 		return text("subagent_usage was disabled. Only a human can enable it with /subagent-usage on; do not retry.", true);
 	}
-	const [scan, reports] = await Promise.all([scanTranscripts(), session.fetchUsageReports()]);
+	// A calibration that just ran scanned the transcripts; reuse that scan instead of reading them again.
+	const [scan, reports] = await Promise.all([scanned ?? scanTranscripts(), session.fetchUsageReports()]);
 	if (scan.kind === "failed")
 		return text(`subagent_usage: transcript scan failed (${scan.reason}). Report this to the user; do not retry.`, true);
 	const now = Date.now();
