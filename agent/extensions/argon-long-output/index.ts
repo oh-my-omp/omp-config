@@ -27,16 +27,18 @@
 // the patched row. Abort (Esc, dispose) still cancels the request at once: the
 // abort path does not depend on the watchdogs.
 //
-// WHERE. Every sweep patches the session model and every available registry
-// row. It runs on `session_start`, `before_agent_start`, `context` (before
-// every model call: turns, subagent turns, auto-retry continuations) and
-// `session.compacting`. OMP emits `session.compacting` on every LLM compaction
-// path (manual `/compact`, automatic, speculative) before the summary request,
-// and picks the compaction model from the session model and the registry rows,
-// so rows rebuilt by a models.yml reload since the last turn are patched before
+// WHERE. The session model is patched on `context` (before every model call:
+// turns, subagent turns, auto-retry continuations, IRC wakes), the one hook
+// that always precedes a request. The full sweep over every available
+// registry row runs only on session boundaries — `session_start`,
+// `before_agent_start` and `session.compacting` — not per call. OMP emits
+// `session.compacting` on every LLM compaction path (manual `/compact`,
+// automatic, speculative) before the summary request, and picks the
+// compaction model from the session model and the registry rows, so rows
+// rebuilt by a models.yml reload since the last boundary are patched before
 // they stream. The handler returns nothing, so the compaction itself is
-// unchanged. A context-window refit would build a row no sweep sees; OMP gives
-// the argon rows no window tiers, so it does not refit them.
+// unchanged. A context-window refit would build a row no sweep sees; OMP
+// gives the argon rows no window tiers, so it does not refit them.
 //
 // PROMPT. In the main session and in every subagent, each matched against its
 // own model, `ARGON_PROMPT.md` (beside this module, re-read at every delivery
@@ -143,8 +145,16 @@ export default function argonLongOutput(pi: ExtensionAPI): void {
 		}
 	};
 	pi.on("session_start", sweepHook);
-	pi.on("context", sweepHook);
 	pi.on("session.compacting", sweepHook);
+	// Per call only the session model is patched; the row sweep stays on the
+	// boundary events above (see WHERE).
+	pi.on("context", (_event, ctx) => {
+		try {
+			patchModel(ctx.model);
+		} catch (error) {
+			pi.logger.warn("argon-long-output: cannot apply timeout defaults", { error: errorText(error) });
+		}
+	});
 
 	const deltas = createDeltaStream(pi, "argon-long-output");
 	pi.on("before_agent_start", (event, ctx) => {
