@@ -10,6 +10,16 @@ export type Verdict =
 
 export const ALLOW: Verdict = { kind: "allow" };
 
+/**
+ * The text a block reason quotes. A command passes its source range as `{ src, start, end }`; the text is copied
+ * with the parser's `slice(...).trim()` only when a block is actually built.
+ */
+export type Fragment = string | { readonly src: string; readonly start: number; readonly end: number };
+
+/** The text of a fragment, copied from its source range only at this point. */
+export const fragmentText = (fragment: Fragment): string =>
+	typeof fragment === "string" ? fragment : fragment.src.slice(fragment.start, fragment.end).trim();
+
 /** Nested shells, `eval`, `trap` and `alias` bodies deeper than this are blocked as non-literal. */
 export const MAX_DEPTH = 8;
 
