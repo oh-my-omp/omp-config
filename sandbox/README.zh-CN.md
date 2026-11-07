@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-`sandbox/` 在本机 OrbStack 上建一个一次性 Linux 容器，在里面用本机 `~/.omp` 配置与凭据的副本和待测的 omp-config 工作树跑真实的 `omp` 会话。不能在宿主机上试的改动在这里验证，例如可能拦不住 `rm -rf "$X"/…` 的删除拦截：改动出错时受影响的只有容器；运行结束时，容器、网络连同其中的凭据副本一起删除。
+`sandbox/` 在本机 OrbStack 上建一个一次性 Linux 容器，在里面用本机 `~/.omp` 配置的副本（凭据只保留记录代理覆盖的 provider）和待测的 omp-config 工作树跑真实的 `omp` 会话。不能在宿主机上试的改动在这里验证，例如可能拦不住 `rm -rf "$X"/…` 的删除拦截：改动出错时受影响的只有容器；运行结束时，容器、网络连同其中的凭据副本一起删除。
 
 沙箱运行在装有 OrbStack（或其他 Docker 引擎）的 macOS 上，宿主机需要 `bun`、`git` 与 `tar`。CI 不使用沙箱：凭据不进公开仓库的 CI。
 
@@ -34,7 +34,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 内容以 tar 流或经 stdin 管道进入 `docker exec`，宿主机磁盘上不暂存任何含凭据的东西：
 
 - `~/.omp/agent`，不含 `sessions/`、`blobs/`、`terminal-sessions/`、`custom-session-files/`、`predict/`、`cache/`、`history.db*`、锁文件与 `agent.db*`。`~/.omp/logs` 不复制。
-- `agent.db`：对宿主机数据库的只读连接做 SQLite 序列化。序列化在同一个读事务内完成，因此包含尚未 checkpoint 的 WAL 帧。镜像被标成回滚日志库（头部第 18–19 字节），逐字节写入容器，在容器内改回 WAL，再执行 `integrity_check`。随后宿主机读回容器内的副本，在内存里与快照逐表、逐行、逐字段比较，任何差异都让构建失败。只打印表名、行数与「every field equal」，从不打印值或摘要。
+- `agent.db`：对宿主机数据库的只读连接做 SQLite 序列化。序列化在同一个读事务内完成，因此包含尚未 checkpoint 的 WAL 帧。镜像被标成回滚日志库（头部第 18–19 字节），逐字节写入容器，在容器内改回 WAL，再执行 `integrity_check`。随后宿主机读回容器内的副本，在内存里与快照逐表、逐行、逐字段比较，任何差异都让构建失败。只打印表名、行数与「every field equal」，从不打印值或摘要。在这次比较之后，只有容器内的副本会删去 provider 没有记录代理目标的 `auth_credentials` 行（见下文「凭据」）；宿主机数据库不变。
 - `~/.omp/plugins`，包含锁文件，不含 `node_modules/`（为 macOS 构建）；容器内 `bun install` 按锁文件为 Linux 装同样的版本。
 - `~/.claude/rules`、`~/.claude/skills`、`~/.claude/CLAUDE.md`，存在才复制。
 - 工作树放到 `/repo`：已跟踪与未跟踪的文件，含未提交改动，不含被忽略的文件。
@@ -43,7 +43,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 
 ### 凭据
 
-凭据副本原样使用：`apiKey` 与 `models.yml` 的其余字段和宿主机相同，模型绑定与宿主机配置相同。唯一的改动是各 provider 的 `baseUrl`，它们指向下面的记录代理。某个模型在沙箱里调用不成功时记为未测，沙箱不排查原因。若某个服务商会轮换 refresh token，沙箱内的会话刷新它之后，宿主机那份可能失效；沙箱不防范这一点。
+凭据副本原样使用：`apiKey` 与 `models.yml` 的其余字段和宿主机相同，模型绑定与宿主机配置相同。容器内的副本只有两处改动：各 provider 的 `baseUrl` 指向下面的记录代理；没有记录代理目标的 provider 的 `auth_credentials` 行从容器内的 `agent.db` 删除，因为这类 provider 的请求会绕过记录代理直达上游。删除之后构建会检查剩下的每一行的 provider 都有目标，否则失败。因此沙箱里没有 `baseUrl` 的 provider 没有凭据，它的模型记为未测。某个模型在沙箱里调用不成功时记为未测，沙箱不排查原因。若某个服务商会轮换 refresh token，沙箱内的会话刷新它之后，宿主机那份可能失效；沙箱不防范这一点。
 
 ### 模型请求记录代理
 

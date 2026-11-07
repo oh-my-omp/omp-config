@@ -180,6 +180,7 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 			check.kind === "equal" ? `  ${check.table}: ${check.rows} rows, every field equal` : `  ${check.table}: DIFFERS (${check.detail})`,
 		);
 	if (differ.length > 0) throw new Error(`agent.db copy differs from the host snapshot in ${differ.length} table(s)`);
+	await step("credentials outside the recorder", () => pruneCredentials(names.container, HOME));
 	const claude = await step("~/.claude", () => copyClaude(names.container, HOME));
 	console.log(`  ${claude.length === 0 ? "nothing to copy" : claude.join(", ")}`);
 	const files = await step(`working tree ${options.repo} -> /repo`, () => copyRepo(names.container, options.repo));
@@ -189,6 +190,23 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 	console.log(`  ${installed.version}`);
 	if (options.target)
 		await step(`ssh target ${names.target}`, () => setUpTarget(names.container, HOME, names.target, labels, names.network));
+}
+
+/**
+ * Drops the container's copy of the credentials of providers the recorder does not cover, after the
+ * snapshot comparison (which checks the copy as copied). The host database is never touched.
+ */
+async function pruneCredentials(container: string, home: string): Promise<void> {
+	const out = await must([
+		"docker",
+		"exec",
+		container,
+		"bun",
+		"/sandbox/recorder.ts",
+		"prune-credentials",
+		join(home, ".omp", "agent", "agent.db"),
+	]);
+	console.log(`  ${out.trim()}`);
 }
 
 /** Removes labelled resources and confirms empty listings; command failures return unconfirmed cleanup evidence. */

@@ -2,7 +2,7 @@
 
 [中文](README.zh-CN.md)
 
-`sandbox/` builds a throwaway Linux container on the local OrbStack in which real `omp` sessions run with a copy of this machine's `~/.omp` configuration and credentials and the omp-config working tree under test. Changes that must not be tried on the host, such as a deletion guard that might fail to block `rm -rf "$X"/…`, are exercised here: when the change misbehaves only the container is affected, and the container, network and the credential copy inside them are removed when the run ends.
+`sandbox/` builds a throwaway Linux container on the local OrbStack in which real `omp` sessions run with a copy of this machine's `~/.omp` configuration and the credentials of the providers the recorder covers, and the omp-config working tree under test. Changes that must not be tried on the host, such as a deletion guard that might fail to block `rm -rf "$X"/…`, are exercised here: when the change misbehaves only the container is affected, and the container, network and the credential copy inside them are removed when the run ends.
 
 The sandbox runs on macOS with OrbStack (or another Docker engine) and needs `bun`, `git` and `tar` on the host. It is not used by CI: credentials never enter the public repository's CI.
 
@@ -34,7 +34,7 @@ These resources carry the label `omp-sandbox.run=<run>`; teardown finds them by 
 Contents enter the sandbox as tar streams or stdin pipes into `docker exec`; nothing credential-bearing is staged on the host disk:
 
 - `~/.omp/agent`, without `sessions/`, `blobs/`, `terminal-sessions/`, `custom-session-files/`, `predict/`, `cache/`, `history.db*`, lock files and `agent.db*`. `~/.omp/logs` is not copied.
-- `agent.db`: SQLite's serialization of a read-only connection to the host database. It is taken inside one read transaction, so it includes WAL frames not yet checkpointed. The image is marked as a rollback-journal database (header bytes 18–19), written into the container byte for byte, switched back to WAL there, and checked with `integrity_check`. The host then reads the container's copy back and compares every field of every row of every table with its snapshot in memory; the build fails on any difference. Only table names, row counts and "every field equal" are printed, never values or digests.
+- `agent.db`: SQLite's serialization of a read-only connection to the host database. It is taken inside one read transaction, so it includes WAL frames not yet checkpointed. The image is marked as a rollback-journal database (header bytes 18–19), written into the container byte for byte, switched back to WAL there, and checked with `integrity_check`. The host then reads the container's copy back and compares every field of every row of every table with its snapshot in memory; the build fails on any difference. Only table names, row counts and "every field equal" are printed, never values or digests. After that comparison the container's copy alone loses its `auth_credentials` rows whose provider has no recorder target (see Credentials); the host database is untouched.
 - `~/.omp/plugins`, including its lockfile but without `node_modules/` (built for macOS); `bun install` in the container installs the same locked versions for Linux.
 - `~/.claude/rules`, `~/.claude/skills` and `~/.claude/CLAUDE.md`, those that exist.
 - The working tree at `/repo`: tracked and untracked files, uncommitted changes included, ignored files excluded.
@@ -43,7 +43,7 @@ Then the container installs the latest `@oh-my-pi/pi-coding-agent`, runs the `/r
 
 ### Credentials
 
-The credential copy is used as it is: `apiKey` and every other field of `models.yml` stay as they are on the host, and model bindings stay as configured. The one change to that copy is the provider `baseUrl` values, which point at the recorder below. A model whose calls fail in the sandbox is recorded as untested; the sandbox does not investigate why. A provider that rotates refresh tokens may invalidate the host's copy when a session in the sandbox refreshes it; the sandbox does not guard against this.
+The credential copy is used as it is: `apiKey` and every other field of `models.yml` stay as they are on the host, and model bindings stay as configured. Two changes are made to the container's copy, and only there. The provider `baseUrl` values point at the recorder below. The `auth_credentials` rows of every provider without a recorder target are deleted from the container's `agent.db`, because a request of such a provider would reach its upstream without passing the recorder; the build then checks that every remaining row's provider has a target and fails otherwise. A provider without a `baseUrl` therefore has no credentials in the sandbox and its models are recorded as untested. A model whose calls fail in the sandbox is recorded as untested; the sandbox does not investigate why. A provider that rotates refresh tokens may invalidate the host's copy when a session in the sandbox refreshes it; the sandbox does not guard against this.
 
 ### Model request recorder
 

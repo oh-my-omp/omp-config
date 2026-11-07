@@ -17,6 +17,12 @@
 // left to fetch), and the response is streamed back.
 //
 // /sandbox/recorder.ready is written after every listener is bound; sandbox.ts waits for it.
+//
+// `prune-credentials AGENT_DB` removes, from the container's copy of agent.db, every auth_credentials
+// row whose provider has no recorder target: such a provider's requests would bypass the recorder.
+// It then checks that every remaining row's provider has a target, and prints counts and provider
+// names only.
+import { Database } from "bun:sqlite";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -87,6 +93,28 @@ function readTargets(): Target[] {
 	const parsed: unknown = JSON.parse(readFileSync(TARGETS_FILE, "utf8"));
 	if (!Array.isArray(parsed)) throw new Error(`${TARGETS_FILE} is not an array`);
 	return parsed as Target[];
+}
+
+/**
+ * Deletes the auth_credentials rows whose provider is not in `providers` (the recorded ones) from
+ * the database at `path`, then throws unless every remaining row's provider is in `providers`.
+ */
+export function pruneCredentials(path: string, providers: readonly string[]): { readonly removed: number; readonly kept: string[] } {
+	const db = new Database(path, { create: false });
+	try {
+		const { changes } = db
+			.query("DELETE FROM auth_credentials WHERE provider NOT IN (SELECT value FROM json_each(?1))")
+			.run(JSON.stringify(providers));
+		const kept = db
+			.query<{ provider: string }, []>("SELECT DISTINCT provider FROM auth_credentials ORDER BY provider")
+			.all()
+			.map((row) => row.provider);
+		const outside = kept.filter((provider) => !providers.includes(provider));
+		if (outside.length > 0) throw new Error(`auth_credentials still holds provider(s) without a recorder target: ${outside.join(", ")}`);
+		return { removed: changes, kept };
+	} finally {
+		db.close();
+	}
 }
 
 function sinkPath(): string {
@@ -170,7 +198,15 @@ function main(argv: readonly string[]): void {
 		console.log(`recorder: serving ${targets.length} provider(s)`);
 		return;
 	}
-	throw new Error("usage: recorder.ts setup MODELS_YML | serve");
+	if (command === "prune-credentials" && arg !== undefined) {
+		const { removed, kept } = pruneCredentials(
+			arg,
+			readTargets().map((target) => target.provider),
+		);
+		console.log(`recorder: removed ${removed} auth_credentials row(s); kept provider(s) ${kept.join(", ") || "none"}`);
+		return;
+	}
+	throw new Error("usage: recorder.ts setup MODELS_YML | serve | prune-credentials AGENT_DB");
 }
 
 if (import.meta.main) main(process.argv.slice(2));
