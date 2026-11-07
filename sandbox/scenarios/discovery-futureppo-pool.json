@@ -1,0 +1,9 @@
+{
+	"name": "discovery-futureppo-pool",
+	"init": "bun -e \"import { Database } from 'bun:sqlite'; const db = new Database(process.env.HOME + '/.omp/agent/models.db'); db.run(\\\"DELETE FROM model_cache WHERE provider_id = 'futureppo-pool'\\\"); db.run(\\\"DELETE FROM model_cache_refresh WHERE provider_id = 'futureppo-pool'\\\"); db.close();\"",
+	"prompt": "用 bash 执行 `echo hi`。",
+	"finalAssertion": "true",
+	"calls": {
+		"expect": [{ "tool": "bash", "resultIncludes": "hi" }]
+	}
+}
