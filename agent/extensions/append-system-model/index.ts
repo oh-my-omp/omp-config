@@ -88,6 +88,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set(["enabled", ...CONDITION_KEYS]
 
 interface Fragment {
 	readonly conditions: SessionConditions;
+	/** Raw frontmatter body; trimmed by the caller, only when the fragment matches the session. */
 	readonly body: string;
 }
 
@@ -134,17 +135,22 @@ function parseFragment(path: string): FragmentParse {
 		const detail = errorText(error);
 		return { kind: "invalid", reason: tr(`unreadable: ${detail}`, `无法读取：${detail}`) };
 	}
-	const parsed = parseFrontmatter(raw.replace(/^\uFEFF/, ""));
+	// Every call re-reads the file, so edits apply at the next prompt or tool
+	// result; nothing is kept between calls. The BOM check avoids copying the
+	// whole text when no BOM is present. The body is returned untrimmed; the
+	// trim lives in fragmentDelta and runs only for a fragment the session matches.
+	const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+	const parsed = parseFrontmatter(stripped);
 	if (!parsed) return { kind: "invalid", reason: tr("missing frontmatter", "缺少 frontmatter") };
 	const { fields, body } = parsed;
 	const unknown = Object.keys(fields).find((key) => !ALLOWED_KEYS.has(key));
 	if (unknown !== undefined) return { kind: "invalid", reason: tr(`unknown key ${unknown}`, `未知键 ${unknown}`) };
 	if (fields.enabled !== undefined && !/^(true|yes|on|1)$/i.test(unquote(fields.enabled))) return { kind: "disabled" };
-	const text = body.trim();
-	if (text === "") return { kind: "invalid", reason: tr("empty body", "正文为空") };
+	// `body.trim() === ""` without materializing the trimmed copy.
+	if (!/\S/.test(body)) return { kind: "invalid", reason: tr("empty body", "正文为空") };
 	const conditions = parseSessionConditions(fields, { kind: "default", targets: [{ kind: "main" }] }, "frontmatter");
 	if (conditions.kind === "invalid") return { kind: "invalid", reason: describeProblem(conditions.problem) };
-	return { kind: "ok", fragment: { conditions: conditions.value, body: text } };
+	return { kind: "ok", fragment: { conditions: conditions.value, body } };
 }
 
 function warn(pi: ExtensionAPI, ctx: ExtensionContext, path: string, reason: string): void {
@@ -165,7 +171,7 @@ function fragmentDelta(pi: ExtensionAPI, ctx: ExtensionContext): Delta {
 		const parsed = parseFragment(path);
 		switch (parsed.kind) {
 			case "ok":
-				if (conditionsApply(parsed.fragment.conditions, ctx, delegation)) bodies.push(parsed.fragment.body);
+				if (conditionsApply(parsed.fragment.conditions, ctx, delegation)) bodies.push(parsed.fragment.body.trim());
 				break;
 			case "disabled":
 				break;
