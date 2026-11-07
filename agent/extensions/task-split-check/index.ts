@@ -238,6 +238,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		ctx: ExtensionContext,
 		checks: readonly Check[],
 		prompt: string,
+		label: string,
 		signal: AbortSignal,
 		budget: AttemptBudget,
 	): Promise<ReadonlyMap<Check, Verdict>> => {
@@ -255,6 +256,9 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal, budget);
 		for (const check of pending) {
 			const verdict: Verdict = reply.kind === "text" ? parseAnswer(reply.text, check) : { kind: "unknown", why: reply.why };
+			if (verdict.kind === "unknown") {
+				pi.logger.warn("task-split-check check failed", { check: check.id, item: label, error: errorText(verdict.why) });
+			}
 			memorize(check, keyOf(check), verdict);
 			verdicts.set(check, verdict);
 		}
@@ -276,9 +280,10 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 					const flags = await Promise.all(checks.map((check) => check.covers(ctx, item.agent)));
 					const covered = checks.filter((_check, position) => flags[position] === true);
 					if (covered.length === 0) return undefined;
+					const label = itemLabel(item, index);
 					return {
-						label: itemLabel(item, index),
-						verdicts: await judgeItem(ctx, covered, renderPrompt(call.context, item), deadline, budget),
+						label,
+						verdicts: await judgeItem(ctx, covered, renderPrompt(call.context, item), label, deadline, budget),
 					};
 				}),
 			)
