@@ -236,10 +236,12 @@ export class RepoHistory {
 	 * Every committed version of `rel`, as raw text, in `cat-file` input
 	 * order. The batch output stays one Buffer; each blob is sliced out of it
 	 * with a cursor and decoded only while visited — no second copy of every
-	 * blob is kept as decoded strings. `onVersion` returning `false` stops
-	 * the walk early (later blobs are never sliced or decoded).
+	 * blob is kept as decoded strings. `spawnSync` must return before the
+	 * walk starts, so its stdout holding every blob's bytes is the lower
+	 * bound here; `structuredHistory` needs each parsable version, so one
+	 * decoded text at a time is the least that path can hold.
 	 */
-	eachVersion(rel: string, onVersion: (text: string) => boolean | void): void {
+	eachVersion(rel: string, onVersion: (text: string) => void): void {
 		const ids = [...this.blobs(rel)];
 		if (ids.length === 0) return;
 		const result = spawnSync("git", ["-C", this.source, "cat-file", "--batch"], {
@@ -254,24 +256,11 @@ export class RepoHistory {
 			if (newline === -1) break;
 			const header = bytes.subarray(offset, newline).toString("utf8").split(" ");
 			const size = Number(header[2]);
-			if (header[1] === "missing") {
-				offset = newline + 1;
-				continue;
-			}
 			if (header[1] !== "blob" || !Number.isFinite(size)) break;
 			const text = bytes.subarray(newline + 1, newline + 1 + size).toString("utf8");
 			offset = newline + 1 + size + 1;
-			if (onVersion(text) === false) return;
+			onVersion(text);
 		}
-	}
-
-	/** Every committed version of `rel`, as raw text. */
-	versions(rel: string): string[] {
-		const texts: string[] = [];
-		this.eachVersion(rel, (text) => {
-			texts.push(text);
-		});
-		return texts;
 	}
 
 	/** The content of `rel` at `commit`, when the source has it. */
