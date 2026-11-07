@@ -5,8 +5,8 @@
 //                   `namespace functions { … }` (pi-ai dialect/inventory.ts renderToolInventory);
 //   xd:// devices — `## <tool>[ — <label>]`, blank, description, blank, `### Schema`
 //                   (pi-coding-agent tools/xdev.ts renderDocs with the "##" heading).
-// One pass over the blocks locates every covered tool's section, kept as an offset into the block;
-// the description's text is only composed for a `{{native:<Heading>}}` reference that needs it.
+// Each block is split once and scanned once per layout; that locates every covered tool's section,
+// kept as an offset into the block; the description's text is only composed for a `{{native:<Heading>}}` reference that needs it.
 import type { ToolDocs, Topic } from "./catalog.ts";
 
 /** One tool's part of the delta, or why it cannot be written against the rendered description. */
@@ -94,7 +94,7 @@ function deviceSection(lines: readonly string[], heading: number): Rendered {
 		}
 	}
 	if (schema < 0 || lines[heading + 1] !== "" || lines[schema - 1] !== "") return { kind: "drift", reason: DEVICE_DRIFT };
-	return { kind: "found", description: new BlockLines(lines, heading + 2, schema - heading - 3, false) };
+	return { kind: "found", description: new BlockLines(lines, heading + 2, Math.max(0, schema - heading - 3), false) };
 }
 
 /** The xd:// device descriptions of `tools` in one block, the first heading of each winning. */
@@ -114,7 +114,7 @@ function deviceDescriptions(lines: readonly string[], tools: readonly string[]):
 }
 
 /**
- * Index `blocks` for `tools`: each block is split and scanned once for both layouts, and a tool's
+ * Index `blocks` for `tools`: each block is split once and scanned once per layout, and a tool's
  * section is taken from the first block that renders it, inline before device.
  */
 export function indexPrompt(blocks: readonly string[], tools: readonly string[]): PromptIndex {

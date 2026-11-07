@@ -67,7 +67,7 @@ export function installToolTopicInjection(
 				ctx,
 				ready.map((entry) => entry.marker),
 			);
-			// The marker and body of a rejected claim are never composed.
+			// Only the injection text of an accepted claim is composed; a rejected claim's marker was all that was built.
 			const parts: string[] = [];
 			for (let index = 0; index < ready.length; index++) {
 				const entry = ready[index];
