@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fitState, type TimelineEntry } from "../agent/extensions/turn-judge/state.ts";
+import { fitState, MAX_BYTES_LIMIT, parseMaxBytes, type TimelineEntry } from "../agent/extensions/turn-judge/state.ts";
 
 function bytes(value: unknown): number {
 	return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -10,6 +10,14 @@ const escapes = 'a"b\\c\nd'.repeat(2_000);
 const emoji = "😀".repeat(10_000);
 /** A lone surrogate half anywhere in the text: the sign of a split code point. */
 const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+describe("turn-judge maxBytes limit", () => {
+	test("64KB is accepted and 64KB + 1 byte is invalid", () => {
+		expect(MAX_BYTES_LIMIT).toBe(65_536);
+		expect(parseMaxBytes("65536")).toEqual({ kind: "ok", value: 65_536 });
+		expect(parseMaxBytes("65537").kind).toBe("invalid");
+	});
+});
 
 describe("turn-judge fitState", () => {
 	test("a small state passes through unchanged", () => {
