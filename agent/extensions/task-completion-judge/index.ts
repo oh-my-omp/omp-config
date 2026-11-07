@@ -31,25 +31,24 @@
  * host exposes one (its `getBranchView()`), a copied branch through
  * `getBranch()` otherwise — and walks only the suffix after the latest
  * `session_init`, recording call metadata and result entry references without
- * materializing text. Result and assistant text are materialized only for the
- * calls the budget window keeps, plus the yield call's own assistant text;
- * every rendered text passes through the windowing helpers (`stringifyWithin`
- * with each leaf string escaped by JSON.stringify itself, `textWithin`), so a
- * call's allocation stays bounded by the character limits no matter what it
- * carried, sizing rides the same bounded windows, the `§ Context` section is
- * located per system-prompt piece, and the submission is truncated once at
- * its source. Requests the independent Todo owner's synchronous read projection
- * before and after judging. Its model is the OMP model role `@task-completion-judge` (assign
- * it in `/model`), then the `default` role's models, resolved at every
- * judgment, and it writes only in-memory round state. Only subagents whose
- * definition file declares `completionJudge: true` are judged; other
- * subagents and main sessions pass. Every failure (agent not identified,
- * definition not found or unreadable, Todo owner unavailable, no model in
- * either role, every model's provider failing, unparseable answer, deadline)
- * lets that yield pass as written and leaves the round open, so the next
- * terminal yield is judged again. A provider failure moves to the next model
- * of the chain; an unparseable answer does not. The deadline stays under the
- * harness's 30 s `tool_call` handler timeout, which would otherwise block the
+ * materializing text. Each call the budget keeps is rendered once, from its
+ * arguments and result through `stringifyWithin` and `textWithin`, which keep
+ * only the bounded head and tail of their output, so a call's allocation stays
+ * bounded by the character limits no matter what it carried. The first call that
+ * does not fit the budget is rendered as well, then dropped. The `§ Context`
+ * section is located per system-prompt piece, and the submission is truncated
+ * once at its source. Requests the independent Todo owner's synchronous read
+ * projection before and after judging. Its model is the OMP model role
+ * `@task-completion-judge` (assign it in `/model`), then the `default` role's
+ * models, resolved at every judgment, and it writes only in-memory round state.
+ * Only subagents whose definition file declares `completionJudge: true` are
+ * judged; other subagents and main sessions pass. Every failure (agent not
+ * identified, definition not found or unreadable, Todo owner unavailable, no
+ * model in either role, every model's provider failing, unparseable answer,
+ * deadline) lets that yield pass as written and leaves the round open, so the
+ * next terminal yield is judged again. A provider failure moves to the next
+ * model of the chain; an unparseable answer does not. The deadline stays under
+ * the harness's 30 s `tool_call` handler timeout, which would otherwise block the
  * yield.
  */
 
@@ -76,6 +75,8 @@ const JUDGE_RESERVED_TOKENS = 4_000;
 const ARGS_CHAR_LIMIT = 800;
 const RESULT_CHAR_LIMIT = 800;
 const SUBMISSION_CHAR_LIMIT = 6_000;
+/** Mixed array items written per native JSON.stringify call while they are primitives. */
+const PRIMITIVE_RUN = 256;
 
 const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not be empty");
 const todoReadSchema = z.union([
@@ -196,78 +197,92 @@ const truncate = (text: string, limit: number): string => {
 };
 
 /**
- * Bounded `truncate(textOf(content, separator), limit)` in one bounded pass:
- * the head window keeps the first `head` characters, a rolling native
- * `slice(-tail)` string keeps the last `tail`, and the running total drives
- * the omitted count. Byte-identical to the whole-join-then-slice path; the
- * joined middle is never held.
+ * `truncate` of the text `produce` emits, in one pass that never holds the whole
+ * text. The first `head` characters are kept as they arrive. The last `tail`
+ * characters come from buffered pieces that are merged back down to `tail`
+ * whenever they pass twice `tail`, so each emitted character is copied a
+ * bounded number of times. The result equals `truncate(joined, limit)`.
  */
-const textWithin = (content: unknown, separator: string, limit: number): string => {
-	const blocks: string[] =
-		typeof content === "string"
-			? [content]
-			: !Array.isArray(content)
-				? []
-				: content.flatMap((block) =>
-						typeof block === "object" &&
-						block !== null &&
-						"type" in block &&
-						block.type === "text" &&
-						"text" in block &&
-						typeof block.text === "string"
-							? [block.text]
-							: [],
-					);
-	if (blocks.length === 0) return "";
+const boundedText = (produce: (emit: (part: string) => void) => void, limit: number): string => {
 	const head = Math.ceil(limit * 0.6);
 	const tail = limit - head;
-	let kept = "";
-	let tailWindow = "";
-	let totalLength = 0;
-	for (let index = 0; index < blocks.length; index++) {
-		const piece = index === 0 ? (blocks[index] ?? "") : separator + (blocks[index] ?? "");
-		totalLength += piece.length;
-		if (kept.length < head) {
-			if (piece.length + kept.length <= head) {
-				kept += piece;
-			} else {
-				kept += piece.slice(0, head - kept.length);
-			}
+	let seen = 0;
+	let held = "";
+	let tailParts: string[] = [];
+	let tailLength = 0;
+	const emit = (part: string): void => {
+		seen += part.length;
+		if (held.length < head) held += part.length + held.length <= head ? part : part.slice(0, head - held.length);
+		if (tail === 0) return;
+		// A piece at least as long as the window holds the last `tail` characters on its own: it replaces the buffer without being joined.
+		if (part.length >= tail) {
+			tailParts = [part.slice(-tail)];
+			tailLength = tail;
+			return;
 		}
-		if (tail > 0) tailWindow = (tailWindow + piece).slice(-tail);
-	}
-	if (totalLength <= limit) return blocks.join(separator);
-	return `${kept}\n…[${totalLength - limit} chars omitted]…\n${tailWindow}`;
+		tailParts.push(part);
+		tailLength += part.length;
+		if (tailLength > 2 * tail) {
+			const merged = tailParts.join("").slice(-tail);
+			tailParts = [merged];
+			tailLength = merged.length;
+		}
+	};
+	produce(emit);
+	const trailing = tail === 0 ? "" : tailParts.join("").slice(-tail);
+	// Short text: `held` plus the trailing characters past `head` is the whole text.
+	if (seen <= limit) return tail > 0 && seen > head ? held + trailing.slice(Math.max(0, head - (seen - trailing.length))) : held;
+	return `${held}\n…[${seen - limit} chars omitted]…\n${trailing}`;
 };
+
+/** The text of a `{ type: "text", text }` content block, or undefined for any other block. */
+const textBlockOf = (block: unknown): string | undefined =>
+	typeof block === "object" &&
+	block !== null &&
+	"type" in block &&
+	block.type === "text" &&
+	"text" in block &&
+	typeof block.text === "string"
+		? block.text
+		: undefined;
+
+/**
+ * `truncate(textOf(content, separator), limit)` in one bounded pass. A string is
+ * its own text; an array contributes its text blocks joined by `separator`;
+ * anything else has no text.
+ */
+const textWithin = (content: unknown, separator: string, limit: number): string =>
+	boundedText((emit) => {
+		if (typeof content === "string") {
+			emit(content);
+			return;
+		}
+		if (!Array.isArray(content)) return;
+		let first = true;
+		for (const block of content) {
+			const text = textBlockOf(block);
+			if (text === undefined) continue;
+			if (!first) emit(separator);
+			first = false;
+			emit(text);
+		}
+	}, limit);
 
 /** A message entry's `content` array, or undefined when the entry shape differs. */
 const contentOf = (entry: unknown): readonly unknown[] | undefined => {
-	if (typeof entry !== "object" || entry === null) return undefined;
-	if (!("message" in entry)) return undefined;
-	const message = (entry as { message?: unknown }).message;
-	if (typeof message !== "object" || message === null) return undefined;
-	if (!("content" in message)) return undefined;
-	const content = (message as { content?: unknown }).content;
-	return Array.isArray(content) ? content : undefined;
+	if (typeof entry !== "object" || entry === null || !("message" in entry)) return undefined;
+	const message = entry.message;
+	if (typeof message !== "object" || message === null || !("content" in message)) return undefined;
+	return Array.isArray(message.content) ? message.content : undefined;
 };
 
-/** `textOf(content)` with the empty-string separator: the exact joined text, or "" for non-text content. */
+/** The exact joined text of a message content (no separator), or "" for non-text content. */
 const textOfExactly = (content: unknown): string => {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
-	const texts: string[] = [];
-	for (const block of content) {
-		if (
-			typeof block === "object" &&
-			block !== null &&
-			"type" in block &&
-			block.type === "text" &&
-			"text" in block &&
-			typeof block.text === "string"
-		)
-			texts.push(block.text);
-	}
-	return texts.join("");
+	let text = "";
+	for (const block of content) text += textBlockOf(block) ?? "";
+	return text;
 };
 
 /**
@@ -317,23 +332,36 @@ const hasToJSON = (value: unknown): value is { readonly toJSON: unknown } =>
 
 /**
  * The value JSON.stringify serializes in place of `value` under `key`: a
- * property name, an array index as text, or "" at the top. A value with a
- * callable `toJSON` (an object, function or bigint) gives `toJSON(key)`, called
+ * property name, an array index, or "" at the top. A value with a callable
+ * `toJSON` (an object, function or bigint) gives `toJSON(String(key))`, called
  * once and not applied again to its result; an object result is then `unboxed`.
  * The result may still be undefined, a function or a symbol.
  */
-const resolveValue = (value: unknown, key: string): unknown => {
+const resolveValue = (value: unknown, key: string | number): unknown => {
 	// A bigint has no own toJSON; its box reads BigInt.prototype's, and the call keeps the primitive as `this`.
 	const holder: unknown = typeof value === "bigint" ? Object(value) : value;
-	const jsonValue: unknown = hasToJSON(holder) && typeof holder.toJSON === "function" ? holder.toJSON.call(value, key) : value;
+	const jsonValue: unknown = hasToJSON(holder) && typeof holder.toJSON === "function" ? holder.toJSON.call(value, String(key)) : value;
 	return typeof jsonValue === "object" && jsonValue !== null ? unboxed(jsonValue) : jsonValue;
 };
 
+/** Whether JSON.stringify writes this item without calling toJSON or walking into it. */
+const isPrimitiveItem = (item: unknown): boolean =>
+	item === null || typeof item === "string" || typeof item === "number" || typeof item === "boolean";
+
+/** The end of the run of primitive items that starts at `from`, at most PRIMITIVE_RUN long. */
+const primitiveRunEnd = (items: readonly unknown[], from: number): number => {
+	let end = from;
+	while (end < items.length && end - from < PRIMITIVE_RUN && isPrimitiveItem(items[end])) end++;
+	return end;
+};
+
 /**
- * Streaming writer that mirrors JSON.stringify byte for byte. `value` is already
- * resolved by `resolveValue` and passes `isSerializable`; each child is resolved
- * with its own key before it is written, so no toJSON runs twice on one value.
- * Shared by the length probe and both bounded window passes.
+ * Streaming writer for `JSON.stringify`'s output. `value` is already resolved by
+ * `resolveValue` and passes `isSerializable`; each child is resolved with its own
+ * key before it is written, so no toJSON runs twice on one value. An array of
+ * only primitives is one native JSON.stringify call. In other arrays, runs of
+ * primitive items are written by native calls and every other item goes through
+ * the walk.
  */
 function walkJson(value: unknown, emit: (part: string) => void, stack: readonly unknown[]): void {
 	for (const seen of stack) if (seen === value) throw new TypeError("Converting circular structure to JSON");
@@ -348,14 +376,9 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 		case "number":
 			emit(Number.isFinite(value) ? String(value) : "null");
 			return;
-		case "string": {
-			// Leaf escaping is exactly JSON.stringify's own: call it on the string
-			// and let the emit windows do the bounding — whole-leaf transient like
-			// the old whole-serialize path, never joined across leaves.
-			const leaf = JSON.stringify(value) as string;
-			emit(leaf);
+		case "string":
+			emit(JSON.stringify(value));
 			return;
-		}
 		case "bigint":
 			throw new TypeError("Do not know how to serialize a BigInt");
 		case "object":
@@ -365,28 +388,43 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 		case "symbol":
 			throw new TypeError("walkJson needs a serializable value");
 	}
+	const inner: readonly unknown[] = [...stack, value];
 	if (Array.isArray(value)) {
 		const items: readonly unknown[] = value;
-		const inner: readonly unknown[] = [...stack, value];
+		// Holes are null in JSON.stringify and `every` skips them, so the whole array is native output.
+		if (items.every(isPrimitiveItem)) {
+			emit(JSON.stringify(items));
+			return;
+		}
 		emit("[");
-		for (let index = 0; index < items.length; index++) {
-			if (index > 0) emit(",");
-			const item = resolveValue(items[index], String(index));
+		let first = true;
+		let index = 0;
+		while (index < items.length) {
+			if (!first) emit(",");
+			first = false;
+			const runEnd = primitiveRunEnd(items, index);
+			if (runEnd > index) {
+				emit(JSON.stringify(items.slice(index, runEnd)).slice(1, -1));
+				index = runEnd;
+				continue;
+			}
+			const item = resolveValue(items[index], index);
 			if (isSerializable(item)) walkJson(item, emit, inner);
 			else emit("null");
+			index++;
 		}
 		emit("]");
 		return;
 	}
-	const inner: readonly unknown[] = [...stack, value];
 	emit("{");
 	let firstProp = true;
-	for (const [key, held] of Object.entries(value as Record<string, unknown>)) {
+	const entries: [string, unknown][] = Object.entries(value);
+	for (const [key, held] of entries) {
 		const item = resolveValue(held, key);
 		if (!isSerializable(item)) continue;
 		if (!firstProp) emit(",");
 		firstProp = false;
-		emit(JSON.stringify(key) as string);
+		emit(JSON.stringify(key));
 		emit(":");
 		walkJson(item, emit, inner);
 	}
@@ -404,29 +442,17 @@ function walkTop(value: unknown, emit: (part: string) => void): void {
 }
 
 /**
- * Bounded `truncate(JSON.stringify(value) ?? String(value), limit)` in one
- * pass: `walkTop` streams the JSON.stringify sequence, the head window keeps its
- * first `head` characters, a rolling native `slice(-tail)` string keeps its last
- * `tail`, and the running total drives the omitted count. The screens meet in
- * the middle once, so the short case reassembles the whole text without a second
- * walk; the whole serialization is never held (F106/F107). A value with no JSON
- * form, a cycle, a BigInt or a throwing toJSON takes the `String(value)` fallback.
+ * `truncate(JSON.stringify(value) ?? String(value), limit)` in one bounded pass
+ * over `walkTop`'s output. For JSON-parsed values, which is what the transcript
+ * holds, the result is byte-identical to that expression. A value with a toJSON,
+ * boxed primitives or undefined members is walked by JSON.stringify's rules, but
+ * a toJSON that mutates the value it serializes is not covered. A value with no
+ * JSON form, a cycle, a BigInt or a throwing toJSON takes the `String(value)`
+ * fallback.
  */
 const stringifyWithin = (value: unknown, limit: number): string => {
-	const head = Math.ceil(limit * 0.6);
-	const tail = limit - head;
 	try {
-		let seen = 0;
-		let held = "";
-		let tailBuffer = "";
-		const emit = (part: string): void => {
-			seen += part.length;
-			if (held.length < head) held += part.length + held.length <= head ? part : part.slice(0, head - held.length);
-			if (tail > 0) tailBuffer = (tailBuffer + part).slice(-tail);
-		};
-		walkTop(value, emit);
-		if (seen <= limit) return tail > 0 && seen > head ? held + tailBuffer.slice(Math.max(0, head - (seen - tailBuffer.length))) : held;
-		return `${held}\n…[${seen - limit} chars omitted]…\n${tailBuffer}`;
+		return boundedText((emit) => walkTop(value, emit), limit);
 	} catch {
 		return truncate(String(value), limit);
 	}
@@ -441,36 +467,35 @@ const classifyYield = (input: YieldInput): YieldCall => {
 /**
  * The branch, newest-last. `getBranchView()` is the host's memoized
  * active-leaf branch, handed out read-only without a copy; `getBranch()`
- * copies. Prefer the view, fall back to the copy on hosts that narrow the
- * extension type.
+ * copies. Prefer the view, fall back to the copy on hosts that do not expose it.
+ * A host result that is not an array counts as an empty branch.
  */
 const branchEntries = (ctx: ExtensionContext): readonly unknown[] => {
-	const manager = ctx.sessionManager as unknown as {
-		readonly getBranchView?: () => readonly unknown[];
-		readonly getBranch?: () => readonly unknown[];
-	};
-	if (typeof manager.getBranchView === "function") return manager.getBranchView();
-	if (typeof manager.getBranch === "function") return manager.getBranch();
-	return [];
+	const manager: unknown = ctx.sessionManager;
+	if (typeof manager !== "object" || manager === null) return [];
+	const view: unknown =
+		"getBranchView" in manager && typeof manager.getBranchView === "function"
+			? manager.getBranchView()
+			: "getBranch" in manager && typeof manager.getBranch === "function"
+				? manager.getBranch()
+				: [];
+	return Array.isArray(view) ? view : [];
 };
 
 /**
  * The run's own transcript: the branch suffix from the latest `session_init`
  * on. A single forward pass records each call with its arguments plus
- * references to its assistant entry and its result entry — text is never
- * materialized here, the render layer below resolves the kept calls only,
- * so allocation stays proportional to the prompt's window rather than the
- * run's length. Entries the old whole-branch `safeParse` walk skipped —
- * null entries, entries without a `message`, messages outside the boundary
- * schema, `message: null` — are skipped the same way, so the visible
- * transcript and the choice of the latest `session_init` are unchanged.
+ * references to its assistant entry and its result entry. Text is never
+ * materialized here; the render layer resolves only the calls it keeps. Entries
+ * that are null, have no `message`, fall outside the message schema, or carry
+ * `message: null` are skipped, so they never affect the assignment or the calls.
  */
 const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 	const view = branchEntries(ctx);
 	// Latest `session_init` first: everything at or before it is background.
-	// Structural match (`type: "session_init"` with a string `task`),
-	// identical to the schema the forward walk used.
+	// Structural match (`type: "session_init"` with a string `task`).
 	let start = -1;
+	let assignment = "";
 	for (let index = view.length - 1; index >= 0; index--) {
 		const entry: unknown = view[index];
 		if (
@@ -479,15 +504,14 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 			"type" in entry &&
 			entry.type === "session_init" &&
 			"task" in entry &&
-			typeof (entry as { task?: unknown }).task === "string"
+			typeof entry.task === "string"
 		) {
 			start = index;
+			assignment = entry.task;
 			break;
 		}
 	}
 	if (start === -1) return undefined;
-	const initEntry = view[start] as unknown as { task: string };
-	const assignment = initEntry.task;
 	const calls: ToolCallRecord[] = [];
 	const resultsByCallId = new Map<string, { readonly isError: boolean; readonly entry: unknown }>();
 	for (let index = start + 1; index < view.length; index++) {
@@ -536,19 +560,19 @@ const sharedContextOf = (ctx: ExtensionContext): string => {
 	const marker = "§ Context\n";
 	const bodyEnd = "\n§ ";
 	/**
-	 * `carry` is the text after the marker in the marker's own piece, or "" when
-	 * the marker straddled the seam; `restIndex` is the piece after the marker's
-	 * piece. The body is `carry`, then each later piece after a seam `"\n"`, up to
-	 * the heading. The heading's `"\n"` lies inside the carry, inside a later piece
-	 * (the first such hit ends the body), or on the seam before a piece whose text
-	 * opens with `"§ "`.
+	 * `carry` is the body text that begins right after the marker: the rest of
+	 * the marker's own piece, or the next piece when the marker straddled a seam.
+	 * `restIndex` is the first piece after the one `carry` comes from. The body is
+	 * `carry`, then each later piece after a seam `"\n"`, stopped by the heading.
+	 * The heading's `"\n"` lies inside the carry, inside a later piece, or on the
+	 * seam before a later piece whose text opens with `"§ "`.
 	 */
 	const bodyOf = (carry: string, restIndex: number): string => {
 		// The body is the carry, then each later piece after a seam "\n". The
 		// heading may cut the carry itself, cut a later piece, or ride the seam
 		// into a piece that opens with "§ ".
-		const carryMac = carry.indexOf(bodyEnd);
-		if (carryMac !== -1) return carry.slice(0, carryMac).trim();
+		const headingInCarry = carry.indexOf(bodyEnd);
+		if (headingInCarry !== -1) return carry.slice(0, headingInCarry).trim();
 		let held = carry; // body prefixes consumed so far
 		for (let index = restIndex; index < pieces.length; index++) {
 			const piece = pieces[index] ?? "";
@@ -566,9 +590,9 @@ const sharedContextOf = (ctx: ExtensionContext): string => {
 		const piece = pieces[index] ?? "";
 		const at = piece.indexOf(marker);
 		if (at !== -1) return bodyOf(piece.slice(at + marker.length), index + 1);
-		// Straddling: this piece ends with the marker's text; the seam carries
-		// the marker's `"\n"`, the body starts inside the next piece.
-		if (index + 1 < pieces.length && piece.endsWith("§ Context")) return bodyOf("", index + 1);
+		// Straddling: this piece ends with the marker's text and its seam is the
+		// marker's `"\n"`, so the next piece is the body's first text.
+		if (index + 1 < pieces.length && piece.endsWith("§ Context")) return bodyOf(pieces[index + 1] ?? "", index + 2);
 	}
 	return "";
 };
@@ -591,110 +615,23 @@ const renderCall = (call: ToolCallRecord, n: number, results: ResultsByCallId): 
 };
 
 /**
- * `estimateTokens` over the exact `truncate(serialized, limit)` output,
- * computed from a single streaming pass: the emit keeps the first `limit`
- * characters (the head window), a bounded rolling `slice(-tail)` string keeps
- * the last `tail`, and the running total drives the omitted count. The middle
- * is never held, and the token weights come from the two windows alone. Byte
- * weights equal the render pass's, so the budget walk keeps the same calls
- * windowed by `fitToolCalls`, and a call that falls outside the window never
- * materializes its text.
+ * The history is filled from the newest call backwards. Each call is rendered
+ * once and its estimated tokens counted from that rendering; the walk stops at
+ * the first call that would push the total past `budget`. That call is rendered
+ * and then dropped, so it is the only call read beyond the window. What is kept
+ * is the newest unbroken run, returned in chronological order. Numbers count
+ * every prior call, so a gap in `n` marks dropped calls.
  */
-const truncatedTokensOf = (
-	produce: (emit: (piece: string) => void) => void,
-	limit: number,
-	// The walk fails on cycles, BigInt, a throwing toJSON and a value with no
-	// JSON form; then String(value) keeps the stringify fallback shape, and the
-	// caller passes the value for it.
-	fallbackValue: unknown,
-): number => {
-	try {
-		const head = Math.ceil(limit * 0.6);
-		const tail = limit - head;
-		let seen = 0;
-		let held = ""; // leading window, up to `head` characters
-		let tailBuffer = ""; // trailing window, last `tail` characters when tail > 0
-		const emit = (piece: string): void => {
-			seen += piece.length;
-			if (held.length < head) held += piece.length + held.length <= head ? piece : piece.slice(0, head - held.length);
-			if (tail > 0) tailBuffer = (tailBuffer + piece).slice(-tail);
-		};
-		produce(emit);
-		if (seen <= limit) {
-			// Short serialization: the render is the whole serialization. Both
-			// windows hold a single unbroken coordinate range of it — the first
-			// `head` characters in `held`, the last min(`tail`, seen) in
-			// `tailBuffer` — and their overlap closes exactly once in the middle
-			// when they meet; appending the tail's slice past `held`'s end
-			// rebuilds the full text with no second walk.
-			return estimateTokens(tail > 0 && seen > head ? held + tailBuffer.slice(Math.max(0, head - (seen - tailBuffer.length))) : held);
-		}
-		const marker = `\n…[${seen - limit} chars omitted]…\n`;
-		return estimateTokens(held) + estimateTokens(marker) + estimateTokens(tailBuffer);
-	} catch {
-		// Same failures as the walk: String(value) keeps the stringify fallback shape.
-		return estimateTokens(truncate(String(fallbackValue), limit));
-	}
-};
-
-/**
- * Exact `estimateTokens` the budget walk needs, per call, without rendering the
- * call: the fixed header glue's weight, plus both bounded windows (args through
- * the JSON walk, result through the text blocks) via `truncatedTokensOf`. A
- * call value walks once here; texts materialize only through the windows, and
- * the walk's `String()` fallback reads the source text only when the walk itself
- * failed (D3: a call outside the window never holds its text).
- */
-const renderedCallTokens = (call: ToolCallRecord, n: number, results: ResultsByCallId): number => {
-	const result = results.get(call.id);
-	const status = result === undefined ? "no result" : result.isError ? "error" : "ok";
-	const headerTokens = estimateTokens(`<call n="${n}" tool="${call.name}" status="${status}">\n<args></args>\n<result></result>\n</call>`);
-	const argsTokens = truncatedTokensOf((emit) => walkTop(call.args, emit), ARGS_CHAR_LIMIT, call.args);
-	const resultTokens = result === undefined ? 0 : truncatedTokensOf(emitStringBlocks(result.entry), RESULT_CHAR_LIMIT, result.entry);
-	return headerTokens + argsTokens + resultTokens;
-};
-const emitStringBlocks =
-	(content: unknown) =>
-	(emit: (piece: string) => void): void => {
-		if (typeof content === "string") {
-			emit(content);
-			return;
-		}
-		if (Array.isArray(content)) {
-			for (const block of content) {
-				if (
-					typeof block === "object" &&
-					block !== null &&
-					"type" in block &&
-					block.type === "text" &&
-					"text" in block &&
-					typeof block.text === "string"
-				)
-					emit(block.text);
-			}
-			return;
-		}
-		emit("");
-	};
-
-/**
- * The history is filled from the newest call backwards until the next call
- * would push the request past `budget` estimated tokens. The first call that
- * does not fit ends the walk: what is kept is the newest unbroken run, in
- * chronological order. Numbers count every prior call, so a gap in `n` marks
- * dropped calls. Sizing uses exact rendered lengths rather than rendering
- * every call first — calls outside the window never have their argument
- * objects or result entries read.
- */
-const fitToolCalls = (prior: readonly ToolCallRecord[], results: ResultsByCallId, budget: number): readonly ToolCallRecord[] => {
+const fitToolCalls = (prior: readonly ToolCallRecord[], results: ResultsByCallId, budget: number): readonly string[] => {
 	const newestFirst = prior.map((call, index) => ({ call, n: index + 1 })).reverse();
-	const kept: ToolCallRecord[] = [];
+	const kept: string[] = [];
 	let used = 0;
 	for (const { call, n } of newestFirst) {
-		const tokens = renderedCallTokens(call, n, results);
+		const rendered = renderCall(call, n, results);
+		const tokens = estimateTokens(rendered);
 		if (used + tokens > budget) break;
 		used += tokens;
-		kept.push(call);
+		kept.push(rendered);
 	}
 	return kept.reverse();
 };
@@ -722,10 +659,7 @@ const renderPrompt = (ctx: ExtensionContext, transcript: Transcript, yieldCallId
 	// Everything but the tool calls is counted first; the calls get what is left of the window.
 	const fixedTokens = estimateTokens(SYSTEM_PROMPT) + estimateTokens(frame([], 0));
 	const budget = JUDGE_CONTEXT_TOKENS - JUDGE_RESERVED_TOKENS - fixedTokens;
-	const window = fitToolCalls(prior, transcript.resultsByCallId, budget);
-	// Rendering happens only for the kept window; a dropped call's text is
-	// never materialized. Each call's rendering walks its own bounded inputs.
-	const calls = window.map((call, index) => renderCall(call, prior.length - window.length + index + 1, transcript.resultsByCallId));
+	const calls = fitToolCalls(prior, transcript.resultsByCallId, budget);
 	return frame(calls, calls.length);
 };
 /**
