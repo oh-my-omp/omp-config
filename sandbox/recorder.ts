@@ -2,9 +2,10 @@
 //   bun /sandbox/recorder.ts setup MODELS_YML     (once, before any omp session)
 //   bun /sandbox/recorder.ts serve                (long-running; one listener per provider)
 //
-// `setup` gives every provider that declares a `baseUrl` a loopback URL
-// (`http://127.0.0.1:<9400+i>`) in the container's models.yml and writes the mapping to
-// /sandbox/recorder-targets.json. Nothing else changes: the rewritten document is re-parsed and
+// `setup` gives every provider that declares a `baseUrl` a loopback URL (`http://127.0.0.1:<9400+i>`)
+// followed by the provider's baseUrl path (`/v1` and the like), so clients send the same request
+// paths as to the upstream, and writes the mapping to /sandbox/recorder-targets.json. Nothing else
+// changes: the rewritten document is re-parsed and
 // every provider must equal its original in all fields except `baseUrl`, so `apiKey` and the rest
 // keep their values. Comments are not kept (the file exists only inside the container).
 //
@@ -54,6 +55,33 @@ function withoutBaseUrl(value: unknown): unknown {
 }
 
 /**
+ * Pure part of `rewriteBaseUrls`. The rewritten `baseUrl` keeps the original path (`/v1` and the
+ * like), because the client appends its request paths to it. The target keeps only the upstream
+ * origin, because `serve` appends the request path, which already carries that prefix.
+ */
+export function rewriteProviders(original: Mapping): { readonly targets: Target[]; readonly providers: Record<string, unknown> } {
+	const targets: Target[] = [];
+	const providers: Record<string, unknown> = {};
+	for (const [name, value] of Object.entries(original)) {
+		if (isMapping(value) && typeof value.baseUrl === "string" && value.baseUrl !== "") {
+			const port = FIRST_PORT + targets.length;
+			const upstream = new URL(value.baseUrl);
+			const prefix = upstream.pathname.replace(/\/+$/, "");
+			targets.push({ provider: name, port, upstream: upstream.origin });
+			providers[name] = { ...value, baseUrl: `http://127.0.0.1:${port}${prefix}` };
+		} else {
+			providers[name] = value;
+		}
+	}
+	return { targets, providers };
+}
+
+/** The URL `serve` forwards a request to: the upstream origin plus the request's path and query. */
+export function forwardUrl(target: Target, request: URL): string {
+	return `${target.upstream}${request.pathname}${request.search}`;
+}
+
+/**
  * Rewrites each provider's `baseUrl` in `path` to its recorder port and writes the targets file.
  * Throws, leaving `path` untouched, unless the re-parsed result matches the original everywhere
  * except `baseUrl`.
@@ -62,17 +90,7 @@ export function rewriteBaseUrls(path: string): Target[] {
 	const root = Bun.YAML.parse(readFileSync(path, "utf8"));
 	if (!isMapping(root)) throw new Error("models.yml root is not a mapping");
 	const original = providersOf(root);
-	const targets: Target[] = [];
-	const providers: Record<string, unknown> = {};
-	for (const [name, value] of Object.entries(original)) {
-		if (isMapping(value) && typeof value.baseUrl === "string" && value.baseUrl !== "") {
-			const port = FIRST_PORT + targets.length;
-			targets.push({ provider: name, port, upstream: value.baseUrl.replace(/\/+$/, "") });
-			providers[name] = { ...value, baseUrl: `http://127.0.0.1:${port}` };
-		} else {
-			providers[name] = value;
-		}
-	}
+	const { targets, providers } = rewriteProviders(original);
 	if (targets.length === 0) {
 		writeFileSync(TARGETS_FILE, "[]\n");
 		return targets;
@@ -168,7 +186,7 @@ function serve(targets: readonly Target[]): void {
 				headers.delete("content-length");
 				let upstream: Response;
 				try {
-					upstream = await fetch(`${target.upstream}${url.pathname}${url.search}`, {
+					upstream = await fetch(forwardUrl(target, url), {
 						method: request.method,
 						headers,
 						body: request.method === "GET" || request.method === "HEAD" ? undefined : bytes,
