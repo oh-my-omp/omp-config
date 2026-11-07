@@ -32,9 +32,12 @@
  * `getBranch()` otherwise — and walks only the suffix after the latest
  * `session_init`, recording call metadata and result entry references without
  * materializing text. Each call the budget keeps is rendered once, from its
- * arguments and result through `stringifyWithin` and `textWithin`, which keep
- * only the bounded head and tail of their output, so a call's allocation stays
- * bounded by the character limits no matter what it carried. The first call that
+ * arguments and result through `stringifyWithin` and `textWithin`. Their output
+ * is windowed to a bounded head and tail, so a rendered call stays within the
+ * character limits however large its arguments or result. A single leaf string
+ * or primitive array is copied whole while it is written. Values outside JSON
+ * data take the native serialization, so the rendered arguments equal
+ * `truncate(stringify(value), limit)` for every value. The first call that
  * does not fit the budget is rendered as well, then dropped. The `§ Context`
  * section is located per system-prompt piece, and the submission is truncated
  * once at its source. Requests the independent Todo owner's synchronous read
@@ -298,51 +301,24 @@ const estimateTokens = (text: string): number => {
 	return tokens;
 };
 
-/** Whether JSON.stringify writes a resolved value; undefined, functions and symbols are skipped or nulled by their holder. */
-const isSerializable = (value: unknown): boolean => value !== undefined && typeof value !== "function" && typeof value !== "symbol";
+/** Thrown by `walkJson` for a value outside the JSON data model; `stringifyWithin` then serializes it natively. */
+class NotJsonData {}
 
-/** Whether a native primitive `valueOf` finds the internal slot of `value`; it throws on any other object. */
-const hasSlot = (read: () => unknown): boolean => {
-	try {
-		read();
-		return true;
-	} catch {
-		// Expected for an ordinary object or a wrapper of another kind: it serializes as itself.
-		return false;
-	}
+/** A plain object's own data, read by key. */
+type JsonRecord = Readonly<Record<string, unknown>>;
+
+/** Whether JSON.stringify writes a property name unchanged between quotes: no quote, backslash, control code unit or surrogate. */
+const NEEDS_ESCAPE = /["\\]|[^ -\ud7ff\ue000-\uffff]/;
+
+/** A plain object (prototype `Object.prototype` or null) with no `toJSON`: JSON.stringify writes it as an object. */
+const isJsonObject = (value: object): value is JsonRecord => {
+	if ("toJSON" in value) return false;
+	const proto: unknown = Object.getPrototypeOf(value);
+	return proto === Object.prototype || proto === null;
 };
 
-/**
- * The primitive JSON.stringify writes for a boxed Number, String, Boolean or
- * BigInt, matched by internal slot; any other object is returned as is. Number
- * and String go through ToNumber and ToString, Boolean and BigInt yield their
- * slot value. A boxed BigInt yields a bigint, which the walk rejects.
- */
-const unboxed = (value: object): unknown => {
-	if (value instanceof Number && hasSlot(() => Number.prototype.valueOf.call(value))) return +value;
-	if (value instanceof String && hasSlot(() => String.prototype.valueOf.call(value))) return `${value}`;
-	if (value instanceof Boolean && hasSlot(() => Boolean.prototype.valueOf.call(value))) return Boolean.prototype.valueOf.call(value);
-	if (value instanceof BigInt && hasSlot(() => BigInt.prototype.valueOf.call(value))) return BigInt.prototype.valueOf.call(value);
-	return value;
-};
-
-/** Whether `value` is an object or function with a `toJSON` property; its value is checked by the caller. */
-const hasToJSON = (value: unknown): value is { readonly toJSON: unknown } =>
-	((typeof value === "object" && value !== null) || typeof value === "function") && "toJSON" in value;
-
-/**
- * The value JSON.stringify serializes in place of `value` under `key`: a
- * property name, an array index, or "" at the top. A value with a callable
- * `toJSON` (an object, function or bigint) gives `toJSON(String(key))`, called
- * once and not applied again to its result; an object result is then `unboxed`.
- * The result may still be undefined, a function or a symbol.
- */
-const resolveValue = (value: unknown, key: string | number): unknown => {
-	// A bigint has no own toJSON; its box reads BigInt.prototype's, and the call keeps the primitive as `this`.
-	const holder: unknown = typeof value === "bigint" ? Object(value) : value;
-	const jsonValue: unknown = hasToJSON(holder) && typeof holder.toJSON === "function" ? holder.toJSON.call(value, String(key)) : value;
-	return typeof jsonValue === "object" && jsonValue !== null ? unboxed(jsonValue) : jsonValue;
-};
+/** An array with the Array prototype and no `toJSON`: JSON.stringify writes it as an array. */
+const isJsonArray = (value: object): boolean => !("toJSON" in value) && Object.getPrototypeOf(value) === Array.prototype;
 
 /** Whether JSON.stringify writes this item without calling toJSON or walking into it. */
 const isPrimitiveItem = (item: unknown): boolean =>
@@ -356,15 +332,13 @@ const primitiveRunEnd = (items: readonly unknown[], from: number): number => {
 };
 
 /**
- * Streaming writer for `JSON.stringify`'s output. `value` is already resolved by
- * `resolveValue` and passes `isSerializable`; each child is resolved with its own
- * key before it is written, so no toJSON runs twice on one value. An array of
- * only primitives is one native JSON.stringify call. In other arrays, runs of
- * primitive items are written by native calls and every other item goes through
- * the walk.
+ * Streams `JSON.stringify(value)` for a JSON-data value: null, a boolean, a number,
+ * a string, an array or a plain object. Any other value throws `NotJsonData`, and
+ * so does a cycle, since `stack` holds the containers still being written. An
+ * array of only primitives is one native JSON.stringify call. In other arrays,
+ * runs of primitive items are written by native calls and every other item is walked.
  */
-function walkJson(value: unknown, emit: (part: string) => void, stack: readonly unknown[]): void {
-	for (const seen of stack) if (seen === value) throw new TypeError("Converting circular structure to JSON");
+function walkJson(value: unknown, emit: (part: string) => void, stack: object[]): void {
 	if (value === null) {
 		emit("null");
 		return;
@@ -379,82 +353,71 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 		case "string":
 			emit(JSON.stringify(value));
 			return;
-		case "bigint":
-			throw new TypeError("Do not know how to serialize a BigInt");
 		case "object":
 			break;
 		case "undefined":
 		case "function":
 		case "symbol":
-			throw new TypeError("walkJson needs a serializable value");
+		case "bigint":
+			throw new NotJsonData();
 	}
-	const inner: readonly unknown[] = [...stack, value];
 	if (Array.isArray(value)) {
+		if (!isJsonArray(value) || stack.includes(value)) throw new NotJsonData();
 		const items: readonly unknown[] = value;
-		// Holes are null in JSON.stringify and `every` skips them, so the whole array is native output.
+		// Holes are null in JSON.stringify and `every` skips them, so an all-primitive array is native output.
 		if (items.every(isPrimitiveItem)) {
 			emit(JSON.stringify(items));
 			return;
 		}
+		stack.push(value);
 		emit("[");
-		let first = true;
-		let index = 0;
-		while (index < items.length) {
-			if (!first) emit(",");
-			first = false;
+		for (let index = 0; index < items.length; index++) {
+			if (index > 0) emit(",");
 			const runEnd = primitiveRunEnd(items, index);
 			if (runEnd > index) {
 				emit(JSON.stringify(items.slice(index, runEnd)).slice(1, -1));
-				index = runEnd;
-				continue;
-			}
-			const item = resolveValue(items[index], index);
-			if (isSerializable(item)) walkJson(item, emit, inner);
-			else emit("null");
-			index++;
+				index = runEnd - 1;
+			} else walkJson(items[index], emit, stack);
 		}
 		emit("]");
-		return;
+	} else {
+		if (!isJsonObject(value) || stack.includes(value)) throw new NotJsonData();
+		stack.push(value);
+		emit("{");
+		let first = true;
+		for (const key in value) {
+			if (!Object.hasOwn(value, key)) continue;
+			if (!first) emit(",");
+			first = false;
+			emit(NEEDS_ESCAPE.test(key) ? `${JSON.stringify(key)}:` : `"${key}":`);
+			walkJson(value[key], emit, stack);
+		}
+		emit("}");
 	}
-	emit("{");
-	let firstProp = true;
-	const entries: [string, unknown][] = Object.entries(value);
-	for (const [key, held] of entries) {
-		const item = resolveValue(held, key);
-		if (!isSerializable(item)) continue;
-		if (!firstProp) emit(",");
-		firstProp = false;
-		emit(JSON.stringify(key));
-		emit(":");
-		walkJson(item, emit, inner);
-	}
-	emit("}");
+	stack.pop();
 }
 
-/**
- * Streams `JSON.stringify(value)` for a top-level value. Throws when that is
- * undefined, so the caller substitutes `String(value)` as `stringify` does.
- */
-function walkTop(value: unknown, emit: (part: string) => void): void {
-	const resolved = resolveValue(value, "");
-	if (!isSerializable(resolved)) throw new TypeError("top-level value has no JSON form");
-	walkJson(resolved, emit, []);
-}
+/** JSON.stringify's text, or String(value) when there is none or it throws; the serialization `truncate` windows. */
+const stringify = (value: unknown): string => {
+	try {
+		return JSON.stringify(value) ?? String(value);
+	} catch {
+		// Circular structures and non-JSON values (such as bigint) use their textual representation.
+		return String(value);
+	}
+};
 
 /**
- * `truncate(JSON.stringify(value) ?? String(value), limit)` in one bounded pass
- * over `walkTop`'s output. For JSON-parsed values, which is what the transcript
- * holds, the result is byte-identical to that expression. A value with a toJSON,
- * boxed primitives or undefined members is walked by JSON.stringify's rules, but
- * a toJSON that mutates the value it serializes is not covered. A value with no
- * JSON form, a cycle, a BigInt or a throwing toJSON takes the `String(value)`
- * fallback.
+ * `truncate(stringify(value), limit)` in one bounded pass over `walkJson`'s output.
+ * JSON data is walked. Any other value, and any value the walk cannot finish (a
+ * cycle, a BigInt, nesting deep enough to exhaust the stack), takes `stringify` and
+ * its full text, so only that fallback allocates the whole serialization.
  */
 const stringifyWithin = (value: unknown, limit: number): string => {
 	try {
-		return boundedText((emit) => walkTop(value, emit), limit);
+		return boundedText((emit) => walkJson(value, emit, []), limit);
 	} catch {
-		return truncate(String(value), limit);
+		return truncate(stringify(value), limit);
 	}
 };
 const classifyYield = (input: YieldInput): YieldCall => {
