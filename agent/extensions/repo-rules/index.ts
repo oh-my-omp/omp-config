@@ -41,8 +41,11 @@
  * path instead (beyond Claude Code, which never matches such a pattern).
  *
  * Delta. One delta of `_shared/context-delta.ts` with source `omp-config/repo-rules`, computed from
- * OMP's system prompt (`event.systemPrompt` at a prompt, `ctx.getSystemPrompt()` after a tool call)
- * and the collected files: the context files, then the unscoped rule bodies and listings above,
+ * OMP's system prompt (`event.systemPrompt` at a prompt, `ctx.getSystemPrompt()` after a tool call),
+ * read once per turn because a turn does not change it between deliveries (the derived text is kept
+ * until the next `turn_start`, so it can reach the next prompt's `before_agent_start`, where it is
+ * reused only when the prompt's parts are identical), and the collected files:
+ * the context files, then the unscoped rule bodies and listings above,
  * then each taken-over native rule found in that prompt, quoted with its `paths`. It is delivered at every `before_agent_start`
  * (except a revive's, whose result OMP discards) and after every tool call, only when it differs
  * from the source's effective delta in the current context; with nothing to add it supersedes an
@@ -69,7 +72,15 @@ import { createDeltaStream, type Delta } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
 import { sessionSettings } from "../_shared/settings.ts";
 import { type ContextFileScope, contextFileScope, type DeliveredContextFile, loadContextFiles } from "./context-files.ts";
-import { collectRules, type RuleCatalog, ruleMatches, type ScopedRule, type UnscopedRule } from "./rules.ts";
+import {
+	collectRules,
+	matchTarget,
+	normalizeWhitespace,
+	type RuleCatalog,
+	ruleMatches,
+	type ScopedRule,
+	type UnscopedRule,
+} from "./rules.ts";
 import { touchedFiles } from "./touched.ts";
 
 /** The working directory's AGENTS.md / CLAUDE.md, in place of OMP's `<repo-rules>` block of the system prompt. */
@@ -95,18 +106,61 @@ function blockInner(systemPrompt: readonly string[], tag: string): string | unde
 	return undefined;
 }
 
+/** OMP's `<generic-rules>` and `<domain-rules>` blocks. */
+function promptBlocks(systemPrompt: readonly string[]): { readonly generic: string | undefined; readonly domain: string | undefined } {
+	return { generic: blockInner(systemPrompt, "generic-rules"), domain: blockInner(systemPrompt, "domain-rules") };
+}
+
+/** OMP's system prompt as a delivery reads it: the text rule bodies are searched in, and the two blocks native rules are quoted from. */
+interface PromptView {
+	/** The parts the rest of the view was derived from; a delivery handing the same parts reuses it. */
+	readonly parts: readonly string[];
+	readonly normalized: string;
+	readonly blocks: { readonly generic: string | undefined; readonly domain: string | undefined };
+}
+
+/** The prompt's derived text, kept while a turn's deliveries hand the same parts and derived again when they do not. */
+function promptView(previous: PromptView | undefined, systemPrompt: readonly string[]): PromptView {
+	if (
+		previous !== undefined &&
+		previous.parts.length === systemPrompt.length &&
+		previous.parts.every((part, i) => part === systemPrompt[i])
+	) {
+		return previous;
+	}
+	return { parts: [...systemPrompt], normalized: normalizeWhitespace(systemPrompt.join("\n")), blocks: promptBlocks(systemPrompt) };
+}
+
+/** The rulebook line of `name` in a `<domain-rules>` block (`- <name> (<globs>): <description>`), sliced out without splitting the block. */
+function rulebookLine(domain: string, name: string): string | undefined {
+	const prefix = `- ${name} (`;
+	for (let start = 0; start < domain.length; ) {
+		if (domain.startsWith(prefix, start)) {
+			const end = domain.indexOf("\n", start);
+			return end < 0 ? domain.slice(start) : domain.slice(start, end);
+		}
+		const next = domain.indexOf("\n", start);
+		if (next < 0) return undefined;
+		start = next + 1;
+	}
+	return undefined;
+}
+
 /** Scanned rules the system prompt does not hold yet: bodies to follow, and a catalog to read on demand. */
-function renderUnscoped(rules: readonly UnscopedRule[], systemPrompt: readonly string[]): string[] {
-	const prompt = systemPrompt.join("\n").replace(/\s+/g, " ").trim();
-	const always: UnscopedRule[] = [];
-	const listed: { readonly rule: UnscopedRule; readonly description: string }[] = [];
+function renderUnscoped(rules: readonly UnscopedRule[], prompt: string): string[] {
+	let always: UnscopedRule[] | undefined;
+	let listed: { readonly rule: UnscopedRule; readonly description: string }[] | undefined;
 	for (const rule of rules) {
 		switch (rule.kind.kind) {
 			case "always":
-				if (!prompt.includes(rule.body.replace(/\s+/g, " ").trim())) always.push(rule);
+				if (prompt.includes(rule.kind.normalizedBody)) break;
+				if (always === undefined) always = [];
+				always.push(rule);
 				break;
 			case "catalog":
-				if (!prompt.includes(`rule://${rule.name}`)) listed.push({ rule, description: rule.kind.description });
+				if (prompt.includes(`rule://${rule.name}`)) break;
+				if (listed === undefined) listed = [];
+				listed.push({ rule, description: rule.kind.description });
 				break;
 			default: {
 				const exhaustive: never = rule.kind;
@@ -114,14 +168,14 @@ function renderUnscoped(rules: readonly UnscopedRule[], systemPrompt: readonly s
 			}
 		}
 	}
-	if (always.length === 0 && listed.length === 0) return [];
+	if (always === undefined && listed === undefined) return [];
 	const parts = [
 		"Rule files discovered outside OMP's native rule directories; they apply in this session like the rules of the system prompt.",
 	];
-	for (const rule of always) {
+	for (const rule of always ?? []) {
 		parts.push(`<rule path="${escapeAttr(rule.displayPath)}">`, rule.body, "</rule>");
 	}
-	if (listed.length > 0) {
+	if (listed !== undefined) {
 		parts.push("Read these with the `read` tool when they become relevant:");
 		for (const { rule, description } of listed) parts.push(`- ${rule.name}: ${description} — \`${rule.displayPath}\``);
 	}
@@ -134,20 +188,21 @@ function renderUnscoped(rules: readonly UnscopedRule[], systemPrompt: readonly s
  * (`- <name> (<globs>): <description>`) in `<domain-rules>`. Each one found is quoted with the paths
  * it is limited to.
  */
-function renderNativeScopes(rules: readonly ScopedRule[], systemPrompt: readonly string[]): string[] {
-	const generic = blockInner(systemPrompt, "generic-rules");
-	const domain = blockInner(systemPrompt, "domain-rules")?.split("\n");
-	const scopes: string[] = [];
+function renderNativeScopes(
+	rules: readonly ScopedRule[],
+	blocks: { readonly generic: string | undefined; readonly domain: string | undefined },
+): string[] {
+	const parts: string[] = [];
 	for (const rule of rules) {
 		if (rule.origin.kind !== "native") continue;
 		const placement = rule.origin.placement;
 		let original: string | undefined;
 		switch (placement.kind) {
 			case "always":
-				original = generic?.includes(`${placement.content}\n`) === true ? placement.content : undefined;
+				original = blocks.generic?.includes(`${placement.content}\n`) === true ? placement.content : undefined;
 				break;
 			case "rulebook":
-				original = domain?.find((line) => line.startsWith(`- ${rule.name} (`));
+				original = blocks.domain === undefined ? undefined : rulebookLine(blocks.domain, rule.name);
 				break;
 			case "dropped":
 				break;
@@ -157,7 +212,7 @@ function renderNativeScopes(rules: readonly ScopedRule[], systemPrompt: readonly
 			}
 		}
 		if (original === undefined) continue;
-		scopes.push(
+		parts.push(
 			`<rule-scope name="${escapeAttr(rule.name)}" path="${escapeAttr(rule.id)}" paths="${escapeAttr(rule.patterns.join(", "))}">`,
 			"<original>",
 			original,
@@ -165,41 +220,39 @@ function renderNativeScopes(rules: readonly ScopedRule[], systemPrompt: readonly
 			"</rule-scope>",
 		);
 	}
-	if (scopes.length === 0) return [];
-	return [
-		[
-			"These passages of the system prompt's `<generic-rules>` and `<domain-rules>` blocks apply only while you work with files their `paths` match; when a tool call touches such a file, the rule arrives after that call:",
-			...scopes,
-		].join("\n"),
-	];
+	if (parts.length === 0) return [];
+	parts.unshift(
+		"These passages of the system prompt's `<generic-rules>` and `<domain-rules>` blocks apply only while you work with files their `paths` match; when a tool call touches such a file, the rule arrives after that call:",
+	);
+	return [parts.join("\n")];
 }
 
 /** What this extension adds to `systemPrompt`, OMP's base prompt as handed to the hook. */
 function rulesDelta(
 	catalog: RuleCatalog,
 	files: readonly DeliveredContextFile[],
-	ctx: ExtensionContext,
-	systemPrompt: readonly string[],
+	scoped: readonly ScopedRule[],
+	prompt: PromptView,
 ): Delta {
-	const sections = [
-		...renderContextFiles(files),
-		...renderUnscoped(catalog.unscoped, systemPrompt),
-		...renderNativeScopes(activeScoped(catalog, ctx), systemPrompt),
-	];
+	const sections = renderContextFiles(files);
+	if (catalog.unscoped.length > 0) sections.push(...renderUnscoped(catalog.unscoped, prompt.normalized));
+	if (scoped.some((rule) => rule.origin.kind === "native")) sections.push(...renderNativeScopes(scoped, prompt.blocks));
 	return sections.length === 0 ? { kind: "none" } : { kind: "text", body: sections.join("\n\n") };
 }
 
 /** Path-scoped rules that apply to this session's agent; native rules need the session's settings. */
-function activeScoped(catalog: RuleCatalog, ctx: ExtensionContext): ScopedRule[] {
+function activeScoped(catalog: RuleCatalog, ctx: ExtensionContext): readonly ScopedRule[] {
+	const scoped = catalog.scoped;
+	if (!scoped.some((rule) => rule.origin.kind === "native")) return scoped;
 	const settings = sessionSettings(ctx);
 	const disabled = new Set(settings === undefined ? [] : cfgTtsr.get(settings).disabledRules);
-	return catalog.scoped.filter((rule) => {
+	return scoped.filter((rule) => {
 		switch (rule.origin.kind) {
 			case "scan":
 				return true;
 			case "native":
 				if (settings === undefined || disabled.has(rule.name)) return false;
-				return ruleAppliesToAgent({ agents: rule.origin.agents === undefined ? undefined : [...rule.origin.agents] }, ctx.agent.name);
+				return ruleAppliesToAgent({ agents: rule.origin.agents }, ctx.agent.name);
 			default: {
 				const exhaustive: never = rule.origin;
 				throw new Error(`Unexpected rule origin: ${JSON.stringify(exhaustive)}`);
@@ -232,6 +285,7 @@ function renderRules(rules: readonly ScopedRule[], files: readonly string[]): st
 /** The `paths` rules a tool call's touched files bring in that the context does not hold yet. */
 function pathScopedContext(
 	rules: RuleCatalog,
+	scoped: readonly ScopedRule[],
 	event: ToolResultEvent,
 	ctx: ExtensionContext,
 	claimDeliveries: (ctx: ExtensionContext, markers: readonly string[]) => boolean[],
@@ -239,7 +293,8 @@ function pathScopedContext(
 	if (rules.scoped.length === 0) return undefined;
 	const files = touchedFiles(event, ctx.cwd);
 	if (files.length === 0) return undefined;
-	const matched = activeScoped(rules, ctx).filter((rule) => files.some((file) => ruleMatches(rule, file)));
+	const targets = files.map(matchTarget);
+	const matched = scoped.filter((rule) => targets.some((target) => ruleMatches(rule, target)));
 	const claims = claimDeliveries(ctx, matched.map(marker));
 	const fresh = matched.filter((_, i) => claims[i]);
 	return fresh.length === 0 ? undefined : renderRules(fresh, files);
@@ -248,8 +303,13 @@ function pathScopedContext(
 export default function repoRules(pi: ExtensionAPI): void {
 	let catalog: RuleCatalog | null = null;
 	let scope: ContextFileScope | null = null;
+	/** The prompt's derived text, reused by a turn's deliveries and started over at the next turn. */
+	let view: PromptView | undefined;
 	const claimDeliveries = createContextDelivery(pi);
 	const deltas = createDeltaStream(pi, "repo-rules");
+	pi.on("turn_start", () => {
+		view = undefined;
+	});
 
 	/** Context files read fresh at each delivery point; the depth slots OMP keeps are collected once per cwd. */
 	const contextFilesFor = async (ctx: ExtensionContext): Promise<DeliveredContextFile[]> => {
@@ -284,7 +344,9 @@ export default function repoRules(pi: ExtensionAPI): void {
 		if (event.reason === "revive") return;
 		try {
 			const [rules, files] = await Promise.all([rulesFor(ctx), contextFilesFor(ctx)]);
-			return deltas.atPrompt(ctx, rulesDelta(rules, files, ctx, event.systemPrompt));
+			const prompt = promptView(view, event.systemPrompt);
+			view = prompt;
+			return deltas.atPrompt(ctx, rulesDelta(rules, files, activeScoped(rules, ctx), prompt));
 		} catch (error) {
 			pi.logger.warn("repo-rules: cannot deliver rules", { error: errorText(error) });
 		}
@@ -299,16 +361,25 @@ export default function repoRules(pi: ExtensionAPI): void {
 			pi.logger.warn("repo-rules: failed to collect rules", { error: errorText(error) });
 			return;
 		}
+		let scoped: readonly ScopedRule[];
+		try {
+			scoped = activeScoped(rules, ctx);
+		} catch (error) {
+			pi.logger.warn("repo-rules: cannot deliver rules", { error: errorText(error) });
+			return;
+		}
 		const parts: string[] = [];
 		try {
-			const delta = deltas.afterTools(ctx, rulesDelta(rules, files, ctx, ctx.getSystemPrompt()));
+			const prompt = promptView(view, ctx.getSystemPrompt());
+			view = prompt;
+			const delta = deltas.afterTools(ctx, rulesDelta(rules, files, scoped, prompt));
 			if (delta !== undefined) parts.push(delta.additionalContext);
 		} catch (error) {
 			pi.logger.warn("repo-rules: cannot deliver rules", { error: errorText(error) });
 		}
 		try {
-			const scoped = pathScopedContext(rules, event, ctx, claimDeliveries);
-			if (scoped !== undefined) parts.push(scoped);
+			const pathScoped = pathScopedContext(rules, scoped, event, ctx, claimDeliveries);
+			if (pathScoped !== undefined) parts.push(pathScoped);
 		} catch (error) {
 			pi.logger.warn("repo-rules: failed to load path-scoped rules", { error: errorText(error) });
 		}

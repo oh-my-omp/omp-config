@@ -10,8 +10,18 @@ const PROJECT_RULE_DIRS = [".claude/rules", ".agents/rules", ".pi/rules"] as con
 /** Claude Code's user-level rule directory, scanned in every session. */
 const USER_RULE_DIR = path.join(os.homedir(), ".claude", "rules");
 
-/** Placement of a rule that applies everywhere. */
-type UnscopedKind = { readonly kind: "always" } | { readonly kind: "catalog"; readonly description: string };
+/**
+ * Placement of a rule that applies everywhere. An always-apply rule keeps the form its body is
+ * searched for in OMP's prompt, normalized once here instead of on every delivery.
+ */
+type UnscopedKind =
+	| { readonly kind: "always"; readonly normalizedBody: string }
+	| { readonly kind: "catalog"; readonly description: string };
+
+/** Text with whitespace runs collapsed to one space and trimmed: how a rule body and OMP's prompt are compared. */
+export function normalizeWhitespace(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
 
 /** A scanned rule without `paths`, rendered into the repo-rules delta. */
 export interface UnscopedRule {
@@ -33,7 +43,7 @@ type NativePlacement = { readonly kind: "always"; readonly content: string } | {
 /** Who discovered a path-scoped rule. Native rules keep OMP's agent scope. */
 type ScopedOrigin =
 	| { readonly kind: "scan" }
-	| { readonly kind: "native"; readonly agents: readonly string[] | undefined; readonly placement: NativePlacement };
+	| { readonly kind: "native"; readonly agents: string[] | undefined; readonly placement: NativePlacement };
 
 /**
  * One compiled `paths` pattern. Claude Code patterns are relative to the rule's base directory; a
@@ -52,6 +62,8 @@ export interface ScopedRule {
 	readonly globs: readonly PathGlob[];
 	/** Directory relative patterns are relative to. */
 	readonly base: string;
+	/** `base` resolved through symlinks, once when the rule is collected. */
+	readonly realBase: string;
 	readonly origin: ScopedOrigin;
 }
 
@@ -224,7 +236,7 @@ function compilePattern(pattern: string): PathGlob {
 }
 
 function scopedRule(id: string, name: string, body: string, patterns: string[], base: string, origin: ScopedOrigin): ScopedRule {
-	return { id, name, body, patterns, globs: patterns.map(compilePattern), base, origin };
+	return { id, name, body, patterns, globs: patterns.map(compilePattern), base, realBase: realpathOr(base), origin };
 }
 
 /** Placement of a scanned file: `paths` wins; otherwise the existing alwaysApply/description semantics. */
@@ -232,12 +244,12 @@ function classifyScanned(frontmatter: Frontmatter): { readonly kind: "scoped"; r
 	switch (frontmatter.kind) {
 		case "absent":
 		case "invalid":
-			return { kind: "always" };
+			return { kind: "always", normalizedBody: normalizeWhitespace(frontmatter.body) };
 		case "valid": {
 			const patterns = parsePaths(frontmatter.fields.paths);
 			if (patterns.length > 0) return { kind: "scoped", patterns };
 			const always = frontmatter.fields.alwaysApply;
-			if (always === true || always === "true") return { kind: "always" };
+			if (always === true || always === "true") return { kind: "always", normalizedBody: normalizeWhitespace(frontmatter.body) };
 			const description = frontmatter.fields.description;
 			return { kind: "catalog", description: typeof description === "string" && description !== "" ? description : "(no description)" };
 		}
@@ -371,31 +383,48 @@ function relativeInside(base: string, file: string): string | null {
 	return rel.split(path.sep).join("/");
 }
 
+/** A touched file as the patterns see it: its path, and that path resolved through symlinks once per call. */
+export interface MatchTarget {
+	readonly file: string;
+	readonly real: string;
+}
+
+/** The touched file and its form resolved through symlinks. */
+export function matchTarget(file: string): MatchTarget {
+	return { file, real: realpathOr(file) };
+}
+
 /**
- * Whether a touched absolute file matches the rule, lexically or with both paths resolved through
- * symlinks: relative patterns against the path inside the base directory, absolute ones against the
- * whole path.
+ * Whether a touched file matches the rule, lexically or with both paths resolved through symlinks:
+ * relative patterns against the path inside the base directory, absolute ones against the whole path.
  */
-export function ruleMatches(rule: ScopedRule, file: string): boolean {
-	const pairs: Array<readonly [string, string]> = [[rule.base, file]];
-	const realBase = realpathOr(rule.base);
-	const realFile = realpathOr(file);
-	if (realBase !== rule.base || realFile !== file) pairs.push([realBase, realFile]);
-	for (const [base, target] of pairs) {
-		const rel = relativeInside(base, target);
-		const absolute = target.split(path.sep).join("/");
-		for (const { kind, glob } of rule.globs) {
-			switch (kind) {
-				case "relative":
-					if (rel !== null && glob.match(rel)) return true;
-					break;
-				case "absolute":
-					if (glob.match(absolute)) return true;
-					break;
-				default: {
-					const exhaustive: never = kind;
-					throw new Error(`Unexpected pattern kind: ${String(exhaustive)}`);
+export function ruleMatches(rule: ScopedRule, target: MatchTarget): boolean {
+	if (matchesInside(rule, rule.base, target.file)) return true;
+	if (rule.realBase === rule.base && target.real === target.file) return false;
+	return matchesInside(rule, rule.realBase, target.real);
+}
+
+/** The rule's globs against `target` seen from `base`; the relative and slash forms are built only when a glob needs them. */
+function matchesInside(rule: ScopedRule, base: string, target: string): boolean {
+	let relative: string | null = null;
+	let relativeKnown = false;
+	let absolute: string | undefined;
+	for (const { kind, glob } of rule.globs) {
+		switch (kind) {
+			case "relative":
+				if (!relativeKnown) {
+					relative = relativeInside(base, target);
+					relativeKnown = true;
 				}
+				if (relative !== null && glob.match(relative)) return true;
+				break;
+			case "absolute":
+				absolute ??= target.split(path.sep).join("/");
+				if (glob.match(absolute)) return true;
+				break;
+			default: {
+				const exhaustive: never = kind;
+				throw new Error(`Unexpected pattern kind: ${String(exhaustive)}`);
 			}
 		}
 	}
