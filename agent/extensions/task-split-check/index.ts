@@ -256,7 +256,9 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal, budget);
 		for (const check of pending) {
 			const verdict: Verdict = reply.kind === "text" ? parseAnswer(reply.text, check) : { kind: "unknown", why: reply.why };
-			if (verdict.kind === "unknown") pi.logger.warn("task-split-check check failed", { check: check.id, item: label, error: verdict.why });
+			if (verdict.kind === "unknown") {
+				pi.logger.warn("task-split-check check failed", { check: check.id, item: label, error: errorText(verdict.why) });
+			}
 			memorize(check, keyOf(check), verdict);
 			verdicts.set(check, verdict);
 		}
