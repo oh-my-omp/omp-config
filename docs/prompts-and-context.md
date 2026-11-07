@@ -26,7 +26,7 @@ Source: `agent/extensions-last/system-prompt-replace/`. Listed as the final entr
 
 `before_agent_start` handlers run in load order: native discovery (`~/.omp/agent/extensions/` and `settings.json` modules) → hooks → plugins → `-e` paths → `config.yml` `extensions` → OMP inline extensions. Keeping this extension in `extensions-last/` outside `extensions/` and at the end of the `extensions` list makes it run after every other path-loaded extension in both modes, so its delta follows theirs among a prompt's messages (see [`agent/extensions-last/README.md`](../agent/extensions-last/README.md)).
 
-At every prompt and after every tool call (main session and each subagent, each matched against itself), the extension reads every `REPLACE-SYSTEM-<label>.yml` beside it (repo-shipped and machine-local files share that directory) and in each directory from the session cwd up to the git root, plus that directory's `.omp/`. `config.yml` sets `inlineToolDescriptors: "on"` so tool descriptions are rendered into the system prompt, where rules can match them. A file is one YAML sequence of rules:
+At every prompt and after every tool call (main session and each subagent, each matched against itself), the extension reads every `REPLACE-SYSTEM-<label>.yml` beside it (repo-shipped and machine-local files share that directory) and in each directory from the session cwd up to the git root or the home directory, whichever comes first (only `cwd` when neither bounds the walk), plus that directory's `.omp/`. `config.yml` sets `inlineToolDescriptors: "on"` so tool descriptions are rendered into the system prompt, where rules can match them. A file is one YAML sequence of rules:
 
 ```yaml
 - literal: "exact original text"
@@ -63,7 +63,7 @@ The updater converts a machine's `system-prompt-replace` section in `omomp.yml` 
 
 Source: `agent/extensions/append-system-model/`. Its header comment is the reference for keys and matching.
 
-At every prompt and after every tool call (main session and each subagent, each matched against itself), the extension reads every `APPEND-SYSTEM-<label>.md` beside it (repo-shipped and machine-local files share that directory) and in each directory from the session cwd up to the git root, plus that directory's `.omp/`. Every fragment that applies is used; there is no override by name. Matching bodies are joined in discovery order into one [delta message](#prompt-files) with source `omp-config/append-system-model`; the system prompt is left unchanged. Files are re-read each time, so a new or edited fragment and a `/model` switch take effect at the next prompt or tool batch without restart, as a delta superseding the earlier one; a subagent turn woken by IRC keeps the delta already in its conversation.
+At every prompt and after every tool call (main session and each subagent, each matched against itself), the extension reads every `APPEND-SYSTEM-<label>.md` beside it (repo-shipped and machine-local files share that directory) and in each directory from the session cwd up to the git root or the home directory, whichever comes first (only `cwd` when neither bounds the walk), plus that directory's `.omp/`. Every fragment that applies is used; there is no override by name. Matching bodies are joined in discovery order into one [delta message](#prompt-files) with source `omp-config/append-system-model`; the system prompt is left unchanged. Files are re-read each time, so a new or edited fragment and a `/model` switch take effect at the next prompt or tool batch without restart, as a delta superseding the earlier one; a subagent turn woken by IRC keeps the delta already in its conversation.
 
 A fragment is `---`-fenced frontmatter followed by its prompt body:
 
@@ -138,7 +138,7 @@ Source: `agent/extensions/fork-task/`. Registers `fork_task` (`context` + `tasks
 
 Source: `agent/extensions/model-compaction/`.
 
-OMP's `compaction.modelThresholds` only matches exact `provider/id` keys or `*` prefixes. On every main-session `before_agent_start`, this extension re-discovers and re-reads `COMPACTION-<label>.md` files from the extension's own directory (machine rules) plus every directory between the session's cwd and its git root and each one's `.omp/` (project rules). One file is one rule, `---`-fenced frontmatter with `provider` and/or `model` as JavaScript regexes (unanchored; `"model": ".*"` matches every model) and `thresholdTokens` as a positive integer:
+OMP's `compaction.modelThresholds` only matches exact `provider/id` keys or `*` prefixes. On every main-session `before_agent_start`, this extension re-discovers and re-reads `COMPACTION-<label>.md` files from the extension's own directory (machine rules) plus every directory between the session's cwd and the git root or the home directory, whichever comes first (only `cwd` when neither bounds the walk), and each one's `.omp/` (project rules). One file is one rule, `---`-fenced frontmatter with `provider` and/or `model` as JavaScript regexes (unanchored; `"model": ".*"` matches every model) and `thresholdTokens` as a positive integer:
 
 ```markdown
 ---
