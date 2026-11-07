@@ -410,14 +410,26 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 function writeJsonString(text: string, emit: (part: string) => void): void {
 	emit('"');
 	let runStart = 0;
-	for (let i = 0; i < text.length; i++) {
+	const escapeAt = (i: number): void => {
 		const code = text.charCodeAt(i);
 		const jsonEscape = JSON_ESCAPES.get(code);
-		if (jsonEscape !== undefined || code < 0x20) {
-			if (runStart < i) emit(text.slice(runStart, i));
-			emit(jsonEscape ?? `\\u${code.toString(16).padStart(4, "0")}`);
-			runStart = i + 1;
-		}
+		emit(jsonEscape ?? `\\u${code.toString(16).padStart(4, "0")}`);
+	};
+	const needsEscape = (i: number): boolean => {
+		const code = text.charCodeAt(i);
+		const jsonEscape = JSON_ESCAPES.get(code);
+		if (jsonEscape !== undefined || code < 0x20) return true;
+		// Well-formed JSON.stringify: a lone surrogate escapes as \uXXXX; a
+		// complete pair stays literal.
+		if (code >= 0xd800 && code <= 0xdbff) return !(text.charCodeAt(i + 1) >= 0xdc00 && text.charCodeAt(i + 1) <= 0xdfff);
+		if (code >= 0xdc00 && code <= 0xdfff) return i === 0 || !(text.charCodeAt(i - 1) >= 0xd800 && text.charCodeAt(i - 1) <= 0xdbff);
+		return false;
+	};
+	for (let i = 0; i < text.length; i++) {
+		if (!needsEscape(i)) continue;
+		if (runStart < i) emit(text.slice(runStart, i));
+		escapeAt(i);
+		runStart = i + 1;
 	}
 	if (runStart < text.length) emit(text.slice(runStart));
 	emit('"');
@@ -464,8 +476,14 @@ const stringifyWithin = (value: unknown, limit: number): string => {
 	}
 };
 
-/** The exact tail `tail`-character window of the serialized value, streamed bounded. */
+/**
+ * The exact tail `tail`-character window of the serialized value, streamed
+ * bounded. `tail === 0` must yield "": the old whole-serialize-then-slice
+ * path produced `slice(length - 0)`, an empty tail, while a rolling-buffer
+ * `slice(-0)` returns the whole string instead.
+ */
 const jsonTailWindow = (value: unknown, tail: number): string => {
+	if (tail === 0) return "";
 	// Serialize fully into a bounded counter first; then, if the tail window
 	// is knowable without the whole string (which it is not for JSON), run a
 	// second pass that slices the tail from the substring stream.
