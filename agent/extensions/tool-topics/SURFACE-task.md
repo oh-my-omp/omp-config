@@ -14,6 +14,7 @@ Concurrent writers MUST use `isolated: true`, with non-overlapping file/state ow
 `name`: CamelCase ≤32, unique within the call, auto-generated if omitted; address the agent by name.
 `solutionSpace`: describe how open-ended the child's problem is: whether the fix or design is given, or which causes or designs remain open. Volume of work does not widen it; NEVER mention sibling agents or coordination. (`one fix: rename, names given`; `one fix: slice end in paginate`; `single-flight cache load; races easy to miss`; `several retry API shapes; error classes to choose`; `deadlock cause open, no repro`)
 `isolated`: own worktree; successful changes merge back into the parent.
+`tools`: names of tools you defined in an eval cell; the child may call them and they run in your kernel (`tool://eval/tools`).
 Children start blank: no conversation history. Large payloads via `local://<path>`, NEVER inline.
 
 # Format
