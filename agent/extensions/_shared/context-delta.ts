@@ -19,10 +19,10 @@
  * of the current turn returned before OMP persists the batch's developer message; `turn_start`
  * drops it.
  */
+import { getAnthropicCompactionPayload } from "@oh-my-pi/pi-agent-core";
 import type { CompactionEntry, ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { resolveSessionLeafId } from "@oh-my-pi/pi-coding-agent";
 import { getOpenAiRemoteCompactionPayload } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import { isRecord } from "@oh-my-pi/pi-utils";
 
 /** What one extension adds to OMP's base prompt for the current session and inputs. */
 export type Delta = { readonly kind: "none" } | { readonly kind: "text"; readonly body: string };
@@ -129,20 +129,6 @@ function carrierBlock(entry: SessionEntry, source: string): Effective | undefine
 	return undefined;
 }
 
-// @upstream adapted @oh-my-pi/pi-agent-core@18.18.0 src/compaction/anthropic.ts#getPreservedAnthropicCompactionData
-// Only the payload's definedness bounds the projection here; the payload itself never leaves the
-// host, so this re-checks the same record and provider/content/toolChanges validity.
-function hasAnthropicCompactionPayload(preserveData: Record<string, unknown> | undefined): boolean {
-	const candidate = preserveData?.anthropicCompaction;
-	if (!isRecord(candidate)) return false;
-	if (typeof candidate.provider !== "string" || candidate.provider.length === 0) return false;
-	if (typeof candidate.content !== "string" || candidate.content.length === 0) return false;
-	const toolChanges = candidate.toolChanges;
-	if (toolChanges !== undefined && (!Array.isArray(toolChanges) || !toolChanges.every(isRecord))) return false;
-	return true;
-}
-// @upstream-end
-
 /** How the latest compaction bounds the kept segment below it in `buildSessionContext`. */
 type KeptRegionBoundary = { readonly kind: "inclusive"; readonly id: string } | { readonly kind: "exclusive"; readonly id: string };
 type KeptBoundary = { readonly kind: "none" } | KeptRegionBoundary;
@@ -160,7 +146,7 @@ function keptBoundary(compaction: CompactionEntry): KeptBoundary {
 		return compaction.providerReplayThroughEntryId ? { kind: "exclusive", id: compaction.providerReplayThroughEntryId } : { kind: "none" };
 	}
 	if (compaction.firstKeptEntryId !== "") return { kind: "inclusive", id: compaction.firstKeptEntryId };
-	if (hasAnthropicCompactionPayload(compaction.preserveData) && compaction.providerReplayThroughEntryId) {
+	if (getAnthropicCompactionPayload(compaction.preserveData) && compaction.providerReplayThroughEntryId) {
 		return { kind: "exclusive", id: compaction.providerReplayThroughEntryId };
 	}
 	return { kind: "none" };
@@ -175,12 +161,12 @@ function keptBoundary(compaction: CompactionEntry): KeptBoundary {
  */
 function inProjection(ctx: ExtensionContext, source: string): Effective {
 	const sessions = ctx.sessionManager;
-	let entry: SessionEntry | undefined;
 	const leafId = sessions.getLeafId();
-	if (leafId !== null) entry = sessions.getEntry(leafId);
+	if (leafId === null) return { kind: "absent" };
+	let entry = sessions.getEntry(leafId);
 	if (entry === undefined) {
-		// The manager's leaf is absent from its index or the leaf is cleared: the host falls back
-		// to the leaf the entries replay to.
+		// The manager's leaf is absent from its index: the host falls back to the leaf the entries
+		// replay to.
 		const replayedId = resolveSessionLeafId(sessions.getEntries());
 		if (replayedId === null) return { kind: "absent" };
 		entry = sessions.getEntry(replayedId);
@@ -211,7 +197,7 @@ function inProjection(ctx: ExtensionContext, source: string): Effective {
 			const block = carrierBlock(entry, source);
 			if (deferred === undefined && block !== undefined) deferred = block;
 		}
-		if (entry.parentId === null) return { kind: "absent" };
+		if (!entry.parentId) return { kind: "absent" };
 		const parent = sessions.getEntry(entry.parentId);
 		if (parent === undefined) return { kind: "absent" };
 		entry = parent;
