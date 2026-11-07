@@ -10,9 +10,9 @@ import type { PortableSource, Replica } from "./replica.ts";
 export const STAGING_ROOT = path.join(os.tmpdir(), "omp-fork-task");
 
 /**
- * The plain-data part of a replica, written by the parent's spawn hook so a
- * child OMP runs in a subagent worker thread (its own copy of this module)
- * can read it. The borrowed `ask` tool is a live object and stays behind.
+ * The plain-data part of a replica: the parent's spawn hook writes it, and the
+ * child's first turn reads it, in whichever thread OMP hosts the child. The
+ * borrowed `ask` tool is a live object and stays in the spawning thread.
  */
 export type PortableReplica = Omit<Replica, "ask">;
 
