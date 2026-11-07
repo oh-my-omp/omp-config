@@ -10,16 +10,19 @@
  *
  * DELIVERY. Two points: the `before_agent_start` result `message` (a hidden custom message whose
  * `customType` is the source, `attribution: "agent"`) and the `tool_result` `additionalContext`
- * (OMP's developer message after the tool batch). Each reads the active leaf's context projection
- * (`buildSessionContext`): the source's last block there is its effective delta. Nothing is sent
- * when the wanted body equals it, or when nothing applies and no body of the source is effective.
- * Delivered messages are never rewritten; once compaction drops one from the projection, the next
- * delivery point sends it again. The only process state is what a tool batch of the current turn
- * returned before OMP persists the batch's developer message; `turn_start` drops it.
+ * (OMP's developer message after the tool batch). Each asks for the source's last block in the
+ * leaf's context projection — the messages `buildSessionContext` would emit — by walking the
+ * parent chain back from the leaf with the projection's boundaries instead of materializing it.
+ * Nothing is sent when the wanted body equals it, or when nothing applies and no body of the
+ * source is effective. Delivered messages are never rewritten; once compaction drops one from the
+ * projection, the next delivery point sends it again. The only process state is what a tool batch
+ * of the current turn returned before OMP persists the batch's developer message; `turn_start`
+ * drops it.
  */
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import { textOf } from "./messages.ts";
+import type { CompactionEntry, ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import { resolveSessionLeafId } from "@oh-my-pi/pi-coding-agent";
+import { getOpenAiRemoteCompactionPayload } from "@oh-my-pi/pi-coding-agent/session/session-context";
+import { isRecord } from "@oh-my-pi/pi-utils";
 
 /** What one extension adds to OMP's base prompt for the current session and inputs. */
 export type Delta = { readonly kind: "none" } | { readonly kind: "text"; readonly body: string };
@@ -73,18 +76,146 @@ function lastBlock(source: string, text: string): Effective | undefined {
 	return { kind: "text", body: inner.startsWith(supersede) ? inner.slice(supersede.length) : inner };
 }
 
-function inProjection(ctx: ExtensionContext, source: string): Effective {
-	const { messages } = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message === undefined || !("role" in message)) continue;
-		const carrier =
-			(message.role === "custom" && message.customType === source) || (message.role === "developer" && message.attribution === "agent");
-		if (!carrier) continue;
-		const block = lastBlock(source, textOf(message.content, "\n"));
-		if (block !== undefined) return block;
+/**
+ * `lastBlock` over a carrier's `content` without joining it: the joined `textOf` holds the open
+ * tag only when one text block holds it or a block ends with the tag minus the separator newline
+ * (the only position the "\n" separator can sit inside the tag), so the join — and its copy of the
+ * whole carrier — runs only on a candidate.
+ */
+function lastBlockInContent(source: string, content: unknown): Effective | undefined {
+	if (typeof content === "string") return lastBlock(source, content);
+	if (!Array.isArray(content)) return undefined;
+	const open = openTag(source);
+	const openSansNewline = open.slice(0, -1);
+	const texts: string[] = [];
+	for (const block of content) {
+		if (typeof block !== "object" || block === null) continue;
+		if (!("type" in block) || block.type !== "text") continue;
+		if (!("text" in block) || typeof block.text !== "string") continue;
+		texts.push(block.text);
 	}
-	return { kind: "absent" };
+	for (const [index, text] of texts.entries()) {
+		if (text.includes(open) || (index < texts.length - 1 && text.endsWith(openSansNewline))) {
+			return lastBlock(source, texts.join("\n"));
+		}
+	}
+	return undefined;
+}
+
+/**
+ * `lastBlock` for the message `entry` emits in the model projection, or undefined when `entry`
+ * emits no message or none carrying `source`. Mirrors `buildSessionContext`'s `appendMessage` for
+ * the two carrier-capable entry types: a `message` entry emits its stored message; a
+ * `custom_message` entry emits a `custom` role message with its `customType` only when its content
+ * is a string or an array, since the host drops payloads it cannot persist.
+ */
+function carrierBlock(entry: SessionEntry, source: string): Effective | undefined {
+	if (entry.type === "message") {
+		const message = entry.message;
+		if (message.role === "custom") {
+			if (message.customType !== source) return undefined;
+		} else if (message.role === "developer") {
+			if (message.attribution !== "agent") return undefined;
+		} else {
+			return undefined;
+		}
+		return lastBlockInContent(source, message.content);
+	}
+	if (entry.type === "custom_message") {
+		if (entry.customType !== source) return undefined;
+		if (typeof entry.content !== "string" && !Array.isArray(entry.content)) return undefined;
+		return lastBlockInContent(source, entry.content);
+	}
+	return undefined;
+}
+
+// @upstream adapted @oh-my-pi/pi-agent-core@18.18.0 src/compaction/anthropic.ts#getPreservedAnthropicCompactionData
+// Only the payload's definedness bounds the projection here; the payload itself never leaves the
+// host, so this re-checks the same record and provider/content/toolChanges validity.
+function hasAnthropicCompactionPayload(preserveData: Record<string, unknown> | undefined): boolean {
+	const candidate = preserveData?.anthropicCompaction;
+	if (!isRecord(candidate)) return false;
+	if (typeof candidate.provider !== "string" || candidate.provider.length === 0) return false;
+	if (typeof candidate.content !== "string" || candidate.content.length === 0) return false;
+	const toolChanges = candidate.toolChanges;
+	if (toolChanges !== undefined && (!Array.isArray(toolChanges) || !toolChanges.every(isRecord))) return false;
+	return true;
+}
+// @upstream-end
+
+/** How the latest compaction bounds the kept segment below it in `buildSessionContext`. */
+type KeptRegionBoundary = { readonly kind: "inclusive"; readonly id: string } | { readonly kind: "exclusive"; readonly id: string };
+type KeptBoundary = { readonly kind: "none" } | KeptRegionBoundary;
+
+/**
+ * The kept segment of `compaction`, matching `buildSessionContext`'s retained tail. An OpenAI
+ * remote compaction emits only entries after `providerReplayThroughEntryId`; an Anthropic native
+ * payload with an empty `firstKeptEntryId` does the same; otherwise the segment starts at
+ * `firstKeptEntryId` itself. A boundary id that is not on the path below the compaction means the
+ * segment is empty — carriers below the compaction are outside the projection either way.
+ */
+function keptBoundary(compaction: CompactionEntry): KeptBoundary {
+	const remote = getOpenAiRemoteCompactionPayload(compaction)?.items;
+	if (remote) {
+		return compaction.providerReplayThroughEntryId ? { kind: "exclusive", id: compaction.providerReplayThroughEntryId } : { kind: "none" };
+	}
+	if (compaction.firstKeptEntryId !== "") return { kind: "inclusive", id: compaction.firstKeptEntryId };
+	if (hasAnthropicCompactionPayload(compaction.preserveData) && compaction.providerReplayThroughEntryId) {
+		return { kind: "exclusive", id: compaction.providerReplayThroughEntryId };
+	}
+	return { kind: "none" };
+}
+
+/**
+ * The source's effective delta in the leaf's model projection, walking the parentId chain with the
+ * boundaries `buildSessionContext` applies: the first compaction met is the latest on the path and
+ * sets the kept-segment boundary below it; a `reset_boundary` met first postdates every compaction
+ * on the path and truncates the projection there. Steady state visits the leaf→carrier distance,
+ * not the session's length.
+ */
+function inProjection(ctx: ExtensionContext, source: string): Effective {
+	const sessions = ctx.sessionManager;
+	let entry: SessionEntry | undefined;
+	const leafId = sessions.getLeafId();
+	if (leafId !== null) entry = sessions.getEntry(leafId);
+	if (entry === undefined) {
+		// The manager's leaf is absent from its index or the leaf is cleared: the host falls back
+		// to the leaf the entries replay to.
+		const replayedId = resolveSessionLeafId(sessions.getEntries());
+		if (replayedId === null) return { kind: "absent" };
+		entry = sessions.getEntry(replayedId);
+	}
+	if (entry === undefined) return { kind: "absent" };
+	const seen = new Set<string>();
+	let boundary: KeptRegionBoundary | undefined;
+	let deferred: Effective | undefined;
+	while (true) {
+		if (!seen.add(entry.id)) return { kind: "absent" };
+		if (boundary === undefined) {
+			const block = carrierBlock(entry, source);
+			if (block !== undefined) return block;
+			if (entry.type === "compaction") {
+				const region = keptBoundary(entry);
+				if (region.kind === "none") return { kind: "absent" };
+				boundary = region;
+			} else if (entry.type === "reset_boundary") {
+				return { kind: "absent" };
+			}
+		} else {
+			// Kept segment: carriers are provisional until the boundary entry confirms the segment
+			// exists; the boundary id absent below the compaction means the segment is empty.
+			if (entry.id === boundary.id) {
+				if (boundary.kind === "exclusive") return deferred ?? { kind: "absent" };
+				return deferred ?? carrierBlock(entry, source) ?? { kind: "absent" };
+			}
+			const block = carrierBlock(entry, source);
+			if (deferred === undefined && block !== undefined) deferred = block;
+		}
+		if (entry.parentId === null) return { kind: "absent" };
+		const parent = sessions.getEntry(entry.parentId);
+		if (parent === undefined) return { kind: "absent" };
+		entry = parent;
+	}
 }
 
 /** The text to send so that `wanted` becomes effective, or undefined when it already is. */
