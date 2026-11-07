@@ -33,7 +33,7 @@
 
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
-import { type Component, isKeyRelease, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { type Component, isKeyRelease, parseKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -178,26 +178,70 @@ type Preview =
 
 type Theme = ExtensionContext["ui"]["theme"];
 
+/**
+ * The last `count` rows of `raw` wrapped to `width`: the same rows wrapping every logical line of
+ * `raw` would produce, computed from the tail of the text only, so a streaming body costs the rows
+ * it shows rather than everything accumulated so far.
+ */
+function wrappedTail(raw: string, width: number, count: number): string[] {
+	if (raw === "") return [""];
+	const reversed: string[] = [];
+	let end = raw.length;
+	while (reversed.length < count) {
+		// `lastIndexOf` clamps a negative position to 0, so the start of the text needs its own case:
+		// otherwise a text that begins with a newline is read as one more empty line forever.
+		const start = end === 0 ? -1 : raw.lastIndexOf("\n", end - 1);
+		const line = raw.slice(start + 1, end);
+		const rows = line === "" ? [""] : wrapTextWithAnsi(line, width);
+		const need = count - reversed.length;
+		// This line alone fills the rest of the window: nothing before it can be shown.
+		if (rows.length >= need) {
+			for (const row of rows.slice(rows.length - need).reverse()) reversed.push(row);
+			break;
+		}
+		for (const row of rows.reverse()) reversed.push(row);
+		if (start < 0) break;
+		end = start;
+	}
+	reversed.reverse();
+	return reversed;
+}
+
 // Display-only: every key is decided by the raw input listener, not here.
 class PreviewView implements Component {
 	preview: Preview = { kind: "polishing", partial: "" };
 	requestRender: () => void = () => {};
+	private labels: { readonly title: string; readonly hint: string } = { title: "", hint: "" };
 
-	constructor(private readonly theme: Theme) {}
+	constructor(private readonly theme: Theme) {
+		this.labels = this.texts();
+	}
 
 	set(preview: Preview): void {
+		const fresh = preview.kind !== this.preview.kind;
 		this.preview = preview;
+		if (fresh) this.labels = this.texts();
 		this.requestRender();
 	}
 
-	private hint(): string {
+	/** The person-facing wording of the current state, resolved once per state rather than per frame. */
+	private texts(): { readonly title: string; readonly hint: string } {
 		switch (this.preview.kind) {
 			case "polishing":
-				return tr("Polishing… · Esc to cancel", "润色中… · Esc 取消");
+				return {
+					title: tr("Polish preview", "润色预览"),
+					hint: tr("Polishing… · Esc to cancel", "润色中… · Esc 取消"),
+				};
 			case "ready":
-				return tr("Enter to send polished text · Esc to cancel and keep original", "Enter 发送润色稿 · Esc 取消，保留原文");
+				return {
+					title: tr("Polish preview", "润色预览"),
+					hint: tr("Enter to send polished text · Esc to cancel and keep original", "Enter 发送润色稿 · Esc 取消，保留原文"),
+				};
 			case "failed":
-				return tr("Esc to close and keep original", "Esc 关闭，保留原文");
+				return {
+					title: tr("Polish failed", "润色失败"),
+					hint: tr("Esc to close and keep original", "Esc 关闭，保留原文"),
+				};
 			default: {
 				const unreachable: never = this.preview;
 				return unreachable;
@@ -236,30 +280,32 @@ class PreviewView implements Component {
 		const rule = (l: string, r: string): string => t.fg("border", `${l}${"─".repeat(innerWidth)}${r}`);
 
 		const raw = this.body();
-		const wrapped = raw === "" ? [""] : raw.split("\n").flatMap((line) => (line === "" ? [""] : wrapTextWithAnsi(line, textWidth)));
 		const streaming = this.preview.kind === "polishing";
-		let shown = wrapped;
-		if (wrapped.length > maxBody) {
-			shown = streaming
-				? wrapped.slice(wrapped.length - maxBody)
-				: [
-						...wrapped.slice(0, maxBody - 1),
-						t.fg(
-							"dim",
-							tr(`… ${wrapped.length - (maxBody - 1)} more lines not shown`, `… 另有 ${wrapped.length - (maxBody - 1)} 行未显示`),
-						),
-					];
+		let shown: readonly string[];
+		if (streaming) {
+			shown = wrappedTail(raw, textWidth, maxBody);
+		} else {
+			const wrapped = raw === "" ? [""] : raw.split("\n").flatMap((line) => (line === "" ? [""] : wrapTextWithAnsi(line, textWidth)));
+			shown =
+				wrapped.length > maxBody
+					? [
+							...wrapped.slice(0, maxBody - 1),
+							t.fg(
+								"dim",
+								tr(`… ${wrapped.length - (maxBody - 1)} more lines not shown`, `… 另有 ${wrapped.length - (maxBody - 1)} 行未显示`),
+							),
+						]
+					: wrapped;
 		}
 		const colorLine = (line: string): string => (this.preview.kind === "failed" ? t.fg("error", line) : line);
 
-		const title = this.preview.kind === "failed" ? tr("Polish failed", "润色失败") : tr("Polish preview", "润色预览");
 		const lines = [
 			rule("┌", "┐"),
-			frame(` ${t.fg("accent", t.bold(title))}`),
+			frame(` ${t.fg("accent", t.bold(this.labels.title))}`),
 			rule("├", "┤"),
 			...shown.map((line) => frame(` ${colorLine(line)}`)),
 			rule("├", "┤"),
-			frame(` ${t.fg("dim", this.hint())}`),
+			frame(` ${t.fg("dim", this.labels.hint)}`),
 			rule("└", "┘"),
 		];
 		return lines;
@@ -379,12 +425,13 @@ export default function inputPolish(pi: ExtensionAPI): void {
 				// Kitty key-release/repeat events must not act as a second press.
 				if (isKeyRelease(data)) return phase.kind === "open" ? { consume: true } : undefined;
 
+				const key = parseKey(data);
 				if (phase.kind === "open") {
-					if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+					if (key === "escape" || key === "ctrl+c") {
 						dismiss();
 						return { consume: true };
 					}
-					if (matchesKey(data, "enter")) {
+					if (key === "enter") {
 						const open = phase;
 						if (open.view.preview.kind !== "ready") return { consume: true };
 						const text = open.view.preview.text;
@@ -396,7 +443,7 @@ export default function inputPolish(pi: ExtensionAPI): void {
 					return { consume: true };
 				}
 
-				if (!matchesKey(data, cfg.key)) return undefined;
+				if (key !== cfg.key) return undefined;
 				const draft = ctx.ui.getEditorText();
 				// Slash command, bash (`!`) and python (`$`) drafts are host commands, not prose.
 				if (draft.trim() === "" || /^\s*[/!$]/.test(draft)) return undefined;
