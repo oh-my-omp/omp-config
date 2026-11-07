@@ -1161,16 +1161,21 @@ function parseSources(opts: ApplyOptions, report: ApplyReport): StructuredSource
 	return sources;
 }
 
-/** Every committed version of a structured file that still parses: the history a missing base is matched against. */
+/**
+ * Every committed version of a structured file that still parses: the history
+ * a missing base is matched against. Blobs stream through the batch output
+ * cursor one at a time and only the parsed mappings are kept — the decoded
+ * texts are never all resident together.
+ */
 function structuredHistory(history: RepoHistory, item: Pick<StructuredItem, "rel" | "format">): Mapping[] {
 	const versions: Mapping[] = [];
-	for (const text of history.versions(item.rel)) {
+	history.eachVersion(item.rel, (text) => {
 		try {
 			versions.push(parseStructured(text, item.format));
 		} catch {
 			// A version that never parsed was never applied: it cannot be a base.
 		}
-	}
+	});
 	return versions;
 }
 

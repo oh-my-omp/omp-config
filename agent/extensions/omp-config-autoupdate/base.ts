@@ -232,16 +232,23 @@ export class RepoHistory {
 		return this.blobs(rel).has(blobId(content));
 	}
 
-	/** Every committed version of `rel`, as raw text. */
-	versions(rel: string): string[] {
+	/**
+	 * Every committed version of `rel`, as raw text, in `cat-file` input
+	 * order. The batch output stays one Buffer; each blob is sliced out of it
+	 * with a cursor and decoded only while visited — no second copy of every
+	 * blob is kept as decoded strings. `spawnSync` must return before the
+	 * walk starts, so its stdout holding every blob's bytes is the lower
+	 * bound here; `structuredHistory` needs each parsable version, so one
+	 * decoded text at a time is the least that path can hold.
+	 */
+	eachVersion(rel: string, onVersion: (text: string) => void): void {
 		const ids = [...this.blobs(rel)];
-		if (ids.length === 0) return [];
+		if (ids.length === 0) return;
 		const result = spawnSync("git", ["-C", this.source, "cat-file", "--batch"], {
 			input: `${ids.join("\n")}\n`,
 			maxBuffer: 256 * 1024 * 1024,
 		});
-		if (result.status !== 0 || result.error) return [];
-		const texts: string[] = [];
+		if (result.status !== 0 || result.error) return;
 		const bytes = result.stdout;
 		let offset = 0;
 		while (offset < bytes.length) {
@@ -250,10 +257,10 @@ export class RepoHistory {
 			const header = bytes.subarray(offset, newline).toString("utf8").split(" ");
 			const size = Number(header[2]);
 			if (header[1] !== "blob" || !Number.isFinite(size)) break;
-			texts.push(bytes.subarray(newline + 1, newline + 1 + size).toString("utf8"));
+			const text = bytes.subarray(newline + 1, newline + 1 + size).toString("utf8");
 			offset = newline + 1 + size + 1;
+			onVersion(text);
 		}
-		return texts;
 	}
 
 	/** The content of `rel` at `commit`, when the source has it. */
