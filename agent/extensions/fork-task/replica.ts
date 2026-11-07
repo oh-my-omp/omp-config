@@ -263,20 +263,6 @@ export function captureReplica(
 
 type PrefixReplay = Extract<Replay, { kind: "prefix" }>;
 
-type Match = { readonly kind: "one"; readonly index: number } | { readonly kind: "none" } | { readonly kind: "many" };
-
-/** The only message in `messages[0, end)` that `matches` accepts. */
-function findOnly(messages: readonly Message[], end: number, matches: (message: Message) => boolean): Match {
-	let found: Match = { kind: "none" };
-	for (const [index, message] of messages.entries()) {
-		if (index >= end) break;
-		if (!matches(message)) continue;
-		if (found.kind === "one") return { kind: "many" };
-		found = { kind: "one", index };
-	}
-	return found;
-}
-
 /**
  * Where the child's own context starts. Everything before it is the child's
  * rebuild of the inherited transcript; the source's request messages replace
@@ -288,26 +274,29 @@ function findOnly(messages: readonly Message[], end: number, matches: (message: 
  * starts the child's part.
  */
 function childStart(messages: readonly Message[], replay: PrefixReplay): number {
-	const notice = findOnly(
-		messages,
-		messages.length,
-		(message) => message.role === "developer" && message.timestamp === replay.notice.timestamp,
-	);
-	switch (notice.kind) {
-		case "one":
-			break;
-		case "none":
-		case "many":
-			throw new Error(`fork_task: the fork notice is ${notice.kind === "none" ? "missing from" : "ambiguous in"} the child context`);
-		default: {
-			const unreachable: never = notice;
-			return unreachable;
-		}
-	}
+	// One reverse pass: the fork notice sits near the child's own tail, and every
+	// message the source's response can match precedes it. It cannot stop at the
+	// notice, because a duplicate notice before it makes the notice ambiguous.
+	const noticeTimestamp = replay.notice.timestamp;
 	const { response } = replay;
-	if (response === undefined) return notice.index;
-	const anchor = findOnly(messages, notice.index, (message) => message.role === "assistant" && message.timestamp === response);
-	return anchor.kind === "one" ? anchor.index : notice.index;
+	let notice = -1;
+	let anchor = -1;
+	let anchors = 0;
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index]!;
+		const isNotice = message.role === "developer" && message.timestamp === noticeTimestamp;
+		if (notice === -1) {
+			if (isNotice) notice = index;
+			continue;
+		}
+		if (isNotice) throw new Error("fork_task: the fork notice is ambiguous in the child context");
+		if (message.role !== "assistant" || message.timestamp !== response) continue;
+		anchor = index;
+		anchors++;
+	}
+	if (notice === -1) throw new Error("fork_task: the fork notice is missing from the child context");
+	if (response === undefined) return notice;
+	return anchors === 1 ? anchor : notice;
 }
 
 /**
@@ -317,16 +306,27 @@ function childStart(messages: readonly Message[], replay: PrefixReplay): number 
  */
 function replaysPrefix(session: AgentSession, notice: ForkNotice): boolean {
 	const branch = session.sessionManager.getBranchView();
-	const at = branch.findIndex((entry) => entry.id === notice.entryId);
-	return at >= 0 && branch.findLastIndex((entry) => entry.type === "compaction") < at;
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index]!;
+		if (entry.type === "compaction") return false;
+		if (entry.id === notice.entryId) return true;
+	}
+	return false;
 }
 
 function replicatedMessages(session: AgentSession, replay: Replay, source: readonly Message[], current: Message[]): Message[] {
 	switch (replay.kind) {
 		case "own":
 			return current;
-		case "prefix":
-			return replaysPrefix(session, replay.notice) ? [...source, ...current.slice(childStart(current, replay))] : current;
+		case "prefix": {
+			if (!replaysPrefix(session, replay.notice)) return current;
+			const start = childStart(current, replay);
+			// One array: the source prefix, then the child's own tail copied in place.
+			const merged: Message[] = new Array(source.length + current.length - start);
+			for (let index = 0; index < source.length; index++) merged[index] = source[index]!;
+			for (let index = source.length, tail = start; tail < current.length; index++, tail++) merged[index] = current[tail]!;
+			return merged;
+		}
 		default: {
 			const unreachable: never = replay;
 			return unreachable;
@@ -364,8 +364,11 @@ export function applyReplica(session: AgentSession, replica: Replica): void {
 	// other tools admitted by the unrestricted internal agent definition.
 	const yieldTool = own.get("yield") ?? session.getToolByName("yield");
 	if (yieldTool && !names.has("yield")) tools.push(yieldTool);
+	// The hook re-installs the source's prompt and tools whenever the host swaps
+	// them; one array each is enough, since both setters store what they get.
+	const systemPrompt = [...replica.systemPrompt];
 	const detach = session.agent.addBeforeModelCallHook(() => {
-		session.agent.setSystemPrompt([...replica.systemPrompt]);
+		session.agent.setSystemPrompt(systemPrompt);
 		session.agent.setTools(tools);
 	});
 	session.addDisposer(detach);

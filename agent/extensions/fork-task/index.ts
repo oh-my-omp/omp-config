@@ -75,17 +75,19 @@
 // Relies on omp internals (AgentRegistry, the executor's session-file path and
 // hook ordering, session entry types, subagent worker threads); re-verify after
 // every omp upgrade. OMP may run a session in a subagent worker thread, which
-// loads its own copy of this module. A child there reads the replica from the
-// copy file instead of `replicas`. A `from` source this thread does not host
-// is asked over source-channel.ts, and its own thread answers with its latest
-// request; a parked source's kept request is a file every thread of the
-// process reads, removed at main-session shutdown or swept by a later
-// main session's startup once its process is gone (sweep.ts).
+// loads its own copy of this module. Every child reads its replica from the
+// copy file at its first turn, and a thread that hosts no child keeps none of
+// it. A `from` source this thread does not host is asked over source-channel.ts,
+// and its own thread answers with its latest request; a parked source's kept
+// request is a file every thread of the process reads, removed at main-session
+// shutdown or swept by a later main session's startup once its process is gone
+// (sweep.ts).
 // ============================================================================
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import {
 	type AgentDefinition,
 	type AgentSession,
@@ -187,6 +189,11 @@ const RUNTIME_STATE_TYPES: Record<string, true> = {
 
 const SESSION_EXIT_CUSTOM_TYPE = "session_exit";
 
+/** Rewrite output buffered before each chunk write, so a staged file is never held whole. */
+const FLUSH_CHARS = 1 << 18;
+/** Bytes read per batch by the staging rewrite. */
+const CHUNK_BYTES = 1 << 22;
+
 const DESCRIPTION = `Fork a conversation into a native task child that continues it under the source's exact request: its system prompt, tools and message prefix are replicated unchanged, so forks of one source share the provider's cached prefix. \`context\`, an \`agent\` role and \`task\` reach the child only as its new user message, never as system text.
 - The source is your conversation, or that of the agent \`from\` names, live or parked.
 - Omit \`agent\` to run the source's model and thinking/request controls; the default is a shared working directory (\`isolated: false\`).
@@ -278,16 +285,15 @@ const forkNotice = (source: ForkSource, parentCwd: string, isolated: boolean, in
 const FORK_AGENT = "fork:self";
 
 /**
- * Replicas by child session file. A child on the parent's thread rebinds this
- * module's factory, so the parent's write is visible to it; a child in a
- * subagent worker thread reads `replica-file.ts`'s copy instead. Entries and
- * copies live until the main session shuts down — a sub session's park runs
- * the same shutdown event, so a revived child keeps its replicated contract.
- * A replica holds plain request data and at most a borrowed `ask` tool
- * (absent from the copy), never the source session, so it keeps no parked
- * session alive.
+ * The borrowed `ask` tool of each child session file, the one live part of a
+ * replica. Every child reads the plain-data copy `replica-file.ts` holds (the
+ * same file in every thread) at its first turn, so a replica is never retained
+ * for a child this thread does not host; only the tool, which must stay in the
+ * parent's thread, outlives that read. Copies live until the main session
+ * shuts down — a sub session's park runs the same shutdown event, so a revived
+ * child keeps its replicated contract.
  */
-const replicas = new Map<string, Replica>();
+const replicaAsks = new Map<string, AgentTool>();
 
 type PendingFork = {
 	/** Exact requested name; the allocated id's last dot-segment. */
@@ -307,10 +313,11 @@ type StagedFork = {
 	readonly shakeSummary?: string;
 };
 
-/** The parent's plain-data copy for `childFile`; it carries no borrowed `ask`, a live tool that stays in the parent's thread. */
+/** This thread's copy for `childFile`, read on demand, plus the borrowed `ask` it still holds. */
 async function portableReplica(childFile: string): Promise<Replica | undefined> {
 	const copy = await readReplicaFile(replicaFilePath(childFile));
-	return copy && { ...copy, ask: undefined };
+	if (!copy) return undefined;
+	return { ...copy, ask: replicaAsks.get(childFile) };
 }
 
 /** Mirrors the task tool's `sanitizeAgentId`, so the requested name is the allocated id. */
@@ -323,72 +330,139 @@ function sanitizeName(value: string | undefined): string | undefined {
 }
 
 /**
+ * A UTF-8 file's lines as byte-sized batches: a rewrite visits every line while
+ * holding only one batch, and a multi-byte character split across reads is
+ * carried into the next batch.
+ */
+async function* readLineBatches(handle: fs.FileHandle, bytes = CHUNK_BYTES): AsyncGenerator<string[]> {
+	const buffer = Buffer.allocUnsafe(bytes);
+	const decoder = new TextDecoder();
+	let carry = "";
+	for (;;) {
+		const { bytesRead } = await handle.read(buffer, 0, bytes, null);
+		if (bytesRead === 0) break;
+		const text = carry + decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
+		const lines = text.split("\n");
+		carry = lines.pop() ?? "";
+		yield lines;
+	}
+	carry += decoder.decode();
+	if (carry.length > 0) yield [carry];
+}
+
+/**
  * Rewrite the staged JSONL: drop parent runtime state and the shake helper's
  * bookkeeping, re-parent what depended on dropped entries, and set the header
- * cwd the child must bind to.
+ * cwd the child must bind to. One pass, one record at a time: a JSONL session
+ * appends an entry after the entries it references, so a dropped entry is
+ * known before the rewrite reaches a `parentId` or `firstKeptEntryId` that
+ * names it. `preShakeIds` is undefined when no shake ran: nothing was added
+ * to drop then.
  */
-async function finalizeStaging(file: string, options: { cwd: string; isolated: boolean; preShakeIds: ReadonlySet<string> }): Promise<void> {
-	const lines = (await fs.readFile(file, "utf8")).split("\n").filter((line) => line.length > 0);
-	const records = lines.map<unknown>((line) => JSON.parse(line));
-
-	const dropped = new Map<string, string | null>();
-	const entries: Array<SessionEntryRecord | undefined> = records.map((record) => {
-		const parsed = sessionEntrySchema.safeParse(record);
-		return parsed.success ? parsed.data : undefined;
-	});
-	for (const entry of entries) {
-		if (!entry) continue;
-		const addedByShake = !options.preShakeIds.has(entry.id);
-		const drop =
-			RUNTIME_STATE_TYPES[entry.type] === true ||
-			(addedByShake && entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE);
-		if (drop) dropped.set(entry.id, entry.parentId ?? null);
+async function finalizeStaging(
+	file: string,
+	options: { cwd: string; isolated: boolean; preShakeIds: ReadonlySet<string> | undefined },
+): Promise<void> {
+	const temp = `${file}.rewrite`;
+	const source = await fs.open(file);
+	let target: fs.FileHandle;
+	try {
+		target = await fs.open(temp, "w");
+	} catch (error) {
+		// The rewrite never starts; release the reader without masking the open failure.
+		await source.close().catch(() => {});
+		throw error;
 	}
+	const chunk: string[] = [];
+	let chunkLength = 0;
+	const flush = async (): Promise<void> => {
+		if (chunk.length === 0) return;
+		const bytes = Buffer.from(`${chunk.join("\n")}\n`, "utf8");
+		chunk.length = 0;
+		chunkLength = 0;
+		let written = 0;
+		// A short write keeps its own cursor; loop so a chunk is never half written.
+		while (written < bytes.length) {
+			const { bytesWritten } = await target.write(bytes, written, bytes.length - written);
+			if (bytesWritten === 0) throw new Error(`fork_task: writing ${temp} made no progress`);
+			written += bytesWritten;
+		}
+	};
+	const emit = (line: string): void => {
+		chunk.push(line);
+		chunkLength += line.length + 1;
+	};
+	const dropped = new Map<string, string | null>();
+	const nextSurviving = new Map<string, string>();
 	const survivingParent = (id: string | null): string | null => {
 		let current = id;
 		while (current !== null && dropped.has(current)) current = dropped.get(current) ?? null;
 		return current;
 	};
-	// `firstKeptEntryId` may name a dropped entry: move it to the next surviving entry.
-	const nextSurviving = new Map<string, string>();
-	let pendingDropped: string[] = [];
-	for (const entry of entries) {
-		if (!entry) continue;
-		if (dropped.has(entry.id)) {
-			pendingDropped.push(entry.id);
-			continue;
-		}
-		for (const id of pendingDropped) nextSurviving.set(id, entry.id);
-		pendingDropped = [];
-	}
-
 	let headerSeen = false;
-	const output: string[] = [];
-	for (const [index, record] of records.entries()) {
-		const header = headerSeen ? undefined : sessionHeaderSchema.safeParse(record);
-		if (header?.success) {
-			headerSeen = true;
-			const next = { ...header.data, cwd: options.isolated ? "" : options.cwd };
-			if (options.isolated) delete next.additionalDirectories;
-			output.push(JSON.stringify(next));
-			continue;
+	let pendingDropped: string[] = [];
+	let failure: unknown;
+	try {
+		for await (const batch of readLineBatches(source)) {
+			for (const line of batch) {
+				if (line.length === 0) continue;
+				const record: unknown = JSON.parse(line);
+				const header = headerSeen ? undefined : sessionHeaderSchema.safeParse(record);
+				if (header?.success) {
+					headerSeen = true;
+					const next = { ...header.data, cwd: options.isolated ? "" : options.cwd };
+					if (options.isolated) delete next.additionalDirectories;
+					emit(JSON.stringify(next));
+					if (chunkLength >= FLUSH_CHARS) await flush();
+					continue;
+				}
+				const parsed = sessionEntrySchema.safeParse(record);
+				if (!parsed.success) {
+					emit(line);
+					if (chunkLength >= FLUSH_CHARS) await flush();
+					continue;
+				}
+				const entry = parsed.data;
+				const addedByShake = options.preShakeIds !== undefined && !options.preShakeIds.has(entry.id);
+				const drop =
+					RUNTIME_STATE_TYPES[entry.type] === true ||
+					(addedByShake && entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE);
+				if (drop) {
+					dropped.set(entry.id, entry.parentId ?? null);
+					pendingDropped.push(entry.id);
+					continue;
+				}
+				// `firstKeptEntryId` may name a dropped entry: move it to the next surviving entry.
+				for (const id of pendingDropped) nextSurviving.set(id, entry.id);
+				pendingDropped = [];
+				const next: SessionEntryRecord = { ...entry };
+				if (next.parentId && dropped.has(next.parentId)) next.parentId = survivingParent(next.parentId);
+				if (next.firstKeptEntryId && dropped.has(next.firstKeptEntryId)) {
+					const replacement = nextSurviving.get(next.firstKeptEntryId);
+					if (replacement) next.firstKeptEntryId = replacement;
+				}
+				emit(JSON.stringify(next));
+				if (chunkLength >= FLUSH_CHARS) await flush();
+			}
 		}
-		const entry = entries[index];
-		if (!entry) {
-			output.push(lines[index]!);
-			continue;
-		}
-		if (dropped.has(entry.id)) continue;
-		const next: SessionEntryRecord = { ...entry };
-		if (next.parentId && dropped.has(next.parentId)) next.parentId = survivingParent(next.parentId);
-		if (next.firstKeptEntryId && dropped.has(next.firstKeptEntryId)) {
-			const replacement = nextSurviving.get(next.firstKeptEntryId);
-			if (replacement) next.firstKeptEntryId = replacement;
-		}
-		output.push(JSON.stringify(next));
+		await flush();
+	} catch (error) {
+		failure = error;
 	}
-	if (!headerSeen) throw new Error(`fork_task: ${file} has no session header`);
-	await fs.writeFile(file, `${output.join("\n")}\n`);
+	// Close both handles whatever happened; a close failure never hides the rewrite's own error.
+	for (const handle of [target, source]) {
+		try {
+			await handle.close();
+		} catch (error) {
+			if (failure === undefined) failure = error;
+		}
+	}
+	if (failure !== undefined || !headerSeen) {
+		await fs.rm(temp, { force: true }).catch(() => {});
+		if (failure !== undefined) throw failure;
+		throw new Error(`fork_task: ${file} has no session header`);
+	}
+	await fs.rename(temp, file);
 }
 
 async function moveFile(from: string, to: string): Promise<void> {
@@ -432,7 +506,8 @@ async function stageFork(
 			repairInterruptedTail: true,
 		});
 		let shakeSummary: string | undefined;
-		let preShakeIds: ReadonlySet<string>;
+		// Only a shake adds entries finalizeStaging must leave out; without one, every entry predates it.
+		let preShakeIds: ReadonlySet<string> | undefined;
 		let notice: ForkNotice;
 		try {
 			// A parked source's kept request is current only while its transcript still ends at that request's response.
@@ -451,8 +526,8 @@ async function stageFork(
 			});
 			notice = { entryId, timestamp };
 			await manager.flush();
-			preShakeIds = new Set(manager.getEntries().map((entry) => entry.id));
 			if (shake) {
+				preShakeIds = new Set(manager.getEntries().map((entry) => entry.id));
 				// Recovery artifacts go to the store the child will adopt, so the
 				// `artifact://` ids written into the transcript resolve for it.
 				const parentArtifacts = parent.sessionManager.getArtifactManager();
@@ -645,7 +720,7 @@ type ForkTaskRuntime = {
 	readonly pending: PendingFork[];
 	/** Child sessions whose per-call hook is installed. */
 	readonly cloned: WeakSet<AgentSession>;
-	/** Subagent transcripts whose workspace start this module copy has handled. */
+	/** Subagent transcripts whose workspace start this module copy has handled; dropped when the session ends. */
 	readonly started: Set<string>;
 };
 
@@ -687,8 +762,9 @@ async function beforeSubagentSpawn(
 		await fs.mkdir(artifactsDir, { recursive: true });
 		await moveFile(entry.staging, target);
 		await discardPending(rt, entry);
-		replicas.set(target, entry.replica);
 		await writeReplicaFile(replicaFilePath(target), entry.replica);
+		// The copy is every thread's source of the replica; only the borrowed tool stays here.
+		if (entry.replica.ask) replicaAsks.set(target, entry.replica.ask);
 		if (entry.overlay) await writeOverlay(target, entry.overlay);
 		return entry.model === undefined ? undefined : { model: entry.model };
 	} catch (error) {
@@ -711,6 +787,8 @@ async function beforeAgentStart(
 ): Promise<BeforeAgentStartEventResult | undefined> {
 	const session = callerSession(ctx);
 	if (!session) return;
+	// A cloned session already holds its replica in the stream hook: never re-read the copy for it.
+	if (rt.cloned.has(session)) return;
 	const file = ctx.sessionManager.getSessionFile();
 	if (ctx.agent.kind === "sub" && file && !rt.started.has(file)) {
 		rt.started.add(file);
@@ -736,12 +814,14 @@ async function beforeAgentStart(
 	}
 	try {
 		observeRequests(session, rt.warn);
-		// A child OMP placed in a subagent worker thread has its own copy of this module: read the parent's copy.
-		const replica = file ? (replicas.get(file) ?? (await portableReplica(file))) : undefined;
-		if (!replica && ctx.agent.name === FORK_AGENT) {
-			throw new Error("the fork's request snapshot is no longer available; create a fresh fork from the parent");
+		// Every child reads the copy `beforeSubagentSpawn` wrote; this thread does not keep the replica.
+		const replica = file ? await portableReplica(file) : undefined;
+		if (!replica) {
+			if (ctx.agent.name === FORK_AGENT) {
+				throw new Error("the fork's request snapshot is no longer available; create a fresh fork from the parent");
+			}
+			return;
 		}
-		if (!replica || rt.cloned.has(session)) return;
 		applyReplica(session, replica);
 		rt.cloned.add(session);
 	} catch (error) {
@@ -785,6 +865,8 @@ async function sessionShutdown(rt: ForkTaskRuntime, _event: SessionShutdownEvent
 	}
 	const parentFile = ctx.sessionManager.getSessionFile();
 	if (!parentFile) return;
+	// A session that ended no longer needs its start record remembered; a revived one re-checks the record file.
+	rt.started.delete(parentFile);
 	const artifactsDir = parentFile.slice(0, -".jsonl".length);
 	for (const entry of rt.pending.filter((p) => p.artifactsDir === artifactsDir)) {
 		try {
