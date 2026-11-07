@@ -1,7 +1,7 @@
 // Bun Worker: reads every session transcript under the sessions root, continuing each file from the byte position
-// its cache entry records when the file is still the same one (same inode), so a later run reads only the bytes
-// appended since then, and returns hourly spend per model plus one record per subagent transcript. Pure fs/JSON:
-// host packages are not importable from a worker.
+// its cache entry records when the file is still the same one (same inode) and the bytes before that position
+// are unchanged, so a later run reads only the bytes appended since then, and returns hourly spend per model plus
+// one record per subagent transcript. Pure fs/JSON: host packages are not importable from a worker.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { DispatchRecord, ScannedDispatch, ScanRequest, ScanResult } from "./records.ts";
@@ -12,7 +12,8 @@ const HOUR_MS = 3_600_000;
 const CHUNK = 1 << 20;
 // 2: `size` became the number of bytes read (the resume position), not the size stat reported before the read.
 // 3: entries also record `ino`, so a transcript replaced by a rewrite (temp file and rename) is read again.
-const CACHE_VERSION = 3;
+// 4: entries also record `tail`, the hash of the bytes before `size`, so a transcript rewritten in place is too.
+const CACHE_VERSION = 4;
 
 /** One transcript's contribution: spend as [provider/model, hour, usd] and, for a subagent, its dispatch record. */
 type FileAggregate = {
@@ -21,6 +22,8 @@ type FileAggregate = {
 	readonly mtimeMs: number;
 	/** Inode of the file those bytes came from; a rewrite replaces the file, so the number changes. */
 	readonly ino: number;
+	/** Hash of the bytes before `size`; a rewrite shifts them, so the mark stops matching and the file is re-read. */
+	readonly tail: string;
 	readonly spend: readonly (readonly [string, number, number])[];
 	readonly dispatch: DispatchRecord | null;
 };
@@ -63,6 +66,7 @@ function isFileAggregate(value: unknown): value is FileAggregate {
 		typeof value.size === "number" &&
 		typeof value.mtimeMs === "number" &&
 		typeof value.ino === "number" &&
+		typeof value.tail === "string" &&
 		Array.isArray(value.spend) &&
 		value.spend.every(isSpend) &&
 		(value.dispatch === null || isDispatch(value.dispatch))
@@ -114,21 +118,28 @@ const NEWLINE = 0x0a;
 const chunk = Buffer.allocUnsafe(CHUNK);
 /** Holds a line that crosses a read boundary; grown when a line is longer and reused for the next one. */
 let spill = Buffer.allocUnsafe(CHUNK);
-/** One byte, to check that a resume position still ends a line. */
-const mark = Buffer.allocUnsafe(1);
+/** Bytes of the prefix tail kept with a resume position, as that position's mark. */
+const TAIL_BYTES = 256;
+/** One tail window, read whole for whichever file is being checked. */
+const tail = Buffer.allocUnsafe(TAIL_BYTES);
 
 /**
- * True when the byte before `position` ends a line, so the bytes after it start a whole entry. A transcript whose
- * last entry was cut short by a crash or an interrupted write fails this check and is read again from its start.
+ * Mark of the bytes ending at `position`: their hash, or "" when they do not end a line, a torn last entry that
+ * no later append can be read after. Resuming requires the same mark, so a rewrite — which shifts the bytes
+ * before the position — sends the transcript back to a full read, while a plain append leaves the mark intact.
  */
-function endsLine(file: string, position: number): boolean {
-	if (position < 1) return true;
+function tailMark(file: string, position: number): string {
+	const start = Math.max(0, position - TAIL_BYTES);
+	const length = position - start;
+	if (length === 0) return "";
 	const fd = fs.openSync(file, "r");
 	try {
-		return fs.readSync(fd, mark, 0, 1, position - 1) === 1 && mark[0] === NEWLINE;
+		if (fs.readSync(fd, tail, 0, length, start) !== length) return "";
 	} finally {
 		fs.closeSync(fd);
 	}
+	if (tail[length - 1] !== NEWLINE) return "";
+	return Bun.hash(tail.subarray(0, length)).toString(16);
 }
 
 /**
@@ -326,7 +337,7 @@ function aggregateFile(file: string, offset: number, mtimeMs: number, ino: numbe
 					mtimeMs,
 					costByProvider: state.costByProvider,
 				};
-	return { size, mtimeMs, ino, spend, dispatch };
+	return { size, mtimeMs, ino, tail: tailMark(file, size), spend, dispatch };
 }
 
 function loadCache(cachePath: string): Cache {
@@ -382,11 +393,15 @@ function scan(request: ScanRequest): ScanResult {
 			continue;
 		}
 		// A transcript that only grew continues from where the last scan stopped, provided that file is still the
-		// same one (a rewrite replaces it, so the inode changes) and that point still ends a line; one that shrank,
-		// was rewritten, or ended in a cut-off entry is read again from its start.
+		// same one (a rewrite replaces it, so the inode changes) and the bytes before that position are unchanged
+		// (a rewrite in place shifts them, a plain append does not); one that shrank, was rewritten, or ended in a
+		// cut-off entry is read again from its start.
 		try {
-			const resumed =
-				cached !== undefined && cached.ino === stat.ino && cached.size < stat.size && endsLine(file, cached.size) ? cached : undefined;
+			let resumed: FileAggregate | undefined;
+			if (cached !== undefined && cached.ino === stat.ino && cached.size < stat.size) {
+				const mark = tailMark(file, cached.size);
+				if (mark !== "" && mark === cached.tail) resumed = cached;
+			}
 			files[file] = aggregateFile(file, resumed?.size ?? 0, stat.mtimeMs, stat.ino, stateOf(resumed));
 			parsed++;
 		} catch {
