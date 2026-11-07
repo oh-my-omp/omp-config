@@ -49,7 +49,8 @@
 // the parsed byte offset and where every record sits, so a model call parses
 // only the bytes appended since the previous call and re-derives only the
 // records a template indexes. The cursor is dropped and the file read from the
-// start when it shrinks or is rewritten.
+// start when the file is replaced, shrinks or is rewritten at its size (see
+// `transcript.ts` for what is detected).
 // Attribution is set by whoever sends the message,
 // so extensions that inject user-role messages must send them with
 // `attribution: "agent"`.

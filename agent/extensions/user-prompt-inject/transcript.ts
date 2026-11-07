@@ -10,7 +10,11 @@
 // every record its parent, its role (prompt / ask answers / neither) and its
 // byte range. A call absorbs only the bytes appended since the previous call,
 // then re-reads just the ranges a template indexes. The cursor is dropped and
-// the file read again from the start when it shrinks or is rewritten.
+// the file read again from the start when the file is replaced (new device or
+// inode), shrinks, changes in its first 256 bytes or the 64 bytes before the
+// offset, or is rewritten at its recorded size. OMP rewrites a session by
+// atomic replace, which the inode check catches; an in-place rewrite that keeps
+// the inode, grows the file and leaves those samples intact is not detected.
 //
 // PARSING. Each record is parsed with the host's own parser (`Bun.JSONL.parseChunk`,
 // the parser behind the host's `parseJsonlLenient`), one newline-terminated
@@ -19,7 +23,7 @@
 // lines, malformed lines (skipped to the next newline), two values on one line
 // (only the first survives) and a complete final record with no newline. A
 // record whose JSON spans several physical lines is not reproduced: the host's
-// whole-content parser accepts it, this reader treats each such line on its own.
+// parsers accept it, this reader treats each such line on its own.
 // ============================================================================
 
 import { closeSync, openSync, readSync, type Stats, statSync } from "node:fs";
@@ -44,7 +48,7 @@ export type PromptSource = { readonly length: number; at(index: number): string 
 export type BranchNeed = { readonly prompts: boolean; readonly answers: boolean };
 
 /** The root branch as the templates consume it. */
-export type BranchPrompts = {
+type BranchPrompts = {
 	readonly prompts: PromptSource;
 	/** Every ask answer on the branch, oldest first; derived on call. */
 	answers(): readonly string[];
@@ -134,8 +138,9 @@ export function createTranscriptReader(): TranscriptReader {
 
 /**
  * Bring `current` up to the file's current contents: a missing file reads as
- * empty, a replaced, shrunk or in-place rewritten one as a fresh start, and an
- * appended one as the bytes past the offset. The recorded size and mtime are
+ * empty, a replaced (new inode), shrunk, head- or seam-changed or same-size
+ * rewritten one as a fresh start, and an appended one as the bytes past the
+ * offset. The recorded size and mtime are
  * the ones this pass read, never a later observation.
  */
 function ensureCursor(current: Cursor | null, file: string): Cursor {
