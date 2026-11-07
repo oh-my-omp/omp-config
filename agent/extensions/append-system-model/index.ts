@@ -88,7 +88,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set(["enabled", ...CONDITION_KEYS]
 
 interface Fragment {
 	readonly conditions: SessionConditions;
-	/** Raw frontmatter body; trimmed only when the fragment matches the session. */
+	/** Raw frontmatter body; trimmed by the caller, only when the fragment matches the session. */
 	readonly body: string;
 }
 
@@ -137,8 +137,8 @@ function parseFragment(path: string): FragmentParse {
 	}
 	// Every call re-reads the file, so edits apply at the next prompt or tool
 	// result; nothing is kept between calls. The BOM check avoids copying the
-	// whole text when no BOM is present; the body trim below runs only for a
-	// fragment the session actually matches.
+	// whole text when no BOM is present. The body is returned untrimmed; the
+	// trim lives in fragmentDelta and runs only for a fragment the session matches.
 	const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
 	const parsed = parseFrontmatter(stripped);
 	if (!parsed) return { kind: "invalid", reason: tr("missing frontmatter", "缺少 frontmatter") };
