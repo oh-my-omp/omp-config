@@ -1,10 +1,15 @@
 // delete-guard eval entry: py and js deletion APIs block (aliases and cross-cell
 // distinctive names included), commands handed to a shell or spawned are
 // classified by the posix classifier, non-literal commands block, and ordinary
-// cells pass.
+// cells pass. A launch whose command shape the source does not fix (spread,
+// duplicate, computed or accessor key, spread argument) blocks as non-literal.
+// Launcher aliases bound in one js cell, or in an earlier cell of the session
+// until a reset cell, judge as their launcher.
 import { describe, expect, test } from "bun:test";
+import { EMPTY_CARRY } from "../agent/extensions/_shared/eval-js-launches.ts";
 import { classifyJs } from "../agent/extensions/delete-guard/eval-js.ts";
 import { classifyPy } from "../agent/extensions/delete-guard/eval-py.ts";
+import { type EvalSession, guardToolCall, newEvalSession, resetEvalSession } from "../agent/extensions/delete-guard/guard.ts";
 import type { Dialect } from "../agent/extensions/delete-guard/verdict.ts";
 
 const POSIX: Dialect = { kind: "posix" };
@@ -13,9 +18,11 @@ const pyRule = (code: string): string => {
 	return verdict.kind === "allow" ? "allow" : verdict.rule;
 };
 const jsRule = async (code: string): Promise<string> => {
-	const verdict = await classifyJs(code, POSIX, POSIX);
+	const { verdict } = await classifyJs(code, POSIX, POSIX, EMPTY_CARRY);
 	return verdict.kind === "allow" ? "allow" : verdict.rule;
 };
+const jsEval = (code: string, session: EvalSession, reset = false) =>
+	guardToolCall("eval", { language: "js", code, reset }, () => true, session);
 
 describe("python cells", () => {
 	test.each([
@@ -112,6 +119,16 @@ describe("js cells", () => {
 		'const { promises: fsp } = require("fs"); await fsp.rm("/tmp/omp-dg-c3/d/f")',
 		'const cp = require("child_process"); cp.spawn("echo ok; rm /tmp/omp-dg-c3/d/f", [], { shell: "/bin/sh" })',
 		'const cp = require("child_process"); cp.spawn("echo ok; rm /tmp/omp-dg-c3/d/f", [], { shell: flag })',
+		// Launcher aliases, same cell (the issue's 结果 4).
+		"const $ = Bun.$; await $`rm -rf x`",
+		"const a = Bun.$; const b = a; await b`rm -rf x`",
+		"const sh = Bun.$; await sh`rm -rf x`",
+		"const s = Bun.spawn; s(['rm', '-rf', 'x'])",
+		"let s; s = Bun.spawn; s(['rm', '-rf', 'x'])",
+		"const { spawn } = Bun; spawn(['rm', 'x'])",
+		"const t = tool.bash; await t({ command: 'rm -rf x' })",
+		"const e = require('child_process').execSync; e('rm -rf x')",
+		"const cp = require('child_process'); const e = cp.execSync; e('rm -rf x')",
 	])("blocks deletion: %p", async (code) => {
 		expect(await jsRule(code)).toBe("delete");
 	});
@@ -124,6 +141,17 @@ describe("js cells", () => {
 		"Bun.spawn([prog, 'x'])",
 		"Bun.spawn(argv)",
 		"await tool.bash({ command: cmd })",
+		// Shapes the source does not fix (issue 结果 1–3).
+		"await tool.bash({ command: 'ls', command: 'rm -rf x' })",
+		"await tool.bash({ command: 'ls', command() { return 'rm -rf x' } })",
+		"const k = 'command'; await tool.bash({ command: 'ls', [k]: 'rm -rf x' })",
+		"require('child_process').spawn('rm -rf x', { shell: false, shell: true })",
+		"require('child_process').spawn('rm -rf x', { get shell() { return true; } })",
+		"require('child_process').spawn('rm -rf x', { ...opts })",
+		"const { execSync } = require('child_process'); execSync(...['rm -rf x'], 'ls')",
+		"const f = ['-delete']; Bun.spawn(['find', 'x', ...f])",
+		"const f = ['-delete']; require('child_process').spawnSync('find', ['x', ...g])",
+		"await tool.write({ path: 'xd://bash', content: JSON.stringify({ command: 'ls', command: 'rm -rf x' }) })",
 	])("blocks non-literal: %p", async (code) => {
 		expect(await jsRule(code)).toBe("nonLiteral");
 	});
@@ -143,6 +171,14 @@ describe("js cells", () => {
 		"console.log((123).toString())",
 		'const o = { a: 1 }; o.hasOwnProperty("a")',
 		'const cp = require("child_process"); cp.spawn("ls", ["-l"], { cwd: "/tmp" })',
+		// Literal forms whose verdict is unchanged (issue 结果 6).
+		"require('child_process').execSync('echo ok')",
+		"const { execSync } = require('child_process'); execSync('echo ok')",
+		"const e = require('child_process').execSync; e('echo ok')",
+		"await tool.bash({ 'command': `ls` })",
+		"await tool.bash({ ['command']: 'ls' })",
+		"const cp = require('child_process'); cp.spawn('ls', ['-l'], { ['cwd']: '/tmp' })",
+		"const $ = 5; console.log($)",
 	])("allows: %p", async (code) => {
 		expect(await jsRule(code)).toBe("allow");
 	});
@@ -199,4 +235,39 @@ describe("python cells: issue 151 bypasses", () => {
 	])("allows: %p", (code) => {
 		expect(pyRule(code)).toBe("allow");
 	});
+});
+
+describe("launcher names carried between js cells", () => {
+	test("a bound launcher name blocks in a later cell, and a module alias too", async () => {
+		const first = await classifyJs("const $ = Bun.$; const cp = require('child_process')", POSIX, POSIX, EMPTY_CARRY);
+		expect(first.verdict.kind).toBe("allow");
+		expect((await classifyJs("await $`rm -rf x`", POSIX, POSIX, first.carry)).verdict.kind).toBe("block");
+		expect((await classifyJs("cp.execSync('rm -rf x')", POSIX, POSIX, first.carry)).verdict.kind).toBe("block");
+	});
+
+	test("a cell that is blocked binds nothing", async () => {
+		const session = newEvalSession();
+		expect(await jsEval("const t = tool.bash; await t({ command: 'rm -rf x' })", session)).toMatchObject({ block: true });
+		expect(await jsEval("await t({ command: 'rm -rf x' })", session)).toBeUndefined();
+	});
+
+	test("the hook judges cells in order: a reset cell clears launcher names, a python reset does not", async () => {
+		const session = newEvalSession();
+		expect(await jsEval("const s = Bun.spawn", session)).toBeUndefined();
+		expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toMatchObject({ block: true });
+		// A python reset wipes python's kernel only; the js alias still binds.
+		expect(await guardToolCall("eval", { language: "py", code: "1", reset: true }, () => true, session)).toBeUndefined();
+		expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toMatchObject({ block: true });
+		// A js reset cell runs in a fresh kernel: the alias is gone, the call is not a launch.
+		expect(await jsEval("1 + 1", session, true)).toBeUndefined();
+		expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toBeUndefined();
+	});
+});
+
+test("a session switch resets the launcher names: an old alias no longer blocks", async () => {
+	const session = newEvalSession();
+	expect(await jsEval("const s = Bun.spawn", session)).toBeUndefined();
+	expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toMatchObject({ block: true });
+	resetEvalSession(session);
+	expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toBeUndefined();
 });

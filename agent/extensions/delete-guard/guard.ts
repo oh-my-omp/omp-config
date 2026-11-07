@@ -1,3 +1,4 @@
+import { EMPTY_CARRY, type JsCarry } from "../_shared/eval-js-launches.ts";
 import { watchedCallOf } from "../_shared/tool-calls.ts";
 import { classify } from "./classify.ts";
 import { classifyJs } from "./eval-js.ts";
@@ -7,7 +8,21 @@ import { BRUSH, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
 /** One guarded tool call, parsed once at the hook boundary. */
 type Entry =
 	| { readonly kind: "bash"; readonly command: string }
-	| { readonly kind: "eval"; readonly language: "py" | "js"; readonly code: string };
+	| { readonly kind: "eval"; readonly language: "py" | "js"; readonly code: string; readonly reset: boolean };
+
+/**
+ * One omp session's js kernel as the guard sees it: the module and launcher names
+ * its allowed cells left behind. The kernel is the source of truth; this record is
+ * derived from the cells judged allowed, and a `reset` cell replaces it.
+ */
+export type EvalSession = { carry: JsCarry };
+
+export const newEvalSession = (): EvalSession => ({ carry: EMPTY_CARRY });
+
+/** A new or switched omp session has a new kernel: the names of the old one no longer bind. */
+export function resetEvalSession(session: EvalSession): void {
+	session.carry = EMPTY_CARRY;
+}
 
 const FRAGMENT_LIMIT = 300;
 
@@ -19,7 +34,9 @@ function entryOf(toolName: string, input: unknown): Entry | null {
 		case "shell":
 			return call.tool === "bash" ? { kind: "bash", command: call.command } : null;
 		case "eval":
-			return call.language === "py" || call.language === "js" ? { kind: "eval", language: call.language, code: call.code } : null;
+			return call.language === "py" || call.language === "js"
+				? { kind: "eval", language: call.language, code: call.code, reset: call.reset }
+				: null;
 		default: {
 			const unreachable: never = call;
 			return unreachable;
@@ -27,12 +44,18 @@ function entryOf(toolName: string, input: unknown): Entry | null {
 	}
 }
 
-function judge(entry: Entry): Verdict {
+/** Judges one entry against the session. An allowed js cell's names become the session's carry; a reset cell replaces it. */
+function judge(entry: Entry, session: EvalSession): Verdict {
 	switch (entry.kind) {
 		case "bash":
 			return classify(BRUSH, { kind: "script", text: entry.command }, 0);
-		case "eval":
-			return entry.language === "py" ? classifyPy(entry.code, SYSTEM_SHELL, BRUSH) : classifyJs(entry.code, SYSTEM_SHELL, BRUSH);
+		case "eval": {
+			if (entry.language === "py") return classifyPy(entry.code, SYSTEM_SHELL, BRUSH);
+			// A reset cell runs in a fresh kernel, so the session's earlier names do not reach it.
+			const judgement = classifyJs(entry.code, SYSTEM_SHELL, BRUSH, entry.reset ? EMPTY_CARRY : session.carry);
+			if (judgement.verdict.kind === "allow") session.carry = judgement.carry;
+			return judgement.verdict;
+		}
 		default: {
 			const unreachable: never = entry;
 			return unreachable;
@@ -60,10 +83,15 @@ function reasonFor(rule: Rule, fragment: string, detail: string, deleteAvailable
 type GuardResult = { readonly block: true; readonly reason: string } | undefined;
 
 /** The `tool_call` decision: a block with its reason, or undefined to let the call run. */
-export async function guardToolCall(toolName: string, input: unknown, deleteAvailable: () => boolean): Promise<GuardResult> {
+export async function guardToolCall(
+	toolName: string,
+	input: unknown,
+	deleteAvailable: () => boolean,
+	session: EvalSession,
+): Promise<GuardResult> {
 	const entry = entryOf(toolName, input);
 	if (entry === null) return undefined;
-	const verdict = judge(entry);
+	const verdict = judge(entry, session);
 	switch (verdict.kind) {
 		case "allow":
 			return undefined;

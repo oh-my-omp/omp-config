@@ -1,6 +1,8 @@
 import type { Node } from "@babel/types";
 import {
+	carriedBindings,
 	isBunFile,
+	type JsCarry,
 	type JsCell,
 	type JsLaunch,
 	jsLaunchOf,
@@ -22,6 +24,9 @@ type Context = {
 	readonly brush: Dialect;
 	readonly depth: number;
 };
+
+/** A js cell's verdict, and the module and launcher names it binds (the session carries them when the cell runs). */
+export type JsJudgement = { readonly verdict: Verdict; readonly carry: JsCarry };
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
@@ -53,6 +58,8 @@ function judgeLaunch(launch: JsLaunch, fragment: string, ctx: Context): Verdict 
 		case "bridge":
 			if (launch.command !== null) return classify(ctx.brush, { kind: "script", text: launch.command }, ctx.depth + 1);
 			return nonLiteral(launch.source === "bash" ? "the bash bridge command" : "the xd://bash payload");
+		case "indeterminate":
+			return block("nonLiteral", fragment, `${launch.what} is not statically known`);
 		default: {
 			const unreachable: never = launch;
 			return unreachable;
@@ -110,19 +117,21 @@ function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Contex
 /**
  * Classifies a js eval cell: fs deletion APIs block, and every command handed to
  * a shell or spawned is classified (`shell` for child_process strings, `brush`
- * for `Bun.$`, `Bun.spawn` argv and the `tool.bash` bridge). Parse failures throw
- * to the hook boundary, which blocks the call.
+ * for `Bun.$`, `Bun.spawn` argv and the `tool.bash` bridge). `carry` holds the
+ * module and launcher names the session's earlier cells bound; the judgement
+ * returns the names this cell's bindings leave for later cells. Parse failures
+ * throw to the hook boundary, which blocks the call.
  */
-export function classifyJs(code: string, shell: Dialect, brush: Dialect, depth = 0): Verdict {
-	const { program, bindings } = parseJs(code);
-	const ctx: Context = { code, bindings, shell, brush, depth };
+export function classifyJs(code: string, shell: Dialect, brush: Dialect, carry: JsCarry, depth = 0): JsJudgement {
+	const cell = parseJs(code, carry);
+	const ctx: Context = { code, bindings: cell.bindings, shell, brush, depth };
 	let verdict: Verdict = ALLOW;
-	for (const statement of program.body) {
-		walk(statement, program, (node, parent) => {
+	for (const statement of cell.program.body) {
+		walk(statement, cell.program, (node, parent) => {
 			if (verdict.kind === "block") return;
 			verdict = judgeNode(node, parent, statement, ctx);
 		});
-		if (verdict.kind === "block") return verdict;
+		if (verdict.kind === "block") break;
 	}
-	return verdict;
+	return { verdict, carry: carriedBindings(cell.bindings) };
 }

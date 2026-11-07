@@ -1,3 +1,4 @@
+import { EMPTY_CARRY } from "../_shared/eval-js-launches.ts";
 import type { ArgvWord } from "./classify.ts";
 import { classifyJs } from "./eval-js.ts";
 import { classifyPy } from "./eval-py.ts";
@@ -192,7 +193,8 @@ function classifyInline(env: Env, code: ArgvWord): Verdict {
 		case "node":
 		case "bun":
 		case "deno":
-			return classifyJs(code.text, SYSTEM_SHELL, BRUSH, env.depth + 1);
+			// A nested interpreter runs in a fresh process, so no launcher name from the outer session reaches it.
+			return classifyJs(code.text, SYSTEM_SHELL, BRUSH, EMPTY_CARRY, env.depth + 1).verdict;
 		case "perl":
 		case "ruby":
 			return scanNamedDeletes(code.text, env.fragment);
