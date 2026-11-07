@@ -6,9 +6,10 @@
  * `task.workerThreads` is greater than 0) share the omp process's memory and are
  * not tracked here. Main session_start starts one process-shared monitor;
  * session_switch refreshes delivery, and its owning main's session_shutdown clears
- * the managed timer before closing libproc. Child factories never own it. Native 2 s
- * stable scans retain PID+birth ownership after reparenting; observed descendant-led
- * process groups can discover surviving members.
+ * the managed timer before closing libproc; a scan suspended in the settings read
+ * returns on resume without touching libproc or delivering. Child factories never
+ * own it. Native 2 s stable scans retain PID+birth ownership after reparenting;
+ * observed descendant-led process groups can discover surviving members.
  * A process born and orphaned between observations without a known surviving group
  * anchor cannot be attributed retroactively from the process table.
  * Reads the `child-memory-warning.thresholdGiB` plugin setting (omp-config;
@@ -145,6 +146,23 @@ async function sample(monitor: Monitor): Promise<void> {
 		// Ownership tracking must see every scan, even while alerts are paused by config.
 		const owned = monitor.tracker.observe(result.snapshot);
 		const config = await loadThreshold(monitor.ctx.cwd);
+		// The session may have shut down while the settings read was suspended:
+		// a stopped lifetime means libproc is already closed and delivery is over.
+		switch (lifetime.kind) {
+			case "active": {
+				if (lifetime.monitor !== monitor) return;
+				break;
+			}
+			case "not-started":
+			case "starting":
+			case "stopped": {
+				return;
+			}
+			default: {
+				const unreachable: never = lifetime;
+				return unreachable;
+			}
+		}
 		reportConfigProblem(monitor, config.kind === "invalid" ? config.problem : null);
 		if (config.kind === "invalid") return;
 		for (const tracked of owned) {
