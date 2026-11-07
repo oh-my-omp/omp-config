@@ -50,9 +50,9 @@
  *
  * Path-scoped delivery. A matching rule is delivered as the `tool_result` `additionalContext` (a
  * developer message after the tool batch, after the delta when both are due), once per context: a
- * rule whose marker is already in the session's current context (`buildSessionContext`, so
- * compaction, resume and branch moves are honoured) or that an earlier call of the same turn
- * delivered is not repeated.
+ * rule whose marker is already in the session's current model context (the host's active-leaf
+ * projection, so compaction, resume and branch moves are honoured) or that an earlier call of the
+ * same turn delivered is not repeated.
  *
  * Registers `session_start`, `before_agent_start`, `turn_start` and `tool_result` for main and sub
  * sessions. Reads context and rule files only; writes no files. Rules are collected per cwd and

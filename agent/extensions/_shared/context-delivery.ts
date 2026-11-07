@@ -17,7 +17,7 @@
  * summaries all emit other roles.
  */
 
-import { getAnthropicCompactionPayload } from "@oh-my-pi/pi-agent-core/compaction";
+import { getAnthropicCompactionPayload } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getOpenAiRemoteCompactionPayload } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
