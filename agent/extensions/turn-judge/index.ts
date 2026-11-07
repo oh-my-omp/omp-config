@@ -3,9 +3,9 @@
 // ask JUDGE (`openJudge`, purpose `turn-judge`) that file's yes/no questions
 // about the turn, then either report the answers or, when one of the file's
 // rules holds, send the configured prompt.
-// Registers input, session_switch/branch/tree, and message_end hooks; no tools
-// or commands. Reads adjacent/repository specs and session history; writes no
-// files. Runs in main and sub sessions.
+// Registers input, session_switch/branch/tree, message_start, and message_end
+// hooks; no tools or commands. Reads adjacent/repository specs and session
+// history; writes no files. Runs in main and sub sessions.
 //
 // FILE FORMAT. `TURN-JUDGE-<label>.md`, discovered like `WATCHDOG-*.md`:
 //   - user level:  <extension dir>/TURN-JUDGE-*.md      (beside this index.ts)
@@ -121,9 +121,10 @@
 //   line separated) joined per inject form: user-form prompts as ONE user
 //   message that starts a new turn, with the system-form ones as one custom
 //   message joining it; system-form prompts alone as ONE custom message that
-//   starts the turn and carries a `deliveryId`. It returns once that turn is
-//   admitted (the session is busy, or a newer message — for system-form alone,
-//   the custom message with that `deliveryId` — is on the branch). The
+//   starts the turn and carries a `deliveryId`. It returns once the host admits
+//   that turn — the prompt's own message entering the round: for system-form
+//   alone the custom message with that `deliveryId`, for user-form a user
+//   message newer than the judged one — or the deadline passes. The
 //   subagent's reply to it replaces the judged report
 //   as the result its parent receives, so a prompt meant for subagents should
 //   ask for the complete revised report; a file that keeps triggering keeps
@@ -145,6 +146,7 @@
 
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Judge, NoulQuestion } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
@@ -173,7 +175,7 @@ const DEFAULT_MAX_BYTES = 30_000;
 const JUDGE_TIMEOUT_MS = 90_000;
 /** Whole subagent handler budget; OMP stops waiting for an extension handler after 30 s. */
 const SUB_DEADLINE_MS = 20_000;
-/** Poll interval while a subagent handler waits for idle or for its prompt's turn. */
+/** Poll interval while a subagent handler waits for idle. */
 const POLL_MS = 25;
 /** A 提醒 keeps its head only: harness attachments (post-compaction context lists) run to thousands of characters. */
 const REMINDER_MAX_CHARS = 400;
@@ -501,50 +503,82 @@ function reminder(text: string): TimelineEntry {
 /**
  * The timeline from the last human prompt to the judged message (whose
  * thinking closes it; its text is the reply), and the tool names called since
- * the previous stop.
+ * the previous stop. Read from the leaf back: the timeline stops at the last
+ * human prompt and the tool names at the previous stop, so entries older than
+ * that prompt only have their metadata read. Assumes timestamps along a branch
+ * do not decrease, so skipping entries at or after the judged message's
+ * timestamp selects the same run the forward read breaks at.
  */
 function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
 	const main = ctx.agent.kind === "main";
-	let timeline: TimelineEntry[] = [];
-	let toolCalls: string[] = [];
-	for (const entry of ctx.sessionManager.getBranch()) {
+	// Newest first while walking back; the judged message's own thinking opens
+	// the list, and the walk reverses it into chronological order at the end.
+	const timeline = assistantEvents(judged, false)
+		.filter((event) => event.类型 !== "模型调用工具")
+		.reverse();
+	const toolCalls: string[] = [];
+	const visited = new Set<string>();
+	let windowOpen = true;
+	let callsOpen = true;
+	for (let id = ctx.sessionManager.getLeafId(); (windowOpen || callsOpen) && id !== null && !visited.has(id); ) {
+		visited.add(id);
+		const entry = ctx.sessionManager.getEntry(id);
+		if (entry === undefined) break;
+		id = entry.parentId;
 		if (entry.type === "custom_message") {
 			// System-form notes reach the agent as custom messages; they are reminders like agent-attributed prompts.
 			if (!REMINDER_CUSTOM_TYPES.has(entry.customType) || Date.parse(entry.timestamp) >= judged.timestamp) continue;
+			if (!windowOpen) continue;
 			const text = textOf(entry.content, "\n").trim();
 			if (text !== "") timeline.push(reminder(text));
 			continue;
 		}
 		if (entry.type !== "message") continue;
 		const message = entry.message;
-		if (message.timestamp >= judged.timestamp) break;
+		// Newer than the judged message: the forward read stopped before these.
+		if (message.timestamp >= judged.timestamp) continue;
 		if (message.role === "user") {
+			if (!windowOpen) continue;
 			const text = textOf(message.content, "\n").trim();
 			if (text === "") continue;
 			const human = message.synthetic !== true && (!main || message.attribution === "user");
-			if (human) timeline = [{ 类型: "用户说", 内容: text }];
-			else timeline.push(reminder(text));
-		} else if (message.role === "assistant") {
-			timeline.push(...assistantEvents(message, true));
-			for (const block of message.content) if (block.type === "toolCall") toolCalls.push(block.name);
-			if (message.stopReason === "stop") toolCalls = [];
-		} else if (message.role === "toolResult") {
+			if (human) windowOpen = false;
+			timeline.push(human ? { 类型: "用户说", 内容: text } : reminder(text));
+			continue;
+		}
+		if (message.role === "assistant") {
+			// A stop ends the previous turn, so its calls never count; the walk
+			// has then collected every call the judged turn made.
+			if (callsOpen) {
+				if (message.stopReason === "stop") callsOpen = false;
+				else
+					for (let i = message.content.length - 1; i >= 0; i--) {
+						const block = message.content[i];
+						if (block !== undefined && block.type === "toolCall") toolCalls.push(block.name);
+					}
+			}
+			if (windowOpen) timeline.push(...assistantEvents(message, true).reverse());
+			continue;
+		}
+		if (message.role === "toolResult" && windowOpen) {
 			// The user's decisions made in `ask` are the user speaking; a cancelled or refused ask is not.
 			const answers = askAnswers(message);
 			if (answers !== null) timeline.push({ 类型: "用户在ask中回答", 内容: formatAskAnswers(answers) });
 		}
 	}
-	timeline.push(...assistantEvents(judged, false).filter((event) => event.类型 !== "模型调用工具"));
-	return { timeline, toolCalls };
+	timeline.reverse();
+	return { timeline, toolCalls: toolCalls.reverse() };
 }
 
 /** Whether the branch's latest message is newer than the judged one. */
 function hasMessageAfter(ctx: ExtensionContext, judgedTimestamp: number): boolean {
-	const branch = ctx.sessionManager.getBranch();
-	for (let i = branch.length - 1; i >= 0; i--) {
-		const entry = branch[i];
-		if (entry === undefined || entry.type !== "message") continue;
-		return entry.message.timestamp > judgedTimestamp;
+	const visited = new Set<string>();
+	for (let id = ctx.sessionManager.getLeafId(); id !== null && !visited.has(id); ) {
+		visited.add(id);
+		const entry = ctx.sessionManager.getEntry(id);
+		if (entry === undefined) return false;
+		id = entry.parentId;
+		if (entry.type === "message") return entry.message.timestamp > judgedTimestamp;
 	}
 	return false;
 }
@@ -606,8 +640,26 @@ function describeVerdict(spec: TurnJudgeSpec, verdict: Verdict, action: Action):
 	}
 }
 
-async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, context: Before, reply: string, signal: AbortSignal): Promise<Judged> {
-	const state: TurnState = fitState(context.timeline, reply, spec.maxBytes);
+/** One file's judgment input: the file and the state it judges. */
+type Prepared = { readonly spec: TurnJudgeSpec; readonly state: TurnState };
+
+/**
+ * Each file with the state it judges. Files that ask for the same `maxBytes`
+ * share one fitted state: their timeline and reply are the same input.
+ */
+function prepareJudgments(specs: readonly TurnJudgeSpec[], context: Before, reply: string): Prepared[] {
+	const byBudget = new Map<number, TurnState>();
+	return specs.map((spec) => {
+		let state = byBudget.get(spec.maxBytes);
+		if (state === undefined) {
+			state = fitState(context.timeline, reply, spec.maxBytes);
+			byBudget.set(spec.maxBytes, state);
+		}
+		return { spec, state };
+	});
+}
+
+async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, state: TurnState, signal: AbortSignal): Promise<Judged> {
 	const result = await runJudge(judge, spec, state, signal);
 	switch (result.kind) {
 		case "failed":
@@ -647,19 +699,42 @@ async function waitUntil(ready: () => boolean, signal: AbortSignal): Promise<boo
 	return true;
 }
 
-/** Whether the system-form prompt of this delivery is on the branch. */
-function hasOwnPrompt(ctx: ExtensionContext, deliveryId: string): boolean {
-	return ctx.sessionManager
-		.getBranch()
-		.some(
-			(entry) =>
-				entry.type === "custom_message" &&
-				entry.customType === PROMPT_CUSTOM_TYPE &&
-				typeof entry.details === "object" &&
-				entry.details !== null &&
-				"deliveryId" in entry.details &&
-				entry.details.deliveryId === deliveryId,
-		);
+/** One prompt the host has not admitted yet: the message that confirms it, and how to settle the wait. */
+type Admission = { readonly matches: (message: AgentMessage) => boolean; readonly settle: (admitted: boolean) => void };
+
+/**
+ * Admission of a delivered prompt, observed from the host's `message_start`
+ * event: the message the loop took into the round. A wait is registered before
+ * the prompt is sent, so a prompt admitted immediately cannot be missed.
+ */
+type AdmissionWatcher = {
+	/** Resolves once a started message `matches`, or false when `signal` aborts first. */
+	watch(matches: (message: AgentMessage) => boolean, signal: AbortSignal): Promise<boolean>;
+};
+
+function createAdmissionWatcher(pi: ExtensionAPI): AdmissionWatcher {
+	const pending = new Set<Admission>();
+	pi.on("message_start", (event) => {
+		for (const admission of pending) if (admission.matches(event.message)) admission.settle(true);
+	});
+	return {
+		watch(matches, signal) {
+			const { promise, resolve } = Promise.withResolvers<boolean>();
+			const admission: Admission = {
+				matches,
+				settle(admitted) {
+					pending.delete(admission);
+					signal.removeEventListener("abort", abort);
+					resolve(admitted);
+				},
+			};
+			const abort = () => admission.settle(false);
+			pending.add(admission);
+			if (signal.aborted) admission.settle(false);
+			else signal.addEventListener("abort", abort, { once: true });
+			return promise;
+		},
+	};
 }
 
 /** Triggered prompts of one subagent turn, joined per inject form; an empty string has none. */
@@ -677,6 +752,7 @@ type SubPrompts = { readonly system: string; readonly user: string };
 async function deliverToSubagent(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
+	admissions: AdmissionWatcher,
 	prompts: SubPrompts,
 	judgedTimestamp: number,
 	deadline: AbortSignal,
@@ -686,29 +762,39 @@ async function deliverToSubagent(
 		return { kind: "unsent", reason: tr("subagent did not become idle in time", "时限内子会话未空闲") };
 	if (hasMessageAfter(ctx, judgedTimestamp))
 		return { kind: "unsent", reason: tr("a new message arrived before the judgment returned", "判断返回前已有新消息") };
-	let admitted: boolean;
+	let admitted: Promise<boolean>;
 	if (prompts.user === "") {
 		const deliveryId = crypto.randomUUID();
+		admitted = admissions.watch(
+			(message) =>
+				message.role === "custom" &&
+				message.customType === PROMPT_CUSTOM_TYPE &&
+				typeof message.details === "object" &&
+				message.details !== null &&
+				"deliveryId" in message.details &&
+				message.details.deliveryId === deliveryId,
+			deadline,
+		);
 		pi.sendMessage(
 			{ customType: PROMPT_CUSTOM_TYPE, content: prompts.system, display: true, attribution: "agent", details: { deliveryId } },
 			{ triggerTurn: true },
 		);
-		admitted = await waitUntil(() => !ctx.isIdle() || hasOwnPrompt(ctx, deliveryId), deadline);
 	} else {
 		if (prompts.system !== "")
 			pi.sendMessage(
 				{ customType: PROMPT_CUSTOM_TYPE, content: prompts.system, display: true, attribution: "agent" },
 				{ deliverAs: "steer" },
 			);
+		admitted = admissions.watch((message) => message.role === "user" && message.timestamp > judgedTimestamp, deadline);
 		pi.sendUserMessage(prompts.user, { attribution: "agent" });
-		admitted = await waitUntil(() => !ctx.isIdle() || hasMessageAfter(ctx, judgedTimestamp), deadline);
 	}
-	return admitted ? { kind: "sent" } : { kind: "unconfirmed" };
+	return (await admitted) ? { kind: "sent" } : { kind: "unconfirmed" };
 }
 
 async function judgeSubagentTurn(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
+	admissions: AdmissionWatcher,
 	specs: readonly TurnJudgeSpec[],
 	context: Before,
 	message: AssistantMessage,
@@ -717,7 +803,9 @@ async function judgeSubagentTurn(
 ): Promise<void> {
 	const opened = openJudge(ctx, "turn-judge");
 	if (opened.kind === "inactive") return;
-	const judged = await Promise.all(specs.map((spec) => judgeSpec(opened.judge, spec, context, reply, deadline)));
+	const judged = await Promise.all(
+		prepareJudgments(specs, context, reply).map(({ spec, state }) => judgeSpec(opened.judge, spec, state, deadline)),
+	);
 	const warnings = judged.flatMap((j) => (j.kind === "failed" ? [j.line] : []));
 	const infos = judged.flatMap((j) => (j.kind === "info" ? [j.line] : []));
 	const triggered = judged.flatMap((j) => (j.kind === "prompt" ? [j] : []));
@@ -727,7 +815,14 @@ async function judgeSubagentTurn(
 				.filter((t) => t.inject === inject)
 				.map((t) => t.prompt)
 				.join("\n\n");
-		const delivery = await deliverToSubagent(pi, ctx, { system: joined("system"), user: joined("user") }, message.timestamp, deadline);
+		const delivery = await deliverToSubagent(
+			pi,
+			ctx,
+			admissions,
+			{ system: joined("system"), user: joined("user") },
+			message.timestamp,
+			deadline,
+		);
 		const tag = `${ctx.agent.name} (${ctx.agent.id})`;
 		switch (delivery.kind) {
 			case "sent":
@@ -763,6 +858,7 @@ async function judgeSubagentTurn(
 // --- extension --------------------------------------------------------------------
 
 export default function turnJudge(pi: ExtensionAPI): void {
+	const admissions = createAdmissionWatcher(pi);
 	/** Bumped by every human prompt and session move; a main verdict from an older epoch is shown, never typed. */
 	let epoch = 0;
 
@@ -812,8 +908,8 @@ export default function turnJudge(pi: ExtensionAPI): void {
 		if (opened.kind === "inactive") return;
 		// One notification per turn: consecutive UI notifications replace each other.
 		void Promise.all(
-			specs.map(async (spec) =>
-				settleMain(ctx, await judgeSpec(opened.judge, spec, context, reply, AbortSignal.timeout(JUDGE_TIMEOUT_MS)), startedAt),
+			prepareJudgments(specs, context, reply).map(async ({ spec, state }) =>
+				settleMain(ctx, await judgeSpec(opened.judge, spec, state, AbortSignal.timeout(JUDGE_TIMEOUT_MS)), startedAt),
 			),
 		)
 			.then((reports) => {
@@ -862,7 +958,7 @@ export default function turnJudge(pi: ExtensionAPI): void {
 			const specs = scoped.filter((spec) => !context.toolCalls.some((name) => spec.skipTools.has(name)));
 			if (specs.length === 0) return;
 			if (deadline === null) await judgeMainTurn(ctx, specs, context, reply);
-			else await judgeSubagentTurn(pi, ctx, specs, context, message, reply, deadline);
+			else await judgeSubagentTurn(pi, ctx, admissions, specs, context, message, reply, deadline);
 		} catch (error) {
 			pi.logger.warn("turn-judge: message_end failed", { error: errorText(error) });
 		}

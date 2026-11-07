@@ -48,28 +48,66 @@ const STATE_OVERHEAD_BYTES = serializedBytes({ 时间线: [], 本轮回复: "" }
 /** Bytes of `…` once serialized inside a string: its UTF-8 plus the two quotes. */
 const ELLIPSIS_BYTES = serializedBytes("…");
 
+/** Bytes `{"类型":"…","内容":"…"}` spends on keys, colons, commas and quotes besides the two values. */
+const ENTRY_FRAME_BYTES = serializedBytes({ 类型: "", 内容: "" });
+
 /**
  * `text` whole when its serialized form fits `budget` bytes; otherwise the
  * longest code-point prefix whose escaped form, plus `…`, fits. A code point is
  * never split, so the result is always valid UTF-8 and well-formed UTF-16.
+ *
+ * A code point's width inside `JSON.stringify` is read from its code unit, so
+ * the cut is found without escaping (or allocating) anything.
  */
 function headWithin(text: string, budget: number): string {
-	if (serializedBytes(text) <= budget) return text;
+	// UTF-8 bytes never exceed the escaped width: a text over budget that way is
+	// answered without copying it into a serialized string first.
+	if (Buffer.byteLength(text, "utf8") + 2 <= budget && serializedBytes(text) <= budget) return text;
 	const cap = budget - ELLIPSIS_BYTES;
 	let used = 0;
 	let end = 0;
-	for (const char of text) {
-		const cost = serializedBytes(char) - 2;
-		if (used + cost > cap) break;
-		used += cost;
-		end += char.length;
+	let index = 0;
+	while (index < text.length) {
+		const code = text.charCodeAt(index);
+		let width: number;
+		if (code < 0x20) {
+			// Control characters take a short escape, or `\u00XX` beyond them.
+			width = code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6;
+			index += 1;
+		} else if (code < 0x80) {
+			width = code === 0x22 || code === 0x5c ? 2 : 1;
+			index += 1;
+		} else if (code < 0x800) {
+			width = 2;
+			index += 1;
+		} else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+			const low = text.charCodeAt(index + 1);
+			width = low >= 0xdc00 && low <= 0xdfff ? 4 : 6;
+			index += width === 4 ? 2 : 1;
+		} else if (code >= 0xd800 && code <= 0xdfff) {
+			// A lone surrogate half is escaped as `\uXXXX`.
+			width = 6;
+			index += 1;
+		} else {
+			width = 3;
+			index += 1;
+		}
+		if (used + width > cap) break;
+		used += width;
+		end = index;
 	}
 	return `${text.slice(0, end)}…`;
 }
 
 /** `entry` whole when its serialized size fits `budget`, otherwise its 内容 cut to a head. */
 function fitEntry(entry: TimelineEntry, budget: number): TimelineEntry {
-	if (serializedBytes(entry) <= budget) return entry;
+	// The escaped size is bounded from below by the UTF-8 bytes of both values:
+	// an entry over budget that way is cut rather than serialized whole.
+	if (
+		ENTRY_FRAME_BYTES + Buffer.byteLength(entry.类型) + Buffer.byteLength(entry.内容, "utf8") <= budget &&
+		serializedBytes(entry) <= budget
+	)
+		return entry;
 	const overhead = serializedBytes({ 类型: entry.类型, 内容: "" });
 	return { 类型: entry.类型, 内容: headWithin(entry.内容, budget - overhead) };
 }
@@ -105,6 +143,9 @@ export function fitState(entries: readonly TimelineEntry[], reply: string, maxBy
 		const kept: TimelineEntry[] = [fittedNewest];
 		for (let i = tail.length - 2; i >= 0; i--) {
 			const entry = tail[i] as TimelineEntry;
+			// The escaped size is bounded from below by the UTF-8 bytes of both
+			// values: an entry over budget that way drops without being serialized.
+			if (ENTRY_FRAME_BYTES + Buffer.byteLength(entry.类型) + Buffer.byteLength(entry.内容, "utf8") + 1 > remaining) break;
 			const cost = serializedBytes(entry) + 1;
 			if (cost > remaining) break;
 			remaining -= cost;
