@@ -365,15 +365,28 @@ async function finalizeStaging(
 ): Promise<void> {
 	const temp = `${file}.rewrite`;
 	const source = await fs.open(file);
-	const target = await fs.open(temp, "w");
+	let target: fs.FileHandle;
+	try {
+		target = await fs.open(temp, "w");
+	} catch (error) {
+		// The rewrite never starts; release the reader without masking the open failure.
+		await source.close().catch(() => {});
+		throw error;
+	}
 	const chunk: string[] = [];
 	let chunkLength = 0;
 	const flush = async (): Promise<void> => {
 		if (chunk.length === 0) return;
-		const text = `${chunk.join("\n")}\n`;
+		const bytes = Buffer.from(`${chunk.join("\n")}\n`, "utf8");
 		chunk.length = 0;
 		chunkLength = 0;
-		await target.write(text);
+		let written = 0;
+		// A short write keeps its own cursor; loop so a chunk is never half written.
+		while (written < bytes.length) {
+			const { bytesWritten } = await target.write(bytes, written, bytes.length - written);
+			if (bytesWritten === 0) throw new Error(`fork_task: writing ${temp} made no progress`);
+			written += bytesWritten;
+		}
 	};
 	const emit = (line: string): void => {
 		chunk.push(line);
@@ -436,10 +449,16 @@ async function finalizeStaging(
 	} catch (error) {
 		failure = error;
 	}
-	await source.close();
-	await target.close();
+	// Close both handles whatever happened; a close failure never hides the rewrite's own error.
+	for (const handle of [target, source]) {
+		try {
+			await handle.close();
+		} catch (error) {
+			if (failure === undefined) failure = error;
+		}
+	}
 	if (failure !== undefined || !headerSeen) {
-		await fs.rm(temp, { force: true });
+		await fs.rm(temp, { force: true }).catch(() => {});
 		if (failure !== undefined) throw failure;
 		throw new Error(`fork_task: ${file} has no session header`);
 	}
