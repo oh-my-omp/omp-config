@@ -9,7 +9,7 @@ export interface ProcessRecord extends ProcessIdentity {
 	readonly groupId: number;
 }
 
-interface ProcessSnapshot {
+export interface ProcessSnapshot {
 	/** Two-pass verified non-zombie rows only; an enumerated PID alone is not a live anchor. */
 	readonly processes: ReadonlyMap<number, ProcessRecord>;
 	/** Includes PIDs whose BSD info was unavailable; absence alone proves exit. */
@@ -36,6 +36,15 @@ export class ProcessTracker {
 	readonly #owned = new Map<number, TrackedProcess>();
 	/** A generation is established only by observing its owned group leader. */
 	readonly #groups = new Map<number, bigint>();
+	// Reused across observe() calls: per-tick allocation is proportional to live edges, not the table size.
+	readonly #children = new Map<number, ProcessRecord[]>();
+	readonly #members = new Map<number, ProcessRecord[]>();
+	readonly #queue: ProcessRecord[] = [];
+	readonly #seen = new Set<number>();
+	readonly #anchored = new Set<number>();
+	readonly #touchedChildren = new Set<number>();
+	readonly #touchedMembers = new Set<number>();
+	readonly #result: TrackedProcess[] = [];
 
 	constructor(root: ProcessIdentity) {
 		this.#root = root;
@@ -47,23 +56,45 @@ export class ProcessTracker {
 			const current = processes.get(pid);
 			if (!pids.has(pid) || (current !== undefined && current.startedAt !== tracked.identity.startedAt)) this.#owned.delete(pid);
 		}
-		const children = new Map<number, ProcessRecord[]>();
-		const members = new Map<number, ProcessRecord[]>();
+		const children = this.#children;
+		const members = this.#members;
+		const touchedChildren = this.#touchedChildren;
+		const touchedMembers = this.#touchedMembers;
+		touchedChildren.clear();
+		touchedMembers.clear();
 		for (const current of processes.values()) {
 			const parent = processes.get(current.parentPid);
 			if (parent !== undefined && parent.startedAt <= current.startedAt) {
-				const siblings = children.get(parent.pid);
-				if (siblings === undefined) children.set(parent.pid, [current]);
-				else siblings.push(current);
+				let siblings = children.get(parent.pid);
+				if (siblings === undefined) {
+					siblings = [];
+					children.set(parent.pid, siblings);
+				} else if (!touchedChildren.has(parent.pid)) {
+					siblings.length = 0;
+				}
+				touchedChildren.add(parent.pid);
+				siblings.push(current);
 			}
-			const group = members.get(current.groupId);
-			if (group === undefined) members.set(current.groupId, [current]);
-			else group.push(current);
+			let group = members.get(current.groupId);
+			if (group === undefined) {
+				group = [];
+				members.set(current.groupId, group);
+			} else if (!touchedMembers.has(current.groupId)) {
+				group.length = 0;
+			}
+			touchedMembers.add(current.groupId);
+			group.push(current);
 		}
+		// PIDs that left the table keep no stale edge lists.
+		for (const pid of children.keys()) if (!touchedChildren.has(pid)) children.delete(pid);
+		for (const groupId of members.keys()) if (!touchedMembers.has(groupId)) members.delete(groupId);
 
-		const queue: ProcessRecord[] = [];
-		const seen = new Set<number>();
-		const anchored = new Set<number>();
+		const queue = this.#queue;
+		const seen = this.#seen;
+		const anchored = this.#anchored;
+		queue.length = 0;
+		seen.clear();
+		anchored.clear();
 		const enqueue = (current: ProcessRecord): void => {
 			if (seen.has(current.pid)) return;
 			seen.add(current.pid);
@@ -96,6 +127,10 @@ export class ProcessTracker {
 		}
 		// A bare PGID is not durable identity: never let an empty old group claim a reused number.
 		for (const groupId of this.#groups.keys()) if (!anchored.has(groupId)) this.#groups.delete(groupId);
-		return [...this.#owned.values()].filter((tracked) => processes.get(tracked.identity.pid)?.startedAt === tracked.identity.startedAt);
+		const result = this.#result;
+		result.length = 0;
+		for (const tracked of this.#owned.values())
+			if (processes.get(tracked.identity.pid)?.startedAt === tracked.identity.startedAt) result.push(tracked);
+		return result;
 	}
 }

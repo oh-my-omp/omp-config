@@ -6,6 +6,7 @@ import type { ProcessRecord, ProcessSource, SnapshotResult } from "./tracker.ts"
 const BSD_INFO_SIZE = 136;
 const RUSAGE_SIZE = 96;
 const ZOMBIE_STATUS = 5; // sys/proc.h: SZOMB; rusage can return terminal accounting for zombies.
+const NANOSECONDS_PER_UNIT = 4294967296n; // 2^32: DataView has no u64 compare, so raw halves stay numbers.
 const decoder = new TextDecoder();
 
 const LIBPROC_ABI = {
@@ -18,15 +19,53 @@ const LIBPROC_ABI = {
 
 type NativeSymbols = Library<typeof LIBPROC_ABI>["symbols"];
 
-function readProcess(symbols: NativeSymbols, bytes: Uint8Array, view: DataView, pid: number): ProcessRecord | null {
-	if (symbols.proc_pidinfo(pid, 3, 0, ptr(bytes), BSD_INFO_SIZE) !== BSD_INFO_SIZE) return null;
-	if (view.getUint32(12, true) !== pid || view.getUint32(4, true) === ZOMBIE_STATUS) return null;
-	return {
-		pid,
-		parentPid: view.getUint32(16, true),
-		groupId: view.getUint32(100, true),
-		startedAt: view.getBigUint64(120, true) * 1_000_000n + view.getBigUint64(128, true),
-	};
+/** Raw BSD identity halves as numbers; the BigInt identity is built only for new or changed PIDs. */
+interface RawIdentity {
+	parentPid: number;
+	groupId: number;
+	startSecHi: number;
+	startSecLo: number;
+	startUsecHi: number;
+	startUsecLo: number;
+}
+
+function freshIdentity(): RawIdentity {
+	return { parentPid: 0, groupId: 0, startSecHi: 0, startSecLo: 0, startUsecHi: 0, startUsecLo: 0 };
+}
+
+/** One BSD info row into `out`; false when unavailable, recycled, or a zombie. Allocates nothing. */
+function readIdentityInto(symbols: NativeSymbols, bytes: Uint8Array, view: DataView, pid: number, out: RawIdentity): boolean {
+	if (symbols.proc_pidinfo(pid, 3, 0, ptr(bytes), BSD_INFO_SIZE) !== BSD_INFO_SIZE) return false;
+	if (view.getUint32(12, true) !== pid || view.getUint32(4, true) === ZOMBIE_STATUS) return false;
+	out.parentPid = view.getUint32(16, true);
+	out.groupId = view.getUint32(100, true);
+	out.startSecHi = view.getUint32(120, true);
+	out.startSecLo = view.getUint32(124, true);
+	out.startUsecHi = view.getUint32(128, true);
+	out.startUsecLo = view.getUint32(132, true);
+	return true;
+}
+
+function sameIdentity(a: RawIdentity, b: RawIdentity): boolean {
+	return (
+		a.parentPid === b.parentPid &&
+		a.groupId === b.groupId &&
+		a.startSecHi === b.startSecHi &&
+		a.startSecLo === b.startSecLo &&
+		a.startUsecHi === b.startUsecHi &&
+		a.startUsecLo === b.startUsecLo
+	);
+}
+
+function startedAtOf(raw: RawIdentity): bigint {
+	const sec = BigInt(raw.startSecHi) * NANOSECONDS_PER_UNIT + BigInt(raw.startSecLo);
+	const usec = BigInt(raw.startUsecHi) * NANOSECONDS_PER_UNIT + BigInt(raw.startUsecLo);
+	return sec * 1_000_000n + usec;
+}
+
+function readProcess(symbols: NativeSymbols, bytes: Uint8Array, view: DataView, pid: number, scratch: RawIdentity): ProcessRecord | null {
+	if (!readIdentityInto(symbols, bytes, view, pid, scratch)) return null;
+	return { pid, parentPid: scratch.parentPid, groupId: scratch.groupId, startedAt: startedAtOf(scratch) };
 }
 
 function argumentCapacity(symbols: NativeSymbols): number | null {
@@ -73,6 +112,14 @@ export function openDarwinProcesses(): ProcessSource {
 	const argsLength = new BigUint64Array(1);
 	const argsMib = new Int32Array([1, 49, 0]); // CTL_KERN, KERN_PROCARGS2, pid
 	let pidBuffer = new Int32Array(1024);
+	// Reused across ticks: records for unchanged PIDs survive; per-tick allocation is proportional to change.
+	let current = new Map<number, ProcessRecord>();
+	let next = new Map<number, ProcessRecord>();
+	const birth = new Map<number, RawIdentity>();
+	const pids = new Set<number>();
+	const view: { processes: Map<number, ProcessRecord>; pids: Set<number> } = { processes: current, pids };
+	const scratch = freshIdentity();
+	const commandPre = freshIdentity();
 
 	return {
 		snapshot(): SnapshotResult {
@@ -86,44 +133,76 @@ export function openDarwinProcesses(): ProcessSource {
 				count = symbols.proc_listallpids(ptr(pidBuffer), pidBuffer.byteLength);
 			}
 			if (count <= 0) return { kind: "unavailable", reason: "proc_listallpids enumeration failed" };
-			const processes = new Map<number, ProcessRecord>();
-			const pids = new Set<number>();
+			pids.clear();
 			for (let index = 0; index < count; index++) {
 				const pid = pidBuffer[index];
-				if (pid === undefined || pid <= 0) continue;
-				pids.add(pid);
-				const current = readProcess(symbols, info, infoView, pid);
-				if (current !== null) processes.set(pid, current);
+				if (pid !== undefined && pid > 0) pids.add(pid);
 			}
-			// Recheck every parent/group anchor AFTER all candidate relations were read.
+			next.clear();
+			for (const pid of pids) {
+				if (!readIdentityInto(symbols, info, infoView, pid, scratch)) continue;
+				const kept = current.get(pid);
+				const known = kept === undefined ? undefined : birth.get(pid);
+				if (kept !== undefined && known !== undefined && sameIdentity(known, scratch)) {
+					next.set(pid, kept);
+				} else {
+					next.set(pid, {
+						pid,
+						parentPid: scratch.parentPid,
+						groupId: scratch.groupId,
+						startedAt: startedAtOf(scratch),
+					});
+					if (known !== undefined) {
+						known.parentPid = scratch.parentPid;
+						known.groupId = scratch.groupId;
+						known.startSecHi = scratch.startSecHi;
+						known.startSecLo = scratch.startSecLo;
+						known.startUsecHi = scratch.startUsecHi;
+						known.startUsecLo = scratch.startUsecLo;
+					} else {
+						birth.set(pid, { ...scratch });
+					}
+				}
+			}
+			// Recheck every candidate AFTER all relations were read.
 			// A reused PID or changed PPID/PGID must never authorize a new ownership edge.
-			for (const [pid, current] of processes) {
-				if (
-					symbols.proc_pidinfo(pid, 3, 0, ptr(info), BSD_INFO_SIZE) !== BSD_INFO_SIZE ||
-					infoView.getUint32(12, true) !== pid ||
-					infoView.getUint32(4, true) === ZOMBIE_STATUS ||
-					infoView.getUint32(16, true) !== current.parentPid ||
-					infoView.getUint32(100, true) !== current.groupId ||
-					infoView.getBigUint64(120, true) * 1_000_000n + infoView.getBigUint64(128, true) !== current.startedAt
-				)
-					processes.delete(pid);
+			for (const [pid, known] of birth) {
+				if (!next.has(pid)) continue;
+				if (!readIdentityInto(symbols, info, infoView, pid, scratch) || !sameIdentity(known, scratch)) {
+					next.delete(pid);
+					birth.delete(pid);
+				}
 			}
-			return { kind: "available", snapshot: { processes, pids } };
+			// Births of PIDs that left the table prove nothing about the next tick's reuse.
+			for (const pid of birth.keys()) if (!next.has(pid)) birth.delete(pid);
+			const previous = current;
+			current = next;
+			next = previous;
+			view.processes = current;
+			return { kind: "available", snapshot: view };
 		},
 		process(pid) {
-			return readProcess(symbols, info, infoView, pid);
+			return readProcess(symbols, info, infoView, pid, scratch);
 		},
 		footprint(pid) {
 			return symbols.proc_pid_rusage(pid, 0, ptr(usage)) === 0 ? usageView.getBigUint64(72, true) : null;
 		},
 		command(pid) {
 			if (args !== null) {
+				const preOk = readIdentityInto(symbols, info, infoView, pid, commandPre);
 				argsMib[2] = pid;
 				argsLength[0] = BigInt(args.byteLength);
 				try {
-					if (symbols.sysctl(ptr(argsMib), argsMib.length, ptr(args), ptr(argsLength), null, 0) === 0) {
+					if (preOk && symbols.sysctl(ptr(argsMib), argsMib.length, ptr(args), ptr(argsLength), null, 0) === 0) {
 						const length = Number(argsLength[0]);
-						if (length >= 4 && length <= args.byteLength) {
+						// TOCTOU recheck AFTER the argv read, BEFORE decode: a recycled PID's
+						// bytes must never decode, and foreign bytes must never be retained.
+						if (
+							length >= 4 &&
+							length <= args.byteLength &&
+							readIdentityInto(symbols, info, infoView, pid, scratch) &&
+							sameIdentity(commandPre, scratch)
+						) {
 							const command = decodeCommand(args, length);
 							if (command !== null) return command;
 						}

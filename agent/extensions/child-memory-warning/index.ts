@@ -51,6 +51,8 @@ interface Monitor {
 	readonly timer: Timer;
 	problem: string | null;
 	configProblem: string | null;
+	/** A sample is suspended in its settings read or FFI loop; ticks skip rather than pile up. */
+	inFlight: boolean;
 }
 
 type Lifetime =
@@ -145,6 +147,12 @@ async function sample(monitor: Monitor): Promise<void> {
 		monitor.problem = null;
 		// Ownership tracking must see every scan, even while alerts are paused by config.
 		const owned = monitor.tracker.observe(result.snapshot);
+		// Threshold IO is per-need, not per-tick: only an unwarned owned process can use it.
+		const pending = owned.some((tracked) => !tracked.alerted);
+		if (!pending) {
+			reportConfigProblem(monitor, null);
+			return;
+		}
 		const config = await loadThreshold(monitor.ctx.cwd);
 		// The session may have shut down while the settings read was suspended:
 		// a stopped lifetime means libproc is already closed and delivery is over.
@@ -181,6 +189,10 @@ async function sample(monitor: Monitor): Promise<void> {
 		const problem = errorText(error);
 		if (monitor.problem !== problem) warn(monitor.pi, "sampling failed", error);
 		monitor.problem = problem;
+	} finally {
+		// Single-flight release: every sample path (tick or the first one from start())
+		// clears the flag it set, so one thrown sample never stops monitoring.
+		monitor.inFlight = false;
 	}
 }
 
@@ -205,10 +217,18 @@ async function start(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 			return;
 		}
 		const tracker = new ProcessTracker(root);
+		// Declared before the timer so the tick closure can claim single-flight on it;
+		// assigned exactly once below before the first sample runs.
+		let monitor: Monitor | undefined;
 		const timer = ctx.setInterval(() => {
-			if (lifetime.kind === "active" && lifetime.monitor.pi === pi) void sample(lifetime.monitor);
+			if (lifetime.kind !== "active" || lifetime.monitor.pi !== pi || monitor === undefined) return;
+			// Single-flight: a still-running sample owns the FFI buffers; skip this tick instead
+			// of holding a second full-table snapshot beside it. sample() clears the flag itself.
+			if (lifetime.monitor.inFlight) return;
+			monitor.inFlight = true;
+			void sample(monitor);
 		}, POLL_MS);
-		const monitor: Monitor = { pi, ctx: starting.ctx, source, tracker, timer, problem: null, configProblem: null };
+		monitor = { pi, ctx: starting.ctx, source, tracker, timer, problem: null, configProblem: null, inFlight: true };
 		lifetime = { kind: "active", monitor };
 		source = null; // Ownership moves to the active monitor before its first sample.
 		await sample(monitor);
