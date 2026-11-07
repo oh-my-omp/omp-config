@@ -21,7 +21,7 @@
 //   provider: ^anthropic$                # optional; regex, see SCOPE
 //   skipTools: wt, harness_restart       # optional; tool names, see SCOPE
 //   inject:  system                      # optional; system (default) | user, see OUTCOME
-//   maxChars: 30000                      # optional; 时间线 budget, see STATE
+//   maxBytes: 30000                      # optional; state budget in bytes, see STATE
 //   question.<id>: <instructions>       # >= 1; one Noul (yes/no) question each
 //   question.<id>.true: <criterion>     # optional; what a yes means
 //   question.<id>.false: <criterion>    # optional; what a no means
@@ -90,8 +90,9 @@
 //                carries; just the name when it has none). Arguments and
 //                results are left out, except the ask answers above.
 // The judged message's own thinking closes the 时间线; its text is 本轮回复.
-// When the entries after 用户说 exceed `maxChars` characters, whole entries
-// are dropped from the oldest end; 用户说 itself is never dropped.
+// When the state's serialized UTF-8 size would exceed `maxBytes`, 本轮回复 and
+// 用户说 are cut to their head and older entries drop whole; the newest entry is
+// cut to its head, never dropped. 用户说 itself is never dropped.
 //
 // OUTCOME. JUDGE answers each question with the probability of yes. A rule
 // holds when every one of its comparisons holds (`>= p`: probability at least
@@ -162,12 +163,13 @@ import {
 	targetsSession,
 } from "../_shared/session-filter.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+import { fitState, type TimelineEntry, type TurnState } from "./state.ts";
 
 const FILE_PATTERN = /^TURN-JUDGE-.+\.md$/i;
 const QUESTION_KEY = /^question\.([a-z0-9_]+)(?:\.(true|false))?$/;
 const RULE_KEY = /^when\.([a-z0-9_]+)$/;
 const COMPARISON = /^([a-z0-9_]+)\s*(>=|<)\s*(\d*\.?\d+)$/;
-const DEFAULT_MAX_CHARS = 30_000;
+const DEFAULT_MAX_BYTES = 30_000;
 const JUDGE_TIMEOUT_MS = 90_000;
 /** Whole subagent handler budget; OMP stops waiting for an extension handler after 30 s. */
 const SUB_DEADLINE_MS = 20_000;
@@ -199,7 +201,7 @@ type TurnJudgeSpec = {
 	readonly questions: readonly TurnQuestion[];
 	readonly rules: readonly Rule[];
 	readonly prompt: string;
-	readonly maxChars: number;
+	readonly maxBytes: number;
 	/** Tool names whose call in the judged turn skips this file. */
 	readonly skipTools: ReadonlySet<string>;
 	readonly filter: SessionFilter;
@@ -210,12 +212,6 @@ type SpecParse =
 	| { readonly kind: "ok"; readonly spec: TurnJudgeSpec }
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
-
-type TimelineKind = "用户说" | "用户在ask中回答" | "提醒" | "模型想" | "模型说" | "模型调用工具";
-
-type TimelineEntry = { readonly 类型: TimelineKind; readonly 内容: string };
-
-type TurnState = { readonly 时间线: readonly TimelineEntry[]; readonly 本轮回复: string };
 
 /**
  * What the branch up to the judged message contributes to every file: the
@@ -388,11 +384,16 @@ function parseSpecFile(path: string): SpecParse {
 		};
 	const prompt = fields.prompt === undefined ? "" : unquote(fields.prompt);
 	if (prompt === "") return { kind: "invalid", reason: tr("prompt is missing or empty", "缺少 prompt 或 prompt 为空") };
-	let maxChars = DEFAULT_MAX_CHARS;
-	if (fields.maxchars !== undefined) {
-		maxChars = Number(unquote(fields.maxchars));
-		if (!Number.isInteger(maxChars) || maxChars <= 0)
-			return { kind: "invalid", reason: tr("maxChars must be a positive integer", "maxChars 必须是正整数") };
+	if (fields.maxchars !== undefined)
+		return {
+			kind: "invalid",
+			reason: tr("maxChars was renamed to maxBytes", "maxChars 已改名为 maxBytes（maxChars was renamed to maxBytes）"),
+		};
+	let maxBytes = DEFAULT_MAX_BYTES;
+	if (fields.maxbytes !== undefined) {
+		maxBytes = Number(unquote(fields.maxbytes));
+		if (!Number.isInteger(maxBytes) || maxBytes <= 0)
+			return { kind: "invalid", reason: tr("maxBytes must be a positive integer", "maxBytes 必须是正整数") };
 	}
 	const filter = parseSessionFilter(fields, FILTER_KEYS, { kind: "default", targets: [{ kind: "main" }] }, "frontmatter");
 	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
@@ -415,7 +416,7 @@ function parseSpecFile(path: string): SpecParse {
 			questions: questions.questions,
 			rules: rules.rules,
 			prompt,
-			maxChars,
+			maxBytes,
 			filter: filter.value,
 			inject: inject.value,
 			skipTools: skipTools.tools,
@@ -537,23 +538,6 @@ function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
 	return { timeline, toolCalls };
 }
 
-/** Keep the leading 用户说 and the newest whole later entries whose total length fits `maxChars`. */
-function fitTimeline(entries: readonly TimelineEntry[], maxChars: number): TimelineEntry[] {
-	const [first, ...rest] = entries;
-	const head = first?.类型 === "用户说" ? [first] : [];
-	const tail = head.length > 0 ? rest : entries;
-	const kept: TimelineEntry[] = [];
-	let used = 0;
-	for (let i = tail.length - 1; i >= 0; i--) {
-		const entry = tail[i];
-		if (entry === undefined) continue;
-		used += entry.内容.length;
-		if (used > maxChars) break;
-		kept.push(entry);
-	}
-	return [...head, ...kept.reverse()];
-}
-
 /** Whether the branch's latest message is newer than the judged one. */
 function hasMessageAfter(ctx: ExtensionContext, judgedTimestamp: number): boolean {
 	const branch = ctx.sessionManager.getBranch();
@@ -623,7 +607,7 @@ function describeVerdict(spec: TurnJudgeSpec, verdict: Verdict, action: Action):
 }
 
 async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, context: Before, reply: string, signal: AbortSignal): Promise<Judged> {
-	const state: TurnState = { 时间线: fitTimeline(context.timeline, spec.maxChars), 本轮回复: reply };
+	const state: TurnState = fitState(context.timeline, reply, spec.maxBytes);
 	const result = await runJudge(judge, spec, state, signal);
 	switch (result.kind) {
 		case "failed":
