@@ -42,7 +42,9 @@
  *
  * Delta. One delta of `_shared/context-delta.ts` with source `omp-config/repo-rules`, computed from
  * OMP's system prompt (`event.systemPrompt` at a prompt, `ctx.getSystemPrompt()` after a tool call),
- * read once per turn because a turn does not change it between deliveries, and the collected files:
+ * read once per turn because a turn does not change it between deliveries (the derived text is kept
+ * until the next `turn_start`, so it can reach the next prompt's `before_agent_start`, where it is
+ * reused only when the prompt's parts are identical), and the collected files:
  * the context files, then the unscoped rule bodies and listings above,
  * then each taken-over native rule found in that prompt, quoted with its `paths`. It is delivered at every `before_agent_start`
  * (except a revive's, whose result OMP discards) and after every tool call, only when it differs
