@@ -147,3 +147,56 @@ describe("js cells", () => {
 		expect(await jsRule(code)).toBe("allow");
 	});
 });
+
+describe("python cells: issue 151 bypasses", () => {
+	test.each([
+		"!echo ok\n!rm -rf /tmp/omp-dg-c3/d",
+		"%sx rm -rf /tmp/omp-dg-c3/d",
+		"%system rm -rf /tmp/omp-dg-c3/d",
+		"import subprocess\nsubprocess.Popen('rm -rf x', -1, None, None, None, None, None, True, True)",
+		"import subprocess\nsubprocess.call('rm -rf x', -1, None, None, None, None, None, True, True)",
+		"await tool.write({'path': 'xd://bash', 'content': '{\"command\": \"rm -rf x\"}'})",
+		"import json\nawait tool.write({'path': 'xd://bash', 'content': json.dumps({'command': 'rm -rf x'})})",
+		"exec(\"import subprocess\\nsubprocess.run('rm -rf x', shell=True)\")",
+		"exec(\"import os\\nos.system('rm -rf x')\")",
+		"eval(\"__import__('os').system('rm -rf x')\")",
+		"__import__('subprocess').run(['rm', '-rf', 'x'])",
+		"import importlib\nsp = importlib.import_module('subprocess')\nsp.run(['rm', '-rf', 'x'])",
+		"import importlib\nimportlib.import_module('subprocess').run(['rm', '-rf', 'x'])",
+	])("blocks deletion: %p", (code) => {
+		expect(pyRule(code)).toBe("delete");
+	});
+
+	test.each([
+		"import subprocess\nsubprocess.run('rm -rf x', **{'shell': True})",
+		"import subprocess\nsubprocess.run(['ls'], **opts)",
+		"await tool.bash(**kw)",
+		"await tool.write({'path': 'xd://bash', 'content': payload})",
+		"await tool.write({'path': 'xd://bash', 'content': 'not json'})",
+		"exec(code)",
+		'exec("print(1)", **kw)',
+		"name = 'subprocess'\n__import__(name).run(['rm', '-rf', 'x'])",
+		"__import__(n)",
+		"import importlib\nmod = 'subprocess'\nimportlib.import_module(mod).run(['rm', '-rf', 'x'])",
+		"import importlib\nimportlib.import_module('.sub', package='p')",
+	])("blocks non-literal: %p", (code) => {
+		expect(pyRule(code)).toBe("nonLiteral");
+	});
+
+	test.each([
+		"import subprocess\nsubprocess.run(['ls', 'd'])",
+		"import subprocess\nsubprocess.call(['ls', 'd'], -1, None, None, None, None, None, True, False)",
+		"import subprocess\nsubprocess.call(['ls', 'd'], -1, None, None, None, None, None, True, None)",
+		"print(1 + 1)",
+		'exec("print(1 + 1)")',
+		"await tool.write({'path': 'xd://bash', 'content': '{\"command\": \"ls\"}'})",
+		"!echo ok\n!ls -la",
+		"%sx ls -la",
+		"s = '''\n!rm -rf x\n'''",
+		"def exec(src):\n    return src",
+		"import importlib\nm = importlib.import_module('json')\nm.dumps({})",
+		"import json\nprint(json.dumps({'command': 'ls'}))",
+	])("allows: %p", (code) => {
+		expect(pyRule(code)).toBe("allow");
+	});
+});

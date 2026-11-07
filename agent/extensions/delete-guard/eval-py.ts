@@ -8,9 +8,9 @@ const DISTINCTIVE_DELETE: ReadonlySet<string> = new Set(["rmtree", "removedirs",
 type Context = {
 	readonly code: string;
 	readonly scan: PyScan;
-	readonly depth: number;
 	readonly shell: Dialect;
 	readonly brush: Dialect;
+	readonly depth: number;
 };
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
@@ -36,6 +36,12 @@ function judgeLaunch(ctx: Context, launch: PyLaunch, fragment: string): Verdict 
 				: classify(ctx.shell, { kind: "script", text: launch.text }, ctx.depth + 1);
 		case "argv":
 			return launch.words === null ? nonLiteral("the command") : classify(ctx.brush, { kind: "argv", words: launch.words }, ctx.depth + 1);
+		case "execEval":
+			return launch.code === null
+				? nonLiteral(`the code given to \`${launch.api}\``)
+				: classifyPy(launch.code, ctx.shell, ctx.brush, ctx.depth + 1);
+		case "opaque":
+			return nonLiteral(`the module loaded by \`${launch.api}\``);
 		default: {
 			const unreachable: never = launch;
 			return unreachable;
@@ -74,8 +80,9 @@ function judgeTokens(ctx: Context): Verdict {
 /**
  * Classifies a py eval cell: filesystem deletion APIs block, and every command
  * handed to a shell or launched is classified — `subprocess`/`os`/`asyncio`
- * launches, `!cmd` and `%%bash` (rewritten by the kernel into shell calls), and
- * the `tool.bash` bridge. `%time`/`%timeit` arguments, `%%capture`/`%%timeit`
+ * launches, `!cmd`, `%sx`/`%system` and `%%bash` (rewritten by the kernel into
+ * shell calls), the `tool.bash` and `tool.write` to `xd://bash` bridges, and the
+ * literal code of builtin `exec`/`eval`. `%time`/`%timeit` arguments, `%%capture`/`%%timeit`
  * bodies and f-string placeholders are classified as Python. Text that cannot
  * be tokenized (unterminated string or bracket) is blocked: it cannot run.
  */
