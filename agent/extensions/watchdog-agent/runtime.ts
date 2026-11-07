@@ -97,8 +97,11 @@ type WatchdogState = {
 	run: RunState;
 	/** Advisories delivered since the last compaction; restored from the branch; compared against `maxPerContext`. */
 	sent: number;
-	/** `full` scope: the transcript rendered so far, and the branch message entries it covers. */
-	full: { readonly text: string; readonly count: number } | null;
+	/**
+	 * `full` scope: the transcript rendered so far, the branch entries it covers, and the last of
+	 * them — a branch that no longer holds that entry (a move the session did not announce) drops it.
+	 */
+	full: { readonly text: string; readonly count: number; readonly anchor: unknown } | null;
 };
 
 /** Session-scoped switch for one watchdog file, persisted as a custom session entry. */
@@ -386,7 +389,8 @@ function joinText(head: string, tail: string): string {
 /**
  * The transcript one review covers, and the timestamp its cursor advances to. `window` renders
  * only messages stamped after the cursor; `full` appends to the rendering retained from earlier
- * reviews, so a review re-renders just the branch's new tail.
+ * reviews, so a review re-renders just the branch's new tail. A retained rendering stays valid
+ * because a note's index entry precedes the message it names: a rendered message never changes.
  */
 function reviewTranscript(
 	runtime: Runtime,
@@ -396,14 +400,15 @@ function reviewTranscript(
 ): { readonly transcript: string; readonly reviewed: number } {
 	const spec = state.spec;
 	const retained = state.full;
-	const selection = selectMessages(branch, spec.scope, state.cursor, tail, retained === null ? 0 : retained.count);
+	const stale =
+		retained !== null && (retained.count > branch.length || (retained.count > 0 && branch[retained.count - 1] !== retained.anchor));
+	const selection = selectMessages(branch, spec.scope, state.cursor, tail, stale || retained === null ? 0 : retained.count);
 	const ownNotes = noteIndexOf(runtime, branch);
 	const added = renderTranscript(selection.messages, ownNotes);
 	let transcript = added;
 	if (spec.scope === "full") {
-		// A shorter branch (a move the session did not announce) drops the retained rendering.
-		const prefix = retained === null || selection.branchCount < retained.count ? "" : retained.text;
-		state.full = { text: joinText(prefix, added), count: selection.branchCount };
+		const prefix = retained === null || stale ? "" : retained.text;
+		state.full = { text: joinText(prefix, added), count: branch.length, anchor: branch[branch.length - 1] };
 		transcript = state.full.text;
 	}
 	return { transcript: joinText(transcript, renderTranscript([], ownNotes, selection.tail)), reviewed: selection.reviewed };

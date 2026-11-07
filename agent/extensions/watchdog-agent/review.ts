@@ -129,29 +129,25 @@ export type ReviewSelection = {
 	readonly messages: unknown[];
 	/** The triggering message, when the branch lacks it yet: `message_end` persistence is queued concurrently with the event. */
 	readonly tail: unknown;
-	/** Message entries on the branch, including ones a retained rendering already covers. */
-	readonly branchCount: number;
 	/** Newest message timestamp the run covers; the caller advances the cursor to it. */
 	readonly reviewed: number;
 };
 
 /**
  * Messages a review covers. `full` covers the whole branch, of which the first `rendered`
- * message entries are already in the caller's retained rendering, so only the remainder is
- * returned; `window` covers those stamped after `after`. Nothing else is materialized: the
- * entries are scanned once and only returned messages are collected.
+ * entries are already in the caller's retained rendering, so only the remainder is
+ * returned; `window` covers messages stamped after `after`. The entries are scanned once
+ * and nothing but the returned messages is collected.
  */
 export function selectMessages(entries: ReadonlyArray<unknown>, scope: Scope, after: number, tail: unknown, rendered = 0): ReviewSelection {
 	const tailStamp = messageTimestamp(tail);
-	let branchCount = 0;
 	let onBranch = false;
 	let reviewed = after;
 	const messages: unknown[] = [];
-	for (const e of entries) {
+	for (let index = 0; index < entries.length; index++) {
+		const e = entries[index];
 		if (!hasKey(e, "type") || e.type !== "message" || !hasKey(e, "message")) continue;
 		const message = e.message;
-		const index = branchCount;
-		branchCount += 1;
 		const stamp = messageTimestamp(message) ?? 0;
 		if (tailStamp !== undefined && stamp === tailStamp) onBranch = true;
 		// `full` still counts the stamps of messages already rendered, for the cursor it advances to.
@@ -163,7 +159,7 @@ export function selectMessages(entries: ReadonlyArray<unknown>, scope: Scope, af
 	}
 	const appended = tail !== undefined && tailStamp !== undefined && !onBranch && (scope === "full" || tailStamp > after);
 	if (appended && tailStamp > reviewed) reviewed = tailStamp;
-	return { messages, tail: appended ? tail : undefined, branchCount, reviewed };
+	return { messages, tail: appended ? tail : undefined, reviewed };
 }
 
 /** Full, untruncated rendering of the given messages, oldest first, then `tail` when given. System-mode notes are custom messages, never branch messages, so only user-mode notes need `ownNotes`. */
