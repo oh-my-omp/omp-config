@@ -123,57 +123,40 @@ export function branchMessages(entries: ReadonlyArray<unknown>): unknown[] {
 	return out;
 }
 
-/** What one review takes from the branch, and how far it reached. */
-export type ReviewSelection = {
-	/** Messages this run has to render, oldest first: branch messages the caller's retained rendering lacks. */
-	readonly messages: unknown[];
-	/** The triggering message, when the branch lacks it yet: `message_end` persistence is queued concurrently with the event. */
-	readonly tail: unknown;
-	/** Newest message timestamp the run covers; the caller advances the cursor to it. */
-	readonly reviewed: number;
-};
-
 /**
- * Messages a review covers. `full` covers the whole branch, of which the first `rendered`
- * entries are already in the caller's retained rendering, so only the remainder is
- * returned; `window` covers messages stamped after `after`. The entries are scanned once
- * and nothing but the returned messages is collected.
+ * The transcript one review covers, and the newest message timestamp in it. `full` covers every
+ * branch message, `window` those stamped after `after`; the entries are walked once and nothing
+ * but the rendered text is built. `tail` is the message that triggered a mid-run review:
+ * `message_end` persistence is queued concurrently with the event, so it is added when the branch
+ * lacks it yet — after the branch messages for `full`, inside the window for `window`.
  */
-export function selectMessages(entries: ReadonlyArray<unknown>, scope: Scope, after: number, tail: unknown, rendered = 0): ReviewSelection {
+export function reviewTranscript(
+	entries: ReadonlyArray<unknown>,
+	scope: Scope,
+	after: number,
+	tail: unknown,
+	ownNotes: Pick<ReadonlySet<string>, "has">,
+): { readonly transcript: string; readonly reviewed: number } {
 	const tailStamp = messageTimestamp(tail);
+	const parts: string[] = [];
 	let onBranch = false;
 	let reviewed = after;
-	const messages: unknown[] = [];
-	for (let index = 0; index < entries.length; index++) {
-		const e = entries[index];
-		if (!hasKey(e, "type") || e.type !== "message" || !hasKey(e, "message")) continue;
-		const message = e.message;
+	for (const entry of entries) {
+		if (!hasKey(entry, "type") || entry.type !== "message" || !hasKey(entry, "message")) continue;
+		const message = entry.message;
 		const stamp = messageTimestamp(message) ?? 0;
 		if (tailStamp !== undefined && stamp === tailStamp) onBranch = true;
-		// `full` still counts the stamps of messages already rendered, for the cursor it advances to.
-		const wanted = scope === "window" ? stamp > after : index >= rendered;
-		if (wanted || scope === "full") {
-			if (wanted) messages.push(message);
-			if (stamp > reviewed) reviewed = stamp;
-		}
-	}
-	const appended = tail !== undefined && tailStamp !== undefined && !onBranch && (scope === "full" || tailStamp > after);
-	if (appended && tailStamp > reviewed) reviewed = tailStamp;
-	return { messages, tail: appended ? tail : undefined, reviewed };
-}
-
-/** Full, untruncated rendering of the given messages, oldest first, then `tail` when given. System-mode notes are custom messages, never branch messages, so only user-mode notes need `ownNotes`. */
-export function renderTranscript(messages: ReadonlyArray<unknown>, ownNotes: Pick<ReadonlySet<string>, "has">, tail?: unknown): string {
-	const parts: string[] = [];
-	for (const m of messages) {
-		const part = renderMessage(m, ownNotes);
+		if (scope === "window" && stamp <= after) continue;
+		if (stamp > reviewed) reviewed = stamp;
+		const part = renderMessage(message, ownNotes);
 		if (part !== undefined) parts.push(part);
 	}
-	if (tail !== undefined) {
+	if (tail !== undefined && tailStamp !== undefined && !onBranch && (scope === "full" || tailStamp > after)) {
 		const part = renderMessage(tail, ownNotes);
 		if (part !== undefined) parts.push(part);
+		if (tailStamp > reviewed) reviewed = tailStamp;
 	}
-	return parts.join("\n");
+	return { transcript: parts.join("\n"), reviewed };
 }
 
 // --- model specs ------------------------------------------------------------

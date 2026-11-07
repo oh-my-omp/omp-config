@@ -22,10 +22,9 @@ import {
 	isOwnUserNote,
 	messageTimestamp,
 	producerOf,
-	renderTranscript,
+	reviewTranscript,
 	runJev,
 	runReviewer,
-	selectMessages,
 } from "./review.ts";
 import {
 	type DeliverAs,
@@ -97,12 +96,6 @@ type WatchdogState = {
 	run: RunState;
 	/** Advisories delivered since the last compaction; restored from the branch; compared against `maxPerContext`. */
 	sent: number;
-	/**
-	 * `full` scope: the transcript rendered so far, the branch entries it covers, and the last of
-	 * them — a branch that no longer holds that entry (a move the session did not announce), or a
-	 * compaction (which may rewrite messages in place), drops it.
-	 */
-	full: { readonly text: string; readonly count: number; readonly anchor: unknown } | null;
 };
 
 /** Session-scoped switch for one watchdog file, persisted as a custom session entry. */
@@ -262,8 +255,6 @@ function refresh(runtime: Runtime, warn: boolean): void {
 		if (!targetsHere(runtime, spec) || !effectiveEnabled(runtime, spec)) continue;
 		const prev = runtime.states.get(spec.filePath);
 		if (prev) {
-			// A retained `full` rendering is only valid for the scope that built it.
-			if (prev.spec.scope !== spec.scope) prev.full = null;
 			prev.spec = spec;
 			next.set(spec.filePath, prev);
 			continue;
@@ -278,7 +269,6 @@ function refresh(runtime: Runtime, warn: boolean): void {
 			cursor,
 			run: { kind: "idle" },
 			sent: deliveredSinceCompaction(branch, spec.filePath, notes),
-			full: null,
 		});
 	}
 	runtime.states = next;
@@ -380,48 +370,14 @@ function abortReviews(runtime: Runtime): Promise<void>[] {
 	return done;
 }
 
-/** Two rendered pieces as one transcript, joined as `renderTranscript` joins its parts. */
-function joinText(head: string, tail: string): string {
-	if (head === "") return tail;
-	if (tail === "") return head;
-	return `${head}\n${tail}`;
-}
-
-/**
- * The transcript one review covers, and the timestamp its cursor advances to. `window` renders
- * only messages stamped after the cursor; `full` appends to the rendering retained from earlier
- * reviews, so a review re-renders just the branch's new tail. A retained rendering stays valid
- * because a note's index entry precedes the message it names: a rendered message never changes.
- */
-function reviewTranscript(
-	runtime: Runtime,
-	state: WatchdogState,
-	branch: ReadonlyArray<unknown>,
-	tail: unknown,
-): { readonly transcript: string; readonly reviewed: number } {
-	const spec = state.spec;
-	const retained = state.full;
-	const stale =
-		retained !== null && (retained.count > branch.length || (retained.count > 0 && branch[retained.count - 1] !== retained.anchor));
-	const selection = selectMessages(branch, spec.scope, state.cursor, tail, stale || retained === null ? 0 : retained.count);
-	const ownNotes = noteIndexOf(runtime, branch);
-	const added = renderTranscript(selection.messages, ownNotes);
-	let transcript = added;
-	if (spec.scope === "full") {
-		const prefix = retained === null || stale ? "" : retained.text;
-		state.full = { text: joinText(prefix, added), count: branch.length, anchor: branch[branch.length - 1] };
-		transcript = state.full.text;
-	}
-	return { transcript: joinText(transcript, renderTranscript([], ownNotes, selection.tail)), reviewed: selection.reviewed };
-}
-
 /** Start one review now; never awaited by the caller, so the watched agent keeps running. */
 function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, tail: unknown): void {
 	if (runtime.closed) return;
 	const spec = state.spec;
 	state.pending = 0;
 	if (state.sent >= spec.maxPerContext) return;
-	const { transcript, reviewed } = reviewTranscript(runtime, state, ctx.sessionManager.getBranch(), tail);
+	const branch = ctx.sessionManager.getBranch();
+	const { transcript, reviewed } = reviewTranscript(branch, spec.scope, state.cursor, tail, noteIndexOf(runtime, branch));
 	if (!/\S/.test(transcript)) {
 		advanceCursor(runtime, state, reviewed);
 		return;
@@ -887,13 +843,11 @@ function registerEvents(runtime: Runtime): void {
 
 	// Compaction starts a new context on the same transcript: only the per-context budget
 	// (`maxPerContext` count) resets. Accumulated actions, the `window` cursor and
-	// in-flight reviews carry over. The retained `full` rendering is dropped: a compaction
-	// may rewrite branch messages in place, which no other event announces.
+	// in-flight reviews carry over.
 	runtime.pi.on("session_compact", () => {
 		try {
 			for (const state of runtime.states.values()) {
 				state.sent = 0;
-				state.full = null;
 			}
 		} catch (error) {
 			runtime.pi.logger.warn(`watchdog ${"session_compact"} handler failed`, { error: errorText(error) });
