@@ -30,7 +30,7 @@ github:
 astGrep:
   enabled: true
 todo:
-  enabled: false
+  enabled: true
 task:
   eager: preferred
   maxRuntimeMs: 0

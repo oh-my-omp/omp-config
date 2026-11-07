@@ -12,7 +12,7 @@ Independent plugins are installed into `~/.omp/plugins/` via `install-plugins.sh
 
 | Source in `install-plugins.sh` | Package name in `omp plugin list` | Status | omp-config integration |
 |---|---|---|---|
-| [`https://github.com/oh-my-omp/omp-todo-more`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | Required (GitHub) | Native Todo is disabled (`agent/config.yml` `todo.enabled: false`); see [todo-more](#todo-more). |
+| [`https://github.com/oh-my-omp/omp-todo-more`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | Required (GitHub) | Runs on top of native Todo, which stays on (`agent/config.yml` `todo.enabled: true`); see [todo-more](#todo-more). |
 | [`https://github.com/oh-my-omp/omp-unified-exec`](https://github.com/oh-my-omp/omp-unified-exec) | `omp-unified-exec` | Required (GitHub fork) | Native launch is disabled (`agent/config.yml` `launch.enabled: false`); the local bash surface routes to `xd://exec_command`. |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | Required (GitHub fork) | `agent/config.yml` includes a `bansos/...` model in the `task:free` binding. |
 | [`https://github.com/oh-my-omp/omp-thinking-translator`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | Required (GitHub) | Plugin-owned configuration is excluded from updater and sync writes; see [Thinking translation](#thinking-translation). |
@@ -25,7 +25,7 @@ Independent plugins are installed into `~/.omp/plugins/` via `install-plugins.sh
 
 ### todo-more
 
-Native Todo is disabled (`todo.enabled: false` in `agent/config.yml`), and the shipped light-mode disable list leaves `omp-todo-more` loaded. The local `task-completion-judge` requests the session's Todo state through the `omp-todo-more:read` event.
+The plugin runs on top of native Todo, so `agent/config.yml` keeps it on (`todo.enabled: true`): its `todo` tool shadows the built-in one and it switches the native reminders off for the process. The shipped light-mode disable list leaves `omp-todo-more` loaded. The local `task-completion-judge` requests the session's Todo state through the `omp-todo-more:read` event.
 
 The updater checks ownership of the Todo and ctx retirement targets before installing plugins. Once OMP's plugin catalog confirms `omp-todo-more` is enabled with `./index.ts` present, the updater retires the local Todo files listed by `TODO_RETIREMENTS` in `agent/extensions/omp-config-autoupdate/omp-config-update.ts`. It retires the files listed by `CTX_RETIREMENTS` only when the ready plugin also contains `src/ctx`. `/sync-omp-config` excludes these same paths.
 

@@ -12,7 +12,7 @@
 
 | `install-plugins.sh` 条目 | `omp plugin list` 包名 | 类别 | omp-config 集成关系 |
 |---|---|---|---|
-| [`https://github.com/oh-my-omp/omp-todo-more`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | 必装（GitHub） | 原生 Todo 已关闭（`agent/config.yml` 中 `todo.enabled: false`）；见 [todo-more](#todo-more)。 |
+| [`https://github.com/oh-my-omp/omp-todo-more`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | 必装（GitHub） | 运行在原生 Todo 之上，原生 Todo 保持开启（`agent/config.yml` 中 `todo.enabled: true`）；见 [todo-more](#todo-more)。 |
 | [`https://github.com/oh-my-omp/omp-unified-exec`](https://github.com/oh-my-omp/omp-unified-exec) | `omp-unified-exec` | 必装（GitHub fork） | 原生 launch 已关闭（`agent/config.yml` 中 `launch.enabled: false`）；本地 bash 表层说明指向 `xd://exec_command`。 |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | 必装（GitHub fork） | `agent/config.yml` 的 `task:free` 绑定中包含 `bansos/...` 模型。 |
 | [`https://github.com/oh-my-omp/omp-thinking-translator`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | 必装（GitHub） | 插件拥有的配置不由更新器或同步操作写入；见 [思考翻译](#思考翻译)。 |
@@ -25,7 +25,7 @@
 
 ### todo-more
 
-原生 Todo 保持关闭（`agent/config.yml` 中 `todo.enabled: false`），仓库自带的轻量模式禁用列表仍保留 `omp-todo-more` 加载。本地 `task-completion-judge` 通过 `omp-todo-more:read` 事件请求会话的 Todo 状态。
+插件运行在原生 Todo 之上，因此 `agent/config.yml` 保持原生 Todo 开启（`todo.enabled: true`）：插件的 `todo` 工具覆盖内置工具，并在进程内关闭原生提醒。仓库自带的轻量模式禁用列表仍保留 `omp-todo-more` 加载。本地 `task-completion-judge` 通过 `omp-todo-more:read` 事件请求会话的 Todo 状态。
 
 更新器在安装插件之前，先检查 Todo 和 ctx 清理目标的归属。OMP 插件目录确认 `omp-todo-more` 已启用且 `./index.ts` 存在后，更新器清理 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 中 `TODO_RETIREMENTS` 列出的本地 Todo 文件。只有就绪插件还包含 `src/ctx` 时，才会清理 `CTX_RETIREMENTS` 列出的文件。`/sync-omp-config` 排除相同的路径。
 
