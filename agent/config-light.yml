@@ -12,3 +12,5 @@ disabledExtensions:
   - extension-module:watchdog-agent
 task:
   eager: "default"
+bashInterceptor:
+  enabled: false
