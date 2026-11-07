@@ -193,10 +193,11 @@ const truncate = (text: string, limit: number): string => {
 };
 
 /**
- * Bounded `truncate(textOf(content, separator), limit)`: text blocks stream
- * through `truncate`'s head/tail windows, so a multi-MB tool result never
- * lives as one string. Output is byte-identical to
- * `truncate(textOf(content, separator), limit)`.
+ * Bounded `truncate(workTextOf(content, separator), limit)` in one bounded
+ * pass: keep the first `head` characters of the joined text as the head
+ * window, a rolling native `slice(-tail)` string keeps the last `tail`
+ * characters, and the running total drives the omitted count. Byte-identical
+ * to the whole-join-then-slice path; the joined middle is never held.
  */
 const textWithin = (content: unknown, separator: string, limit: number): string => {
 	const blocks: string[] =
@@ -215,55 +216,25 @@ const textWithin = (content: unknown, separator: string, limit: number): string 
 							: [],
 					);
 	if (blocks.length === 0) return "";
-	if (blocks.length === 1) return truncate(blocks[0] ?? "", limit);
-	const joinedLength = blocks.reduce((sum, block) => sum + block.length, 0) + separator.length * (blocks.length - 1);
-	if (joinedLength <= limit) return blocks.join(separator);
-	// Same head/tail split as `truncate`, mapped back onto block boundaries.
 	const head = Math.ceil(limit * 0.6);
 	const tail = limit - head;
 	let kept = "";
-	let used = 0;
-	for (const [index, block] of blocks.entries()) {
-		const piece = index === 0 ? block : `${separator}${block}`;
-		if (used + piece.length >= head) {
-			kept += piece.slice(0, head - used);
-			break;
+	let tailWindow = "";
+	let totalLength = 0;
+	for (let index = 0; index < blocks.length; index++) {
+		const piece = index === 0 ? (blocks[index] ?? "") : separator + (blocks[index] ?? "");
+		totalLength += piece.length;
+		if (kept.length < head) {
+			if (piece.length + kept.length <= head) {
+				kept += piece;
+			} else {
+				kept += piece.slice(0, head - kept.length);
+			}
 		}
-		kept += piece;
-		used += piece.length;
+		if (tail > 0) tailWindow = (tailWindow + piece).slice(-tail);
 	}
-	let tailText = "";
-	used = 0;
-	for (let index = blocks.length - 1; index >= 0; index--) {
-		const block = blocks[index] ?? "";
-		const piece = index === blocks.length - 1 ? block : `${block}${separator}`;
-		if (used + piece.length >= tail) {
-			tailText = piece.slice(piece.length - (tail - used)) + tailText;
-			break;
-		}
-		tailText = piece + tailText;
-		used += piece.length;
-	}
-	return `${kept}\n…[${joinedLength - limit} chars omitted]…\n${tailText}`;
-};
-
-/** Exact `textOf` length without building the joined string. */
-const textOfLength = (content: unknown): number => {
-	if (typeof content === "string") return content.length;
-	if (!Array.isArray(content)) return 0;
-	let total = 0;
-	for (const block of content) {
-		if (
-			typeof block === "object" &&
-			block !== null &&
-			"type" in block &&
-			block.type === "text" &&
-			"text" in block &&
-			typeof block.text === "string"
-		)
-			total += block.text.length;
-	}
-	return total;
+	if (totalLength <= limit) return blocks.join(separator);
+	return `${kept}\n…[${totalLength - limit} chars omitted]…\n${tailWindow}`;
 };
 
 /** A message entry's `content` array, or undefined when the entry shape differs. */
@@ -296,26 +267,6 @@ const textOfExactly = (content: unknown): string => {
 	return texts.join("");
 };
 
-/**
- * Exact length of `JSON.stringify(value)`'s output, walked streaming without
- * materializing the string. Mirrors JSON.stringify's own semantics, see
- * `serializeJsonValue` for the byte-level match; returns -1 only when the
- * value's serialization itself throws (cycle, BigInt), which the caller
- * turns into the old `String(value)` fallback shape.
- */
-const jsonStringifiedLength = (value: unknown, stack: readonly unknown[] = []): number => {
-	let length = 0;
-	const emit = (part: string): void => {
-		length += part.length;
-	};
-	try {
-		walkJson(value, emit, stack, () => {});
-	} catch {
-		return -1;
-	}
-	return length;
-};
-
 const JSON_ESCAPES = new Map<number, string>([
 	[0x22, '\\"'],
 	[0x5c, "\\\\"],
@@ -339,16 +290,15 @@ const estimateTokens = (text: string): number => {
 	return tokens;
 };
 
-/** Exact length of `truncate(text, limit)` in closed form: body or head + marker + tail. */
-const boundedTruncatedLength = (length: number, limit: number): number => {
-	if (length <= limit) return length;
-	const head = Math.ceil(limit * 0.6);
-	const tail = limit - head;
-	return head + "\n…[".length + String(length - limit).length + " chars omitted]…\n".length + tail;
+/** `estimateTokens` of a pre-truncated window: weight the code points the window holds; a split surrogate half counts as its own. */
+const weightOf = (window: string): number => {
+	let tokens = 0;
+	for (const char of window) tokens += char.charCodeAt(0) < 128 ? 1 : 2;
+	return tokens;
 };
 
 /** Streaming writer that mirrors JSON.stringify byte for byte. Shared by the length probe and both bounded window passes. */
-function walkJson(value: unknown, emit: (part: string) => void, stack: readonly unknown[], _sink: unknown): void {
+function walkJson(value: unknown, emit: (part: string) => void, stack: readonly unknown[]): void {
 	for (const seen of stack) if (seen === value) throw new TypeError("Converting circular structure to JSON");
 	if (value === null) {
 		emit("null");
@@ -369,15 +319,13 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 		case "object":
 			break;
 		default:
-			// undefined / function / symbol at a value position; the object and
-			// array walks below never route such a value here, so this only
-			// fires for a top-level value, which jsonStringifiedLength and the
-			// window passes map through String(value) themselves.
-			emit("undefined");
-			return;
+			// undefined / function / symbol at a value position: JSON.stringify
+			// returns undefined and the callers substitute String(value); only
+			// a top-level leaf reaches this branch, so throw into that path.
+			throw new TypeError("top-level undefined");
 	}
 	if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
-		walkJson((value as { toJSON: (key?: string) => unknown }).toJSON(""), emit, stack, _sink);
+		walkJson((value as { toJSON: (key?: string) => unknown }).toJSON(""), emit, stack);
 		return;
 	}
 	if (Array.isArray(value)) {
@@ -388,7 +336,7 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 			if (!first) emit(",");
 			first = false;
 			if (item === undefined || typeof item === "function" || typeof item === "symbol") emit("null");
-			else walkJson(item, emit, inner, _sink);
+			else walkJson(item, emit, inner);
 		}
 		emit("]");
 		return;
@@ -402,7 +350,7 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 		firstProp = false;
 		writeJsonString(key, emit);
 		emit(":");
-		walkJson(item, emit, inner, _sink);
+		walkJson(item, emit, inner);
 	}
 	emit("}");
 }
@@ -436,80 +384,43 @@ function writeJsonString(text: string, emit: (part: string) => void): void {
 }
 
 /**
- * Bounded `truncate(workJson.stringify(value) ?? String(value), limit)`:
- * three bounded streaming passes over the value (head window, exact total
- * length, tail window) produce the exact truncated-serialized string without
- * ever holding the whole serialization, byte-identical to the
- * whole-serialize-then-slice path for every serializable value; cycles and
- * BigInt keep the `truncate(String(value), limit)` fallback (F106/F107:
- * truncation happens before full serialization exists).
+ * Bounded `truncate(JSON.stringify(value) ?? String(value), limit)` in
+ * one bounded pass: the walker streams the exact JSON.stringify byte
+ * sequence, the emit keeps the first `limit` characters (the head
+ * window), a rolling native `slice(-tail)` string keeps the last `tail`
+ * characters, and the total length drives the omitted count. Only the
+ * window lives across the walk, never the whole serialization; cycles
+ * and BigInt keep the `truncate(String(value), limit)` fallback
+ * (F106/F107: truncation happens before full serialization exists).
  */
 const stringifyWithin = (value: unknown, limit: number): string => {
 	const head = Math.ceil(limit * 0.6);
 	const tail = limit - head;
-	// Top-level undefined/function/symbol: JSON.stringify returns undefined
-	// and the old code substituted String(value); the same three-pass walk
-	// with the writer mapping those values to "undefined" text reproduces it.
+	// `tail === 0` must keep an empty tail window, not the whole string;
+	// the rolling `slice(-0)` below would return the full string.
 	try {
-		const capped = { text: "" };
+		let kept = "";
+		let tailBuffer = "";
 		let total = 0;
-		const headEmit = (part: string): void => {
+		const emit = (part: string): void => {
 			total += part.length;
-			if (capped.text.length < head)
-				capped.text += part.length + capped.text.length <= head ? part : part.slice(0, head - capped.text.length);
+			if (kept.length < head) kept += part.length + kept.length <= head ? part : part.slice(0, head - kept.length);
+			if (tail > 0) tailBuffer = (tailBuffer + part).slice(-tail);
 		};
-		walkJson(value, headEmit, [], capped);
+		walkJson(value, emit, []);
 		if (total <= limit) {
-			// Fits whole: replay the walk into a plain string builder; this is
-			// the entire serialized form, so keeping it is bounded by `limit`.
+			// Fits whole: replay into a plain builder; bounded by `limit`.
 			let full = "";
 			const fullEmit = (part: string): void => {
 				full += part;
 			};
-			walkJson(value, fullEmit, [], full);
+			walkJson(value, fullEmit, []);
 			return full;
 		}
-		const tailText = jsonTailWindow(value, tail);
-		return `${capped.text}\n…[${total - limit} chars omitted]…\n${tailText}`;
+		return kept + "\n…[" + String(total - limit) + " chars omitted]…\n" + tailBuffer;
 	} catch {
 		return truncate(String(value), limit);
 	}
-};
-
-/**
- * The exact tail `tail`-character window of the serialized value, streamed
- * bounded. `tail === 0` must yield "": the old whole-serialize-then-slice
- * path produced `slice(length - 0)`, an empty tail, while a rolling-buffer
- * `slice(-0)` returns the whole string instead.
- */
-const jsonTailWindow = (value: unknown, tail: number): string => {
-	if (tail === 0) return "";
-	// Serialize fully into a bounded counter first; then, if the tail window
-	// is knowable without the whole string (which it is not for JSON), run a
-	// second pass that slices the tail from the substring stream.
-	let total = 0;
-	const countEmit = (part: string): void => {
-		total += part.length;
-	};
-	walkJson(value, countEmit, [], {});
-	if (total <= tail) {
-		let whole = "";
-		const wholeEmit = (part: string): void => {
-			whole += part;
-		};
-		walkJson(value, wholeEmit, [], {});
-		return whole;
-	}
-	// Oversized: stream the serialization into a rolling buffer that holds
-	// only the last `tail` characters; the buffer never grows past the
-	// window, no single emit is held whole, and the newest `tail`
-	// characters always survive truncation of the concatenation.
-	let buffer = "";
-	const ringEmit = (part: string): void => {
-		buffer = buffer.length + part.length <= tail ? buffer + part : (buffer + part).slice(-tail);
-	};
-	walkJson(value, ringEmit, [], {});
-	return buffer;
 };
 
 const classifyYield = (input: YieldInput): YieldCall => {
@@ -603,13 +514,52 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 
 /** The batch's shared `context` is rendered into the subagent system prompt as its `§ Context` section. */
 const sharedContextOf = (ctx: ExtensionContext): string => {
-	const prompt = ctx.getSystemPrompt().join("\n");
+	// F108: § Context is located without materializing the joined prompt. The
+	// scan reads at most the marker-sized seam window between two pieces (a
+	// marker straddles at most one seam of the "\n" join) and accumulates the
+	// body one joined piece at a time until the next "\n§ " heading; work
+	// stays proportional to the section, not the prompt, and body extraction
+	// stays byte-identical to whole-join\u2011then\u2011slice.
 	const marker = "§ Context\n";
-	const start = prompt.indexOf(marker);
-	if (start === -1) return "";
-	const body = prompt.slice(start + marker.length);
-	const end = body.indexOf("\n§ ");
-	return (end === -1 ? body : body.slice(0, end)).trim();
+	const markerLen = marker.length;
+	const pieces = ctx.getSystemPrompt();
+	/** Accumulate the body from here through the next "\n§ " heading, joining pieces with the prompt's "\n" seam. */
+	const readBody = (leader: string, nextIndex: number): string => {
+		// A "\u00a7 " terminator can straddle the leader\u2019s trailing separator
+		// and the next piece\u2019s first characters; its "\n" then belongs to the
+		// seam, so the body ends at the leader minus that separator.
+		if ((pieces[nextIndex] ?? "").startsWith("\u00a7 ") && leader.endsWith("\n")) {
+			return leader.slice(0, leader.length - "\n".length).trim();
+		}
+		let rest = leader;
+		for (let used = nextIndex; used < pieces.length; used++) {
+			const piece = pieces[used] ?? "";
+			const inside = piece.indexOf("\n\u00a7 ");
+			if (inside !== -1) return (rest + piece.slice(0, inside)).trim();
+			// The terminator\u2019s "\n" may also be the seam before this piece.
+			if (used > nextIndex && piece.startsWith("\u00a7 ")) {
+				return rest.slice(0, rest.length - 1).trim();
+			}
+			rest += piece + "\n";
+		}
+		return rest.trim();
+	};
+	for (let index = 0; index < pieces.length; index++) {
+		const piece = pieces[index] ?? "";
+		const at = piece.indexOf(marker);
+		if (at !== -1) {
+			return readBody(piece.slice(at + markerLen) + "\n", index + 1);
+		}
+		if (piece.length < markerLen - 1) continue;
+		for (const cover of [pieces[index + 1]]) {
+			if (cover === undefined) break;
+			const candidate = piece.slice(-(markerLen - 1)) + "\n" + cover;
+			const at2 = candidate.indexOf(marker);
+			if (at2 === -1) break;
+			return readBody(candidate.slice(at2 + markerLen), index + 2);
+		}
+	}
+	return "";
 };
 
 /**
@@ -639,61 +589,46 @@ const renderCall = (call: ToolCallRecord, n: number, results: ResultsByCallId): 
  * render-first walk's, and a call that falls outside the window never
  * materializes its text.
  */
-const truncatedTokensOf = (produce: (emit: (piece: string) => void) => void, limit: number, fallbackSource: unknown): number => {
+const truncatedTokensOf = (
+	produce: (emit: (piece: string) => void) => void,
+	limit: number,
+	// A value uses String() on throw; a function materializes the exact
+	// pre-truncation text only when the walk itself failed.
+	fallbackSource: unknown | (() => string),
+): number => {
 	const head = Math.ceil(limit * 0.6);
 	const tail = limit - head;
+	// The estimator weights a code point: 1 per ASCII character, 2 per other
+	// character, and a split surrogate half weighs 2 as a lone half. Only the
+	// rendered windows carry weight — the middle is cut, so its weight never
+	// enters the total. Both windows ride a bounded rolling native slice; a
+	// straddling code point that loses one half stays in the window: it was
+	// emitted whole and its weight is what the window's text counts.
 	try {
-		// Streaming tallies over the exact `truncate(output, limit)` shape:
-		// the head window's char weights add until the head cursor passes
-		// `head`, the marker's weight is a fixed string estimate, and the
-		// tail window's weight rides a bounded rolling list of the output's
-		// last `tail` code units. Both tracks never hold more than the
-		// window's own characters.
-		let seen = 0; // emitted code units
-		let headTokens = 0;
+		let kept = "";
+		let tailBuffer = "";
+		let seen = 0;
 		let totalWeight = 0;
-		const tailChunks: [unitLength: number, weight: number][] = [];
-		let tailUnits = 0;
 		const emit = (piece: string): void => {
 			for (const ch of piece) {
 				const weight = ch.charCodeAt(0) < 128 ? 1 : 2;
-				const unitLength = ch.length;
+				seen += ch.length;
 				totalWeight += weight;
-				if (seen < head) headTokens += weight;
-				tailChunks.push([unitLength, weight]);
-				tailUnits += unitLength;
-				while (tailUnits > tail && tailChunks.length > 0) {
-					const entry = tailChunks[0];
-					if (entry === undefined) break;
-					const over = tailUnits - tail;
-					if (entry[0] <= over) {
-						// The whole entry leaves the window.
-						tailChunks.shift();
-						tailUnits -= entry[0];
-					} else {
-						// A straddling entry keeps its weight: the estimator
-						// weights a code point — a split surrogate pair still
-						// weighs 2 as a lone half — but its surviving unit
-						// length shrinks to what the window kept, so later
-						// draw-downs measure the absolute units it holds.
-						entry[0] -= over;
-						tailUnits -= over;
-						break;
-					}
-				}
-				seen += unitLength;
 			}
+			if (kept.length < head) kept += piece.length + kept.length <= head ? piece : piece.slice(0, head - kept.length);
+			if (tail > 0) tailBuffer = (tailBuffer + piece).slice(-tail);
 		};
 		produce(emit);
+		const headWeight = weightOf(kept);
+		const tailWeight = weightOf(tailBuffer);
 		if (seen <= limit) return totalWeight;
-		let tailWeight = 0;
-		for (const [, weight] of tailChunks) tailWeight += weight;
-		return headTokens + estimateTokens(`\n…[${seen - limit} chars omitted]…\n`) + tailWeight;
+		return headWeight + estimateTokens(`\n…[${seen - limit} chars omitted]…\n`) + tailWeight;
 	} catch {
 		// Serialization itself throws (cycle, BigInt): the old code fed
 		// String(value) through truncate; the exact weights of that rendered
 		// text are what the budget walk needs here.
-		return estimateTokens(truncate(String(fallbackSource), limit));
+		const materialized = typeof fallbackSource === "function" ? fallbackSource() : String(fallbackSource);
+		return estimateTokens(truncate(materialized, limit));
 	}
 };
 
@@ -708,9 +643,9 @@ const renderedCallTokens = (call: ToolCallRecord, n: number, results: ResultsByC
 	const result = results.get(call.id);
 	const status = result === undefined ? "no result" : result.isError ? "error" : "ok";
 	const headerTokens = estimateTokens(`<call n="${n}" tool="${call.name}" status="${status}">\n<args></args>\n<result></result>\n</call>`);
-	const argsTokens = truncatedTokensOf((emit) => walkJson(call.args, emit, [], null), ARGS_CHAR_LIMIT, call.args);
+	const argsTokens = truncatedTokensOf((emit) => walkJson(call.args, emit, []), ARGS_CHAR_LIMIT, call.args);
 	const resultTokens =
-		result === undefined ? 0 : truncatedTokensOf(emitStringBlocks(result.entry), RESULT_CHAR_LIMIT, textOfExactly(result.entry));
+		result === undefined ? 0 : truncatedTokensOf(emitStringBlocks(result.entry), RESULT_CHAR_LIMIT, () => textOfExactly(result.entry));
 	return headerTokens + argsTokens + resultTokens;
 };
 
@@ -895,7 +830,10 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 		// walk found none (an unstructured or errored yield handle) — its
 		// text-kind submission is then the empty string, as before.
 		const yieldEntry = transcript.callById.get(toolCallId)?.assistantEntry;
-		const submission = call.kind === "text" ? textOfExactly(contentOf(yieldEntry)) : stringifyWithin(input.data, SUBMISSION_CHAR_LIMIT);
+		const submission =
+			call.kind === "text"
+				? truncate(textOfExactly(contentOf(yieldEntry)), SUBMISSION_CHAR_LIMIT)
+				: stringifyWithin(input.data, SUBMISSION_CHAR_LIMIT);
 		// Data-kind: `stringifyWithin` already applied the single truncation
 		// with the exact omitted count (one truncate, exactly like the old
 		// whole-serialize-then-truncate path); `submissionReady` keeps the
@@ -974,23 +912,3 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 		}
 	});
 }
-
-// Dev-only exports for the differential probe; the extension’s public surface stays `default`.
-export {
-	boundedTruncatedLength,
-	emitStringBlocks,
-	fitToolCalls,
-	jsonStringifiedLength,
-	readTranscript,
-	renderCall,
-	renderedCallTokens,
-	renderPrompt,
-	sharedContextOf,
-	stringifyWithin,
-	textOfExactly,
-	textOfLength,
-	textWithin,
-	truncate,
-	truncatedTokensOf,
-	walkJson,
-};
