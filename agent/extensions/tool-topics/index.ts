@@ -49,7 +49,7 @@ import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { type Catalog, loadCatalog, type ToolDocs } from "./catalog.ts";
 import { installToolTopicInjection } from "./injection.ts";
-import { promptLines, renderDelta, renderedDescription, toolEntry } from "./prompt.ts";
+import { indexPrompt, renderDelta, toolEntry } from "./prompt.ts";
 import { publishTopics } from "./registry.ts";
 
 /** Drift already reported, per tool and reason, for the life of the process. */
@@ -86,35 +86,42 @@ function publish(pi: ExtensionAPI, catalog: Catalog): boolean {
 	}
 }
 
-/** Tools registered from an extension or plugin file: OMP reports a filesystem source path for them, `<origin:name>` otherwise. */
-function fileRegistered(pi: ExtensionAPI): ReadonlySet<string> {
-	return new Set(
-		pi
-			.getAllTools()
-			.filter((tool) => !tool.sourceInfo.path.startsWith("<"))
-			.map((tool) => tool.name),
-	);
+/**
+ * The catalog's tools as the delta sees them: each tool's docs, the names the prompt index answers
+ * for, and the same names for membership while scanning the registry.
+ */
+interface Covered {
+	readonly docs: readonly ToolDocs[];
+	readonly names: readonly string[];
+	readonly known: ReadonlySet<string>;
+}
+
+/**
+ * Tools among `covered.known` that an extension or plugin file registered: OMP reports a filesystem
+ * source path for them, `<origin:name>` otherwise. OMP offers no signal for a registry change, so
+ * this is built per call in one pass over the registry, holding only the covered matches.
+ */
+function fileRegistered(pi: ExtensionAPI, known: ReadonlySet<string>): ReadonlySet<string> {
+	const foreign = new Set<string>();
+	for (const tool of pi.getAllTools()) {
+		if (known.has(tool.name) && !tool.sourceInfo.path.startsWith("<")) foreign.add(tool.name);
+	}
+	return foreign;
 }
 
 /** The `<tool>` elements for every covered tool `systemPrompt` renders, as one delta. */
-function toolsDelta(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	systemPrompt: readonly string[],
-	docsList: readonly ToolDocs[],
-	indexed: boolean,
-): Delta {
+function toolsDelta(pi: ExtensionAPI, ctx: ExtensionContext, systemPrompt: readonly string[], covered: Covered, indexed: boolean): Delta {
 	const active = pi.getActiveTools();
 	if (!active.includes("read")) return { kind: "none" };
-	const prompt = promptLines(systemPrompt);
-	const foreign = fileRegistered(pi);
+	const prompt = indexPrompt(systemPrompt, covered.names);
+	const foreign = fileRegistered(pi, covered.known);
 	const entries: string[] = [];
-	for (const docs of docsList) {
+	for (const docs of covered.docs) {
 		if (foreign.has(docs.tool)) continue;
-		const rendered = renderedDescription(prompt, docs.tool);
+		const rendered = prompt.description(docs.tool);
 		switch (rendered.kind) {
 			case "found": {
-				const entry = toolEntry(rendered.native, docs, indexed);
+				const entry = toolEntry(rendered.description, docs, indexed);
 				if (entry?.kind === "ok") entries.push(entry.text);
 				else if (entry?.kind === "drift") report(pi, ctx, docs.tool, entry.reason);
 				break;
@@ -146,6 +153,8 @@ export default function toolTopics(pi: ExtensionAPI): void {
 		return;
 	}
 	const docsList = [...catalog.tools.values()];
+	const names = docsList.map((docs) => docs.tool);
+	const covered: Covered = { docs: docsList, names, known: new Set(names) };
 
 	// Inject only when this extension serves tool://; another handler's topics must not go out under our marker.
 	if (indexed) {
@@ -162,14 +171,14 @@ export default function toolTopics(pi: ExtensionAPI): void {
 		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;
 		try {
-			return deltas.atPrompt(ctx, toolsDelta(pi, ctx, event.systemPrompt, docsList, indexed));
+			return deltas.atPrompt(ctx, toolsDelta(pi, ctx, event.systemPrompt, covered, indexed));
 		} catch (error) {
 			pi.logger.warn("tool-topics: cannot deliver tool descriptions", { error: errorText(error) });
 		}
 	});
 	pi.on("tool_result", (_event, ctx) => {
 		try {
-			return deltas.afterTools(ctx, toolsDelta(pi, ctx, ctx.getSystemPrompt(), docsList, indexed));
+			return deltas.afterTools(ctx, toolsDelta(pi, ctx, ctx.getSystemPrompt(), covered, indexed));
 		} catch (error) {
 			pi.logger.warn("tool-topics: cannot deliver tool descriptions", { error: errorText(error) });
 		}

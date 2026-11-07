@@ -46,7 +46,7 @@ export function installToolTopicInjection(
 	const claimDeliveries = createContextDelivery(pi);
 	pi.on("tool_result", async (event, ctx) => {
 		try {
-			const ready: { rendered: string; marker: string }[] = [];
+			const ready: { marker: string; topic: string; content: string }[] = [];
 			for (const rule of options.rules) {
 				if (event.toolName !== rule.tool) continue;
 				const argument = stringArgument(event.input, rule.parameter);
@@ -56,9 +56,8 @@ export function installToolTopicInjection(
 				try {
 					const marker = `<tool-topic-injection rule="${encodeURIComponent(options.owner)}/${encodeURIComponent(rule.id)}" `;
 					const resource = await InternalUrlRouter.instance().resolve(rule.topic);
-					const rendered = `${marker}topic="${rule.topic}">\n${resource.content}\n</tool-topic-injection>`;
 					if (!resource.content.trim()) throw new Error(`Topic '${rule.topic}' is empty`);
-					ready.push({ rendered, marker });
+					ready.push({ marker, topic: rule.topic, content: resource.content });
 				} catch (error) {
 					pi.logger.warn("tool-topic-injection: topic unavailable", { owner: options.owner, rule: rule.id, error: errorText(error) });
 				}
@@ -68,7 +67,13 @@ export function installToolTopicInjection(
 				ctx,
 				ready.map((entry) => entry.marker),
 			);
-			const parts = ready.filter((_, i) => claims[i]).map((entry) => entry.rendered);
+			// The marker and body of a rejected claim are never composed.
+			const parts: string[] = [];
+			for (let index = 0; index < ready.length; index++) {
+				const entry = ready[index];
+				if (entry === undefined || claims[index] !== true) continue;
+				parts.push(`${entry.marker}topic="${entry.topic}">\n${entry.content}\n</tool-topic-injection>`);
+			}
 			if (parts.length > 0) return { additionalContext: parts.join("\n\n") };
 		} catch (error) {
 			pi.logger.warn("tool-topic-injection: rules unavailable", { owner: options.owner, error: errorText(error) });
