@@ -1,6 +1,15 @@
 import { classifyNestedProgram, programName } from "./nested.ts";
-import { parsePosix, type Script, type SimpleCommand, STDIN_SCRIPT, type StdinSource, stdinLabel, type Word } from "./posix-parse.ts";
-import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
+import {
+	heredocText,
+	parsePosix,
+	type Script,
+	type SimpleCommand,
+	STDIN_SCRIPT,
+	type StdinSource,
+	stdinLabel,
+	type Word,
+} from "./posix-parse.ts";
+import { ALLOW, type Fragment, fragmentText, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
 /** The posix deletion commands; names are compared lowercased (case-insensitive filesystems run `RM`). */
 const DELETE_COMMANDS: ReadonlySet<string> = new Set(["rm", "unlink", "rmdir", "shred"]);
@@ -209,13 +218,18 @@ const AMBIGUITY_BUDGET = 4;
 type Context = {
 	readonly depth: number;
 	readonly stdin: StdinSource | null;
-	/** The simple command's own text, quoted in the reason. */
-	readonly fragment: string;
+	/** The simple command's own text, quoted in the reason; a source range resolves only when a block is built. */
+	readonly fragment: Fragment;
 };
 
-const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
+const block = (rule: Rule, fragment: Fragment, detail: string): Verdict => ({
+	kind: "block",
+	rule,
+	fragment: fragmentText(fragment),
+	detail,
+});
 
-function classifyNested(text: string, depth: number, fragment: string): Verdict {
+function classifyNested(text: string, depth: number, fragment: Fragment): Verdict {
 	if (depth > MAX_DEPTH) return block("nonLiteral", fragment, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
 	return classifyPosix(text, depth);
 }
@@ -385,7 +399,8 @@ function resolveShellFrom(ctx: Context, words: readonly Word[], start: number, i
 	if (!stdinMode && j < words.length) return ALLOW;
 	const stdin = ctx.stdin;
 	if (stdin?.kind === "file") return ALLOW;
-	if (stdin?.kind === "heredoc" && stdin.quoted) return noExec ? ALLOW : classifyNested(stdin.body, ctx.depth + 1, ctx.fragment);
+	if (stdin?.kind === "heredoc" && stdin.quoted)
+		return noExec ? ALLOW : classifyNested(heredocText(stdin.body), ctx.depth + 1, ctx.fragment);
 	return block(
 		"nonLiteral",
 		ctx.fragment,
@@ -548,7 +563,7 @@ function classifyCommand(command: SimpleCommand, depth: number): Verdict {
 		if (word.text === "for" || word.text === "select") return ALLOW;
 		break;
 	}
-	return resolveCommand({ depth, stdin: command.stdin, fragment: command.raw }, words, i);
+	return resolveCommand({ depth, stdin: command.stdin, fragment: command }, words, i);
 }
 
 function walkScript(script: Script, depth: number): Verdict {

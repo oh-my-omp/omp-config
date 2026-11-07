@@ -4,7 +4,7 @@ import { classifyInterpreter, interpreterKind } from "./interpreter.ts";
 import { classifyPosixArgv } from "./posix.ts";
 import type { StdinSource } from "./posix-parse.ts";
 import { classifyPowershell } from "./powershell.ts";
-import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
+import { ALLOW, type Fragment, fragmentText, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
 /** The dialect a shell program interprets its script in. */
 type ShellKind = "posix" | "powershell" | "cmd";
@@ -26,9 +26,14 @@ const SHELLS: Record<string, ShellKind> = {
 	cmd: "cmd",
 };
 
-const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
+const block = (rule: Rule, fragment: Fragment, detail: string): Verdict => ({
+	kind: "block",
+	rule,
+	fragment: fragmentText(fragment),
+	detail,
+});
 
-const tooDeep = (fragment: string): Verdict =>
+const tooDeep = (fragment: Fragment): Verdict =>
 	block("nonLiteral", fragment, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
 
 /** PowerShell parameters that take a value; matched by unambiguous prefix like PowerShell does. */
@@ -47,7 +52,7 @@ const PS_VALUE_PARAMS = [
  * `powershell|pwsh <args>`: `-Command`/`-c` (or a first positional argument) takes the rest of the line as a
  * PowerShell script; `-EncodedCommand` hides it (non-literal); `-File` runs a script file (K5); no script reads stdin.
  */
-export function classifyPowershellInvocation(args: readonly ArgvWord[], depth: number, fragment: string): Verdict {
+export function classifyPowershellInvocation(args: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
 	if (depth > MAX_DEPTH) return tooDeep(fragment);
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -67,7 +72,7 @@ export function classifyPowershellInvocation(args: readonly ArgvWord[], depth: n
 	return block("nonLiteral", fragment, "PowerShell has no script argument, so it reads its script from stdin");
 }
 
-function scriptVerdict(words: readonly ArgvWord[], depth: number, fragment: string): Verdict {
+function scriptVerdict(words: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
 	if (words.length === 0) return block("nonLiteral", fragment, "PowerShell `-Command` has no script");
 	if (words.some((word) => !word.literal)) return block("nonLiteral", fragment, "the PowerShell script is not literal");
 	const script = words.map((word) => word.text).join(" ");
@@ -77,7 +82,7 @@ function scriptVerdict(words: readonly ArgvWord[], depth: number, fragment: stri
 }
 
 /** `cmd <args>`: `/c` or `/k` takes the rest of the line as a cmd command line; without them cmd reads stdin. */
-export function classifyCmdInvocation(args: readonly ArgvWord[], depth: number, fragment: string): Verdict {
+export function classifyCmdInvocation(args: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
 	if (depth > MAX_DEPTH) return tooDeep(fragment);
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -94,7 +99,7 @@ export function classifyCmdInvocation(args: readonly ArgvWord[], depth: number, 
 	return block("nonLiteral", fragment, "cmd has no `/c` or `/k` command line, so it reads commands from stdin");
 }
 
-function classifyShellInvocation(kind: ShellKind, name: ArgvWord, args: readonly ArgvWord[], depth: number, fragment: string): Verdict {
+function classifyShellInvocation(kind: ShellKind, name: ArgvWord, args: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
 	switch (kind) {
 		case "posix":
 			return classifyPosixArgv([name, ...args], depth);
@@ -118,7 +123,7 @@ export function classifyNestedProgram(
 	name: ArgvWord,
 	args: readonly ArgvWord[],
 	depth: number,
-	fragment: string,
+	fragment: Fragment,
 	stdin: StdinSource | null,
 ): Verdict | null {
 	const program = programName(name.text);

@@ -2,8 +2,8 @@ import { EMPTY_CARRY } from "../_shared/eval-js-launches.ts";
 import type { ArgvWord } from "./classify.ts";
 import { classifyJs } from "./eval-js.ts";
 import { classifyPy } from "./eval-py.ts";
-import { STDIN_SCRIPT, type StdinSource, stdinLabel } from "./posix-parse.ts";
-import { ALLOW, BRUSH, MAX_DEPTH, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
+import { heredocText, STDIN_SCRIPT, type StdinSource, stdinLabel } from "./posix-parse.ts";
+import { ALLOW, BRUSH, type Fragment, fragmentText, MAX_DEPTH, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
 
 /** Interpreters whose inline code (`-c`, `-e`, `eval`, …) runs with the filesystem of the bash call. */
 export type InterpreterKind = "python" | "node" | "bun" | "deno" | "perl" | "ruby";
@@ -45,11 +45,16 @@ type Spec = {
 type Env = {
 	readonly kind: InterpreterKind;
 	readonly depth: number;
-	readonly fragment: string;
+	readonly fragment: Fragment;
 	readonly stdin: StdinSource | null;
 };
 
-const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
+const block = (rule: Rule, fragment: Fragment, detail: string): Verdict => ({
+	kind: "block",
+	rule,
+	fragment: fragmentText(fragment),
+	detail,
+});
 
 /** A URL-scheme specifier names code fetched or decoded at run time, so it cannot be judged here. `file:` is a file. */
 const REMOTE_SPECIFIER = /^(?:data|https?|ftp|blob):/i;
@@ -179,7 +184,7 @@ const RUBY: Spec = {
 /** Perl and Ruby have no judged language: their inline code is scanned for the filesystem deletion names. */
 const NAMED_DELETE = /\b(?:unlink|rmtree|remove_tree)\b|\b(?:File|FileUtils)(?:\.|::)(?:delete|rm\w*|remove_entry\w*)\b/;
 
-function scanNamedDeletes(code: string, fragment: string): Verdict {
+function scanNamedDeletes(code: string, fragment: Fragment): Verdict {
 	const match = NAMED_DELETE.exec(code);
 	return match === null ? ALLOW : block("delete", fragment, `\`${match[0]}\` deletes files`);
 }
@@ -212,7 +217,7 @@ function classifyInline(env: Env, code: ArgvWord): Verdict {
 function classifyStdin(env: Env): Verdict {
 	const stdin = env.stdin;
 	if (stdin?.kind === "file") return ALLOW;
-	if (stdin?.kind === "heredoc" && stdin.quoted) return classifyInline(env, { text: stdin.body, literal: true });
+	if (stdin?.kind === "heredoc" && stdin.quoted) return classifyInline(env, { text: heredocText(stdin.body), literal: true });
 	return block(
 		"nonLiteral",
 		env.fragment,
@@ -344,7 +349,7 @@ function classifyDeno(env: Env, args: readonly ArgvWord[]): Verdict {
 export function classifyInterpreter(
 	kind: InterpreterKind,
 	args: readonly ArgvWord[],
-	ctx: { readonly depth: number; readonly fragment: string; readonly stdin: StdinSource | null },
+	ctx: { readonly depth: number; readonly fragment: Fragment; readonly stdin: StdinSource | null },
 ): Verdict {
 	if (ctx.depth > MAX_DEPTH)
 		return block("nonLiteral", ctx.fragment, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);

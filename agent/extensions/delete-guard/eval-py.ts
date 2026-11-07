@@ -23,8 +23,8 @@ function lineAt(code: string, at: number): string {
 }
 
 /** Every launch is judged whatever its binding; a command that is not literal blocks. */
-function judgeLaunch(ctx: Context, launch: PyLaunch, fragment: string): Verdict {
-	const nonLiteral = (what: string): Verdict => block("nonLiteral", fragment, `${what} is not a literal string`);
+function judgeLaunch(ctx: Context, launch: PyLaunch, at: number): Verdict {
+	const nonLiteral = (what: string): Verdict => block("nonLiteral", lineAt(ctx.code, at), `${what} is not a literal string`);
 	switch (launch.kind) {
 		case "bridge":
 			return launch.command === null
@@ -70,7 +70,7 @@ function judgeTokens(ctx: Context): Verdict {
 		}
 		const launch = pyLaunchAt(ctx.scan, k);
 		if (launch !== null) {
-			const verdict = judgeLaunch(ctx, launch, lineAt(ctx.code, token.start));
+			const verdict = judgeLaunch(ctx, launch, token.start);
 			if (verdict.kind === "block") return verdict;
 		}
 	}
