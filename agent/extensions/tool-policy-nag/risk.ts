@@ -27,8 +27,8 @@
  * REMINDER. One attributed message naming what was found, then the call.
  * Nothing is blocked, nothing counts, and the same call is reported once.
  */
-import { detectShellViolations } from "./heuristic.ts";
-import { splitSimpleCommands } from "./shell-parser.ts";
+import { detectCommandViolations } from "./heuristic.ts";
+import type { SimpleCommand } from "./shell-parser.ts";
 import type { ExecutedTrace, TraceStep } from "./trace.ts";
 
 /** Limits a call must exceed to be worth a risk reminder. */
@@ -205,9 +205,9 @@ const isEnvAssignment = (text: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.te
 /** One step of the line: the program it runs and the arguments it was given. */
 type Step = { readonly program: string; readonly args: string };
 
-function stepsOf(command: string): Step[] {
+function stepsOf(commands: readonly SimpleCommand[]): Step[] {
 	const steps: Step[] = [];
-	for (const simple of splitSimpleCommands(command)) {
+	for (const simple of commands) {
 		const words: string[] = [];
 		for (const token of simple.tokens) if (token.kind === "word") words.push(token.text);
 		let head = words.shift();
@@ -243,17 +243,17 @@ export type RiskFinding = {
 };
 
 /** The finding when the call's outcome is unpredictable from the call, else null. */
-export function inspectRisk(command: string, limits: RiskConfig): RiskFinding | null {
-	const steps = stepsOf(command);
-	const simple = splitSimpleCommands(command).length;
-	const chars = command.length;
+export function inspectRisk(commands: readonly SimpleCommand[], text: string, limits: RiskConfig): RiskFinding | null {
+	const steps = stepsOf(commands);
+	const simple = commands.length;
+	const chars = text.length;
 	if (simple < limits.minCommands && chars < limits.minChars) return null;
 	const programs = [...new Set(steps.map((step) => step.program))];
 	const foreign = programs.filter((program) => SHELL_PLUMBING[program] !== true);
 	if (foreign.length < limits.minPrograms) return null;
 	const writes = new Set<string>();
 	for (const step of steps) if (writesByJob(step) || writesBySubcommand(step) || writesByFlag(step)) writes.add(step.program);
-	for (const violation of detectShellViolations(command)) {
+	for (const violation of detectCommandViolations(commands, () => true)) {
 		for (const category of violation.categories) {
 			if (category === "edit" || category === "write") writes.add(violation.program);
 		}

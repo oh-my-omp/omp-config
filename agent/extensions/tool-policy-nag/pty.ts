@@ -39,7 +39,7 @@
 import { jsLaunchOf, parseJs, walk } from "../_shared/eval-js-launches.ts";
 import { type LaunchWord, type PyScan, pyLaunchAt, scanPy } from "../_shared/eval-py-launches.ts";
 import { optionName, resolveCommand } from "./shell-command.ts";
-import { type CommandToken, parseShellCommands } from "./shell-parser.ts";
+import { type CommandToken, type ShellScan, scanShell } from "./shell-parser.ts";
 
 type PtyCategory = "passthrough" | "terminal" | "open-ended";
 
@@ -52,7 +52,18 @@ type Command = {
 	readonly stdinFed: boolean;
 	readonly background: boolean;
 	readonly loopBody: boolean;
+	/** Reads of `args` shared by every rule, keyed by the option spec that shaped them. */
+	readonly options: Map<OptionSpec, Options>;
+	/** Views derived from `args` for every rule; `undefined` until a rule asks for one. */
+	container?: Verb | null;
+	compose?: Verb | null;
+	kubectl?: Verb | null;
+	git?: Verb | null;
+	firstOperand?: string;
 };
+
+/** A subcommand verb after global options, and the arguments after it. */
+type Verb = { readonly verb: string; readonly rest: readonly string[] };
 
 type Rule =
 	| { readonly on: "command"; readonly category: PtyCategory; readonly matches: (command: Command) => boolean }
@@ -72,6 +83,18 @@ type OptionSpec = {
 type Options = { readonly short: ReadonlySet<string>; readonly long: ReadonlySet<string>; readonly operands: readonly string[] };
 
 const PLAIN: OptionSpec = { valueLetters: "", valueLongs: [], stopAtOperand: false };
+
+/** `PLAIN` through the first operand, for a subcommand verb or a first operand. */
+const PLAIN_STOP: OptionSpec = { valueLetters: "", valueLongs: [], stopAtOperand: true };
+
+/** `args` under `spec`, read once per command; every rule that asks the same question reuses it. */
+function optionsIn(command: Command, spec: OptionSpec): Options {
+	const cached = command.options.get(spec);
+	if (cached !== undefined) return cached;
+	const parsed = optionsOf(command.args, spec);
+	command.options.set(spec, parsed);
+	return parsed;
+}
 
 /** Splits arguments into short letters (`-fn` → f, n), long names (`--follow=x` → `--follow`) and operands. */
 function optionsOf(args: readonly string[], spec: OptionSpec): Options {
@@ -111,9 +134,15 @@ function optionsOf(args: readonly string[], spec: OptionSpec): Options {
 const hasAny = (options: Options, letters: string, longs: readonly string[] = []): boolean =>
 	[...letters].some((letter) => options.short.has(letter)) || longs.some((name) => options.long.has(name));
 
-/** A subcommand verb after global options, and the arguments after it. */
-function verbOf(args: readonly string[], spec: OptionSpec): { readonly verb: string; readonly rest: readonly string[] } {
-	const [verb = "", ...rest] = optionsOf(args, { ...spec, stopAtOperand: true }).operands;
+/** A subcommand verb after global options, and the arguments after it; `spec` must stop at the first operand. */
+function verbOf(args: readonly string[], spec: OptionSpec): Verb {
+	const [verb = "", ...rest] = optionsOf(args, spec).operands;
+	return { verb, rest };
+}
+
+/** The command's own verb, read through this command's shared options. */
+function commandVerb(command: Command, spec: OptionSpec): Verb {
+	const [verb = "", ...rest] = optionsIn(command, spec).operands;
 	return { verb, rest };
 }
 
@@ -179,32 +208,68 @@ const SUDO_OPTIONS: OptionSpec = {
 	stopAtOperand: true,
 };
 
+const DOAS_OPTIONS: OptionSpec = { valueLetters: "uC", valueLongs: [], stopAtOperand: true };
+const RUN0_OPTIONS: OptionSpec = {
+	valueLetters: "uDgM",
+	valueLongs: ["--user", "--group", "--chdir", "--machine", "--unit", "--property", "--description", "--slice"],
+	stopAtOperand: true,
+};
+const INCUS_OPTIONS: OptionSpec = { valueLetters: "", valueLongs: ["--project"], stopAtOperand: true };
+
 const CONTAINER_ENGINES: ReadonlySet<string> = new Set(["docker", "podman", "nerdctl"]);
 const COMPOSE_PROGRAMS: ReadonlySet<string> = new Set(["docker-compose", "podman-compose"]);
 
-/** `docker [global] [container] <verb> …`, or null for another program. */
-function containerVerb(command: Command): { readonly verb: string; readonly rest: readonly string[] } | null {
-	if (!CONTAINER_ENGINES.has(command.program)) return null;
-	const outer = verbOf(command.args, DOCKER_GLOBAL);
-	return outer.verb === "container" ? verbOf(outer.rest, PLAIN) : outer;
+/** `docker [global] [container] <verb> …`, or null for another program; each command answers once. */
+function containerVerb(command: Command): Verb | null {
+	const cached = command.container;
+	if (cached !== undefined) return cached;
+	let value: Verb | null = null;
+	if (CONTAINER_ENGINES.has(command.program)) {
+		const outer = commandVerb(command, DOCKER_GLOBAL);
+		value = outer.verb === "container" ? verbOf(outer.rest, PLAIN_STOP) : outer;
+	}
+	command.container = value;
+	return value;
 }
 
-/** `docker compose [global] <verb> …` or `docker-compose [global] <verb> …`, or null. */
-function composeVerb(command: Command): { readonly verb: string; readonly rest: readonly string[] } | null {
-	if (COMPOSE_PROGRAMS.has(command.program)) return verbOf(command.args, COMPOSE_GLOBAL);
-	const outer = containerVerb(command);
-	return outer?.verb === "compose" ? verbOf(outer.rest, COMPOSE_GLOBAL) : null;
+/** `docker compose [global] <verb> …` or `docker-compose [global] <verb> …`, or null; each command answers once. */
+function composeVerb(command: Command): Verb | null {
+	const cached = command.compose;
+	if (cached !== undefined) return cached;
+	let value: Verb | null;
+	if (COMPOSE_PROGRAMS.has(command.program)) {
+		value = commandVerb(command, COMPOSE_GLOBAL);
+	} else {
+		const outer = containerVerb(command);
+		value = outer?.verb === "compose" ? verbOf(outer.rest, COMPOSE_GLOBAL) : null;
+	}
+	command.compose = value;
+	return value;
 }
 
-function kubectlVerb(command: Command): { readonly verb: string; readonly rest: readonly string[] } | null {
-	return command.program === "kubectl" ? verbOf(command.args, KUBECTL_GLOBAL) : null;
+function kubectlVerb(command: Command): Verb | null {
+	const cached = command.kubectl;
+	if (cached !== undefined) return cached;
+	const value = command.program === "kubectl" ? commandVerb(command, KUBECTL_GLOBAL) : null;
+	command.kubectl = value;
+	return value;
 }
 
-function gitVerb(command: Command): { readonly verb: string; readonly rest: readonly string[] } | null {
-	return command.program === "git" ? verbOf(command.args, GIT_GLOBAL) : null;
+function gitVerb(command: Command): Verb | null {
+	const cached = command.git;
+	if (cached !== undefined) return cached;
+	const value = command.program === "git" ? commandVerb(command, GIT_GLOBAL) : null;
+	command.git = value;
+	return value;
 }
 
-const firstOperand = (command: Command): string => optionsOf(command.args, { ...PLAIN, stopAtOperand: true }).operands[0] ?? "";
+function firstOperand(command: Command): string {
+	const cached = command.firstOperand;
+	if (cached !== undefined) return cached;
+	const value = optionsIn(command, PLAIN_STOP).operands[0] ?? "";
+	command.firstOperand = value;
+	return value;
+}
 
 const startsWith = (args: readonly string[], words: readonly string[]): boolean => words.every((word, index) => args[index] === word);
 
@@ -248,9 +313,9 @@ function sqliteOperands(args: readonly string[]): readonly string[] | null {
 function elevationPrompts(command: Command): boolean {
 	switch (command.program) {
 		case "sudo":
-			return !hasAny(optionsOf(command.args, SUDO_OPTIONS), "nS", ["--non-interactive", "--stdin"]);
+			return !hasAny(optionsIn(command, SUDO_OPTIONS), "nS", ["--non-interactive", "--stdin"]);
 		case "doas":
-			return !hasAny(optionsOf(command.args, { valueLetters: "uC", valueLongs: [], stopAtOperand: true }), "n");
+			return !hasAny(optionsIn(command, DOAS_OPTIONS), "n");
 		case "run0":
 			return !command.args.includes("--no-ask-password");
 		default:
@@ -262,15 +327,11 @@ function elevationPrompts(command: Command): boolean {
 function elevatedCommand(command: Command): readonly string[] | null {
 	switch (command.program) {
 		case "sudo":
-			return optionsOf(command.args, SUDO_OPTIONS).operands;
+			return optionsIn(command, SUDO_OPTIONS).operands;
 		case "doas":
-			return optionsOf(command.args, { valueLetters: "uC", valueLongs: [], stopAtOperand: true }).operands;
+			return optionsIn(command, DOAS_OPTIONS).operands;
 		case "run0":
-			return optionsOf(command.args, {
-				valueLetters: "uDgM",
-				valueLongs: ["--user", "--group", "--chdir", "--machine", "--unit", "--property", "--description", "--slice"],
-				stopAtOperand: true,
-			}).operands;
+			return optionsIn(command, RUN0_OPTIONS).operands;
 		default:
 			return null;
 	}
@@ -280,10 +341,36 @@ function elevatedCommand(command: Command): readonly string[] | null {
 
 const command = (category: PtyCategory, matches: (command: Command) => boolean): Rule => ({ on: "command", category, matches });
 
+const PSQL_OPTIONS: OptionSpec = { valueLetters: "cdfhpUvTLoPRFS", valueLongs: [], stopAtOperand: false };
+const MYSQL_OPTIONS: OptionSpec = { valueLetters: "ehuPSD", valueLongs: [], stopAtOperand: false };
+const REDIS_OPTIONS: OptionSpec = { valueLetters: "hpsaunrid", valueLongs: ["--user", "--pass"], stopAtOperand: false };
+const TOP_OPTIONS: OptionSpec = { valueLetters: "dlnpsuUoOwEFm", valueLongs: [], stopAtOperand: false };
+const PING_OPTIONS: OptionSpec = { valueLetters: "cisItWwlpQSmM", valueLongs: [], stopAtOperand: false };
+const TAIL_OPTIONS: OptionSpec = { valueLetters: "ncs", valueLongs: ["--pid", "--sleep-interval"], stopAtOperand: false };
+const JOURNAL_OPTIONS: OptionSpec = { valueLetters: "bcDiIkMnopStuU", valueLongs: [], stopAtOperand: false };
+const LOGS_OPTIONS: OptionSpec = { valueLetters: "n", valueLongs: ["--since", "--until", "--tail"], stopAtOperand: false };
+const GIT_REBASE_OPTIONS: OptionSpec = { valueLetters: "sxXC", valueLongs: [], stopAtOperand: false };
+const GIT_COMMIT_OPTIONS: OptionSpec = { valueLetters: "mFCct", valueLongs: [], stopAtOperand: false };
+const COMPOSE_UP_OPTIONS: OptionSpec = {
+	valueLetters: "t",
+	valueLongs: ["--scale", "--timeout", "--exit-code-from", "--pull", "--wait-timeout", "--attach", "--no-attach"],
+	stopAtOperand: false,
+};
+const KUBECTL_LOGS_OPTIONS: OptionSpec = {
+	valueLetters: "cln",
+	valueLongs: ["--container", "--since", "--since-time", "--tail", "--selector", "--max-log-requests"],
+	stopAtOperand: false,
+};
+const KUBECTL_GET_OPTIONS: OptionSpec = {
+	valueLetters: "fLlno",
+	valueLongs: ["--selector", "--output", "--sort-by", "--template"],
+	stopAtOperand: false,
+};
+
 /** The closed rule registry, in precedence order; adding or removing an entry needs a hit and a miss fixture. */
 const RULES = {
 	// passthrough
-	ssh: command("passthrough", (c) => c.program === "ssh" && !hasAny(optionsOf(c.args, SSH_OPTIONS), "GVO")),
+	ssh: command("passthrough", (c) => c.program === "ssh" && !hasAny(optionsIn(c, SSH_OPTIONS), "GVO")),
 	mosh: command("passthrough", (c) => c.program === "mosh"),
 	vagrantSsh: command("passthrough", (c) => c.program === "vagrant" && firstOperand(c) === "ssh"),
 	gcloudSsh: command("passthrough", (c) => {
@@ -305,15 +392,13 @@ const RULES = {
 	kubectlExec: command("passthrough", (c) => ["exec", "run", "debug", "attach"].includes(kubectlVerb(c)?.verb ?? "")),
 	incusExec: command(
 		"passthrough",
-		(c) =>
-			(c.program === "incus" || c.program === "lxc") &&
-			["exec", "shell"].includes(verbOf(c.args, { valueLetters: "", valueLongs: ["--project"], stopAtOperand: true }).verb),
+		(c) => (c.program === "incus" || c.program === "lxc") && ["exec", "shell"].includes(commandVerb(c, INCUS_OPTIONS).verb),
 	),
 	pctExec: command("passthrough", (c) => c.program === "pct" && (c.args[0] === "exec" || c.args[0] === "enter")),
 	qmGuest: command("passthrough", (c) => c.program === "qm" && (startsWith(c.args, ["guest", "exec"]) || c.args[0] === "terminal")),
 	orbShell: command("passthrough", (c) => {
 		if (c.program !== "orb" && c.program !== "orbctl") return false;
-		const options = optionsOf(c.args, ORB_OPTIONS);
+		const options = optionsIn(c, ORB_OPTIONS);
 		if (hasAny(options, "m", ["--machine"])) return true;
 		const verb = options.operands[0];
 		if (verb === undefined) return !hasAny(options, "hv", ["--help", "--version"]);
@@ -336,28 +421,18 @@ const RULES = {
 		(c) =>
 			c.program === "psql" &&
 			!c.stdinFed &&
-			!hasAny(optionsOf(c.args, { valueLetters: "cdfhpUvTLoPRFS", valueLongs: [], stopAtOperand: false }), "cflV", [
-				"--command",
-				"--file",
-				"--list",
-				"--help",
-				"--version",
-			]),
+			!hasAny(optionsIn(c, PSQL_OPTIONS), "cflV", ["--command", "--file", "--list", "--help", "--version"]),
 	),
 	mysql: command(
 		"terminal",
 		(c) =>
 			(c.program === "mysql" || c.program === "mariadb") &&
 			!c.stdinFed &&
-			!hasAny(optionsOf(c.args, { valueLetters: "ehuPSD", valueLongs: [], stopAtOperand: false }), "eV", [
-				"--execute",
-				"--help",
-				"--version",
-			]),
+			!hasAny(optionsIn(c, MYSQL_OPTIONS), "eV", ["--execute", "--help", "--version"]),
 	),
 	redisCli: command("terminal", (c) => {
 		if (c.program !== "redis-cli" || c.stdinFed) return false;
-		const options = optionsOf(c.args, { valueLetters: "hpsaunrid", valueLongs: ["--user", "--pass"], stopAtOperand: false });
+		const options = optionsIn(c, REDIS_OPTIONS);
 		return options.operands.length === 0 && !hasAny(options, "x", ["--help", "--version"]);
 	}),
 	sqlite3: command("terminal", (c) => {
@@ -381,23 +456,18 @@ const RULES = {
 	}),
 	tui: command("terminal", (c) => {
 		if (["htop", "btop", "lazygit", "lazydocker", "tig", "k9s"].includes(c.program)) return true;
-		return c.program === "top" && !hasAny(optionsOf(c.args, { valueLetters: "dlnpsuUoOwEFm", valueLongs: [], stopAtOperand: false }), "bl");
+		return c.program === "top" && !hasAny(optionsIn(c, TOP_OPTIONS), "bl");
 	}),
 	gitInteractive: command("terminal", (c) => {
 		const git = gitVerb(c);
 		if (git === null) return false;
 		switch (git.verb) {
 			case "rebase":
-				return hasAny(optionsOf(git.rest, { valueLetters: "sxXC", valueLongs: [], stopAtOperand: false }), "i", ["--interactive"]);
+				return hasAny(optionsOf(git.rest, GIT_REBASE_OPTIONS), "i", ["--interactive"]);
 			case "add":
 				return hasAny(optionsOf(git.rest, PLAIN), "pi", ["--patch", "--interactive"]);
 			case "commit":
-				return !hasAny(optionsOf(git.rest, { valueLetters: "mFCct", valueLongs: [], stopAtOperand: false }), "mFC", [
-					"--message",
-					"--file",
-					"--reuse-message",
-					"--no-edit",
-				]);
+				return !hasAny(optionsOf(git.rest, GIT_COMMIT_OPTIONS), "mFC", ["--message", "--file", "--reuse-message", "--no-edit"]);
 			default:
 				return false;
 		}
@@ -431,91 +501,31 @@ const RULES = {
 			}),
 	},
 	// open-ended
-	tailFollow: command(
-		"open-ended",
-		(c) =>
-			c.program === "tail" &&
-			hasAny(optionsOf(c.args, { valueLetters: "ncs", valueLongs: ["--pid", "--sleep-interval"], stopAtOperand: false }), "fF", [
-				"--follow",
-			]),
-	),
-	journalFollow: command(
-		"open-ended",
-		(c) =>
-			c.program === "journalctl" &&
-			hasAny(optionsOf(c.args, { valueLetters: "bcDiIkMnopStuU", valueLongs: [], stopAtOperand: false }), "f", ["--follow"]),
-	),
+	tailFollow: command("open-ended", (c) => c.program === "tail" && hasAny(optionsIn(c, TAIL_OPTIONS), "fF", ["--follow"])),
+	journalFollow: command("open-ended", (c) => c.program === "journalctl" && hasAny(optionsIn(c, JOURNAL_OPTIONS), "f", ["--follow"])),
 	containerLogsFollow: command("open-ended", (c) => {
 		const logs = containerVerb(c);
-		return (
-			logs?.verb === "logs" &&
-			hasAny(optionsOf(logs.rest, { valueLetters: "n", valueLongs: ["--since", "--until", "--tail"], stopAtOperand: false }), "f", [
-				"--follow",
-			])
-		);
+		return logs?.verb === "logs" && hasAny(optionsOf(logs.rest, LOGS_OPTIONS), "f", ["--follow"]);
 	}),
 	composeLogsFollow: command("open-ended", (c) => {
 		const logs = composeVerb(c);
-		return (
-			logs?.verb === "logs" &&
-			hasAny(optionsOf(logs.rest, { valueLetters: "n", valueLongs: ["--since", "--until", "--tail"], stopAtOperand: false }), "f", [
-				"--follow",
-			])
-		);
+		return logs?.verb === "logs" && hasAny(optionsOf(logs.rest, LOGS_OPTIONS), "f", ["--follow"]);
 	}),
 	composeUp: command("open-ended", (c) => {
 		const up = composeVerb(c);
-		return (
-			up?.verb === "up" &&
-			!hasAny(
-				optionsOf(up.rest, {
-					valueLetters: "t",
-					valueLongs: ["--scale", "--timeout", "--exit-code-from", "--pull", "--wait-timeout", "--attach", "--no-attach"],
-					stopAtOperand: false,
-				}),
-				"d",
-				["--detach", "--wait"],
-			)
-		);
+		return up?.verb === "up" && !hasAny(optionsOf(up.rest, COMPOSE_UP_OPTIONS), "d", ["--detach", "--wait"]);
 	}),
 	kubectlLogsFollow: command("open-ended", (c) => {
 		const logs = kubectlVerb(c);
-		return (
-			logs?.verb === "logs" &&
-			hasAny(
-				optionsOf(logs.rest, {
-					valueLetters: "cln",
-					valueLongs: ["--container", "--since", "--since-time", "--tail", "--selector", "--max-log-requests"],
-					stopAtOperand: false,
-				}),
-				"f",
-				["--follow"],
-			)
-		);
+		return logs?.verb === "logs" && hasAny(optionsOf(logs.rest, KUBECTL_LOGS_OPTIONS), "f", ["--follow"]);
 	}),
 	kubectlWatch: command("open-ended", (c) => {
 		const get = kubectlVerb(c);
-		return (
-			get?.verb === "get" &&
-			hasAny(
-				optionsOf(get.rest, {
-					valueLetters: "fLlno",
-					valueLongs: ["--selector", "--output", "--sort-by", "--template"],
-					stopAtOperand: false,
-				}),
-				"w",
-				["--watch", "--watch-only"],
-			)
-		);
+		return get?.verb === "get" && hasAny(optionsOf(get.rest, KUBECTL_GET_OPTIONS), "w", ["--watch", "--watch-only"]);
 	}),
 	watch: command("open-ended", (c) => c.program === "watch"),
 	ghRunWatch: command("open-ended", (c) => c.program === "gh" && startsWith(c.args, ["run", "watch"])),
-	ping: command(
-		"open-ended",
-		(c) =>
-			(c.program === "ping" || c.program === "ping6") &&
-			!hasAny(optionsOf(c.args, { valueLetters: "cisItWwlpQSmM", valueLongs: [], stopAtOperand: false }), "c"),
-	),
+	ping: command("open-ended", (c) => (c.program === "ping" || c.program === "ping6") && !hasAny(optionsIn(c, PING_OPTIONS), "c")),
 	detach: command("open-ended", (c) => c.wrappers.includes("nohup") || c.program === "nohup" || c.program === "setsid"),
 	background: command("open-ended", (c) => c.background),
 	loopSleep: command("open-ended", (c) => c.program === "sleep" && c.loopBody),
@@ -544,6 +554,7 @@ function commandsOf(tokens: readonly CommandToken[], context: ShellContext): Com
 		stdinFed: invocation.piped || invocation.readInputs.length > 0 || invocation.hereInput,
 		background: context.background,
 		loopBody: context.loopBody,
+		options: new Map(),
 	};
 	if (elevationPrompts(found)) return [found];
 	const inner = elevatedCommand(found);
@@ -561,17 +572,21 @@ function commandHit(found: Command): PtyHit | null {
 	return null;
 }
 
-/** The first rule a shell line hits, or null; an unterminated line passes. */
-export function ptyShellHit(line: string): PtyHit | null {
-	const parsed = parseShellCommands(line);
-	if (parsed.kind === "unterminated") return null;
-	for (const simple of parsed.commands) {
+/** The first rule a scanned shell line hits, or null; an unterminated line passes. */
+export function ptyLineHit(scan: ShellScan): PtyHit | null {
+	if (!scan.complete) return null;
+	for (const simple of scan.commands) {
 		for (const found of commandsOf(simple.tokens, simple)) {
 			const hit = commandHit(found);
 			if (hit !== null) return hit;
 		}
 	}
 	return null;
+}
+
+/** The first rule a shell line hits, or null; a caller that already scanned the line passes that scan instead. */
+export function ptyShellHit(line: string): PtyHit | null {
+	return ptyLineHit(scanShell(line));
 }
 
 /** An argv run without a shell; a word that is not literal leaves it unknown. */
@@ -637,7 +652,17 @@ function pythonHit(code: string): PtyHit | null {
 	return null;
 }
 
+/**
+ * Every name the js lane's reader can match, in any casing: `Bun` (`Bun.$`,
+ * `Bun.spawn*`), a launcher member or alias (`spawn*`, `exec*`), the
+ * `child_process` and `bun` modules, and the `tool.bash`/`tool.write` bridges.
+ * A cell spelling none of them starts no process here, so the parse is skipped;
+ * a cell spelling one is parsed and judged as before.
+ */
+const JS_LAUNCH_HINT = /bun|spawn|exec|child_process|tool/i;
+
 async function javascriptHit(code: string): Promise<PtyHit | null> {
+	if (!JS_LAUNCH_HINT.test(code)) return null;
 	let cell: ReturnType<typeof parseJs>;
 	try {
 		cell = parseJs(code);

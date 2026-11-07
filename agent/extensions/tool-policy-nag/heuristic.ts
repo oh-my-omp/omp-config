@@ -129,16 +129,45 @@ function outputConsumed(commands: readonly SimpleCommand[], stages: readonly Sta
 const COUNTABLE: ReadonlySet<ViolationCategory> = new Set(["list", "read", "search"]);
 
 /**
- * Every shell command whose work a built-in tool owns. Commands are resolved
- * through wrappers (`timeout`, `xargs`, `env`, …) and reserved words; nested
- * command lines (`bash -c '…'`, `eval '…'`, `find -exec … ;`) are analyzed in
- * place. A stage's stdin source decides pathless forms (`rg foo` searches the
- * working directory unless piped) and authored writes (`printf … | tee f`).
- * Listing, reading and searching whose output feeds the shell — a `$(…)`
- * capture, a count, `xargs` arguments — is not counted.
+ * Every shell command whose work a built-in tool owns, over a line already
+ * split by `shell-parser.ts`. Commands are resolved through wrappers
+ * (`timeout`, `xargs`, `env`, …) and reserved words; nested command lines
+ * (`bash -c '…'`, `eval '…'`, `find -exec … ;`) are analyzed in place. A
+ * stage's stdin source decides pathless forms (`rg foo` searches the working
+ * directory unless piped) and authored writes (`printf … | tee f`). Listing,
+ * reading and searching whose output feeds the shell — a `$(…)` capture, a
+ * count, `xargs` arguments — is not counted. A call that scans its line once
+ * hands the same `commands` to every lane; `reached` says whether a simple
+ * command's output reaches the result.
  */
+export function detectCommandViolations(commands: readonly SimpleCommand[], reached: (index: number) => boolean): ShellViolation[] {
+	const stages: Stage[] = [];
+	for (const [index, simple] of commands.entries()) {
+		stages.push(analyzeTokens(simple.tokens, simple.piped, provenanceOf(commands, stages, index)));
+	}
+	const violations: ShellViolation[] = [];
+	for (const [index, stage] of stages.entries()) {
+		const { findings, nested } = stage.analysis;
+		if (findings.length === 0 && nested.length === 0) continue;
+		const consumed = commands[index]?.captured === true || outputConsumed(commands, stages, index) || !reached(index);
+		if (!consumed) {
+			violations.push(...stageViolation(stage, findings), ...nested);
+			continue;
+		}
+		violations.push(
+			...stageViolation(
+				stage,
+				findings.filter((finding) => !COUNTABLE.has(finding.category)),
+			),
+		);
+		violations.push(...nested.filter((violation) => violation.categories.some((category) => !COUNTABLE.has(category))));
+	}
+	return violations;
+}
+
+/** Every shell command whose work a built-in tool owns, over a line's text. */
 export function detectShellViolations(command: string): ShellViolation[] {
-	return detectViolations(splitSimpleCommands(command), () => true);
+	return detectCommandViolations(splitSimpleCommands(command), () => true);
 }
 
 /**
@@ -174,38 +203,21 @@ export function detectTraceViolations(trace: ExecutedTrace): ShellViolation[] {
 		return { tokens, pipelineId, piped: step.stage > 0, captured: step.captured, background: false, loopBody: false };
 	});
 	// A pipeline's bytes reach the result through its last stage; nothing attributed anywhere in it means they did not.
+	// The first index with attributed output decides every stage of its pipeline in one pass.
+	const outputFrom = new Map<string, number>();
+	for (const [index, step] of steps.entries()) {
+		if (!step.output || step.pipeline === null) continue;
+		const earliest = outputFrom.get(step.pipeline);
+		if (earliest === undefined || index < earliest) outputFrom.set(step.pipeline, index);
+	}
 	const reached = (index: number): boolean => {
 		const step = steps[index];
 		if (step === undefined) return false;
 		if (step.pipeline === null) return step.output;
-		return steps.some((other, at) => at >= index && other.pipeline === step.pipeline && other.output);
+		const earliest = outputFrom.get(step.pipeline);
+		return earliest !== undefined && earliest >= index;
 	};
-	return detectViolations(commands, reached);
-}
-
-function detectViolations(commands: readonly SimpleCommand[], reached: (index: number) => boolean): ShellViolation[] {
-	const stages: Stage[] = [];
-	for (const [index, simple] of commands.entries()) {
-		stages.push(analyzeTokens(simple.tokens, simple.piped, provenanceOf(commands, stages, index)));
-	}
-	const violations: ShellViolation[] = [];
-	for (const [index, stage] of stages.entries()) {
-		const { findings, nested } = stage.analysis;
-		if (findings.length === 0 && nested.length === 0) continue;
-		const consumed = commands[index]?.captured === true || outputConsumed(commands, stages, index) || !reached(index);
-		if (!consumed) {
-			violations.push(...stageViolation(stage, findings), ...nested);
-			continue;
-		}
-		violations.push(
-			...stageViolation(
-				stage,
-				findings.filter((finding) => !COUNTABLE.has(finding.category)),
-			),
-		);
-		violations.push(...nested.filter((violation) => violation.categories.some((category) => !COUNTABLE.has(category))));
-	}
-	return violations;
+	return detectCommandViolations(commands, reached);
 }
 
 type EvalLanguage = "py" | "js";
