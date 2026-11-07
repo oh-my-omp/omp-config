@@ -388,11 +388,21 @@ function shellScanFor(slot: ScanSlot, call: Extract<WatchedCall, { kind: "shell"
 }
 
 /** The slot of the call whose result just arrived; consumed either way. */
-function takePending(nag: Nag, id: string): PendingCall | null {
+/** Whether a result's call is the call its `tool_call` hook read: same id, same text. */
+function sameCall(a: WatchedCall, b: WatchedCall): boolean {
+	switch (a.kind) {
+		case "shell":
+			return b.kind === "shell" && a.tool === b.tool && a.command === b.command;
+		case "eval":
+			return b.kind === "eval" && a.language === b.language && a.code === b.code && a.reset === b.reset;
+	}
+}
+
+function takePending(nag: Nag, id: string, call: WatchedCall): PendingCall | null {
 	const pending = nag.pending;
 	if (pending === null || pending.id !== id) return null;
 	nag.pending = null;
-	return pending;
+	return sameCall(pending.call, call) ? pending : null;
 }
 
 function commit(nag: Nag, next: NagState): void {
@@ -629,7 +639,7 @@ async function onToolResult(nag: Nag, event: ToolResultEvent, ctx: ExtensionCont
 	if (call === null) return;
 	const job = nag.intentJobs.get(event.toolCallId);
 	nag.intentJobs.delete(event.toolCallId);
-	const pending = takePending(nag, event.toolCallId);
+	const pending = takePending(nag, event.toolCallId, call);
 	const slot: ScanSlot = pending ?? { scan: null };
 	const reminders = nag.lateReminders.splice(0);
 	try {

@@ -657,9 +657,11 @@ function pythonHit(code: string): PtyHit | null {
  * `Bun.spawn*`), a launcher member or alias (`spawn*`, `exec*`), the
  * `child_process` and `bun` modules, and the `tool.bash`/`tool.write` bridges.
  * A cell spelling none of them starts no process here, so the parse is skipped;
- * a cell spelling one is parsed and judged as before.
+ * a cell spelling one is parsed and judged as before. The hint reads the source
+ * text, where a name may be written with `\u` or `\x` escapes that only the
+ * parse decodes, so a cell containing a backslash is always parsed.
  */
-const JS_LAUNCH_HINT = /bun|spawn|exec|child_process|tool/i;
+const JS_LAUNCH_HINT = /bun|spawn|exec|child_process|tool|\\/i;
 
 async function javascriptHit(code: string): Promise<PtyHit | null> {
 	if (!JS_LAUNCH_HINT.test(code)) return null;
