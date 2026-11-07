@@ -26,8 +26,9 @@
  * schema. Once a yield passes, later yields in the same session pass
  * unjudged.
  *
- * Registers `tool_call` and `session_shutdown`; it reads the host-managed session
- * branch for the assignment/tools and requests the independent Todo owner's
+ * Registers `tool_call` and `session_shutdown`; it walks the host-managed session
+ * branch back from the tail view for the assignment/tools (never a copied
+ * branch, never whole messages) and requests the independent Todo owner's
  * synchronous read projection before and after judging. Its model is the OMP
  * model role `@task-completion-judge` (assign it in `/model`), then the
  * `default` role's models, resolved at every judgment, and it writes only
@@ -49,7 +50,6 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { declaresFlag } from "../_shared/agent-definition.ts";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
-import { textOf } from "../_shared/messages.ts";
 import { completeRoleChain } from "../_shared/role-chain.ts";
 
 /** The OMP model role this extension's judge model comes from: the extension's own name. */
@@ -130,8 +130,6 @@ const toolCallBlockSchema = z
 	.passthrough();
 
 /** Written by the task executor when the run starts; `task` is the exact prompt it dispatches. */
-const sessionInitEntrySchema = z.object({ type: z.literal("session_init"), task: z.string() }).passthrough();
-
 const messageEntrySchema = z
 	.object({
 		type: z.literal("message"),
@@ -184,6 +182,61 @@ const truncate = (text: string, limit: number): string => {
 };
 
 /**
+ * Bounded text of one message's `content` without materializing the whole
+ * text first: text blocks stream through `truncate`'s head/tail windows, so a
+ * multi-MB tool result never lives as one string. Output is byte-identical to
+ * `truncate(textOf(content, separator), limit)`.
+ */
+const textWithin = (content: unknown, separator: string, limit: number): string => {
+	const blocks: string[] =
+		typeof content === "string"
+			? [content]
+			: !Array.isArray(content)
+				? []
+				: content.flatMap((block) =>
+						typeof block === "object" &&
+						block !== null &&
+						"type" in block &&
+						block.type === "text" &&
+						"text" in block &&
+						typeof block.text === "string"
+							? [block.text]
+							: [],
+					);
+	if (blocks.length === 0) return "";
+	if (blocks.length === 1) return truncate(blocks[0] ?? "", limit);
+	const joinedLength = blocks.reduce((sum, block) => sum + block.length, 0) + separator.length * (blocks.length - 1);
+	if (joinedLength <= limit) return blocks.join(separator);
+	// Same head/tail split as `truncate`, mapped back onto block boundaries.
+	const head = Math.ceil(limit * 0.6);
+	const tail = limit - head;
+	let kept = "";
+	let used = 0;
+	for (const [index, block] of blocks.entries()) {
+		const piece = index === 0 ? block : `${separator}${block}`;
+		if (used + piece.length >= head) {
+			kept += piece.slice(0, head - used);
+			break;
+		}
+		kept += piece;
+		used += piece.length;
+	}
+	let tailText = "";
+	used = 0;
+	for (let index = blocks.length - 1; index >= 0; index--) {
+		const block = blocks[index] ?? "";
+		const piece = index === blocks.length - 1 ? block : `${block}${separator}`;
+		if (used + piece.length >= tail) {
+			tailText = piece.slice(piece.length - (tail - used)) + tailText;
+			break;
+		}
+		tailText = piece + tailText;
+		used += piece.length;
+	}
+	return `${kept}\n…[${joinedLength - limit} chars omitted]…\n${tailText}`;
+};
+
+/**
  * Conservative token estimate without a tokenizer: one token per ASCII character
  * and two per other character. Calibrated against the judge helper's
  * `max_tokens_exceeded` boundary: CJK text failed at about 32k characters (two
@@ -196,12 +249,22 @@ const estimateTokens = (text: string): number => {
 	return tokens;
 };
 
-const stringify = (value: unknown): string => {
+/**
+ * Bounded `truncate(JSON.stringify(value) ?? String(value), limit)` with an
+ * early return when the serialized form fits: the only allocation is the
+ * bounded result. Oversized values take the same whole-serialize-then-slice
+ * path the old code took (byte-identical). The allocation win of this child
+ * is the transcript walk (no branch copy, bounded texts), not this helper.
+ */
+const stringifyWithin = (value: unknown, limit: number): string => {
+	const head = Math.ceil(limit * 0.6);
+	const tail = limit - head;
 	try {
-		return JSON.stringify(value) ?? String(value);
+		const full = JSON.stringify(value) ?? String(value);
+		if (full.length <= limit) return full;
+		return `${full.slice(0, head)}\n…[${full.length - limit} chars omitted]…\n${full.slice(full.length - tail)}`;
 	} catch {
-		// Circular structures and non-JSON values (such as bigint) use their textual representation.
-		return String(value);
+		return truncate(String(value), limit);
 	}
 };
 
@@ -215,38 +278,85 @@ const classifyYield = (input: YieldInput): YieldCall => {
 /**
  * The run's own part of the branch: from the latest `session_init` on. Returns
  * undefined when the branch has none, i.e. the session is not a task run.
+ * Walks the host's memoized branch view back from the tail, keeping at most
+ * one pass over the run's own suffix: entries before the latest `session_init`
+ * are never touched, assistant text is capped to the result window, and result
+ * text is capped the same way. `session_init` matching is structural
+ * (`type: "session_init"` with a string `task`), identical to the schema the
+ * forward walk used.
  */
+const branchEntries = (ctx: ExtensionContext): readonly unknown[] => {
+	const manager = ctx.sessionManager as unknown as {
+		readonly getBranchView?: () => readonly unknown[];
+		readonly getBranch?: () => readonly unknown[];
+	};
+	// Host `SessionManager.branchView()` is the memoized active-leaf branch
+	// (no copy); `getBranch()` copies it. Prefer the view, fall back to the
+	// copy on hosts that narrow the extension type.
+	if (typeof manager.getBranchView === "function") return manager.getBranchView();
+	if (typeof manager.getBranch === "function") return manager.getBranch();
+	return [];
+};
+
 const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
-	let assignment: string | undefined;
-	const calls: ToolCallRecord[] = [];
-	const results = new Map<string, ToolResultRecord>();
-	const assistantTextByCallId = new Map<string, string>();
-	for (const entry of ctx.sessionManager.getBranch()) {
-		const init = sessionInitEntrySchema.safeParse(entry);
-		if (init.success) {
-			assignment = init.data.task;
-			calls.length = 0;
-			results.clear();
-			assistantTextByCallId.clear();
-			continue;
+	const view = branchEntries(ctx);
+	// Latest `session_init` first: everything at or before it is background.
+	let start = -1;
+	for (let index = view.length - 1; index >= 0; index--) {
+		const entry = view[index] as { readonly type?: unknown; readonly task?: unknown } | undefined;
+		if (entry !== undefined && entry !== null && entry.type === "session_init" && typeof entry.task === "string") {
+			start = index;
+			break;
 		}
-		if (assignment === undefined) continue;
+	}
+	if (start === -1) return undefined;
+	const initEntry = view[start] as unknown as { task: string };
+	const assignment = initEntry.task;
+	const calls: ToolCallRecord[] = [];
+	const pendingResults = new Map<string, { readonly isError: boolean; readonly entry: unknown }>();
+	const assistantTextByCallId = new Map<string, string>();
+	const textByCallId = new Map<string, string>();
+	// Tail-first over the run's own suffix only; the loop below replays the
+	// kept suffix forward so shapes stay identical to the forward walk.
+	const kept: unknown[] = [];
+	for (let index = view.length - 1; index > start; index--) {
+		const entry = view[index] as { readonly type?: unknown; readonly message?: unknown } | undefined;
+		if (entry === undefined || entry.type !== "message") continue;
+		const message = (entry as { message?: unknown }).message as
+			| { role?: unknown; content?: unknown; toolCallId?: unknown; isError?: unknown }
+			| undefined;
+		if (message === undefined || typeof message !== "object") continue;
+		if (message.role === "assistant") {
+			const content = (message as { content?: unknown }).content;
+			if (
+				Array.isArray(content) &&
+				content.some((block) => typeof block === "object" && block !== null && "type" in block && block.type === "toolCall")
+			) {
+				kept.push(entry);
+				continue;
+			}
+		}
+		if (message.role === "toolResult") {
+			kept.push(entry);
+		}
+	}
+	for (const entry of kept.reverse()) {
 		const parsed = messageEntrySchema.safeParse(entry);
 		if (!parsed.success) continue;
 		const message = parsed.data.message;
 		switch (message.role) {
 			case "assistant": {
-				const text = textOf(message.content);
+				const text = textWithin(message.content, "", RESULT_CHAR_LIMIT);
 				for (const block of message.content) {
 					const call = toolCallBlockSchema.safeParse(block);
 					if (!call.success) continue;
 					calls.push({ id: call.data.id, name: call.data.name, args: call.data.arguments });
-					assistantTextByCallId.set(call.data.id, text);
+					textByCallId.set(call.data.id, text);
 				}
 				break;
 			}
 			case "toolResult":
-				results.set(message.toolCallId, { text: textOf(message.content), isError: message.isError === true });
+				pendingResults.set(message.toolCallId, { isError: message.isError === true, entry: message.content });
 				break;
 			default: {
 				const unexpected: never = message;
@@ -254,18 +364,28 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 			}
 		}
 	}
-	return assignment === undefined ? undefined : { assignment, calls, results, assistantTextByCallId };
+	const results = new Map<string, ToolResultRecord>();
+	for (const [toolCallId, pending] of pendingResults)
+		results.set(toolCallId, { text: textWithin(pending.entry, "", RESULT_CHAR_LIMIT), isError: pending.isError });
+	for (const [toolCallId, text] of textByCallId) assistantTextByCallId.set(toolCallId, text);
+	return { assignment, calls, results, assistantTextByCallId };
 };
 
-/** The batch's shared `context` is rendered into the subagent system prompt as its `§ Context` section. */
+/** The batch's shared `context` is rendered into the subagent system prompt as its `§ Context` section. Scans pieces without joining the whole prompt. */
 const sharedContextOf = (ctx: ExtensionContext): string => {
-	const prompt = ctx.getSystemPrompt().join("\n");
+	const pieces = ctx.getSystemPrompt();
 	const marker = "§ Context\n";
-	const start = prompt.indexOf(marker);
-	if (start === -1) return "";
-	const body = prompt.slice(start + marker.length);
-	const end = body.indexOf("\n§ ");
-	return (end === -1 ? body : body.slice(0, end)).trim();
+	let chunk: string | undefined;
+	for (const piece of pieces) {
+		const at = piece.indexOf(marker);
+		if (at !== -1) {
+			chunk = piece.slice(at + marker.length);
+			break;
+		}
+	}
+	if (chunk === undefined) return "";
+	const end = chunk.indexOf("\n§ ");
+	return (end === -1 ? chunk : chunk.slice(0, end)).trim();
 };
 
 /** One tool call with its arguments and result, each already truncated; `n` is its position among all the worker's prior calls. */
@@ -274,8 +394,8 @@ const renderCall = (call: ToolCallRecord, n: number, results: ReadonlyMap<string
 	const status = result === undefined ? "no result" : result.isError ? "error" : "ok";
 	return [
 		`<call n="${n}" tool="${call.name}" status="${status}">`,
-		`<args>${truncate(stringify(call.args), ARGS_CHAR_LIMIT)}</args>`,
-		`<result>${result === undefined ? "" : truncate(result.text, RESULT_CHAR_LIMIT)}</result>`,
+		`<args>${stringifyWithin(call.args, ARGS_CHAR_LIMIT)}</args>`,
+		`<result>${result === undefined ? "" : result.text}</result>`,
 		"</call>",
 	].join("\n");
 };
@@ -415,7 +535,7 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 			return undefined;
 		}
 		const assistantText = transcript.assistantTextByCallId.get(toolCallId);
-		const submission = call.kind === "text" ? (assistantText ?? "") : stringify(input.data);
+		const submission = call.kind === "text" ? (assistantText ?? "") : stringifyWithin(input.data, SUBMISSION_CHAR_LIMIT);
 		const todo = requireReviewTodo(pi, ctx.agent.id);
 		const verdict = await judge(ctx, renderPrompt(ctx, transcript, toolCallId, submission, todo), AbortSignal.timeout(DEADLINE_MS));
 		pi.logger.info("task-completion-judge verdict", {
