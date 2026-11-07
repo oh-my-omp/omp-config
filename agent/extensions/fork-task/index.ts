@@ -40,6 +40,7 @@
 // tool surface is the source's, not the named agent's. Forks without `agent`
 // share cwd by default, forks with `agent` are isolated by default. No
 // inheritance-size or cost gate exists.
+// At the maximum dispatch depth (caller `taskDepth` + 1 reaches `task.maxRecursionDepth`) the call returns a tool error before staging.
 //
 // The spawn itself is the built-in `task` tool, called with the same batch
 // shape, so each child is an ordinary task subagent: Agent Hub row,
@@ -108,7 +109,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { ensurePersistedRoster } from "@oh-my-pi/pi-coding-agent/registry/persisted-agents";
 import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
+import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents, cfgTaskMaxRecursionDepth } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { callerSession } from "../_shared/caller-session.ts";
@@ -795,6 +796,24 @@ async function sessionShutdown(rt: ForkTaskRuntime, _event: SessionShutdownEvent
 }
 
 /**
+ * Recursion depth of a live session: one per subagent link up the registry
+ * parent chain (the main session has none). Revive derives `taskDepth` the same
+ * way (`task/persisted-revive.ts`); `AgentSession` does not expose the field.
+ */
+function taskDepthOf(session: AgentSession): number {
+	const registry = AgentRegistry.global();
+	let ref = registry.list().find((candidate) => candidate.session === session);
+	let depth = 0;
+	const visited = new Set<string>();
+	while (ref?.parentId !== undefined && !visited.has(ref.id)) {
+		visited.add(ref.id);
+		depth++;
+		ref = registry.get(ref.parentId);
+	}
+	return depth;
+}
+
+/**
  * Stage each item's fork (resolve the source, capture its request, write the
  * staging JSONL), then dispatch the whole batch through the native `task`
  * tool. A `workspace: "source"` rejection refuses before dispatch; staging or
@@ -824,6 +843,15 @@ async function executeForkTask(
 		const params = paramsSchema.parse(rawParams);
 		const parent = callerSession(ctx);
 		if (!parent) return fail("fork_task: could not resolve the calling session in the agent registry.");
+		const maxRecursionDepth = cfgTaskMaxRecursionDepth.get(parent.settings);
+		const callerDepth = taskDepthOf(parent);
+		// The host's executor strips `task` from a child whose depth reaches the cap (`atMaxDepth`); a fork
+		// dispatched here would be that child, so refuse before staging anything.
+		if (maxRecursionDepth >= 0 && callerDepth + 1 >= maxRecursionDepth) {
+			return fail(
+				`fork_task: reached the maximum dispatch depth (current taskDepth ${callerDepth}, task.maxRecursionDepth ${maxRecursionDepth}); a forked child would start at the cap and cannot dispatch subagents.`,
+			);
+		}
 		const taskTool = parent.getToolByName("task");
 		if (!taskTool) return fail("fork_task: the `task` tool is unavailable in this session (recursion depth or settings).");
 		// Only async dispatch pre-allocates the child id before the spawn hook;

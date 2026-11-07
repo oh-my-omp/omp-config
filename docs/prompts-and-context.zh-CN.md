@@ -129,6 +129,7 @@ OMP 的 `agents-md` 与 `claude-md` provider 把独立的 `AGENTS.md` / `CLAUDE.
   | `overlay-conflict` | 读不出来源的改动（没有起点记录：它的运行早于本 OMP 进程或早于 `fork-task` 加载），或改动套不到调用方的 checkout 上。检查之后调用方 checkout 又变化、改动套不到子代理的副本上时，子代理在第一次模型调用前以同一 code 停止 |
 - **Shake 必须显式选择**：`shake` 默认为 false，任何任务项都不检查继承 token 数或来源成本。显式 `shake: true` 对副本执行 `session.shake("elide")`，保留最近约 4,000 token 及 `skill://`、`local://PLAN.md` 读取，把更早的文本工具结果、$\ge 400$ token 的代码块和顶层小写 XML 块替换成共享 artifact 中的恢复引用。开启 shake 的分叉明确不再回放原始消息前缀。
 - **拒绝的任务项**：`tools` 不是 fork 字段，子代理只暴露源的工具。未知 agent、`task.disabledAgents` 中的 agent 或 `fork:self` 本身在派发前报错。
+- **派发深度上限**：调用方 `taskDepth` + 1 达到 `task.maxRecursionDepth` 时，`fork_task` 在暂存前返回 `isError` 工具结果，不派发任何子代理。
 - **执行失败**：execute 边界捕获失败，在暂存清理后记录警告并返回 `isError` 工具结果；只有用户中止（`signal.aborted`）会重新抛出，交由宿主处理取消。
 - `from: "<agent-id>"`（解析规则同 `agent://<id>`）复刻另一个代理而非调用方，无论它运行在 OMP 进程的哪个线程。运行中或 idle 的代理：先捕获它的最近一次请求，再落盘并复制它的对话历史。parked 代理保持 parked：分叉使用它 park 时保留的请求和它的对话历史，历史必须仍以该请求的回复结尾；不满足，或 OMP 没有为它保留请求（它在更早的进程中 park，或最后一次请求没有得到回复）时，该任务项在派发前报错，并指出可用 `write agent://<id>` 唤醒。不设 `workspace: "source"` 时，子代理的工作目录只来自调用方的 checkout。
 - 复制出的历史末尾会追加 `<system-notice cause="fork_task">`，说明前面的历史仅作背景，并要求子代理在交回结果前完成相关构建、测试与真实运行验证。
