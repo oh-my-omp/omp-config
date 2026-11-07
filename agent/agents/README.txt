@@ -30,7 +30,7 @@ The two forms differ in what an omitted `agent` field resolves to:
     spawns: a, b, c    -> omitted `agent` resolves to the first listed name
 
 The bundled `task` sits in `task.disabledAgents` in config.yml (along with `scout`,
-`sonic`, `reviewer`, `security-reviewer`), so "*" plus an omitted field is a hard
+`sonic`, `security-reviewer`), so "*" plus an omitted field is a hard
 preflight failure. An explicit list closes that trap for free — but choose the first
 entry deliberately, because it is the silent default. `task-high.md`, the only
 worker that spawns other workers, lists `task:mid` (the default worker tier) first;
@@ -39,10 +39,11 @@ worker that spawns other workers, lists `task:mid` (the default worker tier) fir
 
 3. Names in `task.disabledAgents` fail even when allowlisted
 -------------------------------------------------------------
-Currently disabled: task, scout, sonic, reviewer, security-reviewer. Listing one in
-`spawns` does not revive it. Ordinary `task` calls must name `agent` explicitly;
-relying on the default walks into item 2. `fork_task` is different: every child
-runs as internal `fork:self`, and `agent` only picks a model binding and a role.
+Currently disabled: task, scout, sonic, security-reviewer. Listing one in `spawns`
+does not revive it: `reviewer.md` keeps the bundled `spawns: scout`, and that spawn
+fails preflight. Ordinary `task` calls must name `agent` explicitly; relying on the
+default walks into item 2. `fork_task` is different: every child runs as internal
+`fork:self`, and `agent` only picks a model binding and a role.
 
 
 4. Recursion depth 2: grandchildren are leaves
@@ -63,7 +64,8 @@ Observed: a depth-2 `task:free` child had no `task` tool in its tool list.
 ------------------------------------------------------------------------------
 `config.yml` sets `task.structured: true`, so every task child has the `yield` tool and
 must finish through it: the `yield` payload is the result its parent receives. Every
-definition here declares the same `output` schema, `{ report: string }`; without it a
+definition here except `reviewer.md` declares the same `output` schema,
+`{ report: string }`; `reviewer.md` keeps the bundled verdict schema. Without one a
 structured run accepts any object and each child picks its own shape. On OMP 18.16 a
 child without structured mode gets no `yield` at all, so do not turn the setting off
 while these definitions require `yield`.

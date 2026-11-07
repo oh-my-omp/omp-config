@@ -2,16 +2,16 @@
 
 [返回首页](../README.zh-CN.md) · [English](agents.md) | 简体中文
 
-`agent/config.yml` 在 `task.disabledAgents` 中禁用了 OMP 内置子代理（`task`、`scout`、`sonic`、`reviewer`、`security-reviewer`；即使写进 `spawns` 也会在 preflight 被拒）。`agent/agents/*.md` 包含可选的 worker/顾问定义，以及内部的 `fork:self`，即所有 `fork_task` 子代理的派发身份（frontmatter 陷阱见 [`agent/agents/README.zh-CN.txt`](../agent/agents/README.zh-CN.txt)；非 agent 笔记使用 `.txt`）。
+`agent/config.yml` 在 `task.disabledAgents` 中禁用了 OMP 内置子代理（`task`、`scout`、`sonic`、`security-reviewer`；即使写进 `spawns` 也会在 preflight 被拒）。`agent/agents/*.md` 包含可选的 worker/顾问定义、`reviewer`（OMP 内置审查代理的副本，按同名覆盖内置定义），以及内部的 `fork:self`，即所有 `fork_task` 子代理的派发身份（frontmatter 陷阱见 [`agent/agents/README.zh-CN.txt`](../agent/agents/README.zh-CN.txt)；非 agent 笔记使用 `.txt`）。
 
 子代理体系基于以下设计原则：
 1. **跨模型特性互补**：以少量调用延迟换取不同模型的特性组合——如 `gpt-*-sol` 偏稳健保守（`discuss:steady`、`mentor:default`、`task:mid`）、`gpt-*-luna` 成本低（`task:low` 及各角色回退链）、`claude-opus` 适合发散设计（`discuss:divergent`、`task:high`）——通过跨模型校验收敛单一模型的推理偏差。
 2. **跨订阅分摊综合成本**：将不同子代理档位与回退链分布到多个订阅与免费渠道（`anthropic`、`openai-codex`、`opencode-go`、`bansos`），分摊调用额度以降低整体成本。
-3. **无状态 `task` 执行器与受机制约束的少量顾问角色**：主代理编写子代理 prompt 时会将自身假设带入子代理，因此常规任务不使用预设人设或固定工作流节点（禁用 `scout`、`reviewer`、`security-reviewer` 等内置角色），统一由主代理编排无状态的通用 `task` 执行器（按成本与可信度分为 `task:high/mid/low/free`）。非 `task` 角色仅在需要严格隔离职责边界时设立（使顾问既不受主代理转述偏差主导，也不替代主代理决策），并通过 [`user-prompt-inject`](#user-prompt-inject) 注入根会话用户消息、`discuss:*` 限制只读工具、`mentor:default` 移除全部工具在运行期约束边界，因此非 `task` 角色只定义 `discuss:steady`、`discuss:divergent` 与 `mentor:default`。
+3. **无状态 `task` 执行器与受机制约束的少量顾问角色**：主代理编写子代理 prompt 时会将自身假设带入子代理，因此常规任务不使用预设人设或固定工作流节点（禁用 `scout`、`security-reviewer` 等内置角色），统一由主代理编排无状态的通用 `task` 执行器（按成本与可信度分为 `task:high/mid/low/free`）。非 `task` 角色仅在需要严格隔离职责边界时设立（使顾问既不受主代理转述偏差主导，也不替代主代理决策），并通过 [`user-prompt-inject`](#user-prompt-inject) 注入根会话用户消息、`discuss:*` 限制只读工具、`mentor:default` 移除全部工具在运行期约束边界，因此顾问角色只定义 `discuss:steady`、`discuss:divergent` 与 `mentor:default`；`reviewer` 是唯一的审查角色。
 
 ## 子代理定义与模型绑定
 
-子代理的职责、工具限制和 `spawns` 列表写在 `agent/agents/<name>.md` 中，具体模型链写在 `agent/config.yml` 的 `task.agentModelOverrides` 下（修改模型绑定若改变了档位或成本量级，需同步更新 `agent/agents/<name>.md` 的 `description` 与下表）。`config.yml` 设置了 `task.structured: true`：每个 task 子代理都必须通过 `yield` 交付结果，`task-completion-judge` 拦截的也是这次调用。每个定义都声明同一个 `output` schema `{ report: string }`，父会话收到的结果总在 `report` 里；调用方传的 `outputSchema` 仍会在该次调用中覆盖它。
+子代理的职责、工具限制和 `spawns` 列表写在 `agent/agents/<name>.md` 中，具体模型链写在 `agent/config.yml` 的 `task.agentModelOverrides` 下（修改模型绑定若改变了档位或成本量级，需同步更新 `agent/agents/<name>.md` 的 `description` 与下表）。`config.yml` 设置了 `task.structured: true`：每个 task 子代理都必须通过 `yield` 交付结果，`task-completion-judge` 拦截的也是这次调用。除 `reviewer` 外每个定义都声明同一个 `output` schema `{ report: string }`，父会话收到的结果在 `report` 里；`reviewer` 保留内置的裁决 schema（`overall_correctness`、`explanation`、`confidence`、可选 `findings`）；调用方传的 `outputSchema` 仍会在该次调用中覆盖它。
 
 | 子代理 | `description` 标明的成本（每 1M token） | `config.yml` 绑定的模型链 | 允许派生 (`spawns`) / 工具 (`tools`) | 职责与限制 |
 |---|---|---|---|---|
@@ -22,6 +22,7 @@
 | `discuss:divergent` | — | `anthropic/claude-opus-5-5:medium, openai-codex/gpt-5.6-luna:max` | `tools: read, grep, glob` | 只读发散讨论者：审视问题提法与给定约束，在存在实质不同的做法（删功能、改状态归属、一次解决同类问题）时给出带 `path:line` 依据和取舍代价的替代方案。 |
 | `discuss:steady` | — | `openai-codex/gpt-5.6-sol:medium` | `tools: read, grep, glob` | 只读保守讨论者：对照实际代码与 `path:line` 检查方案的隐含假设、未覆盖状态、迁移影响面以及更简单的做法。 |
 | `mentor:default` | — | `openai-codex/gpt-5.6-sol:high, openai-codex/gpt-5.6-luna:max` | `tools: []`（仅 `yield`） | 无工具顾问：长调查开始前协助收敛计划与决定性检查点，交付前核对改动、已跑验证与未验证项；回复内容必须放在 `yield` 参数内。 |
+| `reviewer` | — | `@slow` | `tools: read, find, grep, glob, bash, lsp, web_search, ast_grep`；`spawns: scout`（已禁用，派生会在 preflight 被拒） | OMP 内置 `reviewer` 的副本，作为定制审查角色的基础：只读审查补丁，以 `yield` 交付 `overall_correctness`、`explanation`、`confidence` 与增量 `findings`（P0–P3，锚定补丁）。 |
 | `fork:self` | 源的模型，或任务项 `agent` 指定的模型绑定 | 由 `fork_task` 固定，不绑定执行档位 | 源的工具顺序，追加存在的 `yield`；仍受原生深度与派发策略限制 | 所有 `fork_task` 子代理的内部派发身份；不在普通 `task` 中直接选择。 |
 
 ## 顾问上下文与 `user-prompt-inject`

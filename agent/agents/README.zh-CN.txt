@@ -27,7 +27,7 @@ prompt 的措辞无法绕过这一点。
     spawns: "*"        -> 省略的 `agent` 解析为内置的 `task`
     spawns: a, b, c    -> 省略的 `agent` 解析为列出的第一个名字
 
-内置的 `task` 在 config.yml 的 `task.disabledAgents` 里（连同 `scout`、`sonic`、`reviewer`、
+内置的 `task` 在 config.yml 的 `task.disabledAgents` 里（连同 `scout`、`sonic`、
 `security-reviewer`），所以 "*" 加上省略字段就是硬性的 preflight 失败。显式列表顺手堵上
 这个坑——但要慎重选第一项，因为它是不声不响的默认值。`task-high.md` 是唯一会派其他 worker
 的 worker，第一项是 `task:mid`（默认 worker 档次）；`task-free.md`、`task-low.md`、
@@ -36,9 +36,10 @@ prompt 的措辞无法绕过这一点。
 
 3. `task.disabledAgents` 里的名字即使列进 allowlist 也会失败
 -------------------------------------------------------------
-目前禁用：task、scout、sonic、reviewer、security-reviewer。把其中一个写进 `spawns` 不会让它
-复活。普通 `task` 必须显式写 `agent`，否则会掉进第 2 条。`fork_task` 不同：所有子代理
-都以内部 `fork:self` 运行，`agent` 只选模型绑定与角色。
+目前禁用：task、scout、sonic、security-reviewer。把其中一个写进 `spawns` 不会让它复活：
+`reviewer.md` 保留了内置的 `spawns: scout`，这次派生会在 preflight 被拒。普通 `task` 必须
+显式写 `agent`，否则会掉进第 2 条。`fork_task` 不同：所有子代理都以内部
+`fork:self` 运行，`agent` 只选模型绑定与角色。
 
 
 4. 递归深度 2：孙代是叶子
@@ -56,9 +57,10 @@ prompt 的措辞无法绕过这一点。
 5. 每个子代都必须用 `yield` 交付；只剩 `yield` 时，纯文本会丢
 ------------------------------------------------------------
 `config.yml` 设置了 `task.structured: true`，所以每个 task 子代都有 `yield` 工具，并且必须用它
-结束：`yield` 的载荷就是父会话收到的结果。这里每个定义都声明同一个 `output` schema
-`{ report: string }`；不声明时结构化运行接受任意对象，每个子代自己决定形状。OMP 18.16 上，
-非结构化运行的子代根本没有 `yield`，所以在这些定义仍要求 `yield` 时，不要关掉这个设置。
+结束：`yield` 的载荷就是父会话收到的结果。这里除 `reviewer.md` 外每个定义都声明同一个
+`output` schema `{ report: string }`；`reviewer.md` 保留内置的裁决 schema。不声明时
+结构化运行接受任意对象，每个子代自己决定形状。OMP 18.16 上，非结构化运行的子代根本没有
+`yield`，所以在这些定义仍要求 `yield` 时，不要关掉这个设置。
 
 `mentor-default.md` 声明 `tools: []`，所以 `yield` 是它唯一的工具。它改用纯文本回答时观察到的
 失败链：
