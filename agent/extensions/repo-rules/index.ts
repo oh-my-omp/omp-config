@@ -50,9 +50,9 @@
  *
  * Path-scoped delivery. A matching rule is delivered as the `tool_result` `additionalContext` (a
  * developer message after the tool batch, after the delta when both are due), once per context: a
- * rule whose marker is already in the session's current context (`buildSessionContext`, so
- * compaction, resume and branch moves are honoured) or that an earlier call of the same turn
- * delivered is not repeated.
+ * rule whose marker is already in the session's current model context (the host's active-leaf
+ * projection, so compaction, resume and branch moves are honoured) or that an earlier call of the
+ * same turn delivered is not repeated.
  *
  * Registers `session_start`, `before_agent_start`, `turn_start` and `tool_result` for main and sub
  * sessions. Reads context and rule files only; writes no files. Rules are collected per cwd and
@@ -234,20 +234,21 @@ function pathScopedContext(
 	rules: RuleCatalog,
 	event: ToolResultEvent,
 	ctx: ExtensionContext,
-	claimDelivery: (ctx: ExtensionContext, marker: string) => boolean,
+	claimDeliveries: (ctx: ExtensionContext, markers: readonly string[]) => boolean[],
 ): string | undefined {
 	if (rules.scoped.length === 0) return undefined;
 	const files = touchedFiles(event, ctx.cwd);
 	if (files.length === 0) return undefined;
 	const matched = activeScoped(rules, ctx).filter((rule) => files.some((file) => ruleMatches(rule, file)));
-	const fresh = matched.filter((rule) => claimDelivery(ctx, marker(rule)));
+	const claims = claimDeliveries(ctx, matched.map(marker));
+	const fresh = matched.filter((_, i) => claims[i]);
 	return fresh.length === 0 ? undefined : renderRules(fresh, files);
 }
 
 export default function repoRules(pi: ExtensionAPI): void {
 	let catalog: RuleCatalog | null = null;
 	let scope: ContextFileScope | null = null;
-	const claimDelivery = createContextDelivery(pi);
+	const claimDeliveries = createContextDelivery(pi);
 	const deltas = createDeltaStream(pi, "repo-rules");
 
 	/** Context files read fresh at each delivery point; the depth slots OMP keeps are collected once per cwd. */
@@ -306,7 +307,7 @@ export default function repoRules(pi: ExtensionAPI): void {
 			pi.logger.warn("repo-rules: cannot deliver rules", { error: errorText(error) });
 		}
 		try {
-			const scoped = pathScopedContext(rules, event, ctx, claimDelivery);
+			const scoped = pathScopedContext(rules, event, ctx, claimDeliveries);
 			if (scoped !== undefined) parts.push(scoped);
 		} catch (error) {
 			pi.logger.warn("repo-rules: failed to load path-scoped rules", { error: errorText(error) });
