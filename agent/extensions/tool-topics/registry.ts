@@ -103,5 +103,16 @@ export function publishTopics(tools: ReadonlyMap<string, readonly Topic[]>): Pub
 	const byTool = new Map<string, ReadonlyMap<string, Topic>>();
 	for (const [tool, topics] of tools) byTool.set(tool, new Map(topics.map((topic) => [topic.name, topic])));
 	router.register(new ToolTopicsHandler(byTool));
+	// Canonical scheme order (§U1): builtins keep the host order first; every other
+	// scheme sorts by name. Re-registering in sorted order moves each entry to the
+	// tail (Map delete + set), so the non-builtin segment ends up sorted no matter
+	// when this extension bound. Only positions change; handlers are untouched.
+	const ordered = [...router.specs().keys()].filter((scheme) => !router.isBuiltin(scheme)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+	for (const scheme of ordered) {
+		const handler = router.getHandler(scheme);
+		if (!handler) continue;
+		router.unregister(scheme);
+		router.register(handler);
+	}
 	return { kind: "published" };
 }
