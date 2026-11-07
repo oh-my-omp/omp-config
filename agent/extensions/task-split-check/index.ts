@@ -156,16 +156,16 @@ const renderPrompt = (context: string | undefined, item: TaskItem): string =>
 	["<shared-context>", context?.trim() || "(none)", "</shared-context>", "<assignment>", item.task.trim(), "</assignment>"].join("\n");
 
 /**
- * Memory key of one check + one item prompt, without materializing the prompt:
- * the same normalized `context?.trim() || "(none)"` / `item.task.trim()`
- * fragments `renderPrompt` joins, length-framed (`<context bytes>:<task bytes>`
+ * Digest of one item prompt, without materializing the prompt: the same
+ * normalized `context?.trim() || "(none)"` / `item.task.trim()` fragments
+ * `renderPrompt` joins, length-framed (`<context UTF-16 code units>:<task UTF-16 code units>`
  * plus NUL separators) so fragment boundaries cannot collide, hashed
  * incrementally into a fixed-length sha256. Framing only distinguishes inputs
  * the old rendered-string key conflated, so recall can only miss where the old
  * key hit — never wrongly hit — and verdicts stay identical to hashing the
  * rendered prompt.
  */
-const memoryKey = (check: Check, context: string | undefined, item: TaskItem): string => {
+const memoryDigest = (context: string | undefined, item: TaskItem): string => {
 	const contextText = context?.trim() || "(none)";
 	const taskText = item.task.trim();
 	const hasher = new Bun.CryptoHasher("sha256");
@@ -173,8 +173,10 @@ const memoryKey = (check: Check, context: string | undefined, item: TaskItem): s
 	hasher.update(contextText);
 	hasher.update("\0");
 	hasher.update(taskText);
-	return `${check.id}:${hasher.digest("hex")}`;
+	return hasher.digest("hex");
 };
+
+const memoryKey = (digest: string, check: Check): string => `${check.id}:${digest}`;
 
 const itemLabel = (item: TaskItem, index: number): string => `\`${item.name ?? `item ${index + 1}`}\``;
 
@@ -265,7 +267,8 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		signal: AbortSignal,
 		budget: AttemptBudget,
 	): Promise<ReadonlyMap<Check, Verdict>> => {
-		const keyOf = (check: Check): string => memoryKey(check, context, item);
+		const digest = memoryDigest(context, item);
+		const keyOf = (check: Check): string => memoryKey(digest, check);
 		const verdicts = new Map<Check, Verdict>();
 		const pending: Check[] = [];
 		for (const check of checks) {

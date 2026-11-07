@@ -1,63 +1,154 @@
-// #244 recall semantics: memoryKey is stable across normalization variants,
-// distinguishes context/task (length-framed fragments), and misses on fragment
-// boundaries that a plain rendered-string hash would conflate.
-import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+// #244 recall semantics, through the extension's real tool_call path: a stub pi
+// captures the registered handler; a mocked role chain answers verdicts.
+// Covers: miss calls judge, identical repeat hits memory, same-boundary
+// different content misses. No seam added to the extension.
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import type { RoleModel } from "../agent/extensions/_shared/roles.ts";
 
-const CheckIds = { split: "split", report: "report-limit" } as const;
+let chain: RoleModel[] = [];
+const model = (id: string): RoleModel => ({
+	role: "default",
+	model: { provider: "p", id } as never,
+	level: undefined,
+});
 
-const normalizeContext = (context: string | undefined): string => context?.trim() || "(none)";
+const answers = new Map<string, string>();
+let judgeCalls = 0;
+const prompts: string[] = [];
 
-function memoryKey(checkId: string, context: string | undefined, task: string): string {
-	const contextText = normalizeContext(context);
-	const taskText = task.trim();
-	const hasher = new Bun.CryptoHasher("sha256");
-	hasher.update(`${contextText.length}:${taskText.length}\0`);
-	hasher.update(contextText);
-	hasher.update("\0");
-	hasher.update(taskText);
-	return `${checkId}:${hasher.digest("hex")}`;
-}
+// The extension judges through `completeRoleChain` in `_shared/role-chain.ts`;
+// stubbing it answers verdicts without touching the provider SDK.
+// `completeSimple` stays real but is never reached: the stubbed chain resolves
+// one canned model and answers from `answers` by matching the prompt fragment.
+mock.module("../agent/extensions/_shared/role-chain.ts", () => ({
+	completeRoleChain: async (
+		_ctx: unknown,
+		_roles: readonly string[],
+		_systemPrompt: string,
+		prompt: string,
+		_effort: unknown,
+		_signal: AbortSignal,
+		_budget: unknown,
+		_accepts: (stopReason: string) => boolean,
+	) => {
+		judgeCalls += 1;
+		prompts.push(prompt);
+		for (const [fragment, line] of answers) {
+			if (prompt.includes(fragment)) {
+				return {
+					kind: "text",
+					text: line,
+					stopReason: "stop",
+					model: { model: { provider: "p", id: "judge" } },
+					failures: [],
+				};
+			}
+		}
+		const fallback = [...answers.values()][0] ?? "split: false";
+		return {
+			kind: "text",
+			text: fallback,
+			stopReason: "stop",
+			model: { model: { provider: "p", id: "judge" } },
+			failures: [],
+		};
+	},
+}));
 
-const renderPrompt = (context: string | undefined, task: string): string =>
-	["<shared-context>", normalizeContext(context), "</shared-context>", "<assignment>", task.trim(), "</assignment>"].join("\n");
+mock.module("../agent/extensions/_shared/roles.ts", () => ({
+	roleModels: () => chain,
+	modelLabel: (m: { provider: string; id: string }) => `${m.provider}/${m.id}`,
+}));
 
-const oldKey = (checkId: string, context: string | undefined, task: string): string =>
-	`${checkId}:${createHash("sha256").update(renderPrompt(context, task)).digest("hex")}`;
+// `declaresFlag` gates `split` coverage on agent frontmatter; the harness drives
+// `fork_task`, whose report-limit check covers every `task:*` item without flags.
+mock.module("../agent/extensions/_shared/agent-definition.ts", () => ({
+	declaresFlag: () => Promise.resolve(false),
+}));
 
-describe("task-split-check memoryKey recall semantics", () => {
-	test("normalization variants hit: undefined, empty, whitespace-only and untrimmed inputs share one key", () => {
-		const task = "do one thing";
-		const keys = new Set(
-			[undefined, "", "   ", "  shared  ", "shared", "shared\n"].map((context) => memoryKey(CheckIds.split, context, `  ${task}  `)),
-		);
-		// "shared" variants share a key; undefined/""/whitespace-only share the "(none)" key.
-		expect(keys.size).toBe(2);
-		expect(memoryKey(CheckIds.split, undefined, task)).toBe(memoryKey(CheckIds.split, "", task));
-		expect(memoryKey(CheckIds.split, undefined, task)).toBe(memoryKey(CheckIds.split, "   ", task));
-		expect(memoryKey(CheckIds.split, "  shared  ", task)).toBe(memoryKey(CheckIds.split, "shared", task));
+type ToolCallHandler = (
+	event: { toolName: string; input: unknown },
+	ctx: unknown,
+) => Promise<{ block?: boolean; reason?: string } | undefined>;
+
+const loadExtension = async (): Promise<{ handler: ToolCallHandler; pi: { logger: { info(): void; warn(): void } } }> => {
+	let handler: ToolCallHandler | undefined;
+	const logged: { level: string; message: string }[] = [];
+	const pi = {
+		on: (_event: string, h: ToolCallHandler) => {
+			handler = h;
+		},
+		logger: {
+			info: (message: string) => {
+				logged.push({ level: "info", message });
+			},
+			warn: (message: string) => {
+				logged.push({ level: "warn", message });
+			},
+		},
+	} as never;
+	const { default: taskSplitCheck } = await import("../agent/extensions/task-split-check/index.ts");
+	taskSplitCheck(pi);
+	if (handler === undefined) throw new Error("task-split-check did not register a tool_call handler");
+	return { handler, pi: pi as never };
+};
+
+const mainCtx = {
+	agent: { kind: "main", id: "Main", name: "main", depth: 0 },
+	sessionManager: { getCwd: () => "/repo" },
+	modelRegistry: { resolver: () => undefined },
+} as never;
+
+const dispatch = (context: string | undefined, task: string) => ({
+	context,
+	tasks: [{ name: "probe", agent: "task:low1", task }],
+});
+
+describe("task-split-check recall through tool_call", () => {
+	beforeEach(() => {
+		chain = [model("judge")];
+		answers.clear();
+		judgeCalls = 0;
+		prompts.length = 0;
 	});
 
-	test("context and task are distinguished: neither may leak into the other", () => {
-		expect(memoryKey(CheckIds.split, "a", "b")).not.toBe(memoryKey(CheckIds.split, "b", "a"));
-		expect(memoryKey(CheckIds.split, "a", "b")).not.toBe(memoryKey(CheckIds.split, "a", "c"));
-		expect(memoryKey(CheckIds.split, "a", "b")).not.toBe(memoryKey(CheckIds.split, "c", "b"));
+	test("miss judges, identical repeat recalls, boundary-shifted content judges again", async () => {
+		const { handler } = await loadExtension();
+		// The reply must not limit the report, or the call blocks and later
+		// dispatches diverge; keep the fixture free of report limits.
+		answers.set("run the probe command", "report-limit: false");
+
+		const first = await handler({ toolName: "fork_task", input: dispatch("evidence-context", "run the probe command") }, mainCtx);
+		expect(first).toBeUndefined();
+		expect(judgeCalls).toBe(1);
+
+		const repeat = await handler({ toolName: "fork_task", input: dispatch("evidence-context", "run the probe command") }, mainCtx);
+		expect(repeat).toBeUndefined();
+		expect(judgeCalls).toBe(1);
+
+		// Length framing keeps the boundary-split keys apart, so this judges again;
+		// the two judge prompts carry the exact rendered bytes for their inputs.
+		const shifted = await handler({ toolName: "fork_task", input: dispatch("evidence-contex", "trun the probe command") }, mainCtx);
+		expect(shifted).toBeUndefined();
+		expect(judgeCalls).toBe(2);
+		expect(prompts).toHaveLength(2);
+		expect(prompts[0]).toBe("<shared-context>\nevidence-context\n</shared-context>\n<assignment>\nrun the probe command\n</assignment>");
+		expect(prompts[1]).toBe("<shared-context>\nevidence-contex\n</shared-context>\n<assignment>\ntrun the probe command\n</assignment>");
 	});
 
-	test("fragment boundaries cannot collide: splits of one concatenation key differently", () => {
-		const left = memoryKey(CheckIds.split, "ab", "c");
-		const right = memoryKey(CheckIds.split, "a", "bc");
-		expect(left).not.toBe(right);
-		// The fixed tags keep the two rendered prompts distinct too; the
-		// length framing guarantees key inequality without relying on tags.
-		expect(oldKey(CheckIds.split, "ab", "c")).not.toBe(oldKey(CheckIds.split, "a", "bc"));
-		expect(renderPrompt("ab", "c")).not.toBe(renderPrompt("a", "bc"));
-	});
+	test("normalization variants share one memory entry", async () => {
+		const { handler } = await loadExtension();
+		answers.set("do one thing", "report-limit: false");
 
-	test("rendered prompt bytes for the model are unchanged (judge path sends the same prompt)", () => {
-		expect(renderPrompt("  shared  ", "  do one thing  ")).toBe(
-			"<shared-context>\nshared\n</shared-context>\n<assignment>\ndo one thing\n</assignment>",
-		);
-		expect(renderPrompt(undefined, "x")).toBe("<shared-context>\n(none)\n</shared-context>\n<assignment>\nx\n</assignment>");
+		const callsBefore = judgeCalls;
+		const first = await handler({ toolName: "fork_task", input: dispatch(undefined, "  do one thing  ") }, mainCtx);
+		expect(first).toBeUndefined();
+		expect(judgeCalls).toBe(callsBefore + 1);
+
+		for (const context of ["", "   "]) {
+			const again = await handler({ toolName: "fork_task", input: dispatch(context, "do one thing") }, mainCtx);
+			expect(again).toBeUndefined();
+		}
+		expect(judgeCalls).toBe(callsBefore + 1);
 	});
 });
