@@ -1,6 +1,5 @@
 import type { Node } from "@babel/types";
 import {
-	carriedBindings,
 	isBunFile,
 	type JsCarry,
 	type JsCell,
@@ -94,7 +93,7 @@ function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Contex
 	const { bindings } = ctx;
 	if (node.type === "Identifier" && isReference(node, parent)) {
 		if (DISTINCTIVE_DELETE.has(node.name)) return block("delete", quoted, `\`${node.name}\` deletes files`);
-		const member = bindings.members.get(node.name);
+		const member = ctx.bindings.members.get(node.name) ?? ctx.bindings.prior.members.get(node.name);
 		const exported = member?.slice(member.lastIndexOf(".") + 1) ?? "";
 		const fromFs = member?.startsWith("fs.") === true || member?.startsWith("fs/promises.") === true;
 		if (fromFs && (exported === "rm" || DISTINCTIVE_DELETE.has(exported))) return block("delete", quoted, `\`${member}\` deletes files`);
@@ -128,10 +127,10 @@ export function classifyJs(code: string, shell: Dialect, brush: Dialect, carry: 
 	let verdict: Verdict = ALLOW;
 	for (const statement of cell.program.body) {
 		walk(statement, cell.program, (node, parent) => {
-			if (verdict.kind === "block") return;
 			verdict = judgeNode(node, parent, statement, ctx);
+			return verdict.kind === "block";
 		});
 		if (verdict.kind === "block") break;
 	}
-	return { verdict, carry: carriedBindings(cell.bindings) };
+	return { verdict, carry: cell.carry };
 }
