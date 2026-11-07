@@ -283,7 +283,58 @@ const estimateTokens = (text: string): number => {
 	return tokens;
 };
 
-/** Streaming writer that mirrors JSON.stringify byte for byte. Shared by the length probe and both bounded window passes. */
+/** Whether JSON.stringify writes a resolved value; undefined, functions and symbols are skipped or nulled by their holder. */
+const isSerializable = (value: unknown): boolean => value !== undefined && typeof value !== "function" && typeof value !== "symbol";
+
+/** Whether a native primitive `valueOf` finds the internal slot of `value`; it throws on any other object. */
+const hasSlot = (read: () => unknown): boolean => {
+	try {
+		read();
+		return true;
+	} catch {
+		// Expected for an ordinary object or a wrapper of another kind: it serializes as itself.
+		return false;
+	}
+};
+
+/**
+ * The primitive JSON.stringify writes for a boxed Number, String, Boolean or
+ * BigInt, matched by internal slot; any other object is returned as is. Number
+ * and String go through ToNumber and ToString, Boolean and BigInt yield their
+ * slot value. A boxed BigInt yields a bigint, which the walk rejects.
+ */
+const unboxed = (value: object): unknown => {
+	if (value instanceof Number && hasSlot(() => Number.prototype.valueOf.call(value))) return +value;
+	if (value instanceof String && hasSlot(() => String.prototype.valueOf.call(value))) return `${value}`;
+	if (value instanceof Boolean && hasSlot(() => Boolean.prototype.valueOf.call(value))) return Boolean.prototype.valueOf.call(value);
+	if (value instanceof BigInt && hasSlot(() => BigInt.prototype.valueOf.call(value))) return BigInt.prototype.valueOf.call(value);
+	return value;
+};
+
+/** Whether `value` is an object or function with a `toJSON` property; its value is checked by the caller. */
+const hasToJSON = (value: unknown): value is { readonly toJSON: unknown } =>
+	((typeof value === "object" && value !== null) || typeof value === "function") && "toJSON" in value;
+
+/**
+ * The value JSON.stringify serializes in place of `value` under `key`: a
+ * property name, an array index as text, or "" at the top. A value with a
+ * callable `toJSON` (an object, function or bigint) gives `toJSON(key)`, called
+ * once and not applied again to its result; an object result is then `unboxed`.
+ * The result may still be undefined, a function or a symbol.
+ */
+const resolveValue = (value: unknown, key: string): unknown => {
+	// A bigint has no own toJSON; its box reads BigInt.prototype's, and the call keeps the primitive as `this`.
+	const holder: unknown = typeof value === "bigint" ? Object(value) : value;
+	const jsonValue: unknown = hasToJSON(holder) && typeof holder.toJSON === "function" ? holder.toJSON.call(value, key) : value;
+	return typeof jsonValue === "object" && jsonValue !== null ? unboxed(jsonValue) : jsonValue;
+};
+
+/**
+ * Streaming writer that mirrors JSON.stringify byte for byte. `value` is already
+ * resolved by `resolveValue` and passes `isSerializable`; each child is resolved
+ * with its own key before it is written, so no toJSON runs twice on one value.
+ * Shared by the length probe and both bounded window passes.
+ */
 function walkJson(value: unknown, emit: (part: string) => void, stack: readonly unknown[]): void {
 	for (const seen of stack) if (seen === value) throw new TypeError("Converting circular structure to JSON");
 	if (value === null) {
@@ -309,25 +360,20 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 			throw new TypeError("Do not know how to serialize a BigInt");
 		case "object":
 			break;
-		default:
-			// undefined / function / symbol at a value position: JSON.stringify
-			// returns undefined and the callers substitute String(value); only
-			// a top-level leaf reaches this branch, so throw into that path.
-			throw new TypeError("top-level undefined");
-	}
-	if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
-		walkJson((value as { toJSON: (key?: string) => unknown }).toJSON(""), emit, stack);
-		return;
+		case "undefined":
+		case "function":
+		case "symbol":
+			throw new TypeError("walkJson needs a serializable value");
 	}
 	if (Array.isArray(value)) {
+		const items: readonly unknown[] = value;
 		const inner: readonly unknown[] = [...stack, value];
 		emit("[");
-		let first = true;
-		for (const item of value) {
-			if (!first) emit(",");
-			first = false;
-			if (item === undefined || typeof item === "function" || typeof item === "symbol") emit("null");
-			else walkJson(item, emit, inner);
+		for (let index = 0; index < items.length; index++) {
+			if (index > 0) emit(",");
+			const item = resolveValue(items[index], String(index));
+			if (isSerializable(item)) walkJson(item, emit, inner);
+			else emit("null");
 		}
 		emit("]");
 		return;
@@ -335,8 +381,9 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 	const inner: readonly unknown[] = [...stack, value];
 	emit("{");
 	let firstProp = true;
-	for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-		if (item === undefined || typeof item === "function" || typeof item === "symbol") continue;
+	for (const [key, held] of Object.entries(value as Record<string, unknown>)) {
+		const item = resolveValue(held, key);
+		if (!isSerializable(item)) continue;
 		if (!firstProp) emit(",");
 		firstProp = false;
 		emit(JSON.stringify(key) as string);
@@ -347,15 +394,23 @@ function walkJson(value: unknown, emit: (part: string) => void, stack: readonly 
 }
 
 /**
+ * Streams `JSON.stringify(value)` for a top-level value. Throws when that is
+ * undefined, so the caller substitutes `String(value)` as `stringify` does.
+ */
+function walkTop(value: unknown, emit: (part: string) => void): void {
+	const resolved = resolveValue(value, "");
+	if (!isSerializable(resolved)) throw new TypeError("top-level value has no JSON form");
+	walkJson(resolved, emit, []);
+}
+
+/**
  * Bounded `truncate(JSON.stringify(value) ?? String(value), limit)` in one
- * pass: the walker streams the exact JSON.stringify sequence — each leaf
- * string through JSON.stringify itself (toJSON with its key argument,
- * array `null`-ification, undefined/function/symbol property skips, cycle
- * and BigInt throws, `String(value)` fallback) — while emit keeps the first
- * `head` characters, a rolling native `slice(-tail)` string keeps the last
- * `tail`, and the running total drives the omitted count. The screens meet
- * in the middle once, so the short case reassembles the whole text without
- * a second walk; the whole serialization is never held (F106/F107).
+ * pass: `walkTop` streams the JSON.stringify sequence, the head window keeps its
+ * first `head` characters, a rolling native `slice(-tail)` string keeps its last
+ * `tail`, and the running total drives the omitted count. The screens meet in
+ * the middle once, so the short case reassembles the whole text without a second
+ * walk; the whole serialization is never held (F106/F107). A value with no JSON
+ * form, a cycle, a BigInt or a throwing toJSON takes the `String(value)` fallback.
  */
 const stringifyWithin = (value: unknown, limit: number): string => {
 	const head = Math.ceil(limit * 0.6);
@@ -369,7 +424,7 @@ const stringifyWithin = (value: unknown, limit: number): string => {
 			if (held.length < head) held += part.length + held.length <= head ? part : part.slice(0, head - held.length);
 			if (tail > 0) tailBuffer = (tailBuffer + part).slice(-tail);
 		};
-		walkJson(value, emit, []);
+		walkTop(value, emit);
 		if (seen <= limit) return tail > 0 && seen > head ? held + tailBuffer.slice(Math.max(0, head - (seen - tailBuffer.length))) : held;
 		return `${held}\n…[${seen - limit} chars omitted]…\n${tailBuffer}`;
 	} catch {
@@ -468,30 +523,30 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 /**
  * The batch's shared `context` is rendered into the subagent system prompt as its
  * `§ Context` section — located and extracted without joining the whole prompt
- * (F108). Extraction equals `getSystemPrompt().join("\n")` + `indexOf("§ Context\n")`
- * + slice to the next `"\n§ "` heading + `trim()`: marker and heading each hold
- * exactly one `"\n"`, the same character the join uses as the separator, so a
- * straddling match must carry its `"\n"` on a seam. A piece-internal `indexOf`
- * match always starts earlier in the stream than a seam after the same piece, so
- * the scan checks each piece directly and each seam with `endsWith`/`startsWith`.
+ * (F108). The extraction equals `getSystemPrompt().join("\n")`, then
+ * `indexOf("§ Context\n")`, then the slice up to the next `"\n§ "` heading, then
+ * `trim()`. The marker and the heading each hold exactly one `"\n"`, the character
+ * the join puts between pieces, so a marker that straddles a seam is one whose
+ * text ends a piece, its `"\n"` being that seam. A match inside a piece starts
+ * before the seam after it, so each piece is checked with `indexOf` before the
+ * seam after it is checked with `endsWith`.
  */
 const sharedContextOf = (ctx: ExtensionContext): string => {
 	const pieces = ctx.getSystemPrompt();
 	const marker = "§ Context\n";
 	const bodyEnd = "\n§ ";
 	/**
-	 * The body streams the pieces joined with `"\n"`. The heading's `"\n"` lies
-	 * either inside a piece (an `indexOf` hit is authoritative downstream) or on
-	 * the seam before a piece whose text opens with `"§ "` — everything after
-	 * the marker (in `carry`, from the marker-containing piece or `""` when the
-	 * marker straddled the seam) joins the first body piece without a seam, so
-	 * that piece contributes exactly `carry + piece` to the joined body.
+	 * `carry` is the text after the marker in the marker's own piece, or "" when
+	 * the marker straddled the seam; `restIndex` is the piece after the marker's
+	 * piece. The body is `carry`, then each later piece after a seam `"\n"`, up to
+	 * the heading. The heading's `"\n"` lies inside the carry, inside a later piece
+	 * (the first such hit ends the body), or on the seam before a piece whose text
+	 * opens with `"§ "`.
 	 */
 	const bodyOf = (carry: string, restIndex: number): string => {
-		// The body streams rest pieces joined by the seam "\n", with the
-		// marker piece's `carry` fused into the first of them. The heading
-		// may cut the carry itself (marker and heading in one piece), then
-		// an inside piece, or ride a seam into one that opens with "§ ".
+		// The body is the carry, then each later piece after a seam "\n". The
+		// heading may cut the carry itself, cut a later piece, or ride the seam
+		// into a piece that opens with "§ ".
 		const carryMac = carry.indexOf(bodyEnd);
 		if (carryMac !== -1) return carry.slice(0, carryMac).trim();
 		let held = carry; // body prefixes consumed so far
@@ -500,11 +555,11 @@ const sharedContextOf = (ctx: ExtensionContext): string => {
 			// Heading riding the seam into this piece.
 			if (piece.startsWith("§ ")) return held.trim();
 			const inside = piece.indexOf(bodyEnd);
-			if (inside !== -1) return (index === restIndex ? carry + piece.slice(0, inside) : `${held}\n${piece.slice(0, inside)}`).trim();
+			if (inside !== -1) return `${held}\n${piece.slice(0, inside)}`.trim();
 			held = `${held}\n${piece}`;
 		}
-		// No heading anywhere: the body is `held` — the carry alone when
-		// there were no rest pieces, the fused stream otherwise.
+		// No heading anywhere: the body is `held`, the carry followed by every
+		// later piece.
 		return held.trim();
 	};
 	for (let index = 0; index < pieces.length; index++) {
@@ -548,8 +603,9 @@ const renderCall = (call: ToolCallRecord, n: number, results: ResultsByCallId): 
 const truncatedTokensOf = (
 	produce: (emit: (piece: string) => void) => void,
 	limit: number,
-	// Walk fails only on cycles and BigInt; then String(value) keeps the old
-	// fallback shape and the caller passes the value for it.
+	// The walk fails on cycles, BigInt, a throwing toJSON and a value with no
+	// JSON form; then String(value) keeps the stringify fallback shape, and the
+	// caller passes the value for it.
 	fallbackValue: unknown,
 ): number => {
 	try {
@@ -576,7 +632,7 @@ const truncatedTokensOf = (
 		const marker = `\n…[${seen - limit} chars omitted]…\n`;
 		return estimateTokens(held) + estimateTokens(marker) + estimateTokens(tailBuffer);
 	} catch {
-		// Cycles and BigInt: String(value) keeps the old fallback shape.
+		// Same failures as the walk: String(value) keeps the stringify fallback shape.
 		return estimateTokens(truncate(String(fallbackValue), limit));
 	}
 };
@@ -593,7 +649,7 @@ const renderedCallTokens = (call: ToolCallRecord, n: number, results: ResultsByC
 	const result = results.get(call.id);
 	const status = result === undefined ? "no result" : result.isError ? "error" : "ok";
 	const headerTokens = estimateTokens(`<call n="${n}" tool="${call.name}" status="${status}">\n<args></args>\n<result></result>\n</call>`);
-	const argsTokens = truncatedTokensOf((emit) => walkJson(call.args, emit, []), ARGS_CHAR_LIMIT, call.args);
+	const argsTokens = truncatedTokensOf((emit) => walkTop(call.args, emit), ARGS_CHAR_LIMIT, call.args);
 	const resultTokens = result === undefined ? 0 : truncatedTokensOf(emitStringBlocks(result.entry), RESULT_CHAR_LIMIT, result.entry);
 	return headerTokens + argsTokens + resultTokens;
 };
