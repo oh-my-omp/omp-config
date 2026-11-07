@@ -3,9 +3,9 @@
 // ask JUDGE (`openJudge`, purpose `turn-judge`) that file's yes/no questions
 // about the turn, then either report the answers or, when one of the file's
 // rules holds, send the configured prompt.
-// Registers input, session_switch/branch/tree, and message_end hooks; no tools
-// or commands. Reads adjacent/repository specs and session history; writes no
-// files. Runs in main and sub sessions.
+// Registers input, session_switch/branch/tree, message_start, and message_end
+// hooks; no tools or commands. Reads adjacent/repository specs and session
+// history; writes no files. Runs in main and sub sessions.
 //
 // FILE FORMAT. `TURN-JUDGE-<label>.md`, discovered like `WATCHDOG-*.md`:
 //   - user level:  <extension dir>/TURN-JUDGE-*.md      (beside this index.ts)
@@ -175,7 +175,7 @@ const DEFAULT_MAX_BYTES = 30_000;
 const JUDGE_TIMEOUT_MS = 90_000;
 /** Whole subagent handler budget; OMP stops waiting for an extension handler after 30 s. */
 const SUB_DEADLINE_MS = 20_000;
-/** Poll interval while a subagent handler waits for idle or for its prompt's turn. */
+/** Poll interval while a subagent handler waits for idle. */
 const POLL_MS = 25;
 /** A 提醒 keeps its head only: harness attachments (post-compaction context lists) run to thousands of characters. */
 const REMINDER_MAX_CHARS = 400;
@@ -505,7 +505,9 @@ function reminder(text: string): TimelineEntry {
  * thinking closes it; its text is the reply), and the tool names called since
  * the previous stop. Read from the leaf back: the timeline stops at the last
  * human prompt and the tool names at the previous stop, so entries older than
- * that prompt only have their metadata read.
+ * that prompt only have their metadata read. Assumes timestamps along a branch
+ * do not decrease, so skipping entries at or after the judged message's
+ * timestamp selects the same run the forward read breaks at.
  */
 function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
 	const main = ctx.agent.kind === "main";
