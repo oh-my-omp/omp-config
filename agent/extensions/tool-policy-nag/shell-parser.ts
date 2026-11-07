@@ -28,9 +28,10 @@ const skipHereDocument = (command: string, start: number, document: HereDocument
 	while (cursor < command.length) {
 		const lineEnd = command.indexOf("\n", cursor);
 		const end = lineEnd === -1 ? command.length : lineEnd;
-		const line = command.slice(cursor, end);
-		const comparable = document.stripTabs ? line.replace(/^\t+/, "") : line;
-		if (comparable === document.delimiter) return lineEnd === -1 ? command.length : lineEnd + 1;
+		let lineStart = cursor;
+		if (document.stripTabs) while (lineStart < end && command.charAt(lineStart) === "\t") lineStart++;
+		if (end - lineStart === document.delimiter.length && command.startsWith(document.delimiter, lineStart))
+			return lineEnd === -1 ? command.length : lineEnd + 1;
 		if (lineEnd === -1) return command.length;
 		cursor = lineEnd + 1;
 	}
@@ -130,21 +131,23 @@ function markLoops(commands: readonly ParsedCommand[], background: ReadonlySet<n
 	});
 }
 
-/** `unterminated`: a quote or `$(`/backtick/`${ …; }` substitution never closes, so the shell would refuse the line. */
-type ShellParse = { readonly kind: "complete"; readonly commands: SimpleCommand[] } | { readonly kind: "unterminated" };
+/**
+ * One lexical scan of a line: its simple commands, and whether the line can
+ * run as written (`complete` false when a quote or a `$(`/backtick/`${ …; }`
+ * substitution never closes, so the shell would refuse it).
+ */
+export type ShellScan = {
+	readonly commands: SimpleCommand[];
+	readonly complete: boolean;
+};
 
 /** The simple commands of a line, best effort: an unterminated line yields what was read. */
 export function splitSimpleCommands(command: string): SimpleCommand[] {
-	return scanCommands(command).commands;
+	return scanShell(command).commands;
 }
 
-/** The simple commands of a line, or `unterminated` when the line cannot run as written. */
-export function parseShellCommands(command: string): ShellParse {
-	const scanned = scanCommands(command);
-	return scanned.complete ? { kind: "complete", commands: scanned.commands } : { kind: "unterminated" };
-}
-
-function scanCommands(command: string): { readonly commands: SimpleCommand[]; readonly complete: boolean } {
+/** Every simple command of a line with the line's completeness; one scan serves all of a call's checks. */
+export function scanShell(command: string): ShellScan {
 	const commands: ParsedCommand[] = [];
 	const background = new Set<number>();
 	let current: CommandToken[] = [];
@@ -152,6 +155,10 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 	let nextPipelineId = 1;
 	let word = "";
 	let wordStart: number | null = null;
+	/** One past the last source character a plain word spans. */
+	let wordEnd = 0;
+	/** `word` is still the source slice `[wordStart, wordEnd)`; quoted, escaped or substituted text materializes it. */
+	let wordVerbatim = true;
 	let wordCanBeFd = true;
 	let wordDynamic = false;
 	let piped = false;
@@ -160,22 +167,38 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 	const suspendedCommands: Array<{ readonly current: CommandToken[]; readonly pipelineId: number; readonly piped: boolean }> = [];
 	const hereDocuments: HereDocument[] = [];
 	let expectingHereDocumentDelimiter: HereDocument | null = null;
-	const flushWord = (): void => {
-		if (word.length === 0) {
-			wordStart = null;
-			wordCanBeFd = true;
-			wordDynamic = false;
-			return;
-		}
-		current.push({ kind: "word", text: word, dynamic: wordDynamic });
-		if (expectingHereDocumentDelimiter !== null) {
-			hereDocuments.push({ delimiter: word, stripTabs: expectingHereDocumentDelimiter.stripTabs });
-			expectingHereDocumentDelimiter = null;
-		}
+	const resetWord = (): void => {
 		word = "";
 		wordStart = null;
+		wordEnd = 0;
+		wordVerbatim = true;
 		wordCanBeFd = true;
 		wordDynamic = false;
+	};
+	/** Materialize the plain prefix when the word stops being the source slice. */
+	const breakVerbatim = (): void => {
+		if (!wordVerbatim) return;
+		if (wordStart !== null && wordEnd > wordStart) word = command.slice(wordStart, wordEnd);
+		wordVerbatim = false;
+	};
+	/** Append quoted, escaped or substituted text; the word stops being the source slice. */
+	const appendWord = (text: string): void => {
+		breakVerbatim();
+		word += text;
+	};
+	const flushWord = (): void => {
+		// A plain word is the source slice around it: no per-character build.
+		const text = wordVerbatim ? (wordStart === null ? "" : command.slice(wordStart, wordEnd)) : word;
+		if (text.length === 0) {
+			resetWord();
+			return;
+		}
+		current.push({ kind: "word", text, dynamic: wordDynamic });
+		if (expectingHereDocumentDelimiter !== null) {
+			hereDocuments.push({ delimiter: text, stripTabs: expectingHereDocumentDelimiter.stripTabs });
+			expectingHereDocumentDelimiter = null;
+		}
+		resetWord();
 	};
 	const flushCommand = (): void => {
 		flushWord();
@@ -216,7 +239,7 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 			if (ch === quote) {
 				quote = null;
 			} else if (quote === '"' && ch === "\\" && i + 1 < command.length) {
-				word += command.charAt(i + 1);
+				appendWord(command.charAt(i + 1));
 				i++;
 			} else if (quote === '"' && ch === "$" && command[i + 1] === "(") {
 				// A substitution inside double quotes still runs a command. Restore
@@ -235,19 +258,21 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 				if (command[i + 1] === "|") i++;
 			} else {
 				if (quote === '"' && ch === "$") wordDynamic = true;
-				word += ch;
+				appendWord(ch);
 			}
 			continue;
 		}
 		if (ch === "\\" && i + 1 < command.length) {
+			// An escaped character still starts a word: `\#` is not a comment.
 			if (wordStart === null) wordStart = i;
 			wordCanBeFd = false;
-			word += command.charAt(i + 1);
+			appendWord(command.charAt(i + 1));
 			i++;
 			continue;
 		}
 		if (ch === '"' || ch === "'") {
 			if (wordStart === null) wordStart = i;
+			breakVerbatim();
 			wordCanBeFd = false;
 			quote = ch;
 			continue;
@@ -322,11 +347,16 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 		}
 		if (ch === "<" || ch === ">") {
 			let fdPrefix: number | null = null;
-			if (wordCanBeFd && wordStart !== null && wordStart + word.length === i && /^\d+$/.test(word)) {
-				fdPrefix = Number(word);
+			// The fd number is a plain, unquoted word glued to the operator.
+			const pending = wordStart !== null && wordVerbatim && wordEnd === i ? command.slice(wordStart, wordEnd) : "";
+			if (wordCanBeFd && pending.length > 0 && /^\d+$/.test(pending)) {
+				fdPrefix = Number(pending);
+				// The fd number is consumed as a word; whether the word so far was
+				// dynamic still describes the word that follows it.
 				word = "";
 				wordStart = null;
-				wordCanBeFd = true;
+				wordEnd = 0;
+				wordVerbatim = true;
 			} else {
 				flushWord();
 			}
@@ -346,7 +376,8 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 		}
 		if (wordStart === null) wordStart = i;
 		if (ch === "$") wordDynamic = true;
-		word += ch;
+		if (wordVerbatim) wordEnd = i + 1;
+		else word += ch;
 	}
 	const complete = quote === null && substitutions.length === 0;
 	flushPipeline();

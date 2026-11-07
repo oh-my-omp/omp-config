@@ -70,11 +70,16 @@ const frontmatterSchema = z.record(z.string(), z.unknown());
 export async function loadIntentSpec(directory: string): Promise<IntentSpecLoad> {
 	let names: string[];
 	try {
-		names = (await readdir(directory)).filter((candidate) => SPEC_NAME.test(candidate)).sort();
+		names = await readdir(directory);
 	} catch (error) {
 		return { kind: "invalid", reason: `cannot list ${directory}: ${errorText(error)}` };
 	}
-	const name = names[0];
+	// The first name in sort order decides; one pass picks it without a filtered copy or a sort.
+	let name: string | undefined;
+	for (const candidate of names) {
+		if (!SPEC_NAME.test(candidate)) continue;
+		if (name === undefined || candidate < name) name = candidate;
+	}
 	if (name === undefined) return { kind: "missing" };
 	const path = join(directory, name);
 	let raw: string;

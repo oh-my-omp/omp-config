@@ -106,10 +106,11 @@ import { openJudge } from "../_shared/judge.ts";
 import { sessionSettings } from "../_shared/settings.ts";
 import { type WatchedCall, watchedCallOf } from "../_shared/tool-calls.ts";
 import { type FormLane, type IntentLane, type Lanes, type LaneWarning, loadLanes } from "./detector-config.ts";
-import { detectEvalViolations, detectShellViolations, detectTraceViolations } from "./heuristic.ts";
+import { detectCommandViolations, detectEvalViolations, detectTraceViolations } from "./heuristic.ts";
 import { type IntentSpec, intentReminder, intentViolation, JUDGE_TIMEOUT_MS, judgeIntent, loadIntentSpec } from "./intent.ts";
-import { ptyEvalHit, ptyRefusal, ptyShellHit } from "./pty.ts";
+import { ptyEvalHit, ptyLineHit, ptyRefusal } from "./pty.ts";
 import { inspectMaskedFailure, inspectRisk, maskedFailureReminder, riskReminder } from "./risk.ts";
+import { type ShellScan, scanShell } from "./shell-parser.ts";
 import type { ShellViolation } from "./shell-programs.ts";
 import { type ShellOutcome, shellOutcome } from "./trace.ts";
 
@@ -148,17 +149,18 @@ function parseState(data: unknown): NagState | null {
  * a branch summary) discards every hit recorded before it.
  */
 function rebuildState(ctx: ExtensionContext): NagState {
-	let state: NagState = WATCHING;
-	for (const entry of ctx.sessionManager.getBranch()) {
-		if (entry.type === "compaction" || entry.type === "reset_boundary" || entry.type === "branch_summary") {
-			state = WATCHING;
-			continue;
-		}
+	const branch = ctx.sessionManager.getBranch();
+	// Only the last boundary and the last state after it matter, so the scan
+	// starts at the branch's end and stops at the first of either.
+	for (let at = branch.length - 1; at >= 0; at--) {
+		const entry = branch[at];
+		if (entry === undefined) continue;
+		if (entry.type === "compaction" || entry.type === "reset_boundary" || entry.type === "branch_summary") return WATCHING;
 		if (entry.type !== "custom" || entry.customType !== STATE_ENTRY_TYPE) continue;
 		const parsed = parseState(entry.data);
-		if (parsed !== null) state = parsed;
+		if (parsed !== null) return parsed;
 	}
-	return state;
+	return WATCHING;
 }
 
 /**
@@ -168,11 +170,15 @@ function rebuildState(ctx: ExtensionContext): NagState {
 const INTENT_WAIT_MS = 20_000;
 
 /** The tool-routing violations of a watched call, from its trace when the run left a usable one. */
-function violationsOf(call: WatchedCall, outcome: ShellOutcome | null): ReturnType<typeof detectEvalViolations> | ShellViolation[] {
+function violationsOf(
+	call: WatchedCall,
+	outcome: ShellOutcome | null,
+	slot: ScanSlot,
+): ReturnType<typeof detectEvalViolations> | ShellViolation[] {
 	if (call.kind === "eval") return detectEvalViolations(call.language, call.code);
 	if (outcome?.kind === "traced") return detectTraceViolations(outcome.trace);
 	if (outcome?.kind === "timedOut" && outcome.trace !== null) return detectTraceViolations(outcome.trace);
-	return detectShellViolations(call.command);
+	return detectCommandViolations(shellScanFor(slot, call).commands, () => true);
 }
 
 /** Counts a call's violations; past the threshold returns `form.prompt` when `deliver`, else null. */
@@ -242,6 +248,7 @@ function riskCheck(
 	lanes: Lanes,
 	call: Extract<WatchedCall, { kind: "shell" }>,
 	outcome: ShellOutcome,
+	slot: ScanSlot,
 	log: (finding: object) => void,
 ): string | null {
 	if (lanes.risk === null) return null;
@@ -265,7 +272,7 @@ function riskCheck(
 			return null;
 		case "background":
 		case "untraced": {
-			const finding = inspectRisk(call.command, lanes.risk);
+			const finding = inspectRisk(shellScanFor(slot, call).commands, call.command, lanes.risk);
 			if (finding === null) return null;
 			log({ rule: "size", limits: lanes.risk, ...finding });
 			if (ctx.hasUI)
@@ -300,14 +307,14 @@ async function runForMainSession(pi: ExtensionAPI, ctx: ExtensionContext, handle
  * `bash` line or an eval cell hits a rule. Never throws; a failure lets the
  * call run.
  */
-async function ptyRefusalFor(pi: ExtensionAPI, lanes: Lanes, call: WatchedCall): Promise<string | null> {
+async function ptyRefusalFor(pi: ExtensionAPI, lanes: Lanes, call: WatchedCall, slot: ScanSlot): Promise<string | null> {
 	if (lanes.pty === null) return null;
 	try {
 		if (!pi.getActiveTools().includes("exec_command")) return null;
 		switch (call.kind) {
 			case "shell": {
 				if (call.tool !== "bash") return null;
-				const hit = ptyShellHit(call.command);
+				const hit = ptyLineHit(shellScanFor(slot, call));
 				if (hit === null) return null;
 				pi.logger.info("Tool-policy pty route refused", { tool: call.tool, ...hit });
 				return ptyRefusal(hit, call.tool);
@@ -329,6 +336,20 @@ async function ptyRefusalFor(pi: ExtensionAPI, lanes: Lanes, call: WatchedCall):
 	}
 }
 
+/** One shell line's scan, memoized for the lanes of a single call. */
+type ScanSlot = {
+	/** The line's lexical scan, made by the first lane that needs it. */
+	scan: ShellScan | null;
+};
+
+/** The watched call between its two hooks: the settings it read and its line's one scan. */
+type PendingCall = ScanSlot & {
+	readonly id: string;
+	readonly call: WatchedCall;
+	/** Settings read at `tool_call`; the same call's result lanes reuse them. */
+	readonly lanes: Lanes;
+};
+
 /** An intent judgment started at `tool_call`, collected at the call's `tool_result`. */
 type IntentJob = {
 	readonly epoch: number;
@@ -348,11 +369,41 @@ type Nag = {
 	readonly warned: Set<string>;
 	/** Intent judgments in flight, by tool call id. */
 	readonly intentJobs: Map<string, IntentJob>;
+	/** The watched call whose result is still to come; one slot, replaced by the next call. */
+	pending: PendingCall | null;
 	/** Intent reminders whose call's result had already gone out; they ride on the next watched result. */
 	readonly lateReminders: string[];
 	/** Settings carrying this extension's interceptor override; only this override is ever cleared. */
 	interceptorOff: Settings | null;
 };
+
+/**
+ * The line of `call`, scanned once: the pty lane fills the slot at `tool_call`
+ * and the result lanes reuse it. A call whose slot the host did not report gets
+ * a fresh slot at `tool_result`, still shared by every lane that needs it.
+ */
+function shellScanFor(slot: ScanSlot, call: Extract<WatchedCall, { kind: "shell" }>): ShellScan {
+	slot.scan ??= scanShell(call.command);
+	return slot.scan;
+}
+
+/** The slot of the call whose result just arrived; consumed either way. */
+/** Whether a result's call is the call its `tool_call` hook read: same id, same text. */
+function sameCall(a: WatchedCall, b: WatchedCall): boolean {
+	switch (a.kind) {
+		case "shell":
+			return b.kind === "shell" && a.tool === b.tool && a.command === b.command;
+		case "eval":
+			return b.kind === "eval" && a.language === b.language && a.code === b.code && a.reset === b.reset;
+	}
+}
+
+function takePending(nag: Nag, id: string, call: WatchedCall): PendingCall | null {
+	const pending = nag.pending;
+	if (pending === null || pending.id !== id) return null;
+	nag.pending = null;
+	return sameCall(pending.call, call) ? pending : null;
+}
 
 function commit(nag: Nag, next: NagState): void {
 	nag.state = next;
@@ -368,6 +419,7 @@ function rearm(nag: Nag, reason: string): void {
 function restore(nag: Nag, reason: string, ctx: ExtensionContext): void {
 	nag.epoch += 1;
 	nag.intentJobs.clear();
+	nag.pending = null;
 	nag.lateReminders.length = 0;
 	nag.state = rebuildState(ctx);
 	nag.pi.logger.info("Tool-policy nag state restored", { reason, state: nag.state });
@@ -476,10 +528,18 @@ function startIntent(nag: Nag, ctx: ExtensionContext, lane: IntentLane, call: Wa
 
 /** Waits briefly for a verdict; one that lands later is held for the next result, or sent when idle. */
 async function collectIntent(nag: Nag, ctx: ExtensionContext, job: IntentJob): Promise<string | null> {
-	const settled = await Promise.race([
-		job.reminder.then((reminder) => ({ kind: "ready", reminder }) as const),
-		Bun.sleep(INTENT_WAIT_MS).then(() => ({ kind: "late" }) as const),
-	]);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let settled: { readonly kind: "ready"; readonly reminder: string | null } | { readonly kind: "late" };
+	try {
+		settled = await Promise.race([
+			job.reminder.then((reminder) => ({ kind: "ready", reminder }) as const),
+			new Promise<{ readonly kind: "late" }>((resolve) => {
+				timer = setTimeout(() => resolve({ kind: "late" }), INTENT_WAIT_MS);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
 	if (settled.kind === "ready") return job.epoch === nag.epoch ? settled.reminder : null;
 	void job.reminder
 		.then((reminder) => {
@@ -552,8 +612,14 @@ async function onToolCall(nag: Nag, event: ToolCallEvent, ctx: ExtensionContext)
 		return;
 	}
 	const { lanes, warnings } = loaded;
+	// One reading per watched call: its settings and its line's scan serve both hooks.
+	const pending: PendingCall | null = ctx.agent.kind === "main" ? { id: event.toolCallId, call, lanes, scan: null } : null;
+	// Stored before the refusal: a host that still reports a refused call's result
+	// then reuses this line's scan instead of scanning it again.
+	if (pending !== null) nag.pending = pending;
+	const slot: ScanSlot = pending ?? { scan: null };
 	// Main and sub sessions: a refused call is stopped before every other lane, so nothing counts or reminds.
-	const refusal = await ptyRefusalFor(nag.pi, lanes, call);
+	const refusal = await ptyRefusalFor(nag.pi, lanes, call, slot);
 	if (refusal !== null) return { block: true, reason: refusal };
 	if (event.toolName === "write") nag.nestedDeviceCalls.add(event.toolCallId);
 	await runForMainSession(nag.pi, ctx, () => {
@@ -573,14 +639,16 @@ async function onToolResult(nag: Nag, event: ToolResultEvent, ctx: ExtensionCont
 	if (call === null) return;
 	const job = nag.intentJobs.get(event.toolCallId);
 	nag.intentJobs.delete(event.toolCallId);
+	const pending = takePending(nag, event.toolCallId, call);
+	const slot: ScanSlot = pending ?? { scan: null };
 	const reminders = nag.lateReminders.splice(0);
 	try {
-		const { lanes } = await loadLanes(ctx.cwd);
+		const lanes = pending?.lanes ?? (await loadLanes(ctx.cwd)).lanes;
 		const settings = sessionSettings(ctx);
 		if (settings !== undefined && interceptorOwns(call, settings)) return context(reminders);
 		const outcome = call.kind === "shell" ? shellOutcome(event.details, event.isError) : null;
 		if (call.kind === "shell" && outcome !== null) {
-			const risk = riskCheck(ctx, lanes, call, outcome, (finding) =>
+			const risk = riskCheck(ctx, lanes, call, outcome, slot, (finding) =>
 				nag.pi.logger.info("Tool-policy risk", { tool: call.tool, outcome: outcome.kind, ...finding }),
 			);
 			if (risk !== null) reminders.push(risk);
@@ -589,7 +657,15 @@ async function onToolResult(nag: Nag, event: ToolResultEvent, ctx: ExtensionCont
 		if (tool === null) return context(reminders);
 		switch (tool.detector) {
 			case "heuristic": {
-				const reminder = heuristicCheck(nag.pi, ctx, violationsOf(call, outcome), tool.form, nag.state, (next) => commit(nag, next), true);
+				const reminder = heuristicCheck(
+					nag.pi,
+					ctx,
+					violationsOf(call, outcome, slot),
+					tool.form,
+					nag.state,
+					(next) => commit(nag, next),
+					true,
+				);
 				if (reminder !== null) reminders.push(reminder);
 				break;
 			}
@@ -598,7 +674,7 @@ async function onToolResult(nag: Nag, event: ToolResultEvent, ctx: ExtensionCont
 				const reminder = heuristicCheck(
 					nag.pi,
 					ctx,
-					violationsOf(call, outcome),
+					violationsOf(call, outcome, slot),
 					tool.fallback,
 					nag.state,
 					(next) => commit(nag, next),
@@ -629,6 +705,7 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		epoch: 0,
 		warned: new Set(),
 		intentJobs: new Map(),
+		pending: null,
 		lateReminders: [],
 		interceptorOff: null,
 	};

@@ -36,15 +36,14 @@ const unitSchema = z.object({
 });
 type TraceUnit = z.infer<typeof unitSchema>;
 
-const outputSchema = z.object({ kind: z.literal("Output"), u: z.number().optional(), n: z.number().optional() });
-
 const traceSchema = z.object({
 	v: z.literal(1),
 	script: z.string(),
 	status: z.number().optional(),
 	historyTruncated: z.boolean().optional(),
 	units: z.array(unitSchema),
-	history: z.array(z.object({ kind: z.string() }).passthrough()).optional(),
+	/** The replay journal: read by type guard below, so its records are never objectified. */
+	history: z.array(z.unknown()).optional(),
 });
 
 const detailsSchema = z.object({
@@ -52,6 +51,17 @@ const detailsSchema = z.object({
 	timedOut: z.boolean().optional(),
 	async: z.unknown().optional(),
 });
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The `u:n` attribution of a bounding `Output` record, else null; `u`/`n` are read directly. */
+function outputRef(entry: Readonly<Record<string, unknown>>): string | null {
+	if (entry.kind !== "Output") return null;
+	const { u, n } = entry;
+	// `z.number()` rejects NaN and accepts Infinity, as the reader always has.
+	return typeof u === "number" && !Number.isNaN(u) && typeof n === "number" && !Number.isNaN(n) ? `${u}:${n}` : null;
+}
 
 /** One simple command that ran. */
 export type TraceStep = {
@@ -98,12 +108,26 @@ export type ShellOutcome =
 const BODY_BUILTINS: Readonly<Record<string, true>> = { eval: true, source: true, ".": true };
 const NOT_STATEMENTS: Readonly<Record<string, true>> = { word: true, assign: true };
 
-/** Statement children of `parent`, in source order. */
-function childrenOf(nodes: readonly TraceNode[], parent: number): number[] {
-	const ids: number[] = [];
-	for (const [id, node] of nodes.entries()) if (node.p === parent && NOT_STATEMENTS[node.k] !== true) ids.push(id);
-	return ids.sort((a, b) => (nodes[a]?.lo ?? 0) - (nodes[b]?.lo ?? 0));
+const NO_CHILDREN: readonly number[] = [];
+
+/**
+ * One unit's statement children by parent id, in source order: every lookup a
+ * unit's steps make reads this index instead of rescanning its node table.
+ */
+function childIndex(nodes: readonly TraceNode[]): ReadonlyMap<number, readonly number[]> {
+	const index = new Map<number, number[]>();
+	for (const [id, node] of nodes.entries()) {
+		if (node.p === undefined || NOT_STATEMENTS[node.k] === true) continue;
+		const children = index.get(node.p);
+		if (children === undefined) index.set(node.p, [id]);
+		else children.push(id);
+	}
+	for (const children of index.values()) children.sort((a, b) => (nodes[a]?.lo ?? 0) - (nodes[b]?.lo ?? 0));
+	return index;
 }
+
+/** Statement children of `parent` in one unit, in source order. */
+const childrenOf = (index: ReadonlyMap<number, readonly number[]>, parent: number): readonly number[] => index.get(parent) ?? NO_CHILDREN;
 
 function isCaptured(nodes: readonly TraceNode[], id: number): boolean {
 	for (let parent = nodes[id]?.p; parent !== undefined; parent = nodes[parent]?.p) {
@@ -113,11 +137,11 @@ function isCaptured(nodes: readonly TraceNode[], id: number): boolean {
 }
 
 /** Whether the and_or list `list` is a condition of the compound command holding it. */
-function isCondition(nodes: readonly TraceNode[], list: number): boolean {
+function isCondition(nodes: readonly TraceNode[], children: ReadonlyMap<number, readonly number[]>, list: number): boolean {
 	const holder = nodes[list]?.p;
 	if (holder === undefined) return false;
 	const kind = nodes[holder]?.k;
-	const parts = childrenOf(nodes, holder);
+	const parts = childrenOf(children, holder);
 	const index = parts.indexOf(list);
 	if (kind === "while" || kind === "until") return index === 0;
 	if (kind !== "if") return false;
@@ -126,25 +150,26 @@ function isCondition(nodes: readonly TraceNode[], list: number): boolean {
 	return index % 2 === 0 && index < conditions;
 }
 
-function unitSteps(unit: TraceUnit, u: number, script: Buffer, outputs: ReadonlySet<string>): TraceStep[] {
+function unitSteps(unit: TraceUnit, u: number, bytesOf: (unit: TraceUnit) => Buffer, outputs: ReadonlySet<string>): TraceStep[] {
 	const { nodes } = unit;
-	const bytes = unit.source !== undefined ? Buffer.from(unit.source) : script.subarray(unit.at ?? 0);
+	const bytes = bytesOf(unit);
+	const index = childIndex(nodes);
 	const steps: TraceStep[] = [];
 	for (const [id, node] of nodes.entries()) {
 		if (node.k !== "simple" || (node.runs ?? 0) <= 0 || node.argv === undefined) continue;
 		const parentId = node.p;
 		const parent = parentId === undefined ? undefined : nodes[parentId];
 		const inPipeline = parentId !== undefined && parent?.k === "pipeline";
-		const stages = inPipeline ? childrenOf(nodes, parentId) : [id];
+		const stages = inPipeline ? childrenOf(index, parentId) : [id];
 		const stage = Math.max(0, stages.indexOf(id));
 		const lastStage = stage === stages.length - 1;
 		const statement = inPipeline ? parentId : id;
 		const statementNode = nodes[statement];
 		const negated = statementNode !== undefined && statementNode.lo < node.lo && bytes[statementNode.lo] === 0x21;
 		const list = statementNode?.p;
-		const listParts = list !== undefined && nodes[list]?.k === "and_or" ? childrenOf(nodes, list) : [];
+		const listParts = list !== undefined && nodes[list]?.k === "and_or" ? childrenOf(index, list) : [];
 		const operandUsed = listParts.length > 1 && listParts.indexOf(statement) < listParts.length - 1;
-		const test = lastStage && (negated || (list !== undefined && nodes[list]?.k === "and_or" && isCondition(nodes, list)));
+		const test = lastStage && (negated || (list !== undefined && nodes[list]?.k === "and_or" && isCondition(nodes, index, list)));
 		const captured = isCaptured(nodes, id);
 		const argv = node.argv;
 		const resolved = node.res ?? "none";
@@ -172,12 +197,20 @@ function executedTrace(raw: unknown): { readonly trace: ExecutedTrace; readonly 
 	const { script, units, history, status, historyTruncated } = parsed.data;
 	const outputs = new Set<string>();
 	for (const entry of history ?? []) {
-		const output = outputSchema.safeParse(entry);
-		if (output.success && output.data.u !== undefined && output.data.n !== undefined) outputs.add(`${output.data.u}:${output.data.n}`);
+		// A journal record is an object with a string `kind`; anything else is not a trace.
+		if (!isRecord(entry) || typeof entry.kind !== "string") return null;
+		const ref = outputRef(entry);
+		if (ref !== null) outputs.add(ref);
 	}
-	const bytes = Buffer.from(script);
+	// The script's bytes are only needed by a unit that does not carry its own source.
+	let scriptBytes: Buffer | null = null;
+	const bytesOf = (unit: TraceUnit): Buffer => {
+		if (unit.source !== undefined) return Buffer.from(unit.source);
+		scriptBytes ??= Buffer.from(script);
+		return scriptBytes.subarray(unit.at ?? 0);
+	};
 	const steps: TraceStep[] = [];
-	for (const [u, unit] of units.entries()) if (unit.callout !== true) steps.push(...unitSteps(unit, u, bytes, outputs));
+	for (const [u, unit] of units.entries()) if (unit.callout !== true) steps.push(...unitSteps(unit, u, bytesOf, outputs));
 	return { trace: { script, steps }, complete: status !== undefined && historyTruncated !== true };
 }
 
