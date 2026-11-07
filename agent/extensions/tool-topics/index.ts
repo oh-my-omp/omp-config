@@ -21,9 +21,10 @@
 // its marker.
 //
 // ROUTING. registry.ts puts the topics on OMP's URL router as the `tool://` scheme, replacing the
-// handler of an earlier load (subagents, isolated children). When OMP or another handler holds
-// `tool://`, no tool gets an index and injection is off, so nothing points at or injects topics
-// this extension does not serve.
+// handler of an earlier load (subagents, isolated children). Afterwards all non-builtin schemes
+// in the router are in canonical order (builtins first, others by name), independent of when
+// this extension bound. When OMP or another handler holds `tool://`, no tool gets an index and
+// injection is off, so nothing points at or injects topics this extension does not serve.
 //
 // PROMPT. At every prompt (`before_agent_start`, from the prompt it is handed) and after every
 // tool call (`tool_result`, from `ctx.getSystemPrompt()`), main and sub, full and light: when the
