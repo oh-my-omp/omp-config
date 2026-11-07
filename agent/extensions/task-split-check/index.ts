@@ -24,7 +24,9 @@
  *   reports go to a file; only `false` prompts are remembered, to skip asking
  *   again.
  *
- * Memory is per process, keyed by check + sha256 of the item prompt.
+ * Memory is per process, keyed by check id + sha256 over the item prompt's
+ * normalized fragments. Hashing is incremental into the key (`Bun.CryptoHasher`),
+ * so recall never materializes the rendered prompt; only the judge path renders it.
  * The model is the OMP model role `@task-split-check` (assign it in `/model`), then the `default`
  * role chain, both resolved at every request; the chain's models are tried in order, each attempt
  * limited to the remaining budget divided over the models not yet tried, so a provider failure or
@@ -34,7 +36,6 @@
  * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise
  * block the call.
  */
-import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
@@ -154,9 +155,32 @@ const parseAnswer = (text: string, check: Check): Verdict => {
 const renderPrompt = (context: string | undefined, item: TaskItem): string =>
 	["<shared-context>", context?.trim() || "(none)", "</shared-context>", "<assignment>", item.task.trim(), "</assignment>"].join("\n");
 
+/**
+ * Digest of one item prompt, without materializing the prompt: the same
+ * normalized `context?.trim() || "(none)"` / `item.task.trim()` fragments
+ * `renderPrompt` joins, length-framed (`<context UTF-16 code units>:<task UTF-16 code units>`
+ * plus NUL separators) so fragment boundaries cannot collide, hashed
+ * incrementally into a fixed-length sha256. Framing only distinguishes inputs
+ * the old rendered-string key conflated, so recall can only miss where the old
+ * key hit — never wrongly hit — and verdicts stay identical to hashing the
+ * rendered prompt.
+ */
+const memoryDigest = (context: string | undefined, item: TaskItem): string => {
+	const contextText = context?.trim() || "(none)";
+	const taskText = item.task.trim();
+	const hasher = new Bun.CryptoHasher("sha256");
+	hasher.update(`${contextText.length}:${taskText.length}\0`);
+	hasher.update(contextText);
+	hasher.update("\0");
+	hasher.update(taskText);
+	return hasher.digest("hex");
+};
+
+const memoryKey = (digest: string, check: Check): string => `${check.id}:${digest}`;
+
 const itemLabel = (item: TaskItem, index: number): string => `\`${item.name ?? `item ${index + 1}`}\``;
 
-/** `<check id>:<sha256 of item prompt>` for every prompt the check's memory keeps. */
+/** `<check id>:<sha256 over the item prompt's normalized fragments>` for every prompt the check's memory keeps. */
 const remembered = new Set<string>();
 
 /** The verdict memory already holds for this check, or null when the model must be asked. */
@@ -237,13 +261,14 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 	const judgeItem = async (
 		ctx: ExtensionContext,
 		checks: readonly Check[],
-		prompt: string,
+		context: string | undefined,
+		item: TaskItem,
 		label: string,
 		signal: AbortSignal,
 		budget: AttemptBudget,
 	): Promise<ReadonlyMap<Check, Verdict>> => {
-		const hash = createHash("sha256").update(prompt).digest("hex");
-		const keyOf = (check: Check): string => `${check.id}:${hash}`;
+		const digest = memoryDigest(context, item);
+		const keyOf = (check: Check): string => memoryKey(digest, check);
 		const verdicts = new Map<Check, Verdict>();
 		const pending: Check[] = [];
 		for (const check of checks) {
@@ -253,6 +278,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		}
 		if (pending.length === 0) return verdicts;
 
+		const prompt = renderPrompt(context, item);
 		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal, budget);
 		for (const check of pending) {
 			const verdict: Verdict = reply.kind === "text" ? parseAnswer(reply.text, check) : { kind: "unknown", why: reply.why };
@@ -283,7 +309,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 					const label = itemLabel(item, index);
 					return {
 						label,
-						verdicts: await judgeItem(ctx, covered, renderPrompt(call.context, item), label, deadline, budget),
+						verdicts: await judgeItem(ctx, covered, call.context, item, label, deadline, budget),
 					};
 				}),
 			)
