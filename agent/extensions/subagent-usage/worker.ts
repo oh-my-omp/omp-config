@@ -1,6 +1,7 @@
 // Bun Worker: reads every session transcript under the sessions root, continuing each file from the byte position
-// its cache entry records, so a later run reads only the bytes appended since then, and returns hourly spend per
-// model plus one record per subagent transcript. Pure fs/JSON: host packages are not importable from a worker.
+// its cache entry records when the file is still the same one (same inode), so a later run reads only the bytes
+// appended since then, and returns hourly spend per model plus one record per subagent transcript. Pure fs/JSON:
+// host packages are not importable from a worker.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { DispatchRecord, ScannedDispatch, ScanRequest, ScanResult } from "./records.ts";
@@ -10,13 +11,16 @@ declare const self: Worker;
 const HOUR_MS = 3_600_000;
 const CHUNK = 1 << 20;
 // 2: `size` became the number of bytes read (the resume position), not the size stat reported before the read.
-const CACHE_VERSION = 2;
+// 3: entries also record `ino`, so a transcript replaced by a rewrite (temp file and rename) is read again.
+const CACHE_VERSION = 3;
 
 /** One transcript's contribution: spend as [provider/model, hour, usd] and, for a subagent, its dispatch record. */
 type FileAggregate = {
 	/** Bytes read so far; the next scan of this file continues from here. */
 	readonly size: number;
 	readonly mtimeMs: number;
+	/** Inode of the file those bytes came from; a rewrite replaces the file, so the number changes. */
+	readonly ino: number;
 	readonly spend: readonly (readonly [string, number, number])[];
 	readonly dispatch: DispatchRecord | null;
 };
@@ -58,6 +62,7 @@ function isFileAggregate(value: unknown): value is FileAggregate {
 		isRecord(value) &&
 		typeof value.size === "number" &&
 		typeof value.mtimeMs === "number" &&
+		typeof value.ino === "number" &&
 		Array.isArray(value.spend) &&
 		value.spend.every(isSpend) &&
 		(value.dispatch === null || isDispatch(value.dispatch))
@@ -177,7 +182,11 @@ function forEachWantedLine(file: string, offset: number, isWanted: (head: string
 				const end = newline === -1 ? read : newline;
 				const length = end - start;
 				if (skipping) {
-					if (newline !== -1) skipping = false;
+					if (newline !== -1) {
+						// The skipped line ends here; the next one is judged afresh.
+						skipping = false;
+						wanted = undefined;
+					}
 				} else if (carried > 0) {
 					if (length > 0) {
 						keep(view, start, end);
@@ -298,7 +307,7 @@ function fold(line: string, state: Aggregate): void {
  * Reads a transcript from `offset` into its aggregate. Resuming from a cached aggregate appends this run's
  * lines to it, so both additions and key order match one full read of the same bytes.
  */
-function aggregateFile(file: string, offset: number, mtimeMs: number, state: Aggregate): FileAggregate {
+function aggregateFile(file: string, offset: number, mtimeMs: number, ino: number, state: Aggregate): FileAggregate {
 	const size = forEachWantedLine(file, offset, isWantedHead, (line) => fold(line, state));
 	const spend: [string, number, number][] = [];
 	for (const [key, usd] of state.spend) {
@@ -317,7 +326,7 @@ function aggregateFile(file: string, offset: number, mtimeMs: number, state: Agg
 					mtimeMs,
 					costByProvider: state.costByProvider,
 				};
-	return { size, mtimeMs, spend, dispatch };
+	return { size, mtimeMs, ino, spend, dispatch };
 }
 
 function loadCache(cachePath: string): Cache {
@@ -372,11 +381,13 @@ function scan(request: ScanRequest): ScanResult {
 			files[file] = cached;
 			continue;
 		}
-		// A transcript that only grew continues from where the last scan stopped, provided that point still ends a
-		// line; one that shrank, was rewritten, or ended in a cut-off entry is read again from its start.
-		const resumed = cached !== undefined && cached.size < stat.size && endsLine(file, cached.size) ? cached : undefined;
+		// A transcript that only grew continues from where the last scan stopped, provided that file is still the
+		// same one (a rewrite replaces it, so the inode changes) and that point still ends a line; one that shrank,
+		// was rewritten, or ended in a cut-off entry is read again from its start.
 		try {
-			files[file] = aggregateFile(file, resumed?.size ?? 0, stat.mtimeMs, stateOf(resumed));
+			const resumed =
+				cached !== undefined && cached.ino === stat.ino && cached.size < stat.size && endsLine(file, cached.size) ? cached : undefined;
+			files[file] = aggregateFile(file, resumed?.size ?? 0, stat.mtimeMs, stat.ino, stateOf(resumed));
 			parsed++;
 		} catch {
 			// Unreadable transcript: left out of this run and retried next time.
