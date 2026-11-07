@@ -1,14 +1,35 @@
 // ============================================================================
 // turn-judge state — the `时间线` / `本轮回复` state a judge request carries,
 // and `fitState`, which keeps its serialized UTF-8 size within `maxBytes`.
+// This repository caps `maxBytes` at 64KB (`MAX_BYTES_LIMIT`); the cap is a
+// repository choice, not a fact about the hosted service.
 //
-// The hosted Jev caps a request at 64KB and counts bytes, so the budget is
-// measured on `JSON.stringify(state)` with escapes included, not on UTF-16
-// length. 本轮回复 takes half of `maxBytes`, 用户说 a quarter, the newest entry
+// The budget counts bytes, so it is measured on `JSON.stringify(state)` with
+// escapes included, not on UTF-16 length. 本轮回复 takes half of `maxBytes`, 用户说 a quarter, the newest entry
 // the rest, and older entries whole from newest to oldest until one does not
 // fit. Content over its share keeps its head and gains `…`; 用户说 and the
 // newest entry are never dropped.
 // ============================================================================
+
+import { tr } from "../_shared/i18n.ts";
+
+/** Largest `maxBytes` this repository accepts for a judge request's state (64KB). */
+export const MAX_BYTES_LIMIT = 65_536;
+
+export type MaxBytesParse = { readonly kind: "ok"; readonly value: number } | { readonly kind: "invalid"; readonly reason: string };
+
+/** Parses a spec's `maxBytes` value: a positive integer no larger than `MAX_BYTES_LIMIT`. */
+export function parseMaxBytes(raw: string): MaxBytesParse {
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value <= 0)
+		return { kind: "invalid", reason: tr("maxBytes must be a positive integer", "maxBytes 必须是正整数") };
+	if (value > MAX_BYTES_LIMIT)
+		return {
+			kind: "invalid",
+			reason: tr(`maxBytes must be at most ${MAX_BYTES_LIMIT} (64KB)`, `maxBytes 不能超过 ${MAX_BYTES_LIMIT}（64KB）`),
+		};
+	return { kind: "ok", value };
+}
 
 export type TimelineKind = "用户说" | "用户在ask中回答" | "提醒" | "模型想" | "模型说" | "模型调用工具";
 

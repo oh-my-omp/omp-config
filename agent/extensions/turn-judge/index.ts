@@ -21,7 +21,7 @@
 //   provider: ^anthropic$                # optional; regex, see SCOPE
 //   skipTools: wt, harness_restart       # optional; tool names, see SCOPE
 //   inject:  system                      # optional; system (default) | user, see OUTCOME
-//   maxBytes: 30000                      # optional; state budget in bytes, see STATE
+//   maxBytes: 30000                      # optional; state budget in bytes, at most 65536 (64KB), see STATE
 //   question.<id>: <instructions>       # >= 1; one Noul (yes/no) question each
 //   question.<id>.true: <criterion>     # optional; what a yes means
 //   question.<id>.false: <criterion>    # optional; what a no means
@@ -163,7 +163,7 @@ import {
 	targetsSession,
 } from "../_shared/session-filter.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
-import { fitState, type TimelineEntry, type TurnState } from "./state.ts";
+import { fitState, parseMaxBytes, type TimelineEntry, type TurnState } from "./state.ts";
 
 const FILE_PATTERN = /^TURN-JUDGE-.+\.md$/i;
 const QUESTION_KEY = /^question\.([a-z0-9_]+)(?:\.(true|false))?$/;
@@ -391,9 +391,9 @@ function parseSpecFile(path: string): SpecParse {
 		};
 	let maxBytes = DEFAULT_MAX_BYTES;
 	if (fields.maxbytes !== undefined) {
-		maxBytes = Number(unquote(fields.maxbytes));
-		if (!Number.isInteger(maxBytes) || maxBytes <= 0)
-			return { kind: "invalid", reason: tr("maxBytes must be a positive integer", "maxBytes 必须是正整数") };
+		const parsed = parseMaxBytes(unquote(fields.maxbytes));
+		if (parsed.kind === "invalid") return parsed;
+		maxBytes = parsed.value;
 	}
 	const filter = parseSessionFilter(fields, FILTER_KEYS, { kind: "default", targets: [{ kind: "main" }] }, "frontmatter");
 	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
