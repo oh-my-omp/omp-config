@@ -79,11 +79,14 @@ export function projectRoot(cwd: string): string {
 /** Hashline `edit` file headers (`[path#TAG]`) and `MV` destinations; other edit modes carry `path`. */
 const EDIT_PATH_PATTERN = /^\[([^\]\n]+?)#[0-9A-Fa-f]{4}\]|^MV\s+"?([^"\n]+?)"?\s*$/gm;
 
+/** Cheap necessary condition for an edit input to name a watchdog file, before scanning its headers. */
+const WATCHDOG_MENTION = /watchdog-/i;
+
 /** Absolute `WATCHDOG-*.md` paths a successful `write` or `edit` call touched. */
 export function touchedWatchdogFiles(toolName: string, input: Record<string, unknown>, cwd: string): string[] {
 	const raw: string[] = [];
 	if ((toolName === "write" || toolName === "edit") && typeof input.path === "string") raw.push(input.path);
-	if (toolName === "edit" && typeof input.input === "string") {
+	if (toolName === "edit" && typeof input.input === "string" && WATCHDOG_MENTION.test(input.input)) {
 		for (const m of input.input.matchAll(EDIT_PATH_PATTERN)) {
 			const path = m[1] ?? m[2];
 			if (path !== undefined) raw.push(path);

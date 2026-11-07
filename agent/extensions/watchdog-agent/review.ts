@@ -35,11 +35,33 @@ function toolCallSummaries(content: unknown): string[] {
 	return calls;
 }
 
+/** Tool calls in one message's content, counted without serializing their arguments. */
+function toolCallCount(content: unknown): number {
+	if (!Array.isArray(content)) return 0;
+	let count = 0;
+	for (const b of content) {
+		if (hasKey(b, "type") && b.type === "toolCall") count += 1;
+	}
+	return count;
+}
+
+/** Whether the content carries a text block with a non-whitespace character, without joining or copying the text. */
+function hasText(content: unknown): boolean {
+	const nonBlank = /\S/;
+	if (typeof content === "string") return nonBlank.test(content);
+	if (!Array.isArray(content)) return false;
+	for (const b of content) {
+		if (!hasKey(b, "type") || b.type !== "text") continue;
+		if (hasKey(b, "text") && typeof b.text === "string" && nonBlank.test(b.text)) return true;
+	}
+	return false;
+}
+
 /** Watched actions in one message: each assistant tool call plus one for a nonempty text reply. */
 export function countActions(message: unknown): number {
 	if (!hasKey(message, "role") || message.role !== "assistant") return 0;
 	const content = hasKey(message, "content") ? message.content : undefined;
-	return toolCallSummaries(content).length + (textBlocks(content).trim() === "" ? 0 : 1);
+	return toolCallCount(content) + (hasText(content) ? 1 : 0);
 }
 
 export function messageTimestamp(message: unknown): number | undefined {
@@ -101,24 +123,58 @@ export function branchMessages(entries: ReadonlyArray<unknown>): unknown[] {
 	return out;
 }
 
+/** What one review takes from the branch, and how far it reached. */
+export type ReviewSelection = {
+	/** Messages this run has to render, oldest first: branch messages the caller's retained rendering lacks. */
+	readonly messages: unknown[];
+	/** The triggering message, when the branch lacks it yet: `message_end` persistence is queued concurrently with the event. */
+	readonly tail: unknown;
+	/** Message entries on the branch, including ones a retained rendering already covers. */
+	readonly branchCount: number;
+	/** Newest message timestamp the run covers; the caller advances the cursor to it. */
+	readonly reviewed: number;
+};
+
 /**
- * Messages a run reviews. `full` = every branch message; `window` = those stamped after
- * `after`. `tail` is the message that triggered a mid-run review: `message_end` persistence
- * is queued concurrently with the event, so it is appended when the branch lacks it yet.
+ * Messages a review covers. `full` covers the whole branch, of which the first `rendered`
+ * message entries are already in the caller's retained rendering, so only the remainder is
+ * returned; `window` covers those stamped after `after`. Nothing else is materialized: the
+ * entries are scanned once and only returned messages are collected.
  */
-export function selectMessages(entries: ReadonlyArray<unknown>, scope: Scope, after: number, tail: unknown): unknown[] {
-	const all = branchMessages(entries);
+export function selectMessages(entries: ReadonlyArray<unknown>, scope: Scope, after: number, tail: unknown, rendered = 0): ReviewSelection {
 	const tailStamp = messageTimestamp(tail);
-	if (tail !== undefined && tailStamp !== undefined && !all.some((m) => messageTimestamp(m) === tailStamp)) all.push(tail);
-	if (scope === "full") return all;
-	return all.filter((m) => (messageTimestamp(m) ?? 0) > after);
+	let branchCount = 0;
+	let onBranch = false;
+	let reviewed = after;
+	const messages: unknown[] = [];
+	for (const e of entries) {
+		if (!hasKey(e, "type") || e.type !== "message" || !hasKey(e, "message")) continue;
+		const message = e.message;
+		const index = branchCount;
+		branchCount += 1;
+		const stamp = messageTimestamp(message) ?? 0;
+		if (tailStamp !== undefined && stamp === tailStamp) onBranch = true;
+		// `full` still counts the stamps of messages already rendered, for the cursor it advances to.
+		const wanted = scope === "window" ? stamp > after : index >= rendered;
+		if (wanted || scope === "full") {
+			if (wanted) messages.push(message);
+			if (stamp > reviewed) reviewed = stamp;
+		}
+	}
+	const appended = tail !== undefined && tailStamp !== undefined && !onBranch && (scope === "full" || tailStamp > after);
+	if (appended && tailStamp > reviewed) reviewed = tailStamp;
+	return { messages, tail: appended ? tail : undefined, branchCount, reviewed };
 }
 
-/** Full, untruncated rendering of the given messages, oldest first. System-mode notes are custom messages, never branch messages, so only user-mode notes need `ownNotes`. */
-export function renderTranscript(messages: ReadonlyArray<unknown>, ownNotes: Pick<ReadonlySet<string>, "has">): string {
+/** Full, untruncated rendering of the given messages, oldest first, then `tail` when given. System-mode notes are custom messages, never branch messages, so only user-mode notes need `ownNotes`. */
+export function renderTranscript(messages: ReadonlyArray<unknown>, ownNotes: Pick<ReadonlySet<string>, "has">, tail?: unknown): string {
 	const parts: string[] = [];
 	for (const m of messages) {
 		const part = renderMessage(m, ownNotes);
+		if (part !== undefined) parts.push(part);
+	}
+	if (tail !== undefined) {
+		const part = renderMessage(tail, ownNotes);
 		if (part !== undefined) parts.push(part);
 	}
 	return parts.join("\n");
