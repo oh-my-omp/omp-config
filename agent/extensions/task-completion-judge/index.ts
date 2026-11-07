@@ -181,7 +181,7 @@ type YieldCall = { readonly kind: "data" } | { readonly kind: "text" } | { reado
 
 /** One transcript call with references to where its rendered inputs live. */
 type ToolCallRecord = { readonly id: string; readonly name: string; readonly args: unknown; readonly assistantEntry: unknown };
-/** Result entry refs keyed by call id; the forward walk's last one wins, unchanged. */
+/** Result entry refs keyed by call id; when a call id has several results, the last one in branch order is kept. */
 type ResultsByCallId = ReadonlyMap<string, { readonly isError: boolean; readonly entry: unknown }>;
 
 type Transcript = {
@@ -281,15 +281,6 @@ const contentOf = (entry: unknown): readonly unknown[] | undefined => {
 	const message = entry.message;
 	if (typeof message !== "object" || message === null || !("content" in message)) return undefined;
 	return Array.isArray(message.content) ? message.content : undefined;
-};
-
-/** The exact joined text of a message content (no separator), or "" for non-text content. */
-const textOfExactly = (content: unknown): string => {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	let text = "";
-	for (const block of content) text += textBlockOf(block) ?? "";
-	return text;
 };
 
 /**
@@ -440,9 +431,12 @@ const stringify = (value: unknown): string => {
 
 /**
  * `truncate(stringify(value), limit)` in one bounded pass over `walkJson`'s output.
- * JSON data is walked. Any other value, and any value the walk cannot finish (a
- * cycle, a BigInt, nesting deep enough to exhaust the stack), takes `stringify` and
- * its full text, so only that fallback allocates the whole serialization.
+ * JSON data is walked; a long string is emitted in chunks, while a short string or
+ * an array of only short primitives is serialized whole by one native call. Any
+ * other value, and any value the walk cannot finish (a cycle, a BigInt, nesting
+ * deep enough to exhaust the stack), takes `stringify` and its full text. That
+ * fallback reads the value again, so an accessor property the walk already read is
+ * read a second time, and a `String(value)` that throws propagates to the caller.
  */
 const stringifyWithin = (value: unknown, limit: number): string => {
 	try {
@@ -540,8 +534,8 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 
 /**
  * The batch's shared `context` is rendered into the subagent system prompt as its
- * `§ Context` section — located and extracted without joining the whole prompt
- * (F108). The extraction equals `getSystemPrompt().join("\n")`, then
+ * `§ Context` section — located and extracted without joining the whole prompt.
+ * The extraction equals `getSystemPrompt().join("\n")`, then
  * `indexOf("§ Context\n")`, then the slice up to the next `"\n§ "` heading, then
  * `trim()`. The marker and the heading each hold exactly one `"\n"`, the character
  * the join puts between pieces, so a marker that straddles a seam is one whose
@@ -743,15 +737,15 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 			rounds.set(sessionFile, { kind: "settled" });
 			return undefined;
 		}
-		// The submission is truncated exactly once, here at its source (D9): the
-		// text kind is the yield call's own assistant message text, the data kind
-		// the bounded serialization of `input.data` — `stringifyWithin` at the
-		// submission limit already outputs the exact `truncate(whole, limit)`
-		// shape, so the frame takes `submission` verbatim.
+		// The submission is truncated exactly once, here at its source: the text
+		// kind is the yield call's own assistant message text, the data kind the
+		// serialization of `input.data`. Both windows are bounded and already have
+		// the exact `truncate(whole, limit)` shape, so the frame takes `submission`
+		// verbatim.
 		const yieldEntry = transcript.callById.get(toolCallId)?.assistantEntry;
 		const submission =
 			call.kind === "text"
-				? truncate(textOfExactly(contentOf(yieldEntry)), SUBMISSION_CHAR_LIMIT)
+				? textWithin(contentOf(yieldEntry), "", SUBMISSION_CHAR_LIMIT)
 				: stringifyWithin(input.data, SUBMISSION_CHAR_LIMIT);
 		const todo = requireReviewTodo(pi, ctx.agent.id);
 		const verdict = await judge(ctx, renderPrompt(ctx, transcript, toolCallId, submission, todo), AbortSignal.timeout(DEADLINE_MS));
