@@ -337,6 +337,13 @@ function scanCommands(command: string): { readonly commands: SimpleCommand[]; re
 			i += redirect.consumed;
 			continue;
 		}
+		if (ch === "#" && wordStart === null && !wordDynamic) {
+			// Unquoted `#` at a word boundary comments out the rest of the line;
+			// the newline itself still ends the command and skips heredoc bodies.
+			const newline = command.indexOf("\n", i + 1);
+			i = (newline === -1 ? command.length : newline) - 1;
+			continue;
+		}
 		if (wordStart === null) wordStart = i;
 		if (ch === "$") wordDynamic = true;
 		word += ch;

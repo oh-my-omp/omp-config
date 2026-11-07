@@ -114,6 +114,11 @@ describe("pty shell structure", () => {
 		expect(ruleOf("make &> log")).toBeNull();
 	});
 
+	test("an unquoted # at a word boundary comments out the rest of the line", () => {
+		expect(ruleOf("ssh -o BatchMode=yes host # don't")).toBe("ssh");
+		expect(ruleOf("ls # ssh host")).toBeNull();
+	});
+
 	test("sleep counts in a loop body, not in its condition nor after done", () => {
 		expect(ruleOf("for i in 1 2; do echo $i; sleep 1; done")).toBe("loopSleep");
 		expect(ruleOf("while sleep 1; do echo x; done")).toBeNull();
