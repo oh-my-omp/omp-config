@@ -228,7 +228,7 @@ Source: `agent/extensions/child-memory-warning/`. macOS (Darwin) only; enabled i
 On the first main session's `session_start`, opens `libproc`/`sysctl` via Bun FFI and samples every 2 s (non-Darwin platforms log one `未启用` info entry; main shutdown clears the timer and closes the library):
 
 - Reads `ri_phys_footprint` from `proc_pid_rusage` and keys processes by `PID + kernel start time`. Tracks owned descendant OS processes of the OMP process and process groups created by observed descendants; reparented orphans (`PPID === 1`) stay tracked until exit. Subagents running in-process — on the main thread, or in a worker thread when more than 8 subagents run concurrently and `task.workerThreads` is greater than 0 — share the OMP process's memory and are not tracked here.
-- Reads the `child-memory-warning.thresholdGiB` setting (`omp-config`; manifest default `4`; a project `.omp/plugin-overrides.json` entry wins over the machine value) when at least one owned process is not yet warned; ticks with nothing to warn about skip the read. If the value is unreadable or invalid, tracking continues while alerts pause and each new config problem warns once.
+- Reads the `child-memory-warning.thresholdGiB` setting (`omp-config`; manifest default `4`; a project `.omp/plugin-overrides.json` entry wins over the machine value) on every 2 s scan. If the value is unreadable or invalid, tracking continues while alerts pause and each new config problem warns once.
 - When an owned process exceeds `thresholdGiB`, warns once per process identity (one main-UI warning and one `attribution: "agent"` message with PID, PPID, orphan status, GiB/bytes, threshold, and 240-char command). Never signals or kills processes.
 
 ### input-polish

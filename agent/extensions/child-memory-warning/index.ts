@@ -14,9 +14,9 @@
  * anchor cannot be attributed retroactively from the process table.
  * Reads the `child-memory-warning.thresholdGiB` plugin setting (omp-config;
  * `/settings → Plugins → omp-config` or `omp plugin config`; the project's
- * `.omp/plugin-overrides.json` wins over the machine value) only when an
- * unwarned owned process exists; an unreadable or invalid value pauses alerts
- * while tracking continues, and each new config problem warns once.
+ * `.omp/plugin-overrides.json` wins over the machine value) every scan; an
+ * unreadable or invalid value pauses alerts while tracking continues, and each
+ * new config problem warns once.
  * No model calls, sampling subprocesses, signals, or automatic kills.
  * Unsupported platforms log once and never import the Darwin binding. Native/hook
  * failures warn without escaping into omp; delivery is attempted once per identity.
@@ -147,12 +147,7 @@ async function sample(monitor: Monitor): Promise<void> {
 		monitor.problem = null;
 		// Ownership tracking must see every scan, even while alerts are paused by config.
 		const owned = monitor.tracker.observe(result.snapshot);
-		// Threshold IO is per-need, not per-tick: only an unwarned owned process can use it.
 		// owned aliases the tracker's reused result buffer; consume it synchronously here.
-		const pending = owned.some((tracked) => !tracked.alerted);
-		// No threshold read and no config-problem bookkeeping on this tick:
-		// a quiet interval must neither clear a recorded problem nor re-warn it later (§3).
-		if (!pending) return;
 		const config = await loadThreshold(monitor.ctx.cwd);
 		// The session may have shut down while the settings read was suspended:
 		// a stopped lifetime means libproc is already closed and delivery is over.
