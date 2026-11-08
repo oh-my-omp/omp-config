@@ -228,7 +228,7 @@ cwd: /absolute/path/to/leader-checkout
 首个主会话在 `session_start` 通过 Bun FFI 打开系统 `libproc`/`sysctl`，启动每 2 秒一次的采样定时器（非 Darwin 平台记一条 `未启用` info 日志；主会话关闭时先清定时器再关闭句柄）：
 
 - 读取 `proc_pid_rusage` 的 `ri_phys_footprint`（含压缩与换出内存），用 `PID + 内核启动时间` 标识进程。追踪当前 OMP 进程归属的后代 OS 子进程及由后代组长创建的进程组；父进程退出后变成孤儿（`PPID === 1`）的已观测后代继续追踪至退出。在进程内运行的子代理——主线程，或在并发子代理超过 8 个且 `task.workerThreads` 大于 0 时进入 worker 线程——与 OMP 进程共享内存，不在监控范围内。
-- 仅在存在尚未告警的归属进程时读取 `child-memory-warning.thresholdGiB` 设置（`omp-config`；manifest 默认 `4`；项目 `.omp/plugin-overrides.json` 的同名项优先于机器值），无可告警进程的采样跳过读取。值读不出或无效时继续追踪进程但暂停告警，每种新配置问题记一次 warning。
+- 每次采样重读 `child-memory-warning.thresholdGiB` 设置（`omp-config`；manifest 默认 `4`；项目 `.omp/plugin-overrides.json` 的同名项优先于机器值）。值读不出或无效时继续追踪进程但暂停告警，每种新配置问题记一次 warning。
 - 任一归属进程的 `phys_footprint` 超过阈值时，按进程身份告警一次（弹主 UI warning，并向主会话发一条含 PID、PPID、是否孤儿、GiB/bytes、阈值与 240 字命令行的 `attribution: "agent"` 消息），不发信号杀进程。
 
 ### input-polish
