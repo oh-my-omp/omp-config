@@ -176,7 +176,9 @@ function inProjection(ctx: ExtensionContext, source: string): Effective {
 	let boundary: KeptRegionBoundary | undefined;
 	let deferred: Effective | undefined;
 	while (true) {
-		if (!seen.add(entry.id)) return { kind: "absent" };
+		// A parent cycle stops the walk at the first repeat, as `buildSessionContext` does.
+		if (seen.has(entry.id)) return { kind: "absent" };
+		seen.add(entry.id);
 		if (boundary === undefined) {
 			const block = carrierBlock(entry, source);
 			if (block !== undefined) return block;
