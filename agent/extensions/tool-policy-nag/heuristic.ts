@@ -203,19 +203,18 @@ export function detectTraceViolations(trace: ExecutedTrace): ShellViolation[] {
 		return { tokens, pipelineId, piped: step.stage > 0, captured: step.captured, background: false, loopBody: false };
 	});
 	// A pipeline's bytes reach the result through its last stage; nothing attributed anywhere in it means they did not.
-	// The first index with attributed output decides every stage of its pipeline in one pass.
-	const outputFrom = new Map<string, number>();
+	// The last index with attributed output answers every stage of its pipeline in one pass.
+	const outputThrough = new Map<string, number>();
 	for (const [index, step] of steps.entries()) {
 		if (!step.output || step.pipeline === null) continue;
-		const earliest = outputFrom.get(step.pipeline);
-		if (earliest === undefined || index < earliest) outputFrom.set(step.pipeline, index);
+		outputThrough.set(step.pipeline, index);
 	}
 	const reached = (index: number): boolean => {
 		const step = steps[index];
 		if (step === undefined) return false;
 		if (step.pipeline === null) return step.output;
-		const earliest = outputFrom.get(step.pipeline);
-		return earliest !== undefined && earliest >= index;
+		const last = outputThrough.get(step.pipeline);
+		return last !== undefined && last >= index;
 	};
 	return detectCommandViolations(commands, reached);
 }
