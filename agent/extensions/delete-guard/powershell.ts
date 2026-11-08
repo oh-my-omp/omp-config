@@ -180,7 +180,9 @@ class PsParser {
 				continue;
 			}
 			if (ch === "}") this.fail("unexpected `}`");
-			if (ch === ">" || (ch === "<" && this.src.charAt(this.i + 1) !== "#")) {
+			// PowerShell has no input redirection: a bare `<` is a parse error, so the script never runs.
+			if (ch === "<") this.fail("`<` is reserved for future use");
+			if (ch === ">") {
 				const opStart = this.i;
 				while (this.i < this.src.length && ">&12*".includes(this.src.charAt(this.i))) this.i++;
 				// `2>&1` merges streams and has no target; any other redirect needs one.

@@ -126,6 +126,11 @@ describe("cmd and PowerShell dialects", () => {
 		[{ kind: "powershell" }, "Remove-Item -Recurse x", "delete"],
 		[{ kind: "powershell" }, "iex $s", "nonLiteral"],
 		[{ kind: "powershell" }, "Get-Process", "allow"],
+		[{ kind: "powershell" }, "<", "nonLiteral"],
+		[{ kind: "powershell" }, "a < b", "nonLiteral"],
+		[{ kind: "powershell" }, "diff <(rm f) x", "nonLiteral"],
+		[{ kind: "powershell" }, "<in.txt del x", "nonLiteral"],
+		[{ kind: "powershell" }, 'Write-Output "a < b"', "allow"],
 	] as const)("%p %p is %p", (dialect, text, rule) => {
 		expect(ruleIn(dialect, text)).toBe(rule);
 	});
