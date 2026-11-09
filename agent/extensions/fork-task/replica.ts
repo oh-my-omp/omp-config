@@ -373,7 +373,12 @@ function resolveReplicaTools(session: AgentSession, replica: Replica): AgentTool
 	return tools;
 }
 
-/** Runs after every before-model-call installer, so a name absent here stays absent. */
+/**
+ * Runs in the before-model-call gate. The `addBeforeModelCallHook` installers
+ * run earlier, during context sync, so a name still absent here stays absent.
+ * An `addBeforeModelCall` installer registered after this one runs after it and
+ * is not seen by this check.
+ */
 function requireReplicaTools(session: AgentSession, replica: Replica): void {
 	const present = new Set(session.agent.state.tools.map((tool) => tool.name));
 	const missing = replica.toolNames.find((name) => !present.has(name));
@@ -389,7 +394,7 @@ export function applyReplica(session: AgentSession, replica: Replica): void {
 		session.agent.setSystemPrompt(systemPrompt);
 		session.agent.setTools(resolveReplicaTools(session, replica));
 	});
-	// Added after the tool hook, and the loop builds the request's tools only after every hook: this check sees the final set.
+	// Registered after the tool hook. The host runs that hook during context sync, before the gate, so this check sees the resolved set; a throw here stops the request before streamFn.
 	const detachCheck = session.agent.addBeforeModelCall(() => requireReplicaTools(session, replica));
 	session.addDisposer(detachTools);
 	session.addDisposer(detachCheck);
