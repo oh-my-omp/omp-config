@@ -347,31 +347,52 @@ function replicateContext(session: AgentSession, replica: Replica, current: Cont
 	};
 }
 
-/** Install once per live generation; disposal releases the per-call hook. */
-export function applyReplica(session: AgentSession, replica: Replica): void {
+/**
+ * The source's tool surface as this child holds it at the call. omp-todo-more
+ * installs `todo` inside the before-model-call chain, so a name still missing
+ * here is skipped and {@link requireReplicaTools} decides once the chain ends.
+ */
+function resolveReplicaTools(session: AgentSession, replica: Replica): AgentTool[] {
 	const own = new Map(session.agent.state.tools.map((tool) => [tool.name, tool]));
-	const names = new Set(replica.toolNames);
-	const tools = replica.toolNames.map((name) => {
+	const tools: AgentTool[] = [];
+	for (const name of replica.toolNames) {
 		const local = own.get(name) ?? session.getToolByName(name);
-		if (local) return local;
+		if (local) {
+			tools.push(local);
+			continue;
+		}
 		// AskTool's real implementation uses the supplied execution context. In
 		// a headless child it takes its existing headless handoff path; never
 		// fabricate a same-schema tool that always returns an error.
-		if (name === "ask" && replica.ask) return replica.ask;
-		throw new Error(`fork_task: cannot clone source tool \`${name}\` into this child`);
-	});
+		if (name === "ask" && replica.ask) tools.push(replica.ask);
+	}
 	// Only completion extends the source's capability surface. Do not expose
 	// other tools admitted by the unrestricted internal agent definition.
 	const yieldTool = own.get("yield") ?? session.getToolByName("yield");
-	if (yieldTool && !names.has("yield")) tools.push(yieldTool);
-	// The hook re-installs the source's prompt and tools whenever the host swaps
-	// them; one array each is enough, since both setters store what they get.
+	if (yieldTool && !replica.toolNames.includes("yield")) tools.push(yieldTool);
+	return tools;
+}
+
+/** Runs after every before-model-call installer, so a name absent here stays absent. */
+function requireReplicaTools(session: AgentSession, replica: Replica): void {
+	const present = new Set(session.agent.state.tools.map((tool) => tool.name));
+	const missing = replica.toolNames.find((name) => !present.has(name));
+	if (missing !== undefined) throw new Error(`fork_task: cannot clone source tool \`${missing}\` into this child`);
+}
+
+/** Install once per live generation; disposal releases the per-call hooks. */
+export function applyReplica(session: AgentSession, replica: Replica): void {
+	// The prompt and tool hook re-installs the source's values whenever the host
+	// swaps them; one array for the prompt is enough, since the setter stores it.
 	const systemPrompt = [...replica.systemPrompt];
-	const detach = session.agent.addBeforeModelCallHook(() => {
+	const detachTools = session.agent.addBeforeModelCallHook(() => {
 		session.agent.setSystemPrompt(systemPrompt);
-		session.agent.setTools(tools);
+		session.agent.setTools(resolveReplicaTools(session, replica));
 	});
-	session.addDisposer(detach);
+	// Added after the tool hook, and the loop builds the request's tools only after every hook: this check sees the final set.
+	const detachCheck = session.agent.addBeforeModelCall(() => requireReplicaTools(session, replica));
+	session.addDisposer(detachTools);
+	session.addDisposer(detachCheck);
 
 	const stream = session.agent.streamFn;
 	const source = replica.request;
