@@ -252,7 +252,7 @@ const FLUSH_CHARS = 1 << 18;
 /** Bytes read per batch by the staging rewrite. */
 const CHUNK_BYTES = 1 << 22;
 
-const DESCRIPTION = `Fork a conversation into a native task child that continues it under the source's exact request: its system prompt, tools and message prefix are replicated unchanged, so forks of one source share the provider's cached prefix. \`context\`, an \`agent\` role and \`task\` reach the child only as its new user message, never as system text.
+const DESCRIPTION = `Fork a conversation into a native task child that continues it under the source's exact request: its system prompt, tools and message prefix are replicated unchanged, so forks of one source share the provider's cached prefix.
 
 Children keep native task result delivery, Agent Hub, \`agent://\`/\`history://\`, \`write agent://\` and isolated merge-back. They support idle/park/revive while their originating process and snapshot remain alive; after restart, create a fresh fork rather than cold-reviving one without its snapshot. Each child has its own Todo and owns only the assignment, not unfinished work in inherited history. Use ordinary \`task\` for an independent fresh perspective or when a short brief suffices.
 
