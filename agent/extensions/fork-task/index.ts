@@ -145,21 +145,79 @@ import {
 } from "./workspace.ts";
 
 const itemSchema = z.object({
-	from: z.string().optional(),
-	name: z.string().optional(),
-	agent: z.string().optional(),
-	task: z.string(),
-	isolated: z.boolean().optional(),
-	workspace: z.enum(["caller", "source"]).optional(),
-	shake: z.boolean().optional(),
-	effort: z.enum(["lo", "med", "hi"]).optional(),
-	outputSchema: z.unknown().optional(),
-	schemaMode: z.enum(["permissive", "strict"]).optional(),
+	from: z
+		.string()
+		.optional()
+		.describe(
+			"Id of another registered agent to fork instead of your conversation, as in `agent://<id>`; any thread of this process works, live, idle or parked. Matched exactly, then case-insensitively; advisors cannot be sources, and an empty value or your own id selects your conversation. A parked source is forked from the request it kept at park without waking it. Omit to fork your own conversation.",
+		),
+	name: z
+		.string()
+		.optional()
+		.describe(
+			"Requested child name: kept characters `[A-Za-z0-9_-]`, truncated to 40, plus a short unique suffix, so the returned id differs. Omit for `Fork` plus the suffix; use the returned id for follow-ups.",
+		),
+	agent: z
+		.string()
+		.optional()
+		.describe(
+			"Agent whose model binding and role prompt the child takes: its `task.agentModelOverrides` binding, else its definition's `model`, and its definition prompt as a `<role>` block in the assignment. The child keeps the source's tools, so the definition's tool restrictions do not apply; a different model reuses no cache. Omit to run the source's model, thinking level and request controls.",
+		),
+	task: z
+		.string()
+		.describe(
+			"This item's assignment: what to do, with its own target, change and acceptance criteria. Joined after the shared `context` (and any role block) as the child's new user message.",
+		),
+	isolated: z
+		.boolean()
+		.optional()
+		.describe(
+			'Run the child in an isolated workspace instead of sharing yours. Defaults to false without `agent` and to true with `agent` or `workspace: "source"`; plan mode forces false. Isolated children merge their changes back on completion and cannot be resumed after completion.',
+		),
+	workspace: z
+		.enum(["caller", "source"])
+		.optional()
+		.describe(
+			"Where the child's workspace starts. `caller` (default): your checkout only, even when `from` names an agent with an isolated workspace of its own. `source`: an isolated copy of your checkout with the uncommitted changes the `from` agent made in its own isolated workspace applied before the child's first turn, handed back with the child's changes; it sets `isolated` to true and needs a stopped `from` agent whose run has not handed its changes back, otherwise the call fails before dispatch (`xd://fork_task/limits`).",
+		),
+	shake: z
+		.boolean()
+		.optional()
+		.describe(
+			'Elide the inherited transcript before the child starts, by running the same `session.shake("elide")` as `/shake`: keeps the newest tokens and `skill://`/`local://PLAN.md` reads, and replaces older text with recovery references in the shared artifact store. Gives up exact inherited-prefix cache reuse. Defaults to false.',
+		),
+	effort: z
+		.enum(["lo", "med", "hi"])
+		.optional()
+		.describe(
+			"Thinking effort for the child: `lo`, `med` or `hi`. Omit to keep the source's level; a changed effort keeps the replicated prefix. Has no effect while `task.enableEffort` is false.",
+		),
+	outputSchema: z
+		.string()
+		.optional()
+		.describe(
+			'JSON Schema for the child\'s `yield` payload, as JSON text, not an object: e.g. \'{"type":"object","properties":{"report":{"type":"string"}},"required":["report"]}\'. Its presence overrides the named agent\'s and the session\'s schema. Text that is not valid JSON is rejected before dispatch, naming this field.',
+		),
+	schemaMode: z
+		.enum(["permissive", "strict"])
+		.optional()
+		.describe(
+			"How the child's `yield` payload is enforced against the output schema. `permissive` keeps legacy retry-budget behavior; `strict` turns every invalid final payload into a failed `schema_violation`. Defaults to `permissive`, or the session's `outputSchemaMode`.",
+		),
 });
 
 const paramsSchema = z.object({
-	context: z.string(),
-	tasks: z.array(itemSchema).min(1),
+	context: z
+		.string()
+		.describe(
+			"Shared context for the whole batch, with the same scoping rules as `task`: state the target, change and acceptance criteria. It reaches every child as part of its new user message, never as system text.",
+		),
+	tasks: z
+		.array(itemSchema)
+		.min(1)
+		.describe(
+			"One fork per item; each item stages the latest request of its own source. The order matches the `index` values in `details.progress`.",
+		),
 });
 
 const progressSchema = z.object({ progress: z.array(z.object({ index: z.number(), id: z.string() }).passthrough()) }).passthrough();
@@ -195,21 +253,12 @@ const FLUSH_CHARS = 1 << 18;
 const CHUNK_BYTES = 1 << 22;
 
 const DESCRIPTION = `Fork a conversation into a native task child that continues it under the source's exact request: its system prompt, tools and message prefix are replicated unchanged, so forks of one source share the provider's cached prefix. \`context\`, an \`agent\` role and \`task\` reach the child only as its new user message, never as system text.
-- The source is your conversation, or that of the agent \`from\` names, live or parked.
-- Omit \`agent\` to run the source's model and thinking/request controls; the default is a shared working directory (\`isolated: false\`).
-- Set \`agent\` to run that agent's model binding, with its definition prompt as a role block in the assignment. The child keeps the source's tools, so the agent's tool restrictions do not apply; a different model reuses no cache. The default is \`isolated: true\`.
 
-Children keep native task result delivery, Agent Hub, \`agent://\`/\`history://\`, \`write agent://\` and isolated merge-back. They support idle/park/revive while their originating process and snapshot remain alive; after restart, create a fresh fork rather than cold-reviving one without its snapshot. Use ordinary \`task\` for an independent fresh perspective or when a short brief suffices.
+Children keep native task result delivery, Agent Hub, \`agent://\`/\`history://\`, \`write agent://\` and isolated merge-back. They support idle/park/revive while their originating process and snapshot remain alive; after restart, create a fresh fork rather than cold-reviving one without its snapshot. Each child has its own Todo and owns only the assignment, not unfinished work in inherited history. Use ordinary \`task\` for an independent fresh perspective or when a short brief suffices.
 
-- \`shake\` defaults to false. Explicit \`shake: true\` elides the inherited copy and writes recovery artifacts; it deliberately gives up exact inherited-message prefix reuse. There is no source-token or source-cost check.
-- \`isolated\` overrides the default. Concurrent writers must explicitly use isolated workspaces. Plan mode forces shared, read-only children. Isolated children cannot be resumed after completion.
-- \`from\` selects another registered agent (running, idle or parked, in any thread of this OMP process) whose latest request is replicated; a parked source is forked without waking it. Omit it for your conversation.
-- \`workspace\` picks what the child's workspace starts from. \`"caller"\` (default): your checkout only, even when \`from\` names an agent with an isolated workspace. \`"source"\`: an isolated copy of your checkout with the uncommitted changes the \`from\` agent made in its own isolated workspace applied before the child's first turn; they are handed back together with the child's changes. \`"source"\` defaults \`isolated\` to true and needs a stopped \`from\` agent whose run has not handed its changes back; otherwise the call fails before dispatch with \`workspace "source" rejected (<code>)\`, code one of \`child-not-isolated\`, \`source-not-isolated\`, \`source-running\`, \`source-handed-back\`, \`nested-repo\`, \`overlay-conflict\` (conditions: \`xd://fork_task/limits\`).
-- Omit \`effort\` unless the user asks; an effort change keeps the replicated prefix.
-- Each \`name\` gets a short unique suffix; use the returned id for follow-ups. The child has its own Todo and only owns the assignment, not unfinished work in inherited history.
-- Forked workers must run relevant scoped checks and real runtime verification before returning; the parent owns final acceptance.
+Forked workers must run relevant scoped checks and real runtime verification before returning; the parent owns final acceptance.
 
-\`context\` and each item's \`task\` follow the same scoping rules as \`task\`: state target, change and acceptance. Cache reuse requires the same model and compatible request parameters, and remains subject to the provider's cache policy; adding completion tools can invalidate caches on providers without append-only tool support.`;
+Cache reuse requires the same model and compatible request parameters, and remains subject to the provider's cache policy; adding completion tools can invalidate caches on providers without append-only tool support.`;
 
 /**
  * Where the forked transcript and replicated request come from. `caller` is
@@ -896,6 +945,18 @@ function taskDepthOf(session: AgentSession): number {
 }
 
 /**
+ * The wire schema carries `tasks[].outputSchema` as JSON text, so the definition
+ * has no untyped node; the `task` tool takes the parsed JSON Schema.
+ */
+function parseOutputSchema(text: string, index: number): unknown {
+	try {
+		return JSON.parse(text);
+	} catch (error) {
+		throw new Error(`tasks[${index}].outputSchema is not valid JSON: ${errorText(error)}`);
+	}
+}
+
+/**
  * Stage each item's fork (resolve the source, capture its request, write the
  * staging JSONL), then dispatch the whole batch through the native `task`
  * tool. A `workspace: "source"` rejection refuses before dispatch; staging or
@@ -923,6 +984,11 @@ async function executeForkTask(
 	};
 	try {
 		const params = paramsSchema.parse(rawParams);
+		// Parse every item's JSON text before staging anything, so one bad value refuses the whole call.
+		const items = params.tasks.map((item, index) => ({
+			item,
+			outputSchema: item.outputSchema === undefined ? undefined : parseOutputSchema(item.outputSchema, index),
+		}));
 		const parent = callerSession(ctx);
 		if (!parent) return fail("fork_task: could not resolve the calling session in the agent registry.");
 		const maxRecursionDepth = cfgTaskMaxRecursionDepth.get(parent.settings);
@@ -954,7 +1020,7 @@ async function executeForkTask(
 		/** The first `workspace: "source"` rejection; nothing is dispatched then. */
 		let refused: string | undefined;
 		try {
-			for (const [index, item] of params.tasks.entries()) {
+			for (const [index, { item, outputSchema }] of items.entries()) {
 				const source = await resolveSource(item.from, parent, parentFile);
 				if (source.kind === "error") throw new Error(source.message);
 				const agent = item.agent?.trim() || undefined;
@@ -995,7 +1061,7 @@ async function executeForkTask(
 					agent: FORK_AGENT,
 					...(planMode ? {} : { isolated }),
 					...(item.effort !== undefined ? { effort: item.effort } : {}),
-					...(item.outputSchema !== undefined ? { outputSchema: item.outputSchema } : {}),
+					...(outputSchema !== undefined ? { outputSchema } : {}),
 					...(item.schemaMode !== undefined ? { schemaMode: item.schemaMode } : {}),
 				};
 			}
