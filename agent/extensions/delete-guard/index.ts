@@ -110,6 +110,9 @@
 //     `child_process`/`bun` module aliases) judge as their launcher and carry to
 //     the session's later js cells until a `reset: true` cell, a `session_start`
 //     or `session_switch` (a new js kernel); a python reset does not clear them.
+//     A js cell that is one standalone percent command (`%load`, `%pip`,
+//     `%bun`, `%environment` with its arguments on the same line, the form omp
+//     rewrites before running) passes: a `%load`ed script's text is not judged.
 // A command that is not a literal string (f-string or template with
 // placeholders, variable, concatenation) is blocked as non-literal. Names are
 // matched in the cell's text only: a generic name (`remove`, `run`, `exec`,
