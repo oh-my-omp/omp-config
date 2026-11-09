@@ -77,7 +77,7 @@ exclude.model: ^claude-opus-5-5$
 …
 ```
 
-注入条件键 `target`（默认 `main`；也可写 `subagents`、`*` 或代理名）、`cwd`、`model` 与 `provider` 沿用 `turn-judge` 与 `watchdog-agent` 的语法；`mode` 列出 `full` 和/或 `light`；`delegation` 列出 `eager`、`restrained` 和/或 `gated`。同一键内多项为“或”，不同键为“且”。`exclude.target`、`exclude.cwd`、`exclude.model`、`exclude.provider`、`exclude.mode` 与 `exclude.delegation` 描述何时不注入：片段设置的 `exclude.*` 键全部命中时跳过；未写 `exclude.target` 时排除覆盖所有会话。`model` 与 `provider` 是匹配会话当前模型 id 与 provider 的正则；`delegation` 匹配 OMP 为该模型解析出的委派倾向，OMP 正是按这个值决定往提示词里渲染哪套委派措辞。没有当前模型时，`model`、`provider` 与 `delegation` 在注入与排除两侧都不命中。`omp-light` 以 `OMOMP_MODE=light` 启动 omp，其余情况为 `full`。`enabled: false` 关闭该文件。未知键、正文为空或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
+注入条件键 `target`（默认 `main`；也可写 `subagents`、`*` 或代理名）、`cwd`、`model` 与 `provider` 沿用 `turn-judge` 与 `watchdog-agent` 的语法；`mode` 列出 `full` 和/或 `light`；`delegation` 列出 `eager`、`balanced`、`restrained` 和/或 `gated`。同一键内多项为“或”，不同键为“且”。`exclude.target`、`exclude.cwd`、`exclude.model`、`exclude.provider`、`exclude.mode` 与 `exclude.delegation` 描述何时不注入：片段设置的 `exclude.*` 键全部命中时跳过；未写 `exclude.target` 时排除覆盖所有会话。`model` 与 `provider` 是匹配会话当前模型 id 与 provider 的正则；`delegation` 匹配 OMP 为该模型解析出的委派倾向，OMP 正是按这个值决定往提示词里渲染哪套委派措辞。没有当前模型时，`model`、`provider` 与 `delegation` 在注入与排除两侧都不命中。`omp-light` 以 `OMOMP_MODE=light` 启动 omp，其余情况为 `full`。`enabled: false` 关闭该文件。未知键、正文为空或取值错误时只跳过该文件，并按原因警告一次，其他文件照常生效。
 
 `APPEND-SYSTEM-*.md`、`WATCHDOG-*.md` 与 `TURN-JUDGE-*.md` 的 frontmatter 中，模型/provider 正则字段在编译前会去掉包围值的一对引号；这与 `REPLACE-SYSTEM-*.yml` 中已经过 YAML 解码的字符串不同。
 

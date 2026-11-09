@@ -19,7 +19,7 @@ import { unquote } from "./spec-files.ts";
  * `session-filter.ts`; `mode` is a comma list of `full` and `light`, the
  * current mode being `light` when `OMOMP_MODE=light` (set by `omp-light`) and
  * `full` otherwise; `delegation` is a comma list of the host's delegation-bias
- * tiers (`eager`, `restrained`, `gated`), tested against the bias OMP resolves
+ * tiers (`eager`, `balanced`, `restrained`, `gated`), tested against the bias OMP resolves
  * for the session's current model, the value that decides which
  * delegation wording OMP renders into the prompt. Inclusion keys must all
  * match; the exclusion, which exists only when an `exclude.*` key is set,
@@ -38,7 +38,7 @@ type Mode = "full" | "light";
 type Choices<T extends string> = Readonly<Record<T, true>>;
 
 const MODES: Choices<Mode> = { full: true, light: true };
-const DELEGATION_BIASES: Choices<DelegationBias> = { eager: true, restrained: true, gated: true };
+const DELEGATION_BIASES: Choices<DelegationBias> = { eager: true, balanced: true, restrained: true, gated: true };
 
 interface Side {
 	readonly filter: SessionFilter;
