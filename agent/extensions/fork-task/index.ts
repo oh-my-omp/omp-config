@@ -190,7 +190,7 @@ const itemSchema = z.object({
 		.enum(["lo", "med", "hi"])
 		.optional()
 		.describe(
-			"Thinking effort for the child: `lo`, `med` or `hi`. Omit to keep the source's level; a changed effort keeps the replicated prefix. Has no effect while `task.enableEffort` is false.",
+			"Thinking effort for the child, mapped onto the target model's own thinking range: `lo` is its lowest supported level, `med` the middle one (the lower of the two middles when the range has an even count), `hi` its highest (high, xhigh or max). Omit to keep the source's level; a changed effort keeps the replicated prefix. Has no effect while `task.enableEffort` is false.",
 		),
 	outputSchema: z
 		.string()
