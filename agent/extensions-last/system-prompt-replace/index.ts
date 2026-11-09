@@ -39,7 +39,7 @@
 // `_shared/prompt-conditions.ts` (shared with append-system-model): `target`,
 // `cwd`, `model`, `provider`, `mode`, `delegation` and the same keys under
 // `exclude.`; without `target` a rule applies to every session. `delegation`
-// lists OMP's delegation-bias tiers (`eager`, `restrained`, `gated`) of the
+// lists OMP's delegation-bias tiers (`eager`, `balanced`, `restrained`, `gated`) of the
 // current model, for text OMP renders only under some tiers. A `model` /
 // `provider` string is the regex source exactly as YAML decodes it. Any other
 // key makes the file invalid. Files apply in discovery order and rules in file

@@ -33,7 +33,7 @@
 // `enabled` keeps the file on only for true/yes/on/1; `target` defaults to
 // main; `cwd` lists absolute or ~/ globs; `model` / `provider` are regexes on
 // the model and provider ids; `mode` lists full and/or light; `delegation`
-// lists OMP's delegation-bias tiers (eager, restrained, gated) of the current
+// lists OMP's delegation-bias tiers (eager, balanced, restrained, gated) of the current
 // model; each `exclude.*` key has the grammar of its inclusion key. Any other
 // key makes the file invalid.
 //
