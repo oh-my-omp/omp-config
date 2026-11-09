@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, StreamFn } from "@oh-my-pi/pi-agent-core";
-import type { Context, Message, Model, SimpleStreamOptions, Tool } from "@oh-my-pi/pi-ai";
+import type { Context, Message, Model, SimpleStreamOptions, Tool, ToolChoice } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { parkedFilePath, parsePortableSource, readOptional } from "./replica-file.ts";
 
@@ -334,21 +334,93 @@ function replicatedMessages(session: AgentSession, replay: Replay, source: reado
 	}
 }
 
-function replicateContext(session: AgentSession, replica: Replica, current: Context): Context {
+/** The model a request runs on, as the provider identifies it. */
+type ModelKey = Pick<Model, "provider" | "id">;
+
+export function sameModel(a: ModelKey, b: ModelKey): boolean {
+	return a.provider === b.provider && a.id === b.id;
+}
+
+/** The source tool whose cells reach the child's own `yield` through the eval bridge. */
+const BRIDGE_TOOL = "eval";
+
+/** The tool a forced tool choice names; undefined when the choice forces none in particular. */
+function forcedToolName(choice: ToolChoice | undefined): string | undefined {
+	if (choice === undefined || typeof choice === "string") return undefined;
+	switch (choice.type) {
+		case "tool":
+			return choice.name;
+		case "function":
+			return "name" in choice ? choice.name : choice.function.name;
+		case "computer":
+			return undefined;
+		default: {
+			const unreachable: never = choice;
+			return unreachable;
+		}
+	}
+}
+
+/** `choice` forcing `name` instead, in the same wire shape. */
+function forceTool(choice: Exclude<ToolChoice, string>, name: string): ToolChoice {
+	switch (choice.type) {
+		case "tool":
+			return { type: "tool", name };
+		case "function":
+			return "name" in choice ? { type: "function", name } : { type: "function", function: { name } };
+		case "computer":
+			return choice;
+		default: {
+			const unreachable: never = choice;
+			return unreachable;
+		}
+	}
+}
+
+/** What one request declares and forces. */
+type WireTools = { readonly tools: Tool[] | undefined; readonly toolChoice: ToolChoice | undefined };
+
+/**
+ * The tools a request declares. A provider caches tools → system → messages
+ * as one prefix, and any declaration the source did not send — deferred or
+ * not — invalidates everything after the tools. So on the source's model, when
+ * the source declares `eval`, the list stays the source's byte for byte: the
+ * child reaches its own tools from an `eval` cell, and a choice forcing one of
+ * them forces `eval` instead. Otherwise the child's own tools follow the
+ * source's.
+ */
+function wireTools(source: Tool[] | undefined, current: Context, onSourceModel: boolean, choice: ToolChoice | undefined): WireTools {
+	const names = new Set(source?.map((tool) => tool.name));
+	const own = current.tools?.filter((tool) => !names.has(tool.name)) ?? [];
+	if (own.length === 0) return { tools: source, toolChoice: choice };
+	if (!onSourceModel || !names.has(BRIDGE_TOOL)) return { tools: [...(source ?? []), ...own], toolChoice: choice };
+	const forced = forcedToolName(choice);
+	const forcesOwn = choice !== undefined && typeof choice !== "string" && own.some((tool) => tool.name === forced);
+	return { tools: source, toolChoice: forcesOwn ? forceTool(choice, BRIDGE_TOOL) : choice };
+}
+
+function replicateContext(session: AgentSession, replica: Replica, current: Context, tools: Tool[] | undefined): Context {
 	const source = replica.request.context;
-	const tools = source.tools ?? [];
-	const names = new Set(tools.map((tool) => tool.name));
-	const extra = current.tools?.filter((tool) => !names.has(tool.name)) ?? [];
 	return {
 		...current,
 		systemPrompt: source.systemPrompt,
-		tools: extra.length > 0 ? [...tools, ...extra] : source.tools,
+		tools,
 		messages: replicatedMessages(session, replica.replay, source.messages, current.messages),
 	};
 }
 
-/** Install once per live generation; disposal releases the per-call hook. */
-export function applyReplica(session: AgentSession, replica: Replica): void {
+/**
+ * The child's own `yield` when the source declares `eval` but not `yield`: on
+ * the source's model it is not declared (see `wireTools`), so the child learns
+ * it from a reminder and calls it from an `eval` cell.
+ */
+export type OwnYield = { readonly tool: AgentTool; readonly sourceModel: ModelKey };
+
+/**
+ * Install once per live generation; disposal releases the per-call hook.
+ * Returns the child's own `yield` when it reaches the source's model through `eval`.
+ */
+export function applyReplica(session: AgentSession, replica: Replica): OwnYield | undefined {
 	const own = new Map(session.agent.state.tools.map((tool) => [tool.name, tool]));
 	const names = new Set(replica.toolNames);
 	const tools = replica.toolNames.map((name) => {
@@ -363,7 +435,8 @@ export function applyReplica(session: AgentSession, replica: Replica): void {
 	// Only completion extends the source's capability surface. Do not expose
 	// other tools admitted by the unrestricted internal agent definition.
 	const yieldTool = own.get("yield") ?? session.getToolByName("yield");
-	if (yieldTool && !names.has("yield")) tools.push(yieldTool);
+	const ownYield = yieldTool && !names.has("yield") ? yieldTool : undefined;
+	if (ownYield) tools.push(ownYield);
 	// The hook re-installs the source's prompt and tools whenever the host swaps
 	// them; one array each is enough, since both setters store what they get.
 	const systemPrompt = [...replica.systemPrompt];
@@ -376,13 +449,16 @@ export function applyReplica(session: AgentSession, replica: Replica): void {
 	const stream = session.agent.streamFn;
 	const source = replica.request;
 	const wrap: StreamFn = (model, context, options) => {
-		const replicated = replicateContext(session, replica, context);
+		const onSourceModel = sameModel(model, source.model);
+		const wire = wireTools(source.context.tools, context, onSourceModel, options?.toolChoice);
+		const replicated = replicateContext(session, replica, context, wire.tools);
 		// Request controls belong to the source's model; another model keeps its own.
-		if (model.provider !== source.model.provider || model.id !== source.model.id) {
+		if (!onSourceModel) {
 			return stream(model, replicated, { ...options, parentSessionId: source.options.sessionId });
 		}
 		return stream(model, replicated, {
 			...options,
+			toolChoice: wire.toolChoice,
 			...(replica.inheritReasoning ? { reasoning: source.options.reasoning, disableReasoning: source.options.disableReasoning } : {}),
 			serviceTier: source.options.serviceTier,
 			temperature: source.options.temperature,
@@ -393,4 +469,7 @@ export function applyReplica(session: AgentSession, replica: Replica): void {
 		});
 	};
 	session.agent.streamFn = wrap;
+	return ownYield && names.has(BRIDGE_TOOL)
+		? { tool: ownYield, sourceModel: { provider: source.model.provider, id: source.model.id } }
+		: undefined;
 }

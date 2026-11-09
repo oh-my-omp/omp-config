@@ -31,7 +31,14 @@
 // request controls, so forks of one source share the provider cache prefix.
 // The shared `context`, an `agent` role and the assignment reach the child
 // only as its new user message, never as system text. Child tools execute
-// against the child's session; an available yield follows the source's tools.
+// against the child's session. On the source's model, when the source
+// declares `eval`, the child declares the source's tool list byte for byte:
+// its own `yield` stays undeclared, introduced by a `before_agent_start` /
+// `tool_result` delta reminder (`omp-config/fork-task`) and called from an
+// `eval` cell through the bridge; the `tool_result` hook reports that bridged
+// call to the session as a `yield` tool execution (`emitExternalEvent`), and a
+// tool choice forcing `yield` forces `eval` instead. Otherwise `yield` follows
+// the source's tools.
 //
 // `agent` selects the model binding (`task.agentModelOverrides`, else the
 // definition's `model`) and puts that definition's prompt in a <role> block
@@ -105,6 +112,7 @@ import {
 	type SessionStartEvent,
 	type TaskItem,
 	type ToolDefinition,
+	type ToolResultEvent,
 	z,
 } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -115,6 +123,7 @@ import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents, cfgTaskMaxRecursionD
 import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { callerSession } from "../_shared/caller-session.ts";
+import { createDeltaStream, type Delta, type DeltaStream } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import {
@@ -122,12 +131,14 @@ import {
 	captureReplica,
 	type ForkNotice,
 	liveRequest,
+	type OwnYield,
 	observedHere,
 	observeRequests,
 	type ParkedRequest,
 	parkedRequest,
 	type Replica,
 	type SourceRequest,
+	sameModel,
 } from "./replica.ts";
 import { parkedRoot, readReplicaFile, replicaFilePath, replicasRoot, STAGING_ROOT, writeReplicaFile } from "./replica-file.ts";
 import { askSource, serveSources } from "./source-channel.ts";
@@ -718,8 +729,9 @@ type ForkTaskRuntime = {
 	readonly pi: ExtensionAPI;
 	readonly warn: (message: string, error: unknown) => void;
 	readonly pending: PendingFork[];
-	/** Child sessions whose per-call hook is installed. */
-	readonly cloned: WeakSet<AgentSession>;
+	/** Child sessions whose per-call hook is installed, with their own `yield` when the source's tools lack it. */
+	readonly cloned: WeakMap<AgentSession, OwnYield | undefined>;
+	readonly deltas: DeltaStream;
 	/** Subagent transcripts whose workspace start this module copy has handled; dropped when the session ends. */
 	readonly started: Set<string>;
 };
@@ -774,6 +786,62 @@ async function beforeSubagentSpawn(
 }
 
 /**
+ * The reminder that introduces a child's own `yield` while the request runs on
+ * the source's model, whose wire tool list leaves it out (replica.ts
+ * `wireTools`); none on another model, which declares it.
+ */
+function yieldDelta(ownYield: OwnYield | undefined, session: AgentSession): Delta {
+	const model = session.model;
+	if (!ownYield || !model || !sameModel(model, ownYield.sourceModel)) return { kind: "none" };
+	const { tool } = ownYield;
+	return {
+		kind: "text",
+		body: [
+			`Your \`${tool.name}\` tool is not in your tool list: the list stays the parent's so its prompt cache keeps serving you. Call it from a JavaScript \`eval\` cell, never as a direct tool call: \`await tool.${tool.name}({ data: … })\` (or \`{ error: "…" }\`). The call submits exactly as a direct \`${tool.name}\` call would; a terminal submission ends your run.`,
+			"",
+			"Description:",
+			tool.description,
+			"",
+			"Parameters (JSON Schema):",
+			JSON.stringify(tool.parameters),
+		].join("\n"),
+	};
+}
+
+/**
+ * Report a `yield` an `eval` cell ran through the bridge as the tool execution
+ * the task executor and session watch for: bridged calls emit no agent-loop
+ * events, so without this the run would never see its result. A `yield` the
+ * loop runs itself is pending in the agent state and already reported.
+ */
+function forwardBridgedYield(rt: ForkTaskRuntime, session: AgentSession, event: ToolResultEvent): void {
+	if (event.toolName !== "yield" || session.agent.state.pendingToolCalls.has(event.toolCallId)) return;
+	try {
+		session.agent.emitExternalEvent({
+			type: "tool_execution_end",
+			toolCallId: event.toolCallId,
+			toolName: event.toolName,
+			result: { content: event.content, details: event.details },
+			isError: event.isError,
+		});
+	} catch (error) {
+		rt.warn("fork_task: reporting a yield submitted from eval failed", error);
+	}
+}
+
+/**
+ * In a cloned child: report a bridged `yield`, and re-introduce the child's
+ * own `yield` after a tool batch when compaction dropped the reminder mid-turn.
+ */
+function toolResult(rt: ForkTaskRuntime, event: ToolResultEvent, ctx: ExtensionContext): { additionalContext: string } | undefined {
+	const session = callerSession(ctx);
+	if (!session || !rt.cloned.has(session)) return;
+	const ownYield = rt.cloned.get(session);
+	if (ownYield) forwardBridgedYield(rt, session, event);
+	return rt.deltas.afterTools(ctx, yieldDelta(ownYield, session));
+}
+
+/**
  * Per subagent transcript: record the isolated workspace start, apply a
  * `workspace: "source"` overlay before the first turn (a failed apply blocks
  * the child before its first model call), then install the replicated
@@ -788,7 +856,7 @@ async function beforeAgentStart(
 	const session = callerSession(ctx);
 	if (!session) return;
 	// A cloned session already holds its replica in the stream hook: never re-read the copy for it.
-	if (rt.cloned.has(session)) return;
+	if (rt.cloned.has(session)) return rt.deltas.atPrompt(ctx, yieldDelta(rt.cloned.get(session), session));
 	const file = ctx.sessionManager.getSessionFile();
 	if (ctx.agent.kind === "sub" && file && !rt.started.has(file)) {
 		rt.started.add(file);
@@ -822,8 +890,9 @@ async function beforeAgentStart(
 			}
 			return;
 		}
-		applyReplica(session, replica);
-		rt.cloned.add(session);
+		const ownYield = applyReplica(session, replica);
+		rt.cloned.set(session, ownYield);
+		return rt.deltas.atPrompt(ctx, yieldDelta(ownYield, session));
 	} catch (error) {
 		const reason = `fork_task: preparing request replication failed: ${errorText(error)}`;
 		rt.pi.logger.warn(reason);
@@ -1038,12 +1107,14 @@ export default function forkTask(pi: ExtensionAPI): void {
 		pi,
 		warn,
 		pending: [],
-		cloned: new WeakSet(),
+		cloned: new WeakMap(),
+		deltas: createDeltaStream(pi, "fork-task"),
 		started: new Set(),
 	};
 
 	pi.on("before_subagent_spawn", beforeSubagentSpawn.bind(null, rt));
 	pi.on("before_agent_start", beforeAgentStart.bind(null, rt));
+	pi.on("tool_result", toolResult.bind(null, rt));
 	pi.on("session_start", sessionStart.bind(null, rt));
 	pi.on("session_shutdown", sessionShutdown.bind(null, rt));
 

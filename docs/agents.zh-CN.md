@@ -23,7 +23,7 @@
 | `discuss:steady` | — | `openai-codex/gpt-5.6-sol:medium` | `tools: read, grep, glob` | 只读保守讨论者：对照实际代码与 `path:line` 检查方案的隐含假设、未覆盖状态、迁移影响面以及更简单的做法。 |
 | `mentor:default` | — | `openai-codex/gpt-5.6-sol:high, openai-codex/gpt-5.6-luna:max` | `tools: []`（仅 `yield`） | 无工具顾问：长调查开始前协助收敛计划与决定性检查点，交付前核对改动、已跑验证与未验证项；回复内容必须放在 `yield` 参数内。 |
 | `reviewer` | — | `@slow` | `tools: read, find, grep, glob, bash, lsp, web_search, ast_grep`；`spawns: scout`（已禁用，派生会在 preflight 被拒） | OMP 内置 `reviewer` 的副本，作为定制审查角色的基础：只读审查补丁，以 `yield` 交付 `overall_correctness`、`explanation`、`confidence` 与增量 `findings`（P0–P3，锚定补丁）。 |
-| `fork:self` | 源的模型，或任务项 `agent` 指定的模型绑定 | 由 `fork_task` 固定，不绑定执行档位 | 源的工具顺序，追加存在的 `yield`；仍受原生深度与派发策略限制 | 所有 `fork_task` 子代理的内部派发身份；不在普通 `task` 中直接选择。 |
+| `fork:self` | 源的模型，或任务项 `agent` 指定的模型绑定 | 由 `fork_task` 固定，不绑定执行档位 | 源的工具列表；运行源的模型且源声明了 `eval` 时 `yield` 不声明、在 `eval` cell 里调用，其余情况追加在末尾；仍受原生深度与派发策略限制 | 所有 `fork_task` 子代理的内部派发身份；不在普通 `task` 中直接选择。 |
 
 ## 顾问上下文与 `user-prompt-inject`
 
