@@ -38,8 +38,7 @@ prompt 的措辞无法绕过这一点。
 -------------------------------------------------------------
 目前禁用：task、scout、sonic、security-reviewer。把其中一个写进 `spawns` 不会让它复活：
 `reviewer.md` 保留了内置的 `spawns: scout`，这次派生会在 preflight 被拒。普通 `task` 必须
-显式写 `agent`，否则会掉进第 2 条。`fork_task` 不同：所有子代理都以内部
-`fork:self` 运行，`agent` 只选模型绑定与角色。
+显式写 `agent`，否则会掉进第 2 条。
 
 
 4. 递归深度 2：孙代是叶子

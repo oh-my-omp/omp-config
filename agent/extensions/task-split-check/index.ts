@@ -4,7 +4,7 @@
  * report-limit checks apply to main and sub sessions. Unexpected hook errors
  * are logged as warnings and let the call run.
  *
- * Dispatch checks for `task` / `fork_task` calls. Each check is one yes/no
+ * Dispatch checks for `task` calls. Each check is one yes/no
  * question about an item (shared context + item task). Per item, every check
  * that covers it and still needs a verdict goes into ONE fast-model request
  * — prompt only, no tools, nothing read — that answers each question on its
@@ -18,7 +18,7 @@
  *   than one topic. Items without `agent` are not split-checked. A prompt that
  *   got a verdict passes unchanged the second time, so the main agent can
  *   force an item it judges to be one topic.
- * - `report-limit`: every session, `task` and `fork_task`, every task-series
+ * - `report-limit`: every session, `task`, every task-series
  *   item (`task:*`, or `agent` omitted); does the dispatch cap the length of
  *   the worker's report. No re-dispatch bypass — the cap must go and long
  *   reports go to a file; only `false` prompts are remembered, to skip asking
@@ -121,7 +121,7 @@ const CHECKS: readonly Check[] = [
 	},
 	{
 		id: "report-limit",
-		tools: { task: true, fork_task: true },
+		tools: { task: true },
 		mainSessionOnly: false,
 		covers: (_ctx, agent) => Promise.resolve(agent === undefined || agent.startsWith("task:")),
 		question: [

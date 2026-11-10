@@ -137,7 +137,7 @@ flowchart TB
 
 检查不覆盖：
 
-- 工具调用与 subagent 派发路径（`fork_task`、`todo-more` 的 `todo` 及其提醒、`isolation-nudge`、`task-split-check`、`task-completion-judge`、`ctx` 等工具的行为）；
+- 工具调用与 subagent 派发路径（`todo-more` 的 `todo` 及其提醒、`isolation-nudge`、`task-split-check`、`task-completion-judge`、`ctx` 等工具的行为）；
 - 付费模型本身的可用性和凭据；
 - TUI 专属行为（`input-polish` 的按键与 overlay，`omp-thinking-translator` 的渲染）；
 - 自动更新的联网路径（`auto`、`/omp-config-autoupdate run`）和维护命令（`/update-omp`、`/sync-omp-config`、`/migrate-omp-keys`）；

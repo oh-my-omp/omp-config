@@ -11,27 +11,26 @@
 | 1 | `system-prompt-replace` | [提示词与上下文](prompts-and-context.zh-CN.md#system-prompt-replace) | 按规则（默认主 + 子） | 是 | `REPLACE-SYSTEM-*.yml`（仓库示例、本机或项目文件） | 修改或添加所需的措辞规则及会话条件；OMP 升级后核对匹配原文 |
 | 2 | `append-system-model` | [提示词与上下文](prompts-and-context.zh-CN.md#append-system-model) | 主 + 子 | 是 | `APPEND-SYSTEM-*.md`（仓库示例、本机或项目文件） | 修改或添加指令片段，选择适用会话、项目、模型和模式 |
 | 3 | `repo-rules` | [提示词与上下文](prompts-and-context.zh-CN.md#repo-rules) | 主 + 子 | 是 | 从 `cwd` 向上的 `AGENTS.md` / `CLAUDE.md`，已发现目录中的规则文件 | 为自己的仓库编写 `AGENTS.md` / `CLAUDE.md`，在 `.claude/rules`、`.agents/rules`、`.pi/rules` 或 `~/.claude/rules` 编写自己的规则及 `paths` 条件 |
-| 4 | `fork-task` | [提示词与上下文](prompts-and-context.zh-CN.md#fork-task) | 主 + 子 | 否 | 无扩展配置文件 | 每次调用选择来源会话、是否带上它隔离工作区里的改动（`workspace`）和目标角色；模型沿用当前会话或目标 agent 的绑定；达到 `task.maxRecursionDepth` 时以工具错误拒绝 |
-| 5 | `model-compaction` | [提示词与上下文](prompts-and-context.zh-CN.md#model-compaction) | 主写 / 子读 | 是 | `COMPACTION-*.md`（本机或项目） | 按自己的模型和项目每个文件写一条阈值规则；项目规则在前，本机规则全部在后作回退 |
-| 6 | `user-prompt-inject` | [子代理](agents.zh-CN.md#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库示例或本机文件） | 修改或添加模板，选择目标角色及其接收的用户原话和回答 |
-| 7 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | 主 + 子 | 否 | 无配置文件 | 在 task 调用中显式设置 `isolated`，选择共享只读工作或隔离写入 |
-| 8 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | 声明 `splitCheck: true` 的 agent 定义 | 给 `split` 应覆盖的 agent 定义加 `splitCheck: true`；将 `@task-split-check` 绑定到自己的可用模型 |
-| 9 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | 声明 `completionJudge: true` 的子代理 | 否 | 声明 `completionJudge: true` 的 agent 定义 | 在 agent 定义中声明 `completionJudge: true`；将 `@task-completion-judge` 绑定到自己的可用模型 |
-| 10 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `tool-policy-nag.*` 设置与 `INTENT-policy.md` | 按工作方式调整检测模式、提醒措辞与频率、意图及风险设置和终端路由通道 |
-| 11 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子，按文件条件 | 否 | `WATCHDOG-*.md`（本机或项目） | 定义审阅内容、目标会话、间隔和投递方式；存在匹配文件后运行 |
-| 12 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子，按文件条件 | 否 | `TURN-JUDGE-*.md`（仓库示例或本机文件） | 编写判定问题、触发规则、提醒和会话条件，绑定适合的判定或聊天模型 |
-| 13 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `lang-nag.language`、`lang-nag.instruction` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
-| 14 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局，仅 macOS | 是 | `child-memory-warning.thresholdGiB` | 在本机或项目中按自己的硬件和负载选择告警阈值 |
-| 15 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `input-polish.key`、`input-polish.instruction` | 选择快捷键和改写指令；将 `@input-polish` 绑定到自己的可用模型 |
-| 16 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
-| 17 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
-| 18 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omp-config-autoupdate.enabled`、`.conflicts`、`.exclude` | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
-| 19 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | `omomp-lang.language` 或环境变量 | 在本机设置中选择界面语言，或用 `OMOMP_LANG` 覆盖 |
-| 20 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明、专题与 `inject` 投递规则，重启 OMP 后加载 |
-| 21 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无配置文件或开关 | 选择字面删除路径；默认可恢复，永久删除需要明确确认 |
-| 22 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
-| 23 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
-| 24 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
+| 4 | `model-compaction` | [提示词与上下文](prompts-and-context.zh-CN.md#model-compaction) | 主写 / 子读 | 是 | `COMPACTION-*.md`（本机或项目） | 按自己的模型和项目每个文件写一条阈值规则；项目规则在前，本机规则全部在后作回退 |
+| 5 | `user-prompt-inject` | [子代理](agents.zh-CN.md#user-prompt-inject) | 子代理 | 否 | `PROMPT-INJECT-*.md`（仓库示例或本机文件） | 修改或添加模板，选择目标角色及其接收的用户原话和回答 |
+| 6 | `isolation-nudge` | [isolation-nudge](#isolation-nudge) | 主 + 子 | 否 | 无配置文件 | 在 task 调用中显式设置 `isolated`，选择共享只读工作或隔离写入 |
+| 7 | `task-split-check` | [task-split-check](#task-split-check) | 主 (`split`) / 主+子 (`report-limit`) | 否 | 声明 `splitCheck: true` 的 agent 定义 | 给 `split` 应覆盖的 agent 定义加 `splitCheck: true`；将 `@task-split-check` 绑定到自己的可用模型 |
+| 8 | `task-completion-judge` | [task-completion-judge](#task-completion-judge) | 声明 `completionJudge: true` 的子代理 | 否 | 声明 `completionJudge: true` 的 agent 定义 | 在 agent 定义中声明 `completionJudge: true`；将 `@task-completion-judge` 绑定到自己的可用模型 |
+| 9 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `tool-policy-nag.*` 设置与 `INTENT-policy.md` | 按工作方式调整检测模式、提醒措辞与频率、意图及风险设置和终端路由通道 |
+| 10 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子，按文件条件 | 否 | `WATCHDOG-*.md`（本机或项目） | 定义审阅内容、目标会话、间隔和投递方式；存在匹配文件后运行 |
+| 11 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子，按文件条件 | 否 | `TURN-JUDGE-*.md`（仓库示例或本机文件） | 编写判定问题、触发规则、提醒和会话条件，绑定适合的判定或聊天模型 |
+| 12 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `lang-nag.language`、`lang-nag.instruction` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
+| 13 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局，仅 macOS | 是 | `child-memory-warning.thresholdGiB` | 在本机或项目中按自己的硬件和负载选择告警阈值 |
+| 14 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `input-polish.key`、`input-polish.instruction` | 选择快捷键和改写指令；将 `@input-polish` 绑定到自己的可用模型 |
+| 15 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
+| 16 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
+| 17 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omp-config-autoupdate.enabled`、`.conflicts`、`.exclude` | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
+| 18 | `omomp-lang` | [omomp-lang](#omomp-lang) | 进程全局 | 是 | `omomp-lang.language` 或环境变量 | 在本机设置中选择界面语言，或用 `OMOMP_LANG` 覆盖 |
+| 19 | `tool-topics` | [tool-topics](#tool-topics) | 主 + 子；进程全局路由 | 是 | 同目录的 `TOPIC-*.md` 和 `SURFACE-*.md` | 修改或添加 OMP 自有工具的说明、专题与 `inject` 投递规则，重启 OMP 后加载 |
+| 20 | `delete-guard` | [delete-guard](#delete-guard) | 主 + 子 | 是 | 无配置文件或开关 | 选择字面删除路径；默认可恢复，永久删除需要明确确认 |
+| 21 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
+| 22 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
+| 23 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
 
 ---
 
@@ -41,13 +40,13 @@
 
 源码：`agent/extensions/isolation-nudge/`。
 
-在主会话与子代理的 `tool_call` 阶段检查 `task` 调用；本扩展不检查 `fork_task`。填写 `agent` 的分叉默认隔离，省略 `agent` 的分叉默认共享 cwd，因此并发写入的 fork 必须显式设 `isolated: true`。当一次 `task` 调用会让 $\ge 2$ 个可写代理（`task:*`、内置 `task`、未填 `agent` 的项、`m1` 等，合并计算本次批次、同一 assistant message 中前序 `task` 调用已派发的共享写者——宿主先准备好整条 message 的所有调用再执行，这些写者尚无运行中的 job——与当前会话仍在运行的共享写入任务）在未设 `isolated: true` 的情况下共用同一工作目录，且其中有未显式填写 `isolated` 的项时，按该项 `task` 文本的 SHA-256 拦截一次，提示写入任务设 `isolated: true`、只读任务设 `isolated: false`；相同 `task` 文本再次调用时放行。
+在主会话与子代理的 `tool_call` 阶段检查 `task` 调用。当一次 `task` 调用会让 $\ge 2$ 个可写代理（`task:*`、内置 `task`、未填 `agent` 的项、`m1` 等，合并计算本次批次、同一 assistant message 中前序 `task` 调用已派发的共享写者——宿主先准备好整条 message 的所有调用再执行，这些写者尚无运行中的 job——与当前会话仍在运行的共享写入任务）在未设 `isolated: true` 的情况下共用同一工作目录，且其中有未显式填写 `isolated` 的项时，按该项 `task` 文本的 SHA-256 拦截一次，提示写入任务设 `isolated: true`、只读任务设 `isolated: false`；相同 `task` 文本再次调用时放行。
 
 ### task-split-check
 
 源码：`agent/extensions/task-split-check/`。
 
-在 `tool_call` 阶段检查 `task` 与 `fork_task`。整批共用 25 秒超时，各任务项并发判定，同一项的全部适用是非检查合在一次模型请求中提问，任一项不通过即拦截整次调用：
+在 `tool_call` 阶段检查 `task`。整批共用 25 秒超时，各任务项并发判定，同一项的全部适用是非检查合在一次模型请求中提问，任一项不通过即拦截整次调用：
 
 - **判定模型**：先取 OMP 模型角色 `@task-split-check`（在 `/model` 中配置，保存在本机 `modelRoles`），再取 `default` 角色链，每次调用实时解析。角色条目未带 `:level` 后缀时使用 `medium` 推理强度；链中模型按顺序尝试，每次尝试的时限为剩余预算除以尚未尝试的模型数，provider 错误或模型挂起只消耗它自己的份额，判定随即换到下一个模型。
 - **split 覆盖范围**：`split` 检查覆盖 `task` 项中 `agent` 定义 frontmatter 声明 `splitCheck: true` 的项（仓库自带的 `task:low`、`task:free`、`task:mid` 定义声明了它；用与 task 工具派生预检相同的查找解析）。`report-limit` 检查与此无关，对所有 `task:*` 生效。
@@ -58,7 +57,7 @@
 | 检查项 | 适用范围 | 判定问题 | 缓存与重试行为 |
 |---|---|---|---|
 | `split` | 主会话 `task` 调用中 `agent` 定义声明 `splitCheck: true` 的项 | 只看该项的 `task` 文本（共享 `context` 仅作背景）：是否把多个互不相关的主题塞进了同一个子代理（按主题而非文件数判断）？ | 缓存所有结论（`pass-repeats`）：单主题边界可能存在判断分歧，被拦后若主会话确认属于同一主题，并保持共享 `context` 和该项 `task` 不变重发，第二次调用放行。 |
-| `report-limit` | 任意会话 `task` 与 `fork_task` 中派给 `task:*` 或未填 `agent` 的项 | 同时看共享 `context` 与该项 `task`：是否限制了子代理返回报告的长度（字数、行数、段落数、token 数或“简短汇报”；对写入仓库文件的交付物限制长度不算）？ | 只缓存通过结论（`skip-clear`）：限制报告长度会截断父会话验收所需的证据，必须删掉字数限制（长报告可写到 `local://<name>.md`），原样重发继续拦截。 |
+| `report-limit` | 任意会话 `task` 中派给 `task:*` 或未填 `agent` 的项 | 同时看共享 `context` 与该项 `task`：是否限制了子代理返回报告的长度（字数、行数、段落数、token 数或“简短汇报”；对写入仓库文件的交付物限制长度不算）？ | 只缓存通过结论（`skip-clear`）：限制报告长度会截断父会话验收所需的证据，必须删掉字数限制（长报告可写到 `local://<name>.md`），原样重发继续拦截。 |
 
 ### task-completion-judge
 
@@ -286,7 +285,7 @@ Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-
 - **文件**：`TOPIC-<tool>-<name>.md` 带严格 YAML 头（`tool`、`name`、`title`、`when`、`upstream`，可选 `inject`）和 Markdown 正文；`SURFACE-<tool>.md`（头为 `tool`、`upstream`）代替该工具的整段说明。专题写调用说明——参数、语法、取值、前置条件、结果、出错后的改法——不写实现细节。`when` 是索引显示的一行（“before …”“when …”）。`upstream` 记录核对时依据的 OMP 版本与来源。
 - **覆盖范围**：`read`、`bash`、`task` 有表层文件（task 的 `{{native:Available Agents}}` 指向原生的 `# Available Agents` 段）；`ast_grep`、`ast_edit`（经 [ast-top-level](#ast-top-level) 留在顶层）也有表层文件，只写哪类代码工作该交给它们而不是 `grep` 或 `edit`，以及路径要写成代码 glob（裸目录会把 Markdown 文件也带进来，其段落会匹配代码 pattern 并被改写）；pattern 语法在各自的 `patterns` 专题。有专题的工具：read、bash（含等待外部条件）、edit（hashline 模式）、eval、grep、find、task、write、OMP 内置 ask、ast_grep、ast_edit，设备 debug、github、checkpoint。简单工具 `wait`、`glob`、`web_search`、`wt`、`wt_remove`、`harness_restart` 不拆专题：原生说明已写全调用契约。从扩展或插件文件注册的工具保留自己的说明与专题索引，即使它以同名替换了内置工具（如 `omp-ask-more` 的 `ask`），本扩展也不向它添加表层说明或索引。插件工具说明：`xd://<tool>`。
 - **生命周期**：扩展加载时读取一次文件，把专题以 `tool://` 挂到 router 上，并替换之前加载（子代理、隔离子代理）留下的 handler；此后 router 中所有非内置 scheme 按规范顺序排列（内置在前、其余按名称排序），与本扩展的绑定时机无关；改文件需重启。每条 prompt 开始时（`before_agent_start`）和每次工具调用之后（`tool_result`），在主会话与子代理、完整与轻量模式下，扩展只读不改地读取 system prompt，按工具名在 OMP 渲染格式中找到所覆盖的 OMP 自有工具——inline 工具是 `type <tool> =` 上方的 `//` 注释行，设备是 `### Schema` 之前的 `## <tool>` 段。找到的每个工具得到一个 `<tool>` 元素：表层文本并标明它替换 system prompt 中的说明（`description="replaced"`），或没有表层文本并标明保留原说明（`"kept"`），然后是索引，每行一个专题及其完整 `tool://` URL。表层文本中的 `{{native:<Heading>}}` 变成指向原生说明中该段的一行，不复制其内容。这些元素组成来源为 `omp-config/tool-topics` 的一条增量，只在与上下文中已有的那条不同时发送；没有 `read` 的会话不收到增量，失去 `read` 的会话收到一条撤销先前增量的增量。
-- **注入**：`TOPIC` 头可列 `inject` 条目 `{id, tool, parameter, pattern}`：某次 `tool_result` 的具名字符串参数（支持点分路径）匹配 JavaScript 正则 `pattern` 后，该文件自己的 `tool://<tool>/<name>` 在每个真实上下文中作为可信 `additionalContext` 投递一次（主会话与子会话、含失败的调用，在工具批次结束后、下一次模型调用前）。投递身份是 `omp-config/tool-topic-injection` + 条目 id；id 在整个目录内唯一，规则不变时保持稳定，因此会话里已送达的标记仍能去重。compact 移除标记后该规则可再次注入；共享 `_shared/context-delivery.ts` 守卫在活动叶节点重建的真实模型上下文里检查 developer 消息，压缩摘要与兄弟分支不会被误认为已送达。仓库自带规则只覆盖不改动任何东西、重来没有代价的调用（read、grep），外加 eval/bash 里 `ssh … cat` 的误用提醒；`task`、`fork_task`、`edit`、`write` 和会改动状态的设备没有规则，它们的专题要在调用前读。
+- **注入**：`TOPIC` 头可列 `inject` 条目 `{id, tool, parameter, pattern}`：某次 `tool_result` 的具名字符串参数（支持点分路径）匹配 JavaScript 正则 `pattern` 后，该文件自己的 `tool://<tool>/<name>` 在每个真实上下文中作为可信 `additionalContext` 投递一次（主会话与子会话、含失败的调用，在工具批次结束后、下一次模型调用前）。投递身份是 `omp-config/tool-topic-injection` + 条目 id；id 在整个目录内唯一，规则不变时保持稳定，因此会话里已送达的标记仍能去重。compact 移除标记后该规则可再次注入；共享 `_shared/context-delivery.ts` 守卫在活动叶节点重建的真实模型上下文里检查 developer 消息，压缩摘要与兄弟分支不会被误认为已送达。仓库自带规则只覆盖不改动任何东西、重来没有代价的调用（read、grep），外加 eval/bash 里 `ssh … cat` 的误用提醒；`task`、`edit`、`write` 和会改动状态的设备没有规则，它们的专题要在调用前读。
 
 - **失败处理**：逐个跳过格式错误或不可读的文件并记 warning，其他文件仍继续加载。处于启用状态的工具在上述格式中找不到说明，或 `{{native:…}}` 段不恰好出现一次时，该工具不进入增量、只保留原生说明，记 warning，主会话按工具与原因各提示一次。OMP 或其他 handler 已占用 `tool://` 时，所有工具都不显示索引。
 

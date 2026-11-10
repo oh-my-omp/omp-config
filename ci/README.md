@@ -137,7 +137,7 @@ The check covers: the repository config can be applied by the updater (structure
 
 The check does not cover:
 
-- tool calls and subagent dispatch paths (the behavior of tools such as `fork_task`, `todo-more`'s `todo` and its reminders, `isolation-nudge`, `task-split-check`, `task-completion-judge` and `ctx`);
+- tool calls and subagent dispatch paths (the behavior of tools such as `todo-more`'s `todo` and its reminders, `isolation-nudge`, `task-split-check`, `task-completion-judge` and `ctx`);
 - the availability and credentials of the paid models themselves;
 - TUI-only behavior (`input-polish`'s keys and overlay, `omp-thinking-translator`'s rendering);
 - the networked path of automatic update (`auto`, `/omp-config-autoupdate run`) and the maintenance commands (`/update-omp`, `/sync-omp-config`, `/migrate-omp-keys`);
