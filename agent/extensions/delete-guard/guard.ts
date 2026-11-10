@@ -3,7 +3,7 @@ import { watchedCallOf } from "../_shared/tool-calls.ts";
 import { classify } from "./classify.ts";
 import { classifyJs } from "./eval-js.ts";
 import { classifyPy } from "./eval-py.ts";
-import { BRUSH, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
+import { ALLOW, BRUSH, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
 
 /** One guarded tool call, parsed once at the hook boundary. */
 type Entry =
@@ -23,6 +23,18 @@ export const newEvalSession = (): EvalSession => ({ carry: EMPTY_CARRY });
 export function resetEvalSession(session: EvalSession): void {
 	session.carry = EMPTY_CARRY;
 }
+
+// @upstream adapted @oh-my-pi/pi-coding-agent@18.17.0 src/eval/input.ts#prepareEvalSource
+/**
+ * A cell omp itself rewrites before any JavaScript runs: one `%load`, `%pip`,
+ * `%bun` or `%environment` command with its arguments on the same line. omp
+ * rejects the command when its arguments span lines, so only one-line forms count.
+ */
+function isStandalonePercentCommand(code: string): boolean {
+	const command = /^%(load|pip|bun|environment)(?:[ \t]+([\s\S]*))?$/.exec(code.trim());
+	return command !== null && !/[\r\n]/.test(command[2] ?? "");
+}
+// @upstream-end
 
 const FRAGMENT_LIMIT = 300;
 
@@ -51,6 +63,11 @@ function judge(entry: Entry, session: EvalSession): Verdict {
 			return classify(BRUSH, { kind: "script", text: entry.command }, 0);
 		case "eval": {
 			if (entry.language === "py") return classifyPy(entry.code, SYSTEM_SHELL, BRUSH);
+			// omp turns these into a file read, an install or an environment choice; a loaded script's text is not judged.
+			if (isStandalonePercentCommand(entry.code)) {
+				if (entry.reset) session.carry = EMPTY_CARRY;
+				return ALLOW;
+			}
 			// A reset cell runs in a fresh kernel, so the session's earlier names do not reach it.
 			const judgement = classifyJs(entry.code, SYSTEM_SHELL, BRUSH, entry.reset ? EMPTY_CARRY : session.carry);
 			if (judgement.verdict.kind === "allow") session.carry = judgement.carry;

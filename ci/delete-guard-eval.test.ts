@@ -264,6 +264,35 @@ describe("launcher names carried between js cells", () => {
 	});
 });
 
+describe("standalone percent commands in js cells", () => {
+	test.each([
+		"%load skill://omp-subagent-more/orchestrate.js",
+		"  %load /tmp/probe.js\n",
+		"%bun add is-number",
+		"%environment managed",
+		"%pip install requests",
+	])("%s passes", async (code) => {
+		expect(await jsEval(code, newEvalSession())).toBeUndefined();
+	});
+
+	test.each([
+		"%load /tmp/probe.js\nrequire('fs').rmSync('/tmp/omp-dg-c3/d', { recursive: true })",
+		"%load /tmp/a.js\n%load /tmp/b.js",
+		"%run /tmp/probe.js",
+	])("%s is still parsed as js, which throws to the hook boundary that blocks it", async (code) => {
+		expect(jsEval(code, newEvalSession())).rejects.toThrow();
+	});
+
+	test("a percent cell keeps the session's launcher names; a reset percent cell clears them", async () => {
+		const session = newEvalSession();
+		expect(await jsEval("const s = Bun.spawn", session)).toBeUndefined();
+		expect(await jsEval("%load /tmp/probe.js", session)).toBeUndefined();
+		expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toMatchObject({ block: true });
+		expect(await jsEval("%load /tmp/probe.js", session, true)).toBeUndefined();
+		expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toBeUndefined();
+	});
+});
+
 test("a session switch resets the launcher names: an old alias no longer blocks", async () => {
 	const session = newEvalSession();
 	expect(await jsEval("const s = Bun.spawn", session)).toBeUndefined();
