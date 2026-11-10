@@ -2,7 +2,7 @@
 
 [返回首页](../README.zh-CN.md) · [English](agents.md) | 简体中文
 
-`agent/config.yml` 在 `task.disabledAgents` 中禁用了 OMP 内置子代理（`task`、`scout`、`sonic`、`security-reviewer`；即使写进 `spawns` 也会在 preflight 被拒）。`agent/agents/*.md` 包含可选的 worker/顾问定义、`reviewer`（OMP 内置审查代理的副本，按同名覆盖内置定义），以及内部的 `fork:self`，即所有 `fork_task` 子代理的派发身份（frontmatter 陷阱见 [`agent/agents/README.zh-CN.txt`](../agent/agents/README.zh-CN.txt)；非 agent 笔记使用 `.txt`）。
+`agent/config.yml` 在 `task.disabledAgents` 中禁用了 OMP 内置子代理（`task`、`scout`、`sonic`、`security-reviewer`；即使写进 `spawns` 也会在 preflight 被拒）。`agent/agents/*.md` 包含可选的 worker/顾问定义、`reviewer`（OMP 内置审查代理的副本，按同名覆盖内置定义）（frontmatter 陷阱见 [`agent/agents/README.zh-CN.txt`](../agent/agents/README.zh-CN.txt)；非 agent 笔记使用 `.txt`）。
 
 子代理体系基于以下设计原则：
 1. **跨模型特性互补**：以少量调用延迟换取不同模型的特性组合——如 `gpt-*-sol` 偏稳健保守（`discuss:steady`、`mentor:default`、`task:mid`）、`gpt-*-luna` 成本低（`task:low` 及各角色回退链）、`claude-opus` 适合发散设计（`discuss:divergent`、`task:high`）——通过跨模型校验收敛单一模型的推理偏差。
@@ -23,7 +23,6 @@
 | `discuss:steady` | — | `openai-codex/gpt-5.6-sol:medium` | `tools: read, grep, glob` | 只读保守讨论者：对照实际代码与 `path:line` 检查方案的隐含假设、未覆盖状态、迁移影响面以及更简单的做法。 |
 | `mentor:default` | — | `openai-codex/gpt-5.6-sol:high, openai-codex/gpt-5.6-luna:max` | `tools: []`（仅 `yield`） | 无工具顾问：长调查开始前协助收敛计划与决定性检查点，交付前核对改动、已跑验证与未验证项；回复内容必须放在 `yield` 参数内。 |
 | `reviewer` | — | `@slow` | `tools: read, find, grep, glob, bash, lsp, web_search, ast_grep`；`spawns: scout`（已禁用，派生会在 preflight 被拒） | OMP 内置 `reviewer` 的副本，作为定制审查角色的基础：只读审查补丁，以 `yield` 交付 `overall_correctness`、`explanation`、`confidence` 与增量 `findings`（P0–P3，锚定补丁）。 |
-| `fork:self` | 源的模型，或任务项 `agent` 指定的模型绑定 | 由 `fork_task` 固定，不绑定执行档位 | 源的工具列表；运行源的模型且源声明了 `eval` 时 `yield` 不声明、在 `eval` cell 里调用，其余情况追加在末尾；仍受原生深度与派发策略限制 | 所有 `fork_task` 子代理的内部派发身份；不在普通 `task` 中直接选择。 |
 
 ## 顾问上下文与 `user-prompt-inject`
 
@@ -46,7 +45,7 @@
 ## 派发规则与并行写入隔离
 
 - **选择 agent**：按各 agent 的定义文本（`agent/agents/<name>.md` 中的 `description`）选择并派发。
-- **递归深度上限为 2**：主会话为 depth 0，其子代理为 depth 1。`task:high` 是可继续展开可执行任务切片的 worker 档位；fork 子代理仍受原生派发与深度限制。OMP 在 depth 2 移除 `task` 工具，因此孙代必须直接接收可执行叶子任务。
-- **`agent` 与 `effort`**：普通 `task` 显式填写 `agent`，避免落入已禁用的默认值。`fork_task` 的子代理一律保留源的 system prompt 与工具；省略 `agent` 沿用源的模型，填写 agent 则用其模型绑定，并在任务消息中以 `<role>` 块收到其定义正文。用户未要求时不传 `effort`；省略 `agent` 的分叉保持源的请求参数。
+- **递归深度上限为 2**：主会话为 depth 0，其子代理为 depth 1。`task:high` 是可继续展开可执行任务切片的 worker 档位。OMP 在 depth 2 移除 `task` 工具，因此孙代必须直接接收可执行叶子任务。
+- **`agent` 与 `effort`**：普通 `task` 显式填写 `agent`，避免落入已禁用的默认值。用户未要求时不传 `effort`。
 - **worker 执行流程**：`task:*` 子代理在修改代码前必须先阅读相关代码并与 `mentor:default` 审阅计划（depth 2 除外）。工作切片（会改动文件、配置、git 或外部状态）全程使用 `todo` 记录步骤，仍有未完成项时不得提前 `yield`，也不得用 `drop`/`rm` 缩小任务范围；非工作切片（调查、讨论、回答问题）不建 `todo`。
-- **并发写入与 `isolated: true`**：同一仓库有两个及以上 agent 并发写入时，每个 writer 都必须显式填写 `isolated: true`。省略 `agent` 的分叉默认共享 cwd，填写 `agent` 的分叉默认隔离；共享只读代理仍可继续联系，plan mode 强制共享、只读。隔离任务使用仓库相对路径；`task.isolation.merge: branch` 逐个 cherry-pick 子代理提交，保留说明与 Todo trailer，需检查返回的合并或无变更结果。
+- **并发写入与 `isolated: true`**：同一仓库有两个及以上 agent 并发写入时，每个 writer 都必须显式填写 `isolated: true`。共享只读代理仍可继续联系，plan mode 强制共享、只读。隔离任务使用仓库相对路径；`task.isolation.merge: branch` 逐个 cherry-pick 子代理提交，保留说明与 Todo trailer，需检查返回的合并或无变更结果。

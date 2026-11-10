@@ -61,7 +61,7 @@ mock.module("../agent/extensions/_shared/roles.ts", () => ({
 }));
 
 // `declaresFlag` gates `split` coverage on agent frontmatter; the harness drives
-// `fork_task`, whose report-limit check covers every `task:*` item without flags.
+// `task`, whose report-limit check covers every `task:*` item without flags.
 mock.module("../agent/extensions/_shared/agent-definition.ts", () => ({
 	declaresFlag: () => Promise.resolve(false),
 }));
@@ -95,7 +95,8 @@ const loadExtension = async (): Promise<{ handler: ToolCallHandler; pi: { logger
 
 const mainCtx = {
 	agent: { kind: "main", id: "Main", name: "main", depth: 0 },
-	sessionManager: { getCwd: () => "/repo" },
+	// split's covers resolves the caller session; no registry session matches the stub.
+	sessionManager: { getCwd: () => "/repo", getSessionFile: () => undefined },
 	modelRegistry: { resolver: () => undefined },
 } as never;
 
@@ -118,17 +119,17 @@ describe("task-split-check recall through tool_call", () => {
 		// dispatches diverge; keep the fixture free of report limits.
 		answers.set("run the probe command", "report-limit: false");
 
-		const first = await handler({ toolName: "fork_task", input: dispatch("evidence-context", "run the probe command") }, mainCtx);
+		const first = await handler({ toolName: "task", input: dispatch("evidence-context", "run the probe command") }, mainCtx);
 		expect(first).toBeUndefined();
 		expect(judgeCalls).toBe(1);
 
-		const repeat = await handler({ toolName: "fork_task", input: dispatch("evidence-context", "run the probe command") }, mainCtx);
+		const repeat = await handler({ toolName: "task", input: dispatch("evidence-context", "run the probe command") }, mainCtx);
 		expect(repeat).toBeUndefined();
 		expect(judgeCalls).toBe(1);
 
 		// Length framing keeps the boundary-split keys apart, so this judges again;
 		// the two judge prompts carry the exact rendered bytes for their inputs.
-		const shifted = await handler({ toolName: "fork_task", input: dispatch("evidence-contex", "trun the probe command") }, mainCtx);
+		const shifted = await handler({ toolName: "task", input: dispatch("evidence-contex", "trun the probe command") }, mainCtx);
 		expect(shifted).toBeUndefined();
 		expect(judgeCalls).toBe(2);
 		expect(prompts).toHaveLength(2);
@@ -141,12 +142,12 @@ describe("task-split-check recall through tool_call", () => {
 		answers.set("do one thing", "report-limit: false");
 
 		const callsBefore = judgeCalls;
-		const first = await handler({ toolName: "fork_task", input: dispatch(undefined, "  do one thing  ") }, mainCtx);
+		const first = await handler({ toolName: "task", input: dispatch(undefined, "  do one thing  ") }, mainCtx);
 		expect(first).toBeUndefined();
 		expect(judgeCalls).toBe(callsBefore + 1);
 
 		for (const context of ["", "   "]) {
-			const again = await handler({ toolName: "fork_task", input: dispatch(context, "do one thing") }, mainCtx);
+			const again = await handler({ toolName: "task", input: dispatch(context, "do one thing") }, mainCtx);
 			expect(again).toBeUndefined();
 		}
 		expect(judgeCalls).toBe(callsBefore + 1);

@@ -12,5 +12,5 @@ upstream: pi-coding-agent@18.13.2 src/eval/js/tool-bridge.ts, src/eval/py/prelud
 - `output(id, ...)` reads task/agent outputs: `format` `raw` (default), `stripped` (no ANSI) or `json` (metadata); `query=".key[0].field"` extracts from JSON output (not together with `offset`/`limit`). Several ids return one record per id. The Python helper reads artifact files itself; the JS helper goes through `read agent://<id>`.
 - Prelude `read("artifact://<id>")` opens a spilled artifact; selectors such as `artifact://3:raw:5-9` go through the `read` tool.
 - Timeout: compute, output and ordinary tool calls count against the cell deadline; waits on `agent()`, `completion()`, `judge`, package installs and bridged `tool.task`/`tool.wait` pause it and resume with a fresh window.
-- `tool.task` and `tool.fork_task` return once the children are spawned (spawn text, ids in `details.progress`); the children's results arrive in your conversation, never in the cell.
+- `tool.task` returns once the children are spawned (spawn text, ids in `details.progress`); the children's results arrive in your conversation, never in the cell.
 - Python and JS kernels are separate; subagents never share your kernel. `reset: true` recreates only the chosen language's kernel.

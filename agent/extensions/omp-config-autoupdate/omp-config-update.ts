@@ -119,12 +119,13 @@
 // agent definition that was modified is kept instead (see OWNERSHIP). Items
 // dropped
 // before this machine had a base use `git diff previousCommit HEAD` when the
-// caller passes the previous commit. The finite TODO_RETIREMENTS are
-// different: when the source declares the independent Todo plugin, both modes
-// retire those exact leaves after the OMP owner confirms plugin readiness,
-// even on first apply or without history. CTX_RETIREMENTS (the ctx leaves the
-// Todo plugin now ships) are inspected in the same preflight, but deleted only
-// when the ready plugin carries src/ctx; until then the old leaves stay.
+// caller passes the previous commit. The finite TODO_RETIREMENTS and
+// FORK_RETIREMENTS are different: when the source declares the corresponding
+// independent plugin (Todo, omp-subagent-more), both modes retire those exact
+// leaves after the OMP owner confirms plugin readiness, even on first apply
+// or without history. CTX_RETIREMENTS (the ctx leaves the Todo plugin now
+// ships) are inspected in the same preflight, but deleted only when the ready
+// plugin carries src/ctx; until then the old leaves stay.
 //
 // RELOCATIONS. Both modes, planned like every other op. Earlier layouts kept
 // extensions flat (extensions/<name>.ts) and their files at the agent root.
@@ -163,8 +164,8 @@
 //
 // SAFETY. Parse and plan all source/host inputs and retirement ownership before
 // plugin installation or file writes. Preflight errors stop the whole apply.
-// Install and upgrade plugins, then freshly query OMP for the required Todo entry;
-// failed readiness leaves all managed file operations unapplied. `--check`
+// Install and upgrade plugins, then freshly query OMP for each required plugin
+// entry; failed readiness leaves all managed file operations unapplied. `--check`
 // only reports candidates, conflicts and prerequisites: it writes no file, no
 // base and fetches no history. Writes use a temp file and rename.
 // Order after readiness: moves, plain files, structured files, deletions, then
@@ -195,8 +196,10 @@
 // manager, not this script, decides whether the default branch moved; npm
 // entries and pinned URLs wait for the next config commit. The result rides on
 // `up-to-date`; a failed install is reported there and never touches the marker.
-// Todo handover requires a fresh enabled npm catalog entry, its declared root
-// entry and the actual file. No plugin internals or Tern catalog are imported here.
+// Each retirement handover requires a fresh enabled npm catalog entry, the
+// extension entry its manifest declares and the actual files (Todo: ./index.ts;
+// omp-subagent-more: ./extensions/fork-task/index.ts plus agents/fork-self.md).
+// No plugin internals or Tern catalog are imported here.
 // Nothing is uninstalled; /update-omp handles uninstall candidates.
 // ============================================================================
 
@@ -350,11 +353,35 @@ const CTX_RETIREMENTS: readonly string[] = [
 	"extensions/_shared/task-log.ts",
 ];
 
+const FORK_PLUGIN_URL = "https://github.com/oh-my-omp/omp-subagent-more";
+const FORK_PLUGIN_NAME = "omp-subagent-more";
+/**
+ * Exact legacy leaves of the local fork-task extension and its agent
+ * definition; the flat module is the SUPERSEDED-era layout the plugin also
+ * replaces. Directories, interior links and neighboring host files are not
+ * retirement targets.
+ */
+const FORK_RETIREMENTS: readonly string[] = [
+	"extensions/fork-task/index.ts",
+	"extensions/fork-task/replica.ts",
+	"extensions/fork-task/replica-file.ts",
+	"extensions/fork-task/source-channel.ts",
+	"extensions/fork-task/sweep.ts",
+	"extensions/fork-task/topics.ts",
+	"extensions/fork-task/workspace.ts",
+	"extensions/fork-task.ts",
+	"agents/fork-self.md",
+];
+
+/** True when an install-plugins.sh required entry names the omp-subagent-more repo, with or without a `#ref` pin. */
+function requiresForkPlugin(spec: string): boolean {
+	return spec.split("#", 1)[0] === FORK_PLUGIN_URL;
+}
+
 /** Files of earlier layouts (agent-dir relative) and the file that replaced each. */
 const SUPERSEDED: readonly { readonly from: string; readonly by: string }[] = [
 	...[
 		"append-system-model",
-		"fork-task",
 		"input-polish",
 		"isolation-nudge",
 		"lang-nag",
@@ -767,6 +794,7 @@ interface PlanContext {
 	readonly base: BaseRecord;
 	readonly history: RepoHistory;
 	readonly todoRequired: boolean;
+	readonly forkRequired: boolean;
 	/** No repo content ever reached this agent dir; see freshMachine. */
 	readonly freshMachine: boolean;
 	readonly replacementMigration: ReplacementMigration;
@@ -1069,17 +1097,22 @@ function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, 
 	return merged.kind === "clean" ? [{ kind: "write", rel, target, content: merged.content, base: accept }] : conflict("both-changed");
 }
 
-/** Todo/ctx leaves have their own retirement planner (see DELETIONS). */
+/** Todo/ctx/fork leaves have their own retirement planner (see DELETIONS). */
 function retiring(ctx: PlanContext, rel: string): boolean {
 	const leaf = rel.slice("agent/".length);
-	return (ctx.todoRequired && TODO_RETIREMENTS.includes(leaf)) || CTX_RETIREMENTS.includes(leaf);
+	return (
+		(ctx.todoRequired && TODO_RETIREMENTS.includes(leaf)) ||
+		CTX_RETIREMENTS.includes(leaf) ||
+		(ctx.forkRequired && FORK_RETIREMENTS.includes(leaf))
+	);
 }
 
 function planPlain(ctx: PlanContext): Op[] {
 	const { opts } = ctx;
-	const shipped = listSourceFiles(opts.source).filter(
-		(rel) => !(ctx.todoRequired && TODO_RETIREMENTS.includes(rel.slice("agent/".length))),
-	);
+	const shipped = listSourceFiles(opts.source).filter((rel) => {
+		const leaf = rel.slice("agent/".length);
+		return !((ctx.todoRequired && TODO_RETIREMENTS.includes(leaf)) || (ctx.forkRequired && FORK_RETIREMENTS.includes(leaf)));
+	});
 	const ops: Op[] = [];
 	for (const rel of shipped) {
 		if (skipExcluded(ctx, rel)) continue;
@@ -1260,7 +1293,7 @@ type RetirementInspection =
 	| { readonly kind: "blocked"; readonly message: string };
 
 /** Reused immediately before unlink: a long owner installation cannot authorize a changed filesystem object. */
-function inspectTodoRetirement(agentDir: string, rel: string): RetirementInspection {
+function inspectRetirement(agentDir: string, rel: string): RetirementInspection {
 	const root = resolve(agentDir);
 	const target = join(root, rel);
 	try {
@@ -1287,7 +1320,7 @@ function planRetirements(ctx: PlanContext, leaves: readonly string[]): Op[] {
 	for (const rel of leaves) {
 		// Only an existing leaf is reported; absent ones have nothing to keep.
 		if (!lexists(join(opts.agentDir, rel)) || skipExcluded(ctx, `agent/${rel}`)) continue;
-		const inspected = inspectTodoRetirement(opts.agentDir, rel);
+		const inspected = inspectRetirement(opts.agentDir, rel);
 		switch (inspected.kind) {
 			case "missing":
 				break;
@@ -1623,6 +1656,8 @@ function pluginVersions(): ReadonlyMap<string, string> {
 	return versions;
 }
 
+type PluginReadiness = { readonly kind: "ready" } | { readonly kind: "missing" } | { readonly kind: "invalid"; readonly message: string };
+
 type TodoPluginReadiness =
 	| { readonly kind: "ready"; readonly ctx: boolean }
 	| { readonly kind: "missing" }
@@ -1632,28 +1667,52 @@ function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((entry: unknown) => typeof entry === "string");
 }
 
+/** The npm section of the OMP owner catalog, queried once per readiness phase. */
+type PluginCatalog = { readonly kind: "ok"; readonly entries: readonly unknown[] } | { readonly kind: "invalid"; readonly message: string };
+
 /** Owner query, not dependency presence: no private imports, upgrades, enablement or Tern inspection. */
-function todoPluginReadiness(): TodoPluginReadiness {
+function pluginCatalog(): PluginCatalog {
 	const omp = Bun.which("omp");
-	if (omp === null) return { kind: "invalid", message: "Todo plugin readiness unavailable: omp is not on PATH" };
+	if (omp === null) return { kind: "invalid", message: "Plugin readiness unavailable: omp is not on PATH" };
 	const result = spawnSync(omp, ["plugin", "list", "--json"], { encoding: "utf8" });
 	if (result.error || result.status !== 0)
 		return {
 			kind: "invalid",
-			message: `Todo plugin readiness query failed: ${(result.stderr || result.error?.message || result.stdout).trim()}`,
+			message: `Plugin readiness query failed: ${(result.stderr || result.error?.message || result.stdout).trim()}`,
 		};
 	try {
 		const value: unknown = JSON.parse(result.stdout);
-		if (!isMapping(value) || !Array.isArray(value.npm)) return { kind: "invalid", message: "Todo plugin readiness: invalid npm catalog" };
-		const entries: unknown[] = value.npm;
-		let plugin: Mapping | undefined;
-		for (const entry of entries) {
-			if (!isMapping(entry) || entry.name !== TODO_PLUGIN_NAME) continue;
-			if (plugin !== undefined) return { kind: "invalid", message: "Todo plugin readiness: ambiguous npm entries" };
-			plugin = entry;
-		}
-		if (plugin === undefined) return { kind: "missing" };
-		if (plugin.enabled !== true) return { kind: "invalid", message: "Todo plugin is disabled or has invalid enablement; nothing switched" };
+		if (!isMapping(value) || !Array.isArray(value.npm)) return { kind: "invalid", message: "Plugin readiness: invalid npm catalog" };
+		return { kind: "ok", entries: value.npm };
+	} catch (error) {
+		return { kind: "invalid", message: `Plugin readiness cannot be confirmed (${errorText(error)})` };
+	}
+}
+
+/** The unique enabled npm entry `name` in a catalog, or why it does not count as present. */
+type NpmPluginEntry =
+	| { readonly kind: "found"; readonly plugin: Mapping }
+	| { readonly kind: "missing" }
+	| { readonly kind: "invalid"; readonly message: string };
+
+function npmPluginEntry(catalog: PluginCatalog, name: string, label: string): NpmPluginEntry {
+	if (catalog.kind === "invalid") return catalog;
+	let plugin: Mapping | undefined;
+	for (const entry of catalog.entries) {
+		if (!isMapping(entry) || entry.name !== name) continue;
+		if (plugin !== undefined) return { kind: "invalid", message: `${label} readiness: ambiguous npm entries` };
+		plugin = entry;
+	}
+	if (plugin === undefined) return { kind: "missing" };
+	if (plugin.enabled !== true) return { kind: "invalid", message: `${label} is disabled or has invalid enablement; nothing switched` };
+	return { kind: "found", plugin };
+}
+
+function todoPluginReadiness(catalog: PluginCatalog): TodoPluginReadiness {
+	const entry = npmPluginEntry(catalog, TODO_PLUGIN_NAME, "Todo plugin");
+	if (entry.kind !== "found") return entry;
+	const plugin = entry.plugin;
+	try {
 		if (!isMapping(plugin.manifest) || !isStringArray(plugin.manifest.extensions) || !plugin.manifest.extensions.includes("./index.ts")) {
 			return { kind: "invalid", message: "Todo plugin does not declare ./index.ts; nothing switched" };
 		}
@@ -1664,6 +1723,28 @@ function todoPluginReadiness(): TodoPluginReadiness {
 	} catch (error) {
 		return { kind: "invalid", message: `Todo plugin readiness cannot be confirmed (${errorText(error)}); nothing switched` };
 	}
+}
+
+function forkPluginReadiness(catalog: PluginCatalog): PluginReadiness {
+	const entry = npmPluginEntry(catalog, FORK_PLUGIN_NAME, `${FORK_PLUGIN_NAME} plugin`);
+	if (entry.kind !== "found") return entry;
+	const plugin = entry.plugin;
+	if (
+		!isMapping(plugin.manifest) ||
+		!isStringArray(plugin.manifest.extensions) ||
+		!plugin.manifest.extensions.includes("./extensions/fork-task/index.ts")
+	) {
+		return { kind: "invalid", message: `${FORK_PLUGIN_NAME} plugin does not declare ./extensions/fork-task/index.ts; nothing switched` };
+	}
+	const path = plugin.path;
+	if (typeof path !== "string" || !isAbsolute(path)) {
+		return { kind: "invalid", message: `${FORK_PLUGIN_NAME} plugin entry is missing or invalid; nothing switched` };
+	}
+	const missing = ["extensions/fork-task/index.ts", "agents/fork-self.md"].filter((rel) => !existsSync(join(path, rel)));
+	if (missing.length > 0) {
+		return { kind: "invalid", message: `${FORK_PLUGIN_NAME} plugin is missing ${missing.join(", ")}; nothing switched` };
+	}
+	return { kind: "ready" };
 }
 
 /** Resolution state `omp install` writes; unchanged bytes mean no plugin was installed or re-resolved. */
@@ -2123,6 +2204,7 @@ function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 		const sources = parseSources(opts, report);
 		const declared = declaredPlugins(opts.source).required;
 		const todoRequired = declared.includes(TODO_PLUGIN_URL);
+		const forkRequired = declared.some(requiresForkPlugin);
 		const replacementMigration = planReplacementMigration(opts, report, base, history, exclusions);
 		const ctx: PlanContext = {
 			opts,
@@ -2130,6 +2212,7 @@ function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 			base,
 			history,
 			todoRequired,
+			forkRequired,
 			freshMachine: freshMachine(opts.agentDir, base),
 			replacementMigration,
 			exclusions,
@@ -2139,11 +2222,12 @@ function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 			...planPlain(ctx),
 			...planStructured(ctx, sources),
 			...(todoRequired ? planRetirements(ctx, TODO_RETIREMENTS) : []),
+			...(forkRequired ? planRetirements(ctx, FORK_RETIREMENTS) : []),
 		];
 		const ctxRetirements = todoRequired ? planRetirements(ctx, CTX_RETIREMENTS) : [];
 		report.notes.push(...history.notes);
 		if (opts.check || !opts.plugins) report.notes.push(...reportPendingSettings(opts, settings));
-		// Moves first, managed writes next, deletions after them, base records last; Todo retirement requires all preceding operations to succeed.
+		// Moves first, managed writes next, deletions after them, base records last; plugin retirements require all preceding operations to succeed.
 		const rank: Record<Op["kind"], number> = { move: 0, split: 0, "migrate-replacements": 0, write: 1, delete: 2, base: 3 };
 		const ops = groupReplacementMigration(opts, replacementMigration, planned).toSorted((a, b) => rank[a.kind] - rank[b.kind]);
 		assertNoExcludedOps(ctx, ops);
@@ -2155,25 +2239,31 @@ function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 }
 
 /**
- * The Todo gate: owner-catalog readiness before plugin sync, `syncPlugins`,
- * then the confirmation switch that sets `ctxReady`. Returns "stop" when a
- * real apply must end before running ops.
+ * The plugin gates: owner-catalog readiness before plugin sync, `syncPlugins`,
+ * then the confirmation switch that sets `ctxReady` and clears both retirement
+ * handoffs. Every required plugin's before-query runs before anything
+ * installs; a failed gate stops a real apply before any op runs, so no managed
+ * file switches. Returns "stop" when a real apply must end before running ops.
  */
-function applyTodoGate(state: ApplyState): "stop" | undefined {
+function applyPluginGates(state: ApplyState): "stop" | undefined {
 	const { opts, report } = state;
-	const before = state.todoRequired ? todoPluginReadiness() : undefined;
-	if (before?.kind === "invalid") {
-		report.errors.push(before.message);
-		if (!opts.check) return "stop";
+	const before = state.todoRequired || state.forkRequired ? pluginCatalog() : undefined;
+	const todoBefore = state.todoRequired && before !== undefined ? todoPluginReadiness(before) : undefined;
+	const forkBefore = state.forkRequired && before !== undefined ? forkPluginReadiness(before) : undefined;
+	for (const readiness of [todoBefore, forkBefore]) {
+		if (readiness?.kind === "invalid") report.errors.push(readiness.message);
 	}
+	if (report.errors.length > 0 && !opts.check) return "stop";
 	syncPlugins(opts, report, declaredPlugins(opts.source).required);
 	if (!opts.check && report.errors.length > 0) {
 		cutoverNote(state);
 		return "stop";
 	}
+	const after = state.todoRequired || state.forkRequired ? (opts.check ? before : pluginCatalog()) : undefined;
+	if (after === undefined) return undefined;
 	if (state.todoRequired) {
-		const ready = opts.check ? before : todoPluginReadiness();
-		switch (ready?.kind) {
+		const ready = todoPluginReadiness(after);
+		switch (ready.kind) {
 			case "ready":
 				report.notes.push("Todo plugin prerequisite confirmed by OMP owner catalog.");
 				state.ctxReady = ready.ctx;
@@ -2183,20 +2273,42 @@ function applyTodoGate(state: ApplyState): "stop" | undefined {
 					`Required plugin ${TODO_PLUGIN_NAME} is missing; no managed files switched${opts.check ? " (check never installs)" : ""}.`,
 				);
 				break;
-			case "invalid":
-				if (ready !== before) report.errors.push(ready.message);
+			case "invalid": {
+				const previous = todoBefore?.kind === "invalid" ? todoBefore.message : undefined;
+				if (ready.message !== previous) report.errors.push(ready.message);
 				break;
-			case undefined:
-				throw new Error("Todo readiness was not requested");
+			}
 			default: {
 				const unreachable: never = ready;
 				throw new Error(String(unreachable));
 			}
 		}
-		if (!opts.check && report.errors.length > 0) {
-			cutoverNote(state);
-			return "stop";
+	}
+	if (state.forkRequired) {
+		const ready = forkPluginReadiness(after);
+		switch (ready.kind) {
+			case "ready":
+				report.notes.push(`${FORK_PLUGIN_NAME} plugin prerequisite confirmed by OMP owner catalog.`);
+				break;
+			case "missing":
+				report.errors.push(
+					`Required plugin ${FORK_PLUGIN_NAME} is missing; no managed files switched${opts.check ? " (check never installs)" : ""}.`,
+				);
+				break;
+			case "invalid": {
+				const previous = forkBefore?.kind === "invalid" ? forkBefore.message : undefined;
+				if (ready.message !== previous) report.errors.push(ready.message);
+				break;
+			}
+			default: {
+				const unreachable: never = ready;
+				throw new Error(String(unreachable));
+			}
 		}
+	}
+	if (!opts.check && (state.todoRequired || state.forkRequired) && report.errors.length > 0) {
+		cutoverNote(state);
+		return "stop";
 	}
 	return undefined;
 }
@@ -2222,7 +2334,9 @@ function runApplyOps(state: ApplyState): BaseChange[] {
 		const leaf = op.rel.slice("agent/".length);
 		const retirement =
 			op.kind === "delete" &&
-			((state.todoRequired && TODO_RETIREMENTS.includes(leaf)) || (state.ctxReady && CTX_RETIREMENTS.includes(leaf)));
+			((state.todoRequired && TODO_RETIREMENTS.includes(leaf)) ||
+				(state.ctxReady && CTX_RETIREMENTS.includes(leaf)) ||
+				(state.forkRequired && FORK_RETIREMENTS.includes(leaf)));
 		try {
 			applyOp(state, op, leaf, retirement, accepted);
 		} catch (error) {
@@ -2240,7 +2354,7 @@ function runApplyOps(state: ApplyState): BaseChange[] {
 function applyOp(state: ApplyState, op: Exclude<Op, { kind: "base" }>, leaf: string, retirement: boolean, accepted: BaseChange[]): void {
 	const { opts, report } = state;
 	if (!opts.check && retirement) {
-		const current = inspectTodoRetirement(opts.agentDir, leaf);
+		const current = inspectRetirement(opts.agentDir, leaf);
 		if (current.kind === "missing") return;
 		if (current.kind === "blocked") throw new Error(current.message);
 	}
@@ -2309,7 +2423,7 @@ function settleApply(state: ApplyState, accepted: readonly BaseChange[]): void {
 		}
 	}
 	installLauncher(opts, report);
-	if (report.errors.length > 0 && !opts.check && (state.todoRequired || report.restartNeeded))
+	if (report.errors.length > 0 && !opts.check && (state.todoRequired || state.forkRequired || report.restartNeeded))
 		report.notes.push("Cutover incomplete; do not restart OMP. Resolve errors and rerun apply.");
 }
 
@@ -2318,7 +2432,7 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 	const state = planApply(opts, report);
 	if (state === null) return report;
 	if (report.errors.length > 0 && !opts.check) return report;
-	if (applyTodoGate(state) === "stop") return report;
+	if (applyPluginGates(state) === "stop") return report;
 	const accepted = runApplyOps(state);
 	settleApply(state, accepted);
 	return report;
@@ -2334,13 +2448,14 @@ export function scanConflicts(source: string, agentDir: string): ConflictScan {
 		// The exclude option lives in plugin settings: asking OMP is read-only.
 		const exclusions = exclusionsOf(settingsPreflight({ ...opts, plugins: true }, base, history), agentDir);
 		const sources = parseSources(opts, report);
-		const todoRequired = declaredPlugins(source).required.includes(TODO_PLUGIN_URL);
+		const required = declaredPlugins(source).required;
 		const ctx: PlanContext = {
 			opts,
 			report,
 			base,
 			history,
-			todoRequired,
+			todoRequired: required.includes(TODO_PLUGIN_URL),
+			forkRequired: required.some(requiresForkPlugin),
 			freshMachine: freshMachine(agentDir, base),
 			replacementMigration: planReplacementMigration(opts, report, base, history, exclusions),
 			exclusions,

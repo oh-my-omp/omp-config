@@ -21,13 +21,14 @@
 | [`https://github.com/oh-my-omp/omp-ask-more`](https://github.com/oh-my-omp/omp-ask-more) | `omp-ask-more` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-peers`](https://github.com/oh-my-omp/omp-peers) | `omp-peers` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-sessions`](https://github.com/oh-my-omp/omp-sessions) | `omp-sessions` | 必装（GitHub） | — |
+| [`https://github.com/oh-my-omp/omp-subagent-more`](https://github.com/oh-my-omp/omp-subagent-more) | `omp-subagent-more` | 必装（GitHub） | 提供 `fork_task`。 |
 | [`# https://github.com/oh-my-omp/omp-remote-build`](https://github.com/oh-my-omp/omp-remote-build) | `omp-remote-build` | 可选（默认注释） | — |
 
 ### todo-more
 
 插件运行在原生 Todo 之上，因此 `agent/config.yml` 保持原生 Todo 开启（`todo.enabled: true`）：插件的 `todo` 工具覆盖内置工具，并在进程内关闭原生提醒。仓库自带的轻量模式禁用列表仍保留 `omp-todo-more` 加载。本地 `task-completion-judge` 通过 `omp-todo-more:read` 事件请求会话的 Todo 状态。
 
-更新器在安装插件之前，先检查 Todo 和 ctx 清理目标的归属。OMP 插件目录确认 `omp-todo-more` 已启用且 `./index.ts` 存在后，更新器清理 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 中 `TODO_RETIREMENTS` 列出的本地 Todo 文件。只有就绪插件还包含 `src/ctx` 时，才会清理 `CTX_RETIREMENTS` 列出的文件。`/sync-omp-config` 排除相同的路径。
+更新器在安装插件之前，先检查 Todo、ctx 和 fork 清理目标的归属。OMP 插件目录确认 `omp-todo-more` 已启用且 `./index.ts` 存在后，更新器清理 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 中 `TODO_RETIREMENTS` 列出的本地 Todo 文件；只有就绪插件还包含 `src/ctx` 时，才会清理 `CTX_RETIREMENTS` 列出的文件。OMP 插件目录确认 `omp-subagent-more` 已启用且 `./extensions/fork-task/index.ts` 与 `agents/fork-self.md` 存在后，更新器清理 `FORK_RETIREMENTS` 列出的文件。`/sync-omp-config` 排除相同的路径。
 
 插件工具文档：`xd://todo` 与 `xd://ctx`。
 
@@ -47,10 +48,10 @@
 | 环境变量 `OMOMP_MODE` | 未设置（视为 `full`） | `light`；[`append-system-model`](prompts-and-context.zh-CN.md#append-system-model) 片段用 `mode` / `exclude.mode` 按它选择，因此仓库自带的决策支持片段（`mode: full`）不注入 |
 | `task.eager` | `preferred` | `default` |
 | `bashInterceptor.enabled` | `true`（`config.yml` 的规则把 `cat`/`grep`/`find`/`sed -i`/`echo >` 等转向专用工具） | `false`：`bash` 直接执行这些命令，不拦截 |
-| `disabledExtensions` | 无 | 禁用以下本地扩展：`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
+| `disabledExtensions` | 无 | 禁用以下扩展：`fork-task`（插件 `omp-subagent-more` 的扩展入口）、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
 | `config.yml` 的 `extensions` 路径列表 | 加载 `extensions-last/system-prompt-replace` | `config-light.yml` 用自己的列表覆盖 `extensions`，同样最后加载 `extensions-last/system-prompt-replace`（其 `REPLACE-SYSTEM-*.yml` 规则用 `mode` / `exclude.mode` 区分模式，仓库自带规则写 `mode: full`）；`omp-light.ts` 读取本机 `config.yml`，把不含 `/extensions-last/` 的本机条目（如 `~/.claude`）通过 `-e` 传回 |
 | 其余本地扩展 | 启用 | 保留：`append-system-model`、`argon-long-output`、`ast-top-level`、`child-memory-warning`、`delete-guard`、`harness-restart`、`input-polish`、`model-compaction`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`subagent-usage`、`tool-topics`、`wt-tool`（轻量模式下 OMP 自有工具的说明同样有表层文本与 `Topics` 索引；插件工具保留自身说明） |
-| 已安装插件 | 全部加载 | 全部加载：仓库自带的 `agent/config-light.yml` 禁用列表只列出本地扩展 |
-| 轻量模式减少的本地工具 | — | `fork_task` |
+| 已安装插件 | 全部加载 | 全部加载，除上面 `disabledExtensions` 列出的 `fork-task` 插件扩展入口外 |
+| 轻量模式减少的本地工具 | — | 无（`fork_task` 是插件 `omp-subagent-more` 的工具，其 `fork-task` 扩展入口被 `config-light.yml` 禁用） |
 
 **启动器安装**：`/update-omp` 和启动自动更新会把 `agent/omp-light.ts` 安装到 `PATH` 上 `omp` 所在目录（POSIX/macOS/Linux 为可执行文件 `omp-light`；Windows 为 `omp-light.ts` 加生成的 `omp-light.cmd`）。`omp-light` 从 `PI_CODING_AGENT_DIR`（未设置时为 `~/.omp/agent`）读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`，任一文件缺失即退出，其余命令行参数原样传给 `omp`。
