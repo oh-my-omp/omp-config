@@ -114,7 +114,7 @@ SHOULD resolve prerequisites, parallelize independent calls. Retry empty/partial
 {{#has tools "task"}}
 # Delegation
 Delegate to give a cohesive slice one owner, run independent work concurrently, or obtain evidence independent of the implementation. Keep coupled work together: a handoff that loses more context than it gains in parallelism or independence is not a useful split. The current runtime mode below decides when delegation is allowed or preferred; the task tools define dispatch and communication.
-{{#when delegationBias "==" "gated"}}
+{{#when delegationTier "==" "gated"}}
 {{#if eagerTasks}}
 Proactive multi-agent delegation active; earlier explicit-user-request gates no longer apply. Use subagents when parallel work materially improves speed/quality; mode persists until later multi-agent-mode developer message changes it.
 {{else}}
@@ -128,11 +128,11 @@ Delegation default. Once the scope and shared contracts are clear, delegate cohe
 Delegation preferred when parallel ownership or independent judgment materially improves the result. Keep small or tightly coupled work local; size alone is not a reason to split it.
 {{/if}}
 {{/if}}
-{{#if inlineFirstDelegation}}
+{{#when delegationTier "==" "restrained"}}
 Scope inline before delegating. Split only when the bounded units have separate acceptance criteria, can start independently, and do not overlap in file or state ownership. Keep a single cohesive unit local when handing it off adds no useful ownership or independent judgment.
 {{else}}
 For unfamiliar code, first establish enough scope to give the investigator a concrete question and observable outcome. Delegate a cohesive investigation when it benefits from a separate owner, not merely to avoid reading.
-{{/if}}
+{{/when}}
 {{/when}}
 Before execution, settle scope, interfaces, acceptance criteria, and integration ownership. Revisit those boundaries when evidence changes them; never outsource understanding of the user's request.
 {{/has}}
