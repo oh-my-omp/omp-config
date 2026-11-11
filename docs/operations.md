@@ -4,12 +4,13 @@
 
 ```mermaid
 flowchart LR
-  gh["GitHub default branch (main)"] -->|"startup auto-update (when enabled) / /omp-config-autoupdate run"| local["~/.omp/agent"]
-  repo["omp-config working tree"] -->|"/onboard-omp / /update-omp"| local
+  repo["omp-config working tree"] -->|"git push"| gh["GitHub main"]
+  gh -->|"daily release"| rel["GitHub release branch"]
+  rel -->|"startup auto-update (when enabled) / /omp-config-autoupdate run"| local["~/.omp/agent"]
+  repo -->|"/onboard-omp / /update-omp"| local
   local -->|"/sync-omp-config (read-only on machine)"| repo
-  repo -->|"git push"| gh
-  gh -->|"install launcher"| light["omp-light beside omp"]
-  gh -->|"omp install"| plugins["~/.omp/plugins"]
+  rel -->|"install launcher"| light["omp-light beside omp"]
+  prel["each omomp plugin's release branch"] -->|"omp install (release channel spec)"| plugins["~/.omp/plugins"]
   local -->|"/migrate-omp-keys"| remote["remote host agent.db (auth_credentials)"]
 ```
 
@@ -99,14 +100,14 @@ Excluded items are never written, created or deleted and keep their recorded bas
 | `/omp-config-autoupdate` or `… status` | Shows whether startup auto-update is on, how conflicts are handled, and the config path |
 | `/omp-config-autoupdate on\|off` | Writes `enabled` (takes effect on the next OMP start) |
 | `/omp-config-autoupdate conflicts notify\|agent` | Writes `conflicts` (takes effect on the next OMP start) |
-| `/omp-config-autoupdate run` | Runs `omp-config-update.ts auto` from the GitHub default branch immediately regardless of the switch, and posts the full report, conflicts included, as a display-only transcript message once idle |
+| `/omp-config-autoupdate run` | Runs `omp-config-update.ts auto` from the GitHub `release` branch immediately regardless of the switch, and posts the full report, conflicts included, as a display-only transcript message once idle |
 | `/omp-config-autoupdate adapt` | Lists the pending conflicts against the updater clone; when there are any, sends the adaptation request into the main session |
 
 How `omp-config-update.ts auto` runs:
 1. Spawned from a `ctx.setTimeout` callback on root `session_start`, holding the lock directory `~/.omp/omp-config-update.lock` (reclaiming stale locks whose PID is gone).
-2. Fetches `main` from `https://github.com/oh-my-omp/omp-config.git` into `~/.omp/omp-config-src` (updating old `mouriya-s-lab/omp-config.git` remotes; if offline, exits without applying the local clone).
+2. Fetches the `release` branch from `https://github.com/oh-my-omp/omp-config.git` into `~/.omp/omp-config-src` (updating old `mouriya-s-lab/omp-config.git` remotes; if offline, exits without applying the local clone).
 3. When the fetched commit differs from `<agentDir>/.omp-config-applied`, imports `applySnapshot` from the fetched clone and runs: preflight parse and ownership checks for `TODO_RETIREMENTS` and `CTX_RETIREMENTS` → `omp install` on required plugins → fresh OMP catalog confirmation that `omp-todo-more` is enabled with its declared entry present → relocations → three-way file and structured-config merges → deletions of unmodified files the source dropped and exact Todo retirement leaves → base record → `omp plugin link` on `extensions/_shared` and the one-time `omomp.*` section move into plugin settings. The ctx retirement leaves are deleted only when the ready plugin carries `src/ctx`; otherwise they stay.
-4. When the fetched commit matches `.omp-config-applied`, skips file writes, runs `omp install` on every unpinned GitHub entry in `install-plugins.sh` (required plugins and already-installed optional plugins), and re-scans conflicts read-only. Installed GitHub sources match by owner/repo across `github:`, HTTPS and Git URL forms; npm entries and pinned URLs wait for the next config commit.
+4. When the fetched commit matches `.omp-config-applied`, skips file writes, runs `omp install` on every GitHub entry in `install-plugins.sh` that has no `#ref` or is on the `#release` channel (required plugins and already-installed optional plugins), and re-scans conflicts read-only. A plugin whose `release` branch moved is thus upgraded to its new head at the next start even when omp-config published nothing; one whose `release` branch did not move stays as installed. Installed GitHub sources match by owner/repo across `github:`, HTTPS and Git URL forms; npm entries and URLs pinned to any other ref wait for the next config commit.
 5. Any move or write error skips all deletions, leaves `.omp-config-applied` unchanged, and reports `Cutover incomplete; do not restart OMP`. Conflicts are not errors: the commit is recorded and they stay pending.
 6. Shows a 5 s widget above the editor only when config files or plugins changed: the omp-config row (`omp-config 93d519e → e5a34bc (3 files)`) when files changed, and the restart hint. Plugin version changes are only logged; [omomp-changelog](extensions.md#omomp-changelog) shows what changed in them at the next start. Up-to-date, busy, and offline runs only log, and errors show a warning.
 
@@ -123,7 +124,7 @@ omp-config is an omomp release member. Its package root is `agent/extensions/_sh
 - **Writing entries**: commit with lgit (`git add`, then `uvx --from lgit-cli lgit`). It writes each user-visible change as an entry under a category of `## [Unreleased]` in the root `CHANGELOG.md`. A PR does not change the version in `agent/extensions/_shared/package.json` and does not add a version section.
 - **Daily release**: `.github/workflows/omomp-release.yml` is the calling file. It runs at 02:00 GMT+9 (`cron: "0 17 * * *"`) and on `workflow_dispatch`, and calls `oh-my-omp/.github/.github/workflows/omomp-release.yml@main` with `package-dir: agent/extensions/_shared` and `changelog: CHANGELOG.md`. When `## [Unreleased]` has entries, the run turns them into a dated version section, sets the version in `agent/extensions/_shared/package.json`, commits `chore: release X.Y.Z` on `main`, tags `vX.Y.Z`, moves the `release` branch to that commit and creates the GitHub Release; with nothing under `## [Unreleased]` it publishes nothing.
 - **To the machine**: the updater copies the root `CHANGELOG.md` to `<agentDir>/extensions/_shared/CHANGELOG.md` (see the ownership table), the file the manifest's `omomp` declaration points to, so [omomp-changelog](extensions.md#omomp-changelog) shows omp-config like any other member. `/sync-omp-config` never copies it back into the repository.
-- **Channel**: startup auto-update and `/omp-config-autoupdate run` still fetch `main`, not the `release` branch.
+- **Channel**: startup auto-update and `/omp-config-autoupdate run` fetch the `release` branch, so a commit merged to `main` reaches machines with the next release; `/update-omp` applies the working tree as it is. `install-plugins.sh` declares every omomp plugin as `<url>#release`, so each plugin reaches machines with its own daily release, independently of omp-config's (step 4 of [`auto`](#omp-config-autoupdate)); the first apply of these specs re-records plugins installed without a ref as `#release`.
 
 ---
 

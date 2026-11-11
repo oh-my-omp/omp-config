@@ -48,7 +48,7 @@ This configuration is organized around the following design choices:
 
 ## Releases
 
-omp-config is an omomp release member. Every day at 02:00 GMT+9 the release workflow publishes what has accumulated under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) at the repository root: a `chore: release X.Y.Z` commit and a `vX.Y.Z` tag on `main`, the `release` branch moved to it, and a GitHub Release. Nothing is published while `## [Unreleased]` is empty. The updater copies the changelog to `~/.omp/agent/extensions/_shared/CHANGELOG.md` on each machine, where [`omomp-changelog`](docs/extensions.md#omomp-changelog) reads it. Startup auto-update still fetches `main`. See [Releases and Changelog](docs/operations.md#releases-and-changelog).
+omp-config is an omomp release member. Every day at 02:00 GMT+9 the release workflow publishes what has accumulated under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) at the repository root: a `chore: release X.Y.Z` commit and a `vX.Y.Z` tag on `main`, the `release` branch moved to it, and a GitHub Release. Nothing is published while `## [Unreleased]` is empty. The updater copies the changelog to `~/.omp/agent/extensions/_shared/CHANGELOG.md` on each machine, where [`omomp-changelog`](docs/extensions.md#omomp-changelog) reads it. Machines receive only released work: startup auto-update fetches the `release` branch, and `install-plugins.sh` installs every omomp plugin as `<url>#release`, so changes merged to `main` arrive with the next release. See [Releases and Changelog](docs/operations.md#releases-and-changelog).
 
 ## Commands
 

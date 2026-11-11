@@ -4,25 +4,25 @@
 
 ## 插件（`install-plugins.sh`）
 
-独立插件通过 `install-plugins.sh` 安装到 `~/.omp/plugins/`（必装项加默认注释掉的可选项，不固定版本号，`~/.omp/plugins/` 不纳入本仓库）。下表只记录安装源与 omp-config 的集成关系；插件的用法与配置由链接指向的插件来源维护。
+独立插件通过 `install-plugins.sh` 安装到 `~/.omp/plugins/`（必装项加默认注释掉的可选项，不固定版本号，`~/.omp/plugins/` 不纳入本仓库）。每个 omomp 插件声明为 `<url>#release`，机器安装的是它 `release` 分支的头，该分支由插件的每日发布移动，`main` 上未发布的改动不会装到机器上。下表只记录安装源与 omp-config 的集成关系；插件的用法与配置由链接指向的插件来源维护。
 
 - 每次运行更新器都会对全部必装项执行 `omp install`，安装缺失插件并升级已安装插件。
-- 启动自动更新在远端配置提交未变时，仍会对每个不带 `#ref` 的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，使其跟随各自仓库的默认分支。已安装条目按 owner/repo 与声明的 GitHub 来源匹配，兼容 OMP 记录的 `github:`、HTTPS 和 git URL 等形式。
+- 启动自动更新在远端配置提交未变时，仍会对每个不带 `#ref` 或处在 `#release` 通道的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，使各插件跟随自己的发布（不带 ref 的跟随默认分支），不必等配置提交；钉在其他引用上的条目等到下次配置提交。已安装条目按 owner/repo 与声明的 GitHub 来源匹配，兼容 OMP 记录的 `github:`、HTTPS 和 git URL 等形式。
 - `./plugin-audit.sh` 以 `omp install` 在 `~/.omp/plugins/package.json` 中记录的包名（下表第二列）比对 Git/URL 条目；本机已安装的可选插件列在 `[保留]` 下，不算缺失也不进卸载候选。
 
 | `install-plugins.sh` 条目 | `omp plugin list` 包名 | 类别 | omp-config 集成关系 |
 |---|---|---|---|
-| [`https://github.com/oh-my-omp/omp-todo-more`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | 必装（GitHub） | 运行在原生 Todo 之上，原生 Todo 保持开启（`agent/config.yml` 中 `todo.enabled: true`）；见 [todo-more](#todo-more)。 |
-| [`https://github.com/oh-my-omp/omp-unified-exec`](https://github.com/oh-my-omp/omp-unified-exec) | `omp-unified-exec` | 必装（GitHub fork） | 原生 launch 已关闭（`agent/config.yml` 中 `launch.enabled: false`）；本地 bash 表层说明指向 `xd://exec_command`。 |
+| [`https://github.com/oh-my-omp/omp-todo-more#release`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | 必装（GitHub） | 运行在原生 Todo 之上，原生 Todo 保持开启（`agent/config.yml` 中 `todo.enabled: true`）；见 [todo-more](#todo-more)。 |
+| [`https://github.com/oh-my-omp/omp-unified-exec#release`](https://github.com/oh-my-omp/omp-unified-exec) | `omp-unified-exec` | 必装（GitHub fork） | 原生 launch 已关闭（`agent/config.yml` 中 `launch.enabled: false`）；本地 bash 表层说明指向 `xd://exec_command`。 |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | 必装（GitHub fork） | `agent/config.yml` 的 `task:free` 绑定中包含 `bansos/...` 模型。 |
-| [`https://github.com/oh-my-omp/omp-thinking-translator`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | 必装（GitHub） | 插件拥有的配置不由更新器或同步操作写入；见 [思考翻译](#思考翻译)。 |
+| [`https://github.com/oh-my-omp/omp-thinking-translator#release`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | 必装（GitHub） | 插件拥有的配置不由更新器或同步操作写入；见 [思考翻译](#思考翻译)。 |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | 必装（npm） | — |
-| [`https://github.com/oh-my-omp/omp-playbooks`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | 必装（GitHub） | — |
-| [`https://github.com/oh-my-omp/omp-ask-more`](https://github.com/oh-my-omp/omp-ask-more) | `omp-ask-more` | 必装（GitHub） | — |
-| [`https://github.com/oh-my-omp/omp-peers`](https://github.com/oh-my-omp/omp-peers) | `omp-peers` | 必装（GitHub） | — |
-| [`https://github.com/oh-my-omp/omp-sessions`](https://github.com/oh-my-omp/omp-sessions) | `omp-sessions` | 必装（GitHub） | — |
-| [`https://github.com/oh-my-omp/omp-subagent-more`](https://github.com/oh-my-omp/omp-subagent-more) | `omp-subagent-more` | 必装（GitHub） | 提供 `fork_task`。 |
-| [`# https://github.com/oh-my-omp/omp-remote-build`](https://github.com/oh-my-omp/omp-remote-build) | `omp-remote-build` | 可选（默认注释） | — |
+| [`https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | 必装（GitHub） | — |
+| [`https://github.com/oh-my-omp/omp-ask-more#release`](https://github.com/oh-my-omp/omp-ask-more) | `omp-ask-more` | 必装（GitHub） | — |
+| [`https://github.com/oh-my-omp/omp-peers#release`](https://github.com/oh-my-omp/omp-peers) | `omp-peers` | 必装（GitHub） | — |
+| [`https://github.com/oh-my-omp/omp-sessions#release`](https://github.com/oh-my-omp/omp-sessions) | `omp-sessions` | 必装（GitHub） | — |
+| [`https://github.com/oh-my-omp/omp-subagent-more#release`](https://github.com/oh-my-omp/omp-subagent-more) | `omp-subagent-more` | 必装（GitHub） | 提供 `fork_task`。 |
+| [`# https://github.com/oh-my-omp/omp-remote-build#release`](https://github.com/oh-my-omp/omp-remote-build) | `omp-remote-build` | 可选（默认注释） | — |
 
 ### todo-more
 

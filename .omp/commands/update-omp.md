@@ -30,8 +30,8 @@ description: 用本仓库工作区更新本机 OMP 配置（repo → 本机）�
 ## 手动更新与自动更新的差别
 
 - 手动更新做 RELOCATIONS 的删除/移动及插件就绪后的精确退休（见更新器文件头）：旧平铺扩展、旧位置结构化配置和数据按迁移规则处理；根目录 `PROMPT-INJECT-*` / `TURN-JUDGE-*` 仓库模板仅在等于旧路径或新路径的仓库自带版本或本机已接受版本时删除，定制模板保留并记 note 提醒移植，符号链接不移动。`TODO_RETIREMENTS`、`CTX_RETIREMENTS` 与 `FORK_RETIREMENTS` 都在安装插件前预检归属；声明的 Todo 插件就绪后仅 unlink `TODO_RETIREMENTS` 列出的叶文件，`CTX_RETIREMENTS` 还要求就绪插件携带 `src/ctx`，否则保留；`FORK_RETIREMENTS` 在声明的 omp-subagent-more 插件就绪后同样 unlink。不删除目录、host-owned、app-managed 或链接 backing。其余删除与自动更新相同，依据记录的基准：基准里有、工作区已删除的受管文件，本机未改就删除，改过就报告冲突。本机还没有基准时，源中早已删除的文件保留：那需要自动更新才有的“上次应用的提交”。
-- 手动更新不改写 `<agent 目录>/.omp-config-applied`，但会把基准记录为工作区版本。自动更新开着时，下次启动只要 GitHub 默认分支的提交与 `.omp-config-applied` 不同就会运行：本机此后没改过的项更新为 GitHub 版本，包括手动应用、尚未推送的内容；本机此后改过的项按定制合并或报告冲突。推送并合并后再启动即可保持一致。
-- 自动更新遇到配置提交未变化时仍刷新 `install-plugins.sh` 中不带 `#ref` 的 GitHub 必装项及已安装的可选项。已安装源按 owner/repo 匹配，兼容 `github:`、HTTPS 与 Git URL 形式；npm 条目和带固定引用的 URL 等到配置提交变化时再更新。手动更新每次都安装或升级必装声明插件。
+- 手动更新不改写 `<agent 目录>/.omp-config-applied`，但会把基准记录为工作区版本。自动更新开着时，下次启动只要 GitHub `release` 分支的提交与 `.omp-config-applied` 不同就会运行：本机此后没改过的项更新为 `release` 版本，包括手动应用、尚未发布的内容；本机此后改过的项按定制合并或报告冲突。合并并发布后再启动即可保持一致。
+- 自动更新遇到配置提交未变化时仍刷新 `install-plugins.sh` 中不带 `#ref` 或处在 `#release` 通道的 GitHub 必装项及已安装的可选项，插件因此随各自的发布更新。已安装源按 owner/repo 匹配，兼容 `github:`、HTTPS 与 Git URL 形式；npm 条目和钉在其他引用上的 URL 等到配置提交变化时再更新。手动更新每次都安装或升级必装声明插件。
 - `omomp` 段的迁移属于更新器本身，随每次 apply 检查一次；`--check` 与 `--no-plugins` 只报告不写。
 
 ## 生效时机

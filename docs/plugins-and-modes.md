@@ -4,25 +4,25 @@
 
 ## Plugins (`install-plugins.sh`)
 
-Independent plugins are installed into `~/.omp/plugins/` via `install-plugins.sh` (required entries plus commented-out optional ones, none version-pinned, and `~/.omp/plugins/` is not tracked in git). The inventory below records installation sources and omp-config integration; plugin usage and configuration belong to the linked plugin sources.
+Independent plugins are installed into `~/.omp/plugins/` via `install-plugins.sh` (required entries plus commented-out optional ones, none version-pinned, and `~/.omp/plugins/` is not tracked in git). Every omomp plugin is declared as `<url>#release`, so machines install the head of its `release` branch, which its daily release moves, never unreleased work on its `main`. The inventory below records installation sources and omp-config integration; plugin usage and configuration belong to the linked plugin sources.
 
 - Every updater apply runs `omp install` on all required entries, installing missing plugins and upgrading installed ones.
-- When startup auto-update sees an unchanged config commit, it still runs `omp install` on every unpinned GitHub entry (required plugins and already-installed optional plugins) so they track their default branch without waiting for a config commit. Installed entries match a declared GitHub source by owner/repo across the forms OMP records, including `github:`, HTTPS and git URLs.
+- When startup auto-update sees an unchanged config commit, it still runs `omp install` on every GitHub entry without a `#ref` or on the `#release` channel (required plugins and already-installed optional plugins), so each plugin follows its own release (or, without a ref, its default branch) without waiting for a config commit; entries pinned to any other ref wait for the next config commit. Installed entries match a declared GitHub source by owner/repo across the forms OMP records, including `github:`, HTTPS and git URLs.
 - `./plugin-audit.sh` matches each Git/URL entry by the package name recorded in `~/.omp/plugins/package.json` (second column below); an installed optional plugin is listed under `[保留]` (keep) rather than missing or uninstall candidate.
 
 | Source in `install-plugins.sh` | Package name in `omp plugin list` | Status | omp-config integration |
 |---|---|---|---|
-| [`https://github.com/oh-my-omp/omp-todo-more`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | Required (GitHub) | Runs on top of native Todo, which stays on (`agent/config.yml` `todo.enabled: true`); see [todo-more](#todo-more). |
-| [`https://github.com/oh-my-omp/omp-unified-exec`](https://github.com/oh-my-omp/omp-unified-exec) | `omp-unified-exec` | Required (GitHub fork) | Native launch is disabled (`agent/config.yml` `launch.enabled: false`); the local bash surface routes to `xd://exec_command`. |
+| [`https://github.com/oh-my-omp/omp-todo-more#release`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | Required (GitHub) | Runs on top of native Todo, which stays on (`agent/config.yml` `todo.enabled: true`); see [todo-more](#todo-more). |
+| [`https://github.com/oh-my-omp/omp-unified-exec#release`](https://github.com/oh-my-omp/omp-unified-exec) | `omp-unified-exec` | Required (GitHub fork) | Native launch is disabled (`agent/config.yml` `launch.enabled: false`); the local bash surface routes to `xd://exec_command`. |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | Required (GitHub fork) | `agent/config.yml` includes a `bansos/...` model in the `task:free` binding. |
-| [`https://github.com/oh-my-omp/omp-thinking-translator`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | Required (GitHub) | Plugin-owned configuration is excluded from updater and sync writes; see [Thinking translation](#thinking-translation). |
+| [`https://github.com/oh-my-omp/omp-thinking-translator#release`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | Required (GitHub) | Plugin-owned configuration is excluded from updater and sync writes; see [Thinking translation](#thinking-translation). |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | Required (npm) | — |
-| [`https://github.com/oh-my-omp/omp-playbooks`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | Required (GitHub) | — |
-| [`https://github.com/oh-my-omp/omp-ask-more`](https://github.com/oh-my-omp/omp-ask-more) | `omp-ask-more` | Required (GitHub) | — |
-| [`https://github.com/oh-my-omp/omp-peers`](https://github.com/oh-my-omp/omp-peers) | `omp-peers` | Required (GitHub) | — |
-| [`https://github.com/oh-my-omp/omp-sessions`](https://github.com/oh-my-omp/omp-sessions) | `omp-sessions` | Required (GitHub) | — |
-| [`https://github.com/oh-my-omp/omp-subagent-more`](https://github.com/oh-my-omp/omp-subagent-more) | `omp-subagent-more` | Required (GitHub) | Ships `fork_task`. |
-| [`# https://github.com/oh-my-omp/omp-remote-build`](https://github.com/oh-my-omp/omp-remote-build) | `omp-remote-build` | Optional (commented out) | — |
+| [`https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | Required (GitHub) | — |
+| [`https://github.com/oh-my-omp/omp-ask-more#release`](https://github.com/oh-my-omp/omp-ask-more) | `omp-ask-more` | Required (GitHub) | — |
+| [`https://github.com/oh-my-omp/omp-peers#release`](https://github.com/oh-my-omp/omp-peers) | `omp-peers` | Required (GitHub) | — |
+| [`https://github.com/oh-my-omp/omp-sessions#release`](https://github.com/oh-my-omp/omp-sessions) | `omp-sessions` | Required (GitHub) | — |
+| [`https://github.com/oh-my-omp/omp-subagent-more#release`](https://github.com/oh-my-omp/omp-subagent-more) | `omp-subagent-more` | Required (GitHub) | Ships `fork_task`. |
+| [`# https://github.com/oh-my-omp/omp-remote-build#release`](https://github.com/oh-my-omp/omp-remote-build) | `omp-remote-build` | Optional (commented out) | — |
 
 ### todo-more
 

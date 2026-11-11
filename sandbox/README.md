@@ -39,7 +39,7 @@ Contents enter the sandbox as tar streams or stdin pipes into `docker exec`; not
 - `~/.claude/rules`, `~/.claude/skills` and `~/.claude/CLAUDE.md`, those that exist.
 - The working tree at `/repo`: tracked and untracked files, uncommitted changes included, ignored files excluded.
 
-Then the container installs the latest `@oh-my-pi/pi-coding-agent`, runs the `/repo` updater (`omp-config-update.ts apply --source /repo` — it links the `omp-config` plugin and moves the copied omomp values into its settings), and switches the startup auto-update off in those settings: `sandbox/autoupdate-off.ts` sets `omp-config-autoupdate.enabled` to `false` through `omp plugin config set` and prints the value read back. The extensions in the container's agent directory therefore come from the working tree, not from what the host last applied, and stay so across every omp start in the sandbox: the copied host switch would otherwise apply GitHub `main` over them at the first start. The host's own settings are not touched.
+Then the container installs the latest `@oh-my-pi/pi-coding-agent`, runs the `/repo` updater (`omp-config-update.ts apply --source /repo` — it links the `omp-config` plugin and moves the copied omomp values into its settings), and switches the startup auto-update off in those settings: `sandbox/autoupdate-off.ts` sets `omp-config-autoupdate.enabled` to `false` through `omp plugin config set` and prints the value read back. The extensions in the container's agent directory therefore come from the working tree, not from what the host last applied, and stay so across every omp start in the sandbox: the copied host switch would otherwise apply GitHub `release` over them at the first start. The host's own settings are not touched.
 
 ### Credentials
 

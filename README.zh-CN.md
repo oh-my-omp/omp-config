@@ -48,7 +48,7 @@ omomp 的完整定制面向高能力主 agent：编排和监督机制增强其�
 
 ## 发布
 
-omp-config 是 omomp 发布成员。发布 workflow 每天 GMT+9 02:00 发布仓库根目录 [`CHANGELOG.md`](CHANGELOG.md) 的 `## [Unreleased]` 下累积的内容：在 `main` 上提交 `chore: release X.Y.Z` 并打 `vX.Y.Z` tag，`release` 分支移到该提交，并建 GitHub Release；`## [Unreleased]` 为空时不发布。更新器把这份变更记录复制到各机器的 `~/.omp/agent/extensions/_shared/CHANGELOG.md`，由 [`omomp-changelog`](docs/extensions.zh-CN.md#omomp-changelog) 读取。启动自动更新仍然拉取 `main`。详见[发布与变更记录](docs/operations.zh-CN.md#发布与变更记录)。
+omp-config 是 omomp 发布成员。发布 workflow 每天 GMT+9 02:00 发布仓库根目录 [`CHANGELOG.md`](CHANGELOG.md) 的 `## [Unreleased]` 下累积的内容：在 `main` 上提交 `chore: release X.Y.Z` 并打 `vX.Y.Z` tag，`release` 分支移到该提交，并建 GitHub Release；`## [Unreleased]` 为空时不发布。更新器把这份变更记录复制到各机器的 `~/.omp/agent/extensions/_shared/CHANGELOG.md`，由 [`omomp-changelog`](docs/extensions.zh-CN.md#omomp-changelog) 读取。机器只收到已发布的内容：启动自动更新拉取 `release` 分支，`install-plugins.sh` 以 `<url>#release` 安装每个 omomp 插件，合并到 `main` 的改动随下一次发布到达。详见[发布与变更记录](docs/operations.zh-CN.md#发布与变更记录)。
 
 ## 常用命令
 
