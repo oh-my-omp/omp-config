@@ -24,6 +24,10 @@
 | `mentor:default` | — | `openai-codex/gpt-5.6-sol:high, openai-codex/gpt-5.6-luna:max` | `tools: []`（仅 `yield`） | 无工具顾问：长调查开始前协助收敛计划与决定性检查点，交付前核对改动、已跑验证与未验证项；回复内容必须放在 `yield` 参数内。 |
 | `reviewer` | — | `@slow` | `tools: read, find, grep, glob, bash, lsp, web_search, ast_grep`；`spawns: scout`（已禁用，派生会在 preflight 被拒） | OMP 内置 `reviewer` 的副本，作为定制审查角色的基础：只读审查补丁，以 `yield` 交付 `overall_correctness`、`explanation`、`confidence` 与增量 `findings`（P0–P3，锚定补丁）。 |
 
+### 本仓库的项目级子代理
+
+`.omp/agents/consult-carbon.md` 定义 `consult:carbon`，只在工作目录为本仓库的会话中被发现；它的模型绑定在项目 `.omp/config.yml` 的 `task.agentModelOverrides`（`google-antigravity/gemini-4-carbon:high`），与全局覆盖深度合并。它是只有 `tools: read` 的咨询与讨论伙伴，不能搜索、列目录或运行任何东西：调用方先备好材料——带行号范围的路径，以及写入 `local://` 文件的命令输出、日志或 diff——并提开放式问题。带着答案的是非题会被拒绝，并改写成其背后的开放式问题。
+
 ## 顾问上下文与 `user-prompt-inject`
 
 默认情况下，子代理只看到调用方写在 `task` 和 `context` 里的转述。针对 `mentor:default`、`discuss:steady` 与 `discuss:divergent` 的约定：

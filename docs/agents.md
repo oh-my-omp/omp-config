@@ -24,6 +24,10 @@ Responsibilities, tool limits, and `spawns` lists live in `agent/agents/<name>.m
 | `mentor:default` | — | `openai-codex/gpt-5.6-sol:high, openai-codex/gpt-5.6-luna:max` | `tools: []` (`yield` only) | Tool-less mentor: consulted before long investigations to sharpen the plan and after work to review what changed, what ran, and what remains unverified. Must place its full reply inside `yield`. |
 | `reviewer` | — | `@slow` | `tools: read, find, grep, glob, bash, lsp, web_search, ast_grep`; `spawns: scout` (disabled, so spawning it fails preflight) | Copy of OMP's bundled `reviewer`, the base for a customized review role: reviews a patch read-only and yields `overall_correctness`, `explanation`, `confidence`, and incremental `findings` (P0–P3, patch-anchored). |
 
+### Project-level subagent of this repository
+
+`.omp/agents/consult-carbon.md` defines `consult:carbon`, discovered only in sessions whose working directory is this repository; its model is bound in the project `.omp/config.yml` under `task.agentModelOverrides` (`google-antigravity/gemini-4-carbon:high`), which deep-merges into the global overrides. It is a consultant and discussion partner with `tools: read` only, so it cannot search, list or run anything: the caller prepares the material — paths with line ranges, and command output, logs or diffs written to `local://` files — and asks open questions. It refuses a yes/no question that carries its own answer and rewrites it as the open question behind it.
+
 ## Advisor Context and `user-prompt-inject`
 
 By default, a subagent only sees the prompt its caller passes in `task` and `context`. The following settings keep `mentor:default`, `discuss:steady`, and `discuss:divergent` grounded in the user's actual request and the repository's code:
