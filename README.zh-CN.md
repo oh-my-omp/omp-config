@@ -56,6 +56,7 @@ omomp 的完整定制面向高能力主 agent：编排和监督机制增强其�
 /sync-omp-config [check]                     # 本机受管改动 -> 仓库（按字段比对修改、校验、提交并推送）
 /omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]
                                              # 启动自动更新开关（默认关）、立即从 GitHub 拉取更新，或适配与上游冲突的本机定制
+/omomp-changelog [full|last [N]]            # 已装 omomp 组件合并后的变更记录：默认最近 3 个发布日，`last [N]` 或 `full`
 /migrate-omp-keys <target>                   # 经 SSH 将本机 auth_credentials 表复制到远端主机 agent.db
 ```
 

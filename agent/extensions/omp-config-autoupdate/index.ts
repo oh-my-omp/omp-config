@@ -32,10 +32,11 @@
 // next start, which the update widget says.
 //
 // VISIBILITY. Only a run that changed something shows anything: a widget above
-// the editor lists each update with its old and new version (omp-config by
-// commit, plugins by version) and disappears after 5 s. Up to date, a busy
-// lock and an offline fetch only log; failures warn. None of them affect the
-// session.
+// the editor shows the omp-config commit move (when files changed) and the
+// restart hint, and disappears after 5 s. Plugin version changes are only
+// logged; what changed in them is shown by the omomp-changelog extension at the
+// next start. Up to date, a busy lock and an offline fetch only log; failures
+// warn. None of them affect the session.
 //
 // PROJECT SECTIONS. OMP once read omp-config sections from a project's
 // `.omp/omomp.*` before the machine's. When a main session starts in such a
@@ -566,17 +567,19 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 	});
 }
 
-/** One updated item: what it is and how its version moved. */
-interface UpdateRow {
-	readonly name: string;
+/** How the omp-config commit moved: `change` as the widget shows it, `logChange` in English for the log. */
+interface ConfigMove {
 	readonly change: string;
 	readonly logChange: string;
 }
 
-/** What a startup run shows: nothing (only a log line), the updates, or a failure. */
+/**
+ * What a startup run shows: nothing (only a log line), the updates, or a failure.
+ * Plugin version changes are only logged here; the omomp-changelog extension shows what changed in them.
+ */
 type StartupOutcome =
 	| { readonly kind: "quiet"; readonly log: string }
-	| { readonly kind: "updated"; readonly rows: readonly UpdateRow[]; readonly restart: boolean }
+	| { readonly kind: "updated"; readonly config: ConfigMove | null; readonly plugins: readonly string[]; readonly restart: boolean }
 	| { readonly kind: "failed"; readonly en: string; readonly zh: string };
 
 function pluginVersionChangeEnglish(change: PluginChange): string {
@@ -585,12 +588,8 @@ function pluginVersionChangeEnglish(change: PluginChange): string {
 	return change.from === change.to ? `${to} (new commit)` : `${change.from} → ${to}`;
 }
 
-const pluginRows = (changes: readonly PluginChange[]): UpdateRow[] =>
-	changes.map((change) => ({
-		name: change.name,
-		change: pluginVersionChange(change),
-		logChange: pluginVersionChangeEnglish(change),
-	}));
+const pluginLogLines = (changes: readonly PluginChange[]): string[] =>
+	changes.map((change) => `${change.name} ${pluginVersionChangeEnglish(change)}`);
 
 function startupOutcome(outcome: RunOutcome<AutoResult>): StartupOutcome {
 	if (outcome.kind !== "result") return { kind: "failed", ...notRun(outcome) };
@@ -615,7 +614,7 @@ function startupOutcome(outcome: RunOutcome<AutoResult>): StartupOutcome {
 					zh: `omp-config：刷新插件时遇到 ${plugins.errors.length} 个错误，将在下次启动时重试：${plugins.errors[0]}；运行 /omp-config-autoupdate run 可查看完整报告`,
 				};
 			if (plugins.changes.length === 0) return { kind: "quiet", log: `omp-config: up to date at ${short(result.commit)}, plugins current` };
-			return { kind: "updated", rows: pluginRows(plugins.changes), restart: true };
+			return { kind: "updated", config: null, plugins: pluginLogLines(plugins.changes), restart: true };
 		}
 		case "applied": {
 			const { report } = result;
@@ -626,21 +625,21 @@ function startupOutcome(outcome: RunOutcome<AutoResult>): StartupOutcome {
 					zh: `omp-config：已应用 ${short(result.commit)}，但出现 ${report.errors.length} 个错误，将在下次启动时重试：${report.errors[0]}；运行 /omp-config-autoupdate run 可查看完整报告`,
 				};
 			const files = report.written.length + report.moved.length + report.deleted.length;
-			const rows: UpdateRow[] = [];
+			const plugins = pluginLogLines(report.pluginChanges);
+			let config: ConfigMove | null = null;
 			if (files > 0) {
 				const previous = result.previous ? short(result.previous) : "new";
-				rows.push({
-					name: "omp-config",
+				config = {
 					change: tr(
 						`${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
 						`${result.previous ? short(result.previous) : "新建"} → ${short(result.commit)}（${files} 个文件）`,
 					),
 					logChange: `${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
-				});
+				};
 			}
-			rows.push(...pluginRows(report.pluginChanges));
-			if (rows.length === 0) return { kind: "quiet", log: `omp-config: ${short(result.commit)} applied, host already matched` };
-			return { kind: "updated", rows, restart: report.restartNeeded };
+			if (config === null && plugins.length === 0)
+				return { kind: "quiet", log: `omp-config: ${short(result.commit)} applied, host already matched` };
+			return { kind: "updated", config, plugins, restart: report.restartNeeded };
 		}
 		default: {
 			const exhaustive: never = result;
@@ -718,13 +717,14 @@ function handleConflicts(pi: ExtensionAPI, ctx: ExtensionContext, state: Conflic
 const WIDGET_KEY = "omp-config-update";
 const WIDGET_MS = 5_000;
 
-/** Show the updates above the editor for WIDGET_MS: a header, then one aligned "name  old → new" row each. */
-function showUpdates(ctx: ExtensionContext, rows: readonly UpdateRow[], restart: boolean): void {
+/** Show the update above the editor for WIDGET_MS: a header, then the omp-config row "name  old → new" when its commit moved. */
+function showUpdates(ctx: ExtensionContext, config: ConfigMove | null, restart: boolean): void {
 	const { theme } = ctx.ui;
-	const width = Math.max(...rows.map((row) => row.name.length));
+	const title =
+		config === null ? tr("omp-config refreshed plugins", "omp-config 已刷新插件") : tr("omp-config updated", "omp-config 已更新");
 	ctx.ui.setWidget(WIDGET_KEY, [
-		`${theme.fg("accent", tr("omp-config updated", "omp-config 已更新"))}${restart ? theme.fg("muted", tr(" · restart OMP to load", " · 重启 OMP 以加载")) : ""}`,
-		...rows.map((row) => `  ${row.name.padEnd(width)}  ${row.change}`),
+		`${theme.fg("accent", title)}${restart ? theme.fg("muted", tr(" · restart OMP to load", " · 重启 OMP 以加载")) : ""}`,
+		...(config === null ? [] : [`  omp-config  ${config.change}`]),
 	]);
 	ctx.setTimeout(() => ctx.ui.setWidget(WIDGET_KEY, undefined), WIDGET_MS);
 }
@@ -840,9 +840,9 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 							break;
 						case "updated":
 							pi.logger.info(
-								`omp-config: updated ${outcome.rows.map((row) => `${row.name} ${row.logChange}`).join("; ")}${outcome.restart ? "; restart to load" : ""}`,
+								`omp-config: updated ${[...(outcome.config === null ? [] : [`omp-config ${outcome.config.logChange}`]), ...outcome.plugins].join("; ")}${outcome.restart ? "; restart to load" : ""}`,
 							);
-							if (ctx.hasUI) showUpdates(ctx, outcome.rows, outcome.restart);
+							if (ctx.hasUI) showUpdates(ctx, outcome.config, outcome.restart);
 							break;
 						default: {
 							const exhaustive: never = outcome;

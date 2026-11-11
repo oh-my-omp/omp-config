@@ -56,6 +56,7 @@ Slash commands run inside `omp` started at the repository root:
 /sync-omp-config [check]                     # copy eligible machine changes -> repo, validate, commit and push
 /omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]
                                              # startup auto-update (off by default), update from GitHub now, or adapt local customizations that conflict with upstream
+/omomp-changelog [full|last [N]]            # merged changelog of the installed omomp components: the latest 3 release days, `last [N]` or `full`
 /migrate-omp-keys <target>                   # copy auth_credentials table to a remote host's agent.db over SSH
 ```
 
