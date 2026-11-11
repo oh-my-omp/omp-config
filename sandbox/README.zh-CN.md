@@ -39,7 +39,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 - `~/.claude/rules`、`~/.claude/skills`、`~/.claude/CLAUDE.md`，存在才复制。
 - 工作树放到 `/repo`：已跟踪与未跟踪的文件，含未提交改动，不含被忽略的文件。
 
-之后容器安装最新的 `@oh-my-pi/pi-coding-agent`，运行 `/repo` 里的 updater（`omp-config-update.ts apply --source /repo`，它会 link `omp-config` 插件并把复制来的 omomp 值迁移进插件设置），再把启动自动更新写进这些设置关掉：`sandbox/autoupdate-off.ts` 通过 `omp plugin config set` 把 `omp-config-autoupdate.enabled` 设为 `false`，并打印读回的值。容器 agent 目录中的扩展因此来自工作树，而不是宿主机上次应用的版本，并且在沙箱里每次启动 omp 后都保持如此：否则复制进来的宿主机开关会在首次启动时用 GitHub `main` 覆盖它们。宿主机自己的设置不受影响。
+之后容器安装最新的 `@oh-my-pi/pi-coding-agent`，运行 `/repo` 里的 updater（`omp-config-update.ts apply --source /repo`，它会 link `omp-config` 插件并把复制来的 omomp 值迁移进插件设置），再把启动自动更新写进这些设置关掉：`sandbox/autoupdate-off.ts` 通过 `omp plugin config set` 把 `omp-config-autoupdate.enabled` 设为 `false`，并打印读回的值。容器 agent 目录中的扩展因此来自工作树，而不是宿主机上次应用的版本，并且在沙箱里每次启动 omp 后都保持如此：否则复制进来的宿主机开关会在首次启动时用 GitHub `release` 覆盖它们。宿主机自己的设置不受影响。
 
 ### 凭据
 

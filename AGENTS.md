@@ -23,7 +23,7 @@ Behavior is described where it lives; read the matching one before changing it:
 
 - **Two one-way directions.** Repo → machine is the updater (`/update-omp`
   applies the working tree; the opt-in startup auto-update applies GitHub
-  `main`). Machine → repo is `/sync-omp-config`, which never writes the
+  `release`). Machine → repo is `/sync-omp-config`, which never writes the
   machine. Adding or removing a managed file or an `omp.settings` key, or
   moving a path between the updater's owner lists, changes the updater's
   `managedPlain` / `STRUCTURED` / `LOCAL_*` / `SEED_*` or the manifest

@@ -4,12 +4,13 @@
 
 ```mermaid
 flowchart LR
-  gh["GitHub 默认分支 (main)"] -->|"启动自动更新（开关打开时） / /omp-config-autoupdate run"| local["~/.omp/agent"]
-  repo["omp-config 工作区"] -->|"/onboard-omp / /update-omp"| local
+  repo["omp-config 工作区"] -->|"git push"| gh["GitHub main"]
+  gh -->|"每日发布"| rel["GitHub release 分支"]
+  rel -->|"启动自动更新（开关打开时） / /omp-config-autoupdate run"| local["~/.omp/agent"]
+  repo -->|"/onboard-omp / /update-omp"| local
   local -->|"/sync-omp-config（只读本机）"| repo
-  repo -->|"git push"| gh
-  gh -->|"安装启动器"| light["omp 同目录的 omp-light"]
-  gh -->|"omp install"| plugins["~/.omp/plugins"]
+  rel -->|"安装启动器"| light["omp 同目录的 omp-light"]
+  prel["各 omomp 插件的 release 分支"] -->|"omp install（release 通道 spec）"| plugins["~/.omp/plugins"]
   local -->|"/migrate-omp-keys"| remote["远端主机 agent.db (auth_credentials)"]
 ```
 
@@ -52,7 +53,7 @@ flowchart LR
 
 1. **新机器首次配置（`/onboard-omp [check|<plane>]` 或 `/update-omp`）**：
    - 在仓库根目录运行 `/onboard-omp`。开场先说明完整定制为什么对低能力主 agent 是负担、对高能力主 agent 则能增强执行并保障任务质量。模型先调查 omomp 之外本机已有的全局规则和 skills，用真实故事讲清哪些语义约束可以由机制承担、哪些只覆盖一部分、哪些用户要求继续保留，以及还能增加什么能力。实际加载、文件存在和安装后才有的行为分别说明，个人与领域知识留给用户。配置、提示词、子代理、本地扩展和全部声明插件（含可选项）的介绍作为补充，不再主导开场。当前来源提供依据，仓库配置提供可调整的可运行示例，而不是讲稿。模型使用用户语言；非中文用户的第一条回复会建议 fork 并本地化配置和 prompt，用普通文字询问是否先做，等待回复；跳过则以同一语言只读继续。接受本地化时保留 schema 和机器可读文字，UI 仍只支持 `en`/`zh`。fork 维护的译文先同步上游，再从 fork 工作树运行 `/update-omp`，保持官方启动自动更新关闭。命令不调用 `ask` 工具，不逐章确认。明确的安装要求进入本机适配与 `/update-omp`；缺少的个人决定用普通文字沟通，思考翻译按 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) 设置。传 `check` 做本机只读诊断；传 `<plane>` 可指定主题、组件名或原有主题编号。
-   - 若已熟悉配置、只需直接安装，运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件执行 `omp install`）。
+   - 若已熟悉配置、只需直接安装，运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件及已安装的可选插件执行 `omp install`）。
    - 若本机使用 `~/.claude`，在 `~/.omp/agent/config.yml` 的 `extensions` 第一项加上 `~/.claude`，然后重启 `omp`。
    - 跟随官方仓库、而非维护 fork 译文的安装，需要开启启动自动更新时运行 `/omp-config-autoupdate on`（下次启动起生效）。
    - 用 `omp config list --json`、`omp plugin list --json`、`git status --short` 检查结果。
@@ -100,14 +101,14 @@ omp-config-autoupdate.exclude:
 | `/omp-config-autoupdate` 或 `… status` | 显示自动更新开关、冲突处理方式与设置位置 |
 | `/omp-config-autoupdate on\|off` | 修改 `omp-config-autoupdate.enabled` 设置（下次启动 OMP 生效） |
 | `/omp-config-autoupdate conflicts notify\|agent` | 修改 `omp-config-autoupdate.conflicts` 设置（下次启动 OMP 生效） |
-| `/omp-config-autoupdate run` | 不看开关状态，立即从 GitHub 默认分支拉取并执行一次 `auto` 更新，在会话空闲时把含冲突的明细报告作为只展示、不触发模型回合的消息写入对话 |
+| `/omp-config-autoupdate run` | 不看开关状态，立即从 GitHub 的 `release` 分支拉取并执行一次 `auto` 更新，在会话空闲时把含冲突的明细报告作为只展示、不触发模型回合的消息写入对话 |
 | `/omp-config-autoupdate adapt` | 列出相对更新器克隆的待处理冲突；有冲突时向主会话发出适配请求 |
 
 `omp-config-update.ts auto` 的执行顺序：
 1. 在根主会话 `session_start` 中由 `ctx.setTimeout` 异步启动子进程，获取锁目录 `~/.omp/omp-config-update.lock`（锁中 PID 已不存在时自动接管）。
-2. 拉取 `https://github.com/oh-my-omp/omp-config.git` 的 `main` 分支到 `~/.omp/omp-config-src`（自动修正旧的 `mouriya-s-lab/omp-config.git` 远程地址；离线拉取失败时直接退出，不使用本地旧克隆）。
-3. 当远端提交与 `<agentDir>/.omp-config-applied` 不同时，从新拉取的克隆导入 `applySnapshot`，依次执行：配置解析及 `TODO_RETIREMENTS`、`CTX_RETIREMENTS` 归属预检 → `omp install` 安装/升级必装插件 → 重新向 OMP 插件目录确认 `omp-todo-more` 已启用且声明的入口存在 → 位置迁移 → 普通文件与结构化配置三方合并 → 删除源中已删除且本机未改的文件及精确列出的 Todo 退休叶文件 → 记录基准 → `omp plugin link` 注册 `extensions/_shared`，并把 `omomp.*` 段一次性迁入插件设置。ctx 退休叶文件只有在就绪插件携带 `src/ctx` 时才删除，否则保留。
-4. 当远端提交与 `.omp-config-applied` 相同时，不写配置文件，仍对 `install-plugins.sh` 中每个不带 `#ref` 的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，并只读重新扫描冲突。已安装的 GitHub 源按 owner/repo 匹配，兼容 `github:`、HTTPS 与 Git URL 形式；npm 条目与带固定引用的 URL 等到下次配置提交变化时才更新。
+2. 拉取 `https://github.com/oh-my-omp/omp-config.git` 的 `release` 分支到 `~/.omp/omp-config-src`（自动修正旧的 `mouriya-s-lab/omp-config.git` 远程地址；离线拉取失败时直接退出，不使用本地旧克隆）。
+3. 当远端提交与 `<agentDir>/.omp-config-applied` 不同时，从新拉取的克隆导入 `applySnapshot`，依次执行：配置解析及 `TODO_RETIREMENTS`、`CTX_RETIREMENTS` 归属预检 → `omp install` 安装/升级必装插件及已安装的可选插件 → 重新向 OMP 插件目录确认 `omp-todo-more` 已启用且声明的入口存在 → 位置迁移 → 普通文件与结构化配置三方合并 → 删除源中已删除且本机未改的文件及精确列出的 Todo 退休叶文件 → 记录基准 → `omp plugin link` 注册 `extensions/_shared`，并把 `omomp.*` 段一次性迁入插件设置。ctx 退休叶文件只有在就绪插件携带 `src/ctx` 时才删除，否则保留。
+4. 当远端提交与 `.omp-config-applied` 相同时，不写配置文件，仍对 `install-plugins.sh` 中每个不带 `#ref` 或处在 `#release` 通道的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，并只读重新扫描冲突。因此某插件的 `release` 分支前进后，即使 omp-config 没有发布，下次启动也会把它升到新的分支头；`release` 分支没动的插件保持原样。已安装的 GitHub 源按 owner/repo 匹配，兼容 `github:`、HTTPS 与 Git URL 形式；npm 条目与钉在其他引用上的 URL 等到下次配置提交变化时才更新。
 5. 移动或写入阶段只要报错，就跳过全部删除步骤、保留原 `.omp-config-applied` 不变，并报告 `Cutover incomplete; do not restart OMP`。冲突不算错误：提交照常记录，冲突保持待处理。
 6. 只有配置文件或插件实际发生变化时，才在编辑框上方显示 5 秒提示框：配置文件有变化时显示 omp-config 一行（如 `omp-config 93d519e → e5a34bc (3 files)`）和重启提示。插件版本变化只写日志，变了什么由 [omomp-changelog](extensions.zh-CN.md#omomp-changelog) 在下次启动时显示；无变化、锁占用与离线只写日志，失败弹 warning。
 
@@ -124,7 +125,7 @@ omp-config 是 omomp 发布成员。它的包根是 `agent/extensions/_shared`�
 - **写条目**：提交用 lgit（`git add` 后运行 `uvx --from lgit-cli lgit`），它把每项用户可见的变化写成根目录 `CHANGELOG.md` 里 `## [Unreleased]` 某个分类下的条目。PR 不改 `agent/extensions/_shared/package.json` 的版本，也不新增版本段。
 - **每日发布**：调用文件是 `.github/workflows/omomp-release.yml`。它在 GMT+9 02:00（`cron: "0 17 * * *"`）和 `workflow_dispatch` 时运行，调用 `oh-my-omp/.github/.github/workflows/omomp-release.yml@main`，传入 `package-dir: agent/extensions/_shared` 与 `changelog: CHANGELOG.md`。`## [Unreleased]` 有条目时，这次运行把它们改写成带日期的版本段，写入 `agent/extensions/_shared/package.json` 的版本，在 `main` 上提交 `chore: release X.Y.Z` 并打 `vX.Y.Z` tag，把 `release` 分支移到该提交，并建 GitHub Release；`## [Unreleased]` 下没有内容时不发布。
 - **到本机**：更新器把根目录 `CHANGELOG.md` 复制到 `<agentDir>/extensions/_shared/CHANGELOG.md`（见归属表），也就是 manifest 的 `omomp` 声明指向的文件，所以 [omomp-changelog](extensions.zh-CN.md#omomp-changelog) 像对待其他成员一样显示 omp-config。`/sync-omp-config` 从不把它收回仓库。
-- **分发通道**：启动自动更新与 `/omp-config-autoupdate run` 仍然拉取 `main`，不是 `release` 分支。
+- **分发通道**：启动自动更新与 `/omp-config-autoupdate run` 拉取 `release` 分支，合并到 `main` 的提交随下一次发布到达机器；`/update-omp` 照旧应用工作区本身。`install-plugins.sh` 把每个 omomp 插件声明为 `<url>#release`，各插件随自己的每日发布到达机器，与 omp-config 的发布无关（见 [`auto`](#omp-config-autoupdate) 第 4 步）；按无 ref spec 安装的插件在第一次应用这些 spec 时改记为 `#release`。
 
 ---
 

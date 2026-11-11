@@ -1,7 +1,7 @@
 // Container side of the startup auto-update switch. Runs as `bun /sandbox/autoupdate-off.ts`, after
 // the /repo updater linked the plugin `omp-config` and moved the copied omomp values into its settings.
 // The copied host settings may have the startup auto-update on; left on, the first omp start in the
-// sandbox applies GitHub `main` over the working tree under test. This sets the plugin setting
+// sandbox applies the GitHub `release` branch over the working tree under test. This sets the plugin setting
 // `omp-config-autoupdate.enabled` to false through `omp plugin config set`, reads it back with
 // `omp plugin config get` and prints it; any other value fails the build.
 import { spawnSync } from "node:child_process";

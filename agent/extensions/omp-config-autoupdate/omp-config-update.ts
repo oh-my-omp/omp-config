@@ -9,7 +9,9 @@
 //   auto      Run by the omp-config-autoupdate extension at OMP start when the
 //             machine's switch is on (`/omp-config-autoupdate on`; off by
 //             default). Refreshes the updater-owned clone (~/.omp/omp-config-src)
-//             from origin, and applies only when the fetch succeeds and its
+//             from origin's `release` branch (DEFAULT_BRANCH; the daily release
+//             moves it, so commits merged to main but not yet released never
+//             reach the machine), and applies only when the fetch succeeds and its
 //             commit differs from the commit last applied to this agent dir
 //             (`<agent dir>/.omp-config-applied`). A failed fetch (offline)
 //             applies nothing: the clone is a copy of origin as of the last
@@ -185,20 +187,25 @@
 // process only releases a lock it holds.
 //
 // PLUGINS. Every required entry of install-plugins.sh (an uncommented quoted
-// line) runs through `omp install` before managed file operations: missing
-// ones are installed, installed ones are re-resolved (npm to the latest
-// version, GitHub URLs to the default branch's head). A plugin counts as
+// line) and every installed optional one (a comment line holding only a
+// source) runs through `omp install` with its declared spec before managed
+// file operations: missing required ones are installed, installed ones are
+// re-resolved and take the declared spec (npm to the latest
+// version, a GitHub URL to the head of its `#ref`, else of its default
+// branch). omomp plugins are declared as `<url>#release`, so they follow
+// each plugin's daily release, not its main. A plugin counts as
 // changed when ~/.omp/plugins/bun.lock or omp-plugins.lock.json changes; a
 // change sets restartNeeded. A failed install or upgrade is an error and stops
 // the apply before file operations. Packages are never enabled or disabled here.
 // When `auto` finds the config commit unchanged it still refreshes plugins
-// whose source moves on its own: every unpinned (no `#ref`) GitHub URL among
-// the required entries and the installed optional ones (a comment line holding
-// only a source). An installed plugin matches a declared GitHub URL by its
-// owner/repo in any form omp records (`github:`, https or git URL). The same
-// `omp install` re-resolves each one, so the plugin
-// manager, not this script, decides whether the default branch moved; npm
-// entries and pinned URLs wait for the next config commit. The result rides on
+// whose source moves on its own: every GitHub URL without a `#ref` or on the
+// `#release` channel (PLUGIN_CHANNEL), among the required entries and the
+// installed optional ones (a comment line holding only a source). An installed
+// plugin matches a declared GitHub URL by its owner/repo in any form omp
+// records (`github:`, https or git URL). The same `omp install` re-resolves
+// each one, so the plugin manager, not this script, decides whether the branch
+// moved; npm entries and URLs pinned to any other `#ref` wait for the next
+// config commit. The result rides on
 // `up-to-date`; a failed install is reported there and never touches the marker.
 // Each retirement handover requires a fresh enabled npm catalog entry, the
 // extension entry its manifest declares and the actual files (Todo: ./index.ts;
@@ -268,7 +275,7 @@ import {
 export const REPO_URL = "https://github.com/oh-my-omp/omp-config.git";
 /** Origins of updater clones made before the repo moved to oh-my-omp; repointed to REPO_URL on the next fetch. */
 const PREVIOUS_REPO_URLS: readonly string[] = ["https://github.com/mouriya-s-lab/omp-config.git"];
-export const DEFAULT_BRANCH = "main";
+export const DEFAULT_BRANCH = "release";
 export const APPLIED_MARKER = ".omp-config-applied";
 
 /**
@@ -334,7 +341,7 @@ const UPDATER_REL = "extensions/omp-config-autoupdate/omp-config-update.ts";
 /** Where layouts before the extension directory kept this script. */
 const LEGACY_UPDATER_REL = "omp-config-update.ts";
 
-const TODO_PLUGIN_URL = "https://github.com/oh-my-omp/omp-todo-more";
+const TODO_PLUGIN_URL = "https://github.com/oh-my-omp/omp-todo-more#release";
 const TODO_PLUGIN_NAME = "omp-todo-more";
 /** Exact legacy leaves; directories, interior links and neighboring host files are not retirement targets. */
 const TODO_RETIREMENTS: readonly string[] = [
@@ -1617,6 +1624,16 @@ function declaredPlugins(source: string): DeclaredPlugins {
 	return { required, optional };
 }
 
+/** The moving channel of omomp plugins: each plugin's daily release moves its `release` branch. */
+const PLUGIN_CHANNEL = "release";
+
+/** A GitHub spec whose source moves without a config commit: no `#ref`, or the `#release` channel. */
+function movesOnItsOwn(spec: string): boolean {
+	if (!spec.includes("://")) return false;
+	const hash = spec.indexOf("#");
+	return hash === -1 || spec.slice(hash + 1) === PLUGIN_CHANNEL;
+}
+
 /** Plugin name → dependency value (`#ref` stripped) recorded in ~/.omp/plugins/package.json. */
 type InstalledPlugins = ReadonlyMap<string, string>;
 
@@ -1787,7 +1804,8 @@ function pluginResolutionState(): string {
 
 /**
  * `omp install` for each spec: a missing one is installed, an installed one is
- * re-resolved to npm's latest or a GitHub URL's default-branch head. `omp plugin
+ * re-resolved to npm's latest or the head of a GitHub URL's `#ref` (its default
+ * branch without one). `omp plugin
  * upgrade` is not used: for GitHub-sourced plugins it reports "up to date" while
  * the locked commit is stale.
  */
@@ -1810,10 +1828,11 @@ function installPlugins(omp: string, specs: readonly string[]): PluginRefresh {
 	return refresh;
 }
 
-/** The apply's plugin step: every required plugin, before managed file operations. */
-function syncPlugins(opts: ApplyOptions, report: ApplyReport, declared: readonly string[]): void {
+/** The apply's plugin step: every required plugin and every installed optional one, before managed file operations. */
+function syncPlugins(opts: ApplyOptions, report: ApplyReport, plugins: DeclaredPlugins): void {
 	const installed = installedPlugins();
-	const missing = declared.filter((spec) => installedName(spec, installed) === undefined);
+	const declared = [...plugins.required, ...plugins.optional.filter((spec) => installedName(spec, installed) !== undefined)];
+	const missing = plugins.required.filter((spec) => installedName(spec, installed) === undefined);
 	if (opts.check || !opts.plugins) {
 		report.pluginsMissing.push(...missing);
 		if (opts.check && opts.plugins && declared.length > 0)
@@ -1838,16 +1857,15 @@ function syncPlugins(opts: ApplyOptions, report: ApplyReport, declared: readonly
 }
 
 /**
- * Plugins whose source moves without a config commit: unpinned GitHub URLs among
- * the required entries and the installed optional ones. Run by `auto` when the
- * config commit is unchanged; npm entries and `#ref` pins wait for the next commit.
+ * Plugins whose source moves without a config commit: GitHub URLs without a
+ * `#ref` or on the `#release` channel, among the required entries and the
+ * installed optional ones. Run by `auto` when the config commit is unchanged;
+ * npm entries and other `#ref` pins wait for the next commit.
  */
 function refreshMovingPlugins(source: string): PluginRefresh {
 	const { required, optional } = declaredPlugins(source);
 	const installed = installedPlugins();
-	const specs = [...required, ...optional.filter((spec) => installedName(spec, installed) !== undefined)].filter(
-		(spec) => spec.includes("://") && !spec.includes("#"),
-	);
+	const specs = [...required, ...optional.filter((spec) => installedName(spec, installed) !== undefined)].filter(movesOnItsOwn);
 	if (specs.length === 0) return { installed: [], upgraded: [], errors: [], changes: [] };
 	const omp = Bun.which("omp");
 	if (!omp) return { installed: [], upgraded: [], errors: ["plugins not refreshed: omp is not on PATH"], changes: [] };
@@ -2277,7 +2295,7 @@ function applyPluginGates(state: ApplyState): "stop" | undefined {
 		if (readiness?.kind === "invalid") report.errors.push(readiness.message);
 	}
 	if (report.errors.length > 0 && !opts.check) return "stop";
-	syncPlugins(opts, report, declaredPlugins(opts.source).required);
+	syncPlugins(opts, report, declaredPlugins(opts.source));
 	if (!opts.check && report.errors.length > 0) {
 		cutoverNote(state);
 		return "stop";
@@ -2354,7 +2372,7 @@ function runApplyOps(state: ApplyState): BaseChange[] {
 			accepted.push(op.change);
 			continue;
 		}
-		const leaf = op.rel.slice("agent/".length);
+		const leaf = agentPathOf(op.rel);
 		const retirement =
 			op.kind === "delete" &&
 			((state.todoRequired && TODO_RETIREMENTS.includes(leaf)) ||
