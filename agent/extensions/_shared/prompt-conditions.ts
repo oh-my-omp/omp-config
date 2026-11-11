@@ -19,9 +19,13 @@ import { unquote } from "./spec-files.ts";
  * `session-filter.ts`; `mode` is a comma list of `full` and `light`, the
  * current mode being `light` when `OMOMP_MODE=light` (set by `omp-light`) and
  * `full` otherwise; `delegation` is a comma list of the host's delegation-bias
- * tiers (`eager`, `balanced`, `restrained`, `gated`), tested against the bias OMP resolves
- * for the session's current model, the value that decides which
- * delegation wording OMP renders into the prompt. Inclusion keys must all
+ * tiers (`eager`, `balanced`, `restrained`, `gated`), tested against the bias
+ * `resolveDelegationBias` returns for the session's current model, the value
+ * from which OMP renders the delegation wording of tool descriptions (`eval`,
+ * `glob`, `grep`, `ast_grep`). The system-prompt template gets its own
+ * `delegationTier`, which differs when `task.eager` is on: in the main
+ * session, with `task.eager` other than `default` and a bias other than
+ * `gated`, the tier is `eager`; otherwise it equals the bias. Inclusion keys must all
  * match; the exclusion, which exists only when an `exclude.*` key is set,
  * excludes when all of its keys match, and without `exclude.target` it covers
  * every session. `model` / `provider` / `delegation` test the session's
