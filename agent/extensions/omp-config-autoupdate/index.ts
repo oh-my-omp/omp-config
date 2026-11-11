@@ -720,10 +720,8 @@ const WIDGET_MS = 5_000;
 /** Show the update above the editor for WIDGET_MS: a header, then the omp-config row "name  old → new" when its commit moved. */
 function showUpdates(ctx: ExtensionContext, config: ConfigMove | null, restart: boolean): void {
 	const { theme } = ctx.ui;
-	const title =
-		config === null ? tr("omp-config refreshed plugins", "omp-config 已刷新插件") : tr("omp-config updated", "omp-config 已更新");
 	ctx.ui.setWidget(WIDGET_KEY, [
-		`${theme.fg("accent", title)}${restart ? theme.fg("muted", tr(" · restart OMP to load", " · 重启 OMP 以加载")) : ""}`,
+		`${theme.fg("accent", tr("omp-config updated", "omp-config 已更新"))}${restart ? theme.fg("muted", tr(" · restart OMP to load", " · 重启 OMP 以加载")) : ""}`,
 		...(config === null ? [] : [`  omp-config  ${config.change}`]),
 	]);
 	ctx.setTimeout(() => ctx.ui.setWidget(WIDGET_KEY, undefined), WIDGET_MS);
