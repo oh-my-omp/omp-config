@@ -57,6 +57,12 @@ Behavior is described where it lives; read the matching one before changing it:
   `task.agentModelOverrides`; agent `.md` files carry no `model` field.
   Non-agent notes in `agent/agents/` are `.txt`, because every `.md` there is
   parsed as an agent.
+- **Commits and releases.** Commit with lgit: `git add`, then
+  `uvx --from lgit-cli lgit`. Its entries go under `## [Unreleased]` of the
+  repo-root `CHANGELOG.md`, which covers every file of the repo, including
+  `install-plugins.sh`. A PR never changes the version in
+  `agent/extensions/_shared/package.json` and never adds a version section;
+  the release workflow does both.
 - **Docs.** `README.md` and each `docs/<topic>.md` have a `*.zh-CN.md` twin
   with aligned sections, tables and anchors; change both. A behavior change
   updates the page or header that describes it. Docs and commands never state

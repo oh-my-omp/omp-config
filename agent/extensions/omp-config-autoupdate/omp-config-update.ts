@@ -41,6 +41,10 @@
 // copy always wins without merge or conflict, and a rel absent with a
 // recorded base — removed or renamed by the machine — is never re-created.
 // /sync-omp-config never pulls them into the repo.
+// The repo-root CHANGELOG.md (written by lgit and the release run) is the one
+// managed file outside `agent/`: it lands at extensions/_shared/CHANGELOG.md,
+// where the plugin manifest's `omomp` declaration points, and merges like any
+// other non-code file. /sync-omp-config never pulls it into the repo.
 // Shipped APPEND-SYSTEM-*.md, PROMPT-INJECT-*.md, TURN-JUDGE-*.md and
 // REPLACE-SYSTEM-*.yml/.yaml rule files are managed templates; additional host
 // files stay machine-owned. Edits to APPEND-SYSTEM and REPLACE-SYSTEM files
@@ -450,6 +454,13 @@ const STRUCTURED: readonly StructuredItem[] = [
 const MACHINE_OWNED_PLAIN = /^agent\/agents\/[^/]+\.md$/;
 
 /**
+ * omp-config's changelog: lgit writes it at the repo root so it covers every
+ * commit; the plugin manifest declares `CHANGELOG.md`, so it lands beside the
+ * manifest in PLUGIN_DIR (see agentPathOf). /sync-omp-config never carries it back.
+ */
+const ROOT_CHANGELOG_REL = "CHANGELOG.md";
+
+/**
  * Repo files copied verbatim. `rel` uses `/` separators. Inside an extension
  * directory only modules and shipped templates are the repo's; any other file
  * there (settings, switches, the machine's own templates) is the host's.
@@ -470,7 +481,8 @@ function managedPlain(rel: string): boolean {
 		/^agent\/extensions\/tool-policy-nag\/INTENT-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions\/tool-topics\/(TOPIC|SURFACE)-[^/]+\.md$/.test(rel) ||
 		rel === "agent/extensions/argon-long-output/ARGON_PROMPT.md" ||
-		rel === `agent/${PLUGIN_DIR}/package.json`
+		rel === `agent/${PLUGIN_DIR}/package.json` ||
+		rel === ROOT_CHANGELOG_REL
 	);
 }
 
@@ -558,9 +570,9 @@ function parseExclusions(raw: readonly string[], origin: string): Exclusions {
 	return { entries, fields };
 }
 
-/** `rel` (`agent/…`) is excluded by a plain entry: a literal pattern covers itself and its whole subtree. */
+/** Managed `rel` is excluded by a plain entry on its agent-dir path: a literal pattern covers itself and its whole subtree. */
 function plainRelExcluded(rel: string, exclusions: Exclusions): boolean {
-	const leaf = rel.slice("agent/".length);
+	const leaf = agentPathOf(rel);
 	return exclusions.entries.some((entry) => entry.kind === "plain" && entry.match(leaf));
 }
 
@@ -703,9 +715,18 @@ function serialize(value: Mapping, format: Format): string {
 	return text.endsWith("\n") ? text : `${text}\n`;
 }
 
-function targetOf(rel: string, agentDir: string): string {
-	if (rel.startsWith("agent/")) return join(agentDir, rel.slice("agent/".length));
+/**
+ * Agent-dir relative path of a managed rel: `agent/X` lands at `X`; the
+ * repo-root changelog lands beside the plugin manifest that declares it.
+ */
+function agentPathOf(rel: string): string {
+	if (rel === ROOT_CHANGELOG_REL) return `${PLUGIN_DIR}/CHANGELOG.md`;
+	if (rel.startsWith("agent/")) return rel.slice("agent/".length);
 	throw new Error(`no target for ${rel}`);
+}
+
+function targetOf(rel: string, agentDir: string): string {
+	return join(agentDir, agentPathOf(rel));
 }
 
 /**
@@ -1009,6 +1030,7 @@ function listSourceFiles(source: string): string[] {
 			.join("/")}`;
 		if (managedPlain(rel)) files.push(rel);
 	}
+	if (existsSync(join(source, ROOT_CHANGELOG_REL))) files.push(ROOT_CHANGELOG_REL);
 	return files.sort();
 }
 
@@ -1099,7 +1121,7 @@ function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, 
 
 /** Todo/ctx/fork leaves have their own retirement planner (see DELETIONS). */
 function retiring(ctx: PlanContext, rel: string): boolean {
-	const leaf = rel.slice("agent/".length);
+	const leaf = agentPathOf(rel);
 	return (
 		(ctx.todoRequired && TODO_RETIREMENTS.includes(leaf)) ||
 		CTX_RETIREMENTS.includes(leaf) ||
@@ -1110,7 +1132,7 @@ function retiring(ctx: PlanContext, rel: string): boolean {
 function planPlain(ctx: PlanContext): Op[] {
 	const { opts } = ctx;
 	const shipped = listSourceFiles(opts.source).filter((rel) => {
-		const leaf = rel.slice("agent/".length);
+		const leaf = agentPathOf(rel);
 		return !((ctx.todoRequired && TODO_RETIREMENTS.includes(leaf)) || (ctx.forkRequired && FORK_RETIREMENTS.includes(leaf)));
 	});
 	const ops: Op[] = [];
@@ -1504,6 +1526,7 @@ function droppedBeforeBase(ctx: PlanContext): Map<string, Buffer> {
 		"HEAD",
 		"--",
 		"agent",
+		ROOT_CHANGELOG_REL,
 	]);
 	if (!diff.ok) {
 		report.notes.push(`deletions before the base skipped: ${diff.err}`);

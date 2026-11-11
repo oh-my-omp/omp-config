@@ -30,6 +30,7 @@ flowchart LR
 | `APPEND_SYSTEM_MODEL.md`（`append-system-model` 旧格式） | 本机 | 一次性按块拆成 `extensions/append-system-model/APPEND-SYSTEM-model-NN.md`，每块一个本机文件并带 `target: *`，随后删除原文件；目标文件名已存在或原文件无法解析时保留原文件并记 note | 不收回仓库 | — |
 | `agent/config.yml` | 仓库 + 本机按字段合并 | 按字段三方合并。`LOCAL_CONFIG_FIELDS`（本机、OMP 或用户本人同意所有，如 `modelRoles`、`theme`、`setupVersion`、`dev.autoqaConsent`、`codexResets`）从不写入；`SEED_CONFIG_FIELDS`（默认值，如 `task.agentModelOverrides`、`retry.fallbackChains`、`browser`、`task.maxConcurrency`）只在本机缺少时写入；本机独有键保留；`extensions` 与 `disabledProviders`（`MACHINE_LIST_FIELDS`）中的本机条目（如 `~/.claude`）保留在前，仓库条目作为一个整体三方合并；基准中没有该列表（仓库从未向本机交付过它）时，本机条目全部归本机，仓库条目追加在其后 | 只用 `edit` 修改差异行，不整文件重序列化；跳过 `LOCAL_CONFIG_FIELDS`、`SEED_CONFIG_FIELDS` 与 `extensions`、`disabledProviders` 的本机条目 | OMP 热重载 |
 | `agent/extensions/_shared/package.json`（`omp-config` 插件 manifest） | 仓库；保留本机修改 | 按上面文本文件的规则三方合并；`omp.settings` 是设置键、类型与默认值的唯一清单 | 与本机 `cmp` 比对，有改动时写回仓库 | 下次启动 OMP |
+| `extensions/_shared/CHANGELOG.md`（仓库根目录 `CHANGELOG.md` 的副本） | 仓库；保留本机修改 | 按上面文本文件的规则三方合并，来源是仓库根目录的 `CHANGELOG.md`；落在 manifest 旁边，manifest 的 `omomp` 声明指向它 | 不收回仓库（changelog 只由 lgit、PR 与发布运行写） | 下次启动 OMP（由 [omomp-changelog](extensions.zh-CN.md#omomp-changelog) 读取） |
 | `omp-config` 插件设置（`/settings → Plugins → omp-config`、`omp plugin config`；项目 `.omp/plugin-overrides.json` 覆盖机器值） | 本机 | 从不写入；apply 先 link 插件（`omp plugin link` 指向 `extensions/_shared`），再把本机 `omomp.*` 中 omp-config 拥有的段一次性迁入设置（见下方迁移） | 不收回仓库（仓库默认值在 manifest 里） | 按各扩展读取时机生效 |
 | `<agentDir>/omomp.*` | 各段各自的归属方 | 只有 omp-config 拥有的段迁出（见下方迁移）；其他归属方的段（如 `omp-unified-exec`）从不写入；内容清空后删除该文件 | 不收回仓库 | — |
 | `<agentDir>/subagent-usage/calibration.json` | 本机（`subagent-usage` 扩展在 `/subagent-usage on` 之后写入） | 不写入也不删除；`/subagent-usage reset` 删除 | 不收回仓库 | 下次调用 `subagent_usage` |
@@ -56,7 +57,7 @@ flowchart LR
    - 跟随官方仓库、而非维护 fork 译文的安装，需要开启启动自动更新时运行 `/omp-config-autoupdate on`（下次启动起生效）。
    - 用 `omp config list --json`、`omp plugin list --json`、`git status --short` 检查结果。
 2. **把本机修改收回仓库（`/sync-omp-config [check]`）**：
-   - 先运行 `/sync-omp-config check` 查看差异，再运行 `/sync-omp-config` 写回仓库、执行 `Bun.YAML.parse` / `JSON.parse` 与 `bun run check` 校验，并提交推送（`chore: sync snapshot with local omp config`）。本机所有路径、播种路径和基准记录都不进仓库。
+   - 先运行 `/sync-omp-config check` 查看差异，再运行 `/sync-omp-config` 写回仓库、执行 `Bun.YAML.parse` / `JSON.parse` 与 `bun run check` 校验，并用 lgit 提交推送（条目写进根目录 `CHANGELOG.md` 的 `## [Unreleased]`，见[发布与变更记录](#发布与变更记录)）。本机所有路径、播种路径和基准记录都不进仓库。
    - 若本机 `extensions/` 下仍有旧平铺 `.ts` 文件（已排除的旧 Todo/`ctx` 路径除外），命令会停止并提示先运行 `/update-omp`。
    - 当 `~/.omp/plugins/package.json` 的依赖与 `install-plugins.sh` 不一致时，同步更新脚本中的插件列表（保留 Git/URL 原文、去掉 npm 版本范围、保持注释掉的可选插件不变）。
 3. **把当前工作区应用到本机（`/update-omp [check]`）**：
@@ -115,6 +116,15 @@ omp-config-autoupdate.exclude:
 - 更新器从未运行过的机器（没有基准记录，也没有已安装的 `omp-config-update.ts`，例如 omp 首次启动设置只写了它自己的 `config.yml`）没有收到过仓库内容，结构化文件不与历史比对：本机缺少的受管键直接写入，用户已设成不同值的键报告为冲突。
 - 有待处理冲突时，`conflicts: notify` 弹出警告并指向 `/omp-config-autoupdate adapt`。`conflicts: agent` 会自动向主会话发出适配请求，但只在刚应用了新提交、有 UI、会话空闲且还没有用户消息时这样做；否则只通知。
 - 适配请求让 agent 运行 `omp-config-update.ts conflicts`，它打印处理步骤，并给出每个冲突的本机副本、基准与新版本。agent 逐项说明两边的改动，用 `ask` 让用户选择保留本机、采用新版本或接受它提出的合并，修改本机文件，再用 `omp-config-update.ts resolve <id>` 记录结果。上游值在列出之后又变化的 id 会被 `resolve` 拒绝。
+
+### 发布与变更记录
+
+omp-config 是 omomp 发布成员。它的包根是 `agent/extensions/_shared`，其 `package.json` 声明 `"omomp": { "changelog": "CHANGELOG.md" }`；变更记录是仓库根目录的 `CHANGELOG.md`，因此覆盖仓库的每个文件，包括 `install-plugins.sh`。
+
+- **写条目**：提交用 lgit（`git add` 后运行 `uvx --from lgit-cli lgit`），它把每项用户可见的变化写成根目录 `CHANGELOG.md` 里 `## [Unreleased]` 某个分类下的条目。PR 不改 `agent/extensions/_shared/package.json` 的版本，也不新增版本段。
+- **每日发布**：调用文件是 `.github/workflows/omomp-release.yml`。它在 GMT+9 02:00（`cron: "0 17 * * *"`）和 `workflow_dispatch` 时运行，调用 `oh-my-omp/.github/.github/workflows/omomp-release.yml@main`，传入 `package-dir: agent/extensions/_shared` 与 `changelog: CHANGELOG.md`。`## [Unreleased]` 有条目时，这次运行把它们改写成带日期的版本段，写入 `agent/extensions/_shared/package.json` 的版本，在 `main` 上提交 `chore: release X.Y.Z` 并打 `vX.Y.Z` tag，把 `release` 分支移到该提交，并建 GitHub Release；`## [Unreleased]` 下没有内容时不发布。
+- **到本机**：更新器把根目录 `CHANGELOG.md` 复制到 `<agentDir>/extensions/_shared/CHANGELOG.md`（见归属表），也就是 manifest 的 `omomp` 声明指向的文件，所以 [omomp-changelog](extensions.zh-CN.md#omomp-changelog) 像对待其他成员一样显示 omp-config。`/sync-omp-config` 从不把它收回仓库。
+- **分发通道**：启动自动更新与 `/omp-config-autoupdate run` 仍然拉取 `main`，不是 `release` 分支。
 
 ---
 
