@@ -50,7 +50,7 @@
 | `bashInterceptor.enabled` | `true`（`config.yml` 的规则把 `cat`/`grep`/`find`/`sed -i`/`echo >` 等转向专用工具） | `false`：`bash` 直接执行这些命令，不拦截 |
 | `disabledExtensions` | 无 | 禁用以下扩展：`fork-task`（插件 `omp-subagent-more` 的扩展入口）、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
 | `config.yml` 的 `extensions` 路径列表 | 加载 `extensions-last/system-prompt-replace` | `config-light.yml` 用自己的列表覆盖 `extensions`，同样最后加载 `extensions-last/system-prompt-replace`（其 `REPLACE-SYSTEM-*.yml` 规则用 `mode` / `exclude.mode` 区分模式，仓库自带规则写 `mode: full`）；`omp-light.ts` 读取本机 `config.yml`，把不含 `/extensions-last/` 的本机条目（如 `~/.claude`）通过 `-e` 传回 |
-| 其余本地扩展 | 启用 | 保留：`append-system-model`、`argon-long-output`、`ast-top-level`、`child-memory-warning`、`delete-guard`、`harness-restart`、`input-polish`、`model-compaction`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`subagent-usage`、`tool-topics`、`wt-tool`（轻量模式下 OMP 自有工具的说明同样有表层文本与 `Topics` 索引；插件工具保留自身说明） |
+| 其余本地扩展 | 启用 | 保留：`append-system-model`、`argon-long-output`、`ast-top-level`、`child-memory-warning`、`delete-guard`、`harness-restart`、`input-polish`、`model-compaction`、`omomp-changelog`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`subagent-usage`、`tool-topics`、`wt-tool`（轻量模式下 OMP 自有工具的说明同样有表层文本与 `Topics` 索引；插件工具保留自身说明） |
 | 已安装插件 | 全部加载 | 全部加载，除上面 `disabledExtensions` 列出的 `fork-task` 插件扩展入口外 |
 | 轻量模式减少的本地工具 | — | 无（`fork_task` 是插件 `omp-subagent-more` 的工具，其 `fork-task` 扩展入口被 `config-light.yml` 禁用） |
 

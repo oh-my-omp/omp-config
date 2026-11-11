@@ -31,6 +31,7 @@ Configuration files expose choices users can adapt to their own work. Shipped ru
 | 21 | `subagent-usage` | [subagent-usage](#subagent-usage) | Main + Sub | Yes | Machine consent; local calibration data | A human enables or disables history access through `/subagent-usage`; project files cannot grant consent |
 | 22 | `argon-long-output` | [argon-long-output](#argon-long-output) | Main + Sub | Yes | `ARGON_PROMPT.md` and supported stream-timeout settings | Customize long-output instructions and explicit timeout budgets for the matching models |
 | 23 | `ast-top-level` | [ast-top-level](#ast-top-level) | Process-wide + Main + Sub | Yes | No extension config file | OMP owns the syntax-tool settings; this extension keeps enabled tools directly visible, and disabling it requires a restart |
+| 24 | `omomp-changelog` | [omomp-changelog](#omomp-changelog) | Main TUI | Yes | `startup.changelogMode`, `startup.quiet` (OMP settings); marker file | Choose `summary`, `expanded` or `hidden` startup notes; read history with `/omomp-changelog [full\|last [N]]` |
 
 ---
 
@@ -298,3 +299,16 @@ Sets the UI language (`en` or `zh`) for person-facing text across local extensio
 - At module load, sets `process.env.OMOMP_LANG` unless the launch environment already defines it (`OMOMP_LANG=en omp`).
 - `_shared/i18n.ts` `tr(en, zh)` resolves `OMOMP_LANG` → `omomp-lang.language` (read once per process) → `LC_ALL` / `LC_MESSAGES` / `LANG` (`zh*` = Chinese) → English at each call site, reading the setting directly so deferred extensions that produce text before `omomp-lang` finishes loading still use the configured language.
 - `omomp-lang.language` belongs to omp-config; OMP plugins read it as part of the shared language-discovery order. Exporting it as `OMOMP_LANG` also supplies environment-only consumers and child processes. Plugin-owned behavior belongs in the [plugin references](plugins-and-modes.md).
+
+### omomp-changelog
+
+Source: `agent/extensions/omomp-changelog/`.
+
+Shows one merged What's New for the omomp components installed on this machine and offers `/omomp-changelog` for their history. OMP's own What's New and `/changelog` are not touched.
+
+- **Members**: an installed plugin, enabled or not, whose `package.json` has a top-level `omomp` object with a string `changelog` (a path relative to the package root). `omp-config` is one through its plugin link. The members and each package's version (from its own `package.json`) are read at every start; plugins without the declaration never appear.
+- **Marker**: `<agentDir>/omomp-changelog/seen.json` holds the version of each member whose changelog was last shown. It is machine state that the updater does not manage and `/sync-omp-config` does not carry. A member without a marker is recorded at its current version and shows nothing; an equal version shows nothing; a newer one shows the sections in (marker, current] and advances the marker; an older one shows nothing and keeps the marker. A member whose changelog cannot be read, has no section for its current version, or has a section without a date shows nothing, keeps its marker and is named in a log warning. The marker entry of a package that is no longer a member is deleted, so a reinstalled package starts again without history.
+- **Startup**: in the main session with a UI, the sections of all members that gained versions appear as one widget above the editor, grouped by release date and then by component; the first message you send (not a slash command) removes it. `startup.changelogMode` `summary` (default) shows the component, release-day and change counts, the category counts with a pointer to `/omomp-changelog`, and one row per component with its version change; `expanded` shows the sections as Markdown, `## <date>` newest first and `### <package> vX.Y.Z` within a day. `hidden` marks the sections as seen without showing them (also when `startup.quiet` is set); with `startup.quiet` and a showing mode nothing is shown and the marker stays. Sessions without a UI and subagents neither show nor change the marker.
+- **Command**: `/omomp-changelog` prints the latest three release days of every member's changelog as one Markdown message, `last` one day, `last N` N days, `full` all of them; other arguments print only the usage line. It reads every member's current changelog and neither reads nor writes the marker.
+- **Language**: widget and command text follow [omomp-lang](#omomp-lang); changelog entries are shown as written.
+- **Failure**: nothing is thrown into OMP; a failed start logs a warning and shows nothing.

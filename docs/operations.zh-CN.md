@@ -33,6 +33,7 @@ flowchart LR
 | `omp-config` 插件设置（`/settings → Plugins → omp-config`、`omp plugin config`；项目 `.omp/plugin-overrides.json` 覆盖机器值） | 本机 | 从不写入；apply 先 link 插件（`omp plugin link` 指向 `extensions/_shared`），再把本机 `omomp.*` 中 omp-config 拥有的段一次性迁入设置（见下方迁移） | 不收回仓库（仓库默认值在 manifest 里） | 按各扩展读取时机生效 |
 | `<agentDir>/omomp.*` | 各段各自的归属方 | 只有 omp-config 拥有的段迁出（见下方迁移）；其他归属方的段（如 `omp-unified-exec`）从不写入；内容清空后删除该文件 | 不收回仓库 | — |
 | `<agentDir>/subagent-usage/calibration.json` | 本机（`subagent-usage` 扩展在 `/subagent-usage on` 之后写入） | 不写入也不删除；`/subagent-usage reset` 删除 | 不收回仓库 | 下次调用 `subagent_usage` |
+| `<agentDir>/omomp-changelog/seen.json` | 本机（`omomp-changelog` 扩展） | 更新器从不写入或删除 | 不收回仓库 | 下次启动 OMP |
 | `<agentDir>/thinking-translator.json` | 插件 / 本机 | 从不创建、重写或删除；旧结构化基准记录不再参与操作 | 不收回仓库；设置见 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) | 由插件定义 |
 | `<agentDir>/.omp-config-base/` | 更新器（本机） | 每个受管项的基准：本机写入成功后写入，`resolve` 也会写；`--check` 从不写 | 不进仓库 | — |
 | 外部应用管理的文件（首行 `// @orca-managed-pi-extension` 或含 `marker: _otty`） | 外部应用（Orca / Otty） | 从不覆盖、导入或删除；旧迁移源保留并跳过或阻止迁移，被取代的模块或退休叶文件会阻止切换；不改它们的基准 | 跳过 | — |
@@ -107,7 +108,7 @@ omp-config-autoupdate.exclude:
 3. 当远端提交与 `<agentDir>/.omp-config-applied` 不同时，从新拉取的克隆导入 `applySnapshot`，依次执行：配置解析及 `TODO_RETIREMENTS`、`CTX_RETIREMENTS` 归属预检 → `omp install` 安装/升级必装插件 → 重新向 OMP 插件目录确认 `omp-todo-more` 已启用且声明的入口存在 → 位置迁移 → 普通文件与结构化配置三方合并 → 删除源中已删除且本机未改的文件及精确列出的 Todo 退休叶文件 → 记录基准 → `omp plugin link` 注册 `extensions/_shared`，并把 `omomp.*` 段一次性迁入插件设置。ctx 退休叶文件只有在就绪插件携带 `src/ctx` 时才删除，否则保留。
 4. 当远端提交与 `.omp-config-applied` 相同时，不写配置文件，仍对 `install-plugins.sh` 中每个不带 `#ref` 的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，并只读重新扫描冲突。已安装的 GitHub 源按 owner/repo 匹配，兼容 `github:`、HTTPS 与 Git URL 形式；npm 条目与带固定引用的 URL 等到下次配置提交变化时才更新。
 5. 移动或写入阶段只要报错，就跳过全部删除步骤、保留原 `.omp-config-applied` 不变，并报告 `Cutover incomplete; do not restart OMP`。冲突不算错误：提交照常记录，冲突保持待处理。
-6. 只有配置文件或插件实际发生变化时，才在编辑框上方显示 5 秒提示框（如 `omp-config 93d519e → e5a34bc (3 files)`、`omp-todo-more 0.1.10 → 0.1.12`）；无变化、锁占用与离线只写日志，失败弹 warning。
+6. 只有配置文件或插件实际发生变化时，才在编辑框上方显示 5 秒提示框：配置文件有变化时显示 omp-config 一行（如 `omp-config 93d519e → e5a34bc (3 files)`）和重启提示。插件版本变化只写日志，变了什么由 [omomp-changelog](extensions.zh-CN.md#omomp-changelog) 在下次启动时显示；无变化、锁占用与离线只写日志，失败弹 warning。
 
 冲突与适配：
 - 没有基准的机器（基准记录出现之前安装，或手动复制安装）会把每个本机副本与仓库历史比对：等于任一已提交版本的视为未改；都不等的记为基准未知，在解决前一直是冲突。为此更新器克隆会加深一次历史。

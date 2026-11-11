@@ -31,6 +31,7 @@
 | 21 | `subagent-usage` | [subagent-usage](#subagent-usage) | 主 + 子 | 是 | 本机授权与本地校准数据 | 用户本人通过 `/subagent-usage` 启停历史访问，项目文件不能授权 |
 | 22 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
 | 23 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
+| 24 | `omomp-changelog` | [omomp-changelog](#omomp-changelog) | 主 TUI | 是 | `startup.changelogMode`、`startup.quiet`（OMP 设置）；标记文件 | 选择 `summary`、`expanded` 或 `hidden` 的启动更新说明；用 `/omomp-changelog [full\|last [N]]` 查看历史 |
 
 ---
 
@@ -299,3 +300,16 @@ Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-
 - 模块加载时将 `process.env.OMOMP_LANG` 设为该值，但若启动环境已设置（如 `OMOMP_LANG=en omp`）则保留环境值。
 - `_shared/i18n.ts` 的 `tr(en, zh)` 在每次生成文字时按 `OMOMP_LANG` → `omomp-lang.language` 设置（每进程读一次）→ `LC_ALL` / `LC_MESSAGES` / `LANG`（`zh*` 为中文）→ 英文 的顺序解析，并直接读取设置，使早于 `omomp-lang` 加载的扩展也能拿到配置语言。
 - `omomp-lang.language` 归 omp-config 所有，OMP 插件在共享的语言发现顺序中读取该设置。将它导出为 `OMOMP_LANG` 也为仅读环境变量的使用方与子进程提供语言。插件自有行为见[插件参考](plugins-and-modes.zh-CN.md)。
+
+### omomp-changelog
+
+源码：`agent/extensions/omomp-changelog/`。
+
+把本机已装 omomp 组件的更新内容合并成一块 What's New，并提供 `/omomp-changelog` 查看它们的历史。OMP 自己的 What's New 与 `/changelog` 不受影响。
+
+- **成员**：已装插件（启用或禁用都算）中，`package.json` 顶层 `omomp` 是对象且 `changelog`（相对包根目录的路径）是字符串的包；`omp-config` 经它的插件链接同样是成员。成员以及各包的版本（取自包内 `package.json`）在每次启动时现场读取；没有这个声明的插件从不出现。
+- **标记**：`<agentDir>/omomp-changelog/seen.json` 记录每个成员上次展示过的版本，属于本机状态，更新器不托管，`/sync-omp-config` 不带走。没有标记的成员记下当前版本、不显示；版本相等不显示；当前版本更高则显示 (标记, 当前] 内的版本段并推进标记；当前版本更低不显示、标记不变。changelog 读不出、找不到当前版本段或有版本段没有日期的成员不显示、标记不变，并在日志里记一条指名它的 warning。不再是成员的包，其标记项被删除，重新安装后从头开始、不弹历史。
+- **启动**：在有 UI 的主会话里，所有版本有增加的成员的版本段合并成编辑器上方的一块 widget，按发布日期、再按组件分组；你发出第一条消息（斜杠命令不算）后它消失。`startup.changelogMode` 为 `summary`（默认）时显示组件数、发布日数与变更数，带 `/omomp-changelog` 提示的分类计数，以及每个组件一行的版本变化；`expanded` 显示 Markdown，`## <日期>` 从新到旧，每个日期下 `### <包名> vX.Y.Z`。`hidden` 只把版本段标记为已看、不显示（同时设置了 `startup.quiet` 也是如此）；模式为显示且 `startup.quiet` 为真时不显示、标记不推进。无 UI 的会话和 subagent 既不显示也不改标记。
+- **命令**：`/omomp-changelog` 把每个成员 changelog 里最近三个发布日合并成一条 Markdown 消息输出，`last` 一天，`last N` N 天，`full` 全部；其他参数只输出用法行。它读取每个成员当前的 changelog，不读也不写标记。
+- **语言**：widget 与命令的文字跟随 [omomp-lang](#omomp-lang)；changelog 条目原样显示。
+- **失败**：不向 OMP 抛异常；启动失败只记 warning、不显示。
