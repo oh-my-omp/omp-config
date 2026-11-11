@@ -53,7 +53,7 @@ flowchart LR
 
 1. **新机器首次配置（`/onboard-omp [check|<plane>]` 或 `/update-omp`）**：
    - 在仓库根目录运行 `/onboard-omp`。开场先说明完整定制为什么对低能力主 agent 是负担、对高能力主 agent 则能增强执行并保障任务质量。模型先调查 omomp 之外本机已有的全局规则和 skills，用真实故事讲清哪些语义约束可以由机制承担、哪些只覆盖一部分、哪些用户要求继续保留，以及还能增加什么能力。实际加载、文件存在和安装后才有的行为分别说明，个人与领域知识留给用户。配置、提示词、子代理、本地扩展和全部声明插件（含可选项）的介绍作为补充，不再主导开场。当前来源提供依据，仓库配置提供可调整的可运行示例，而不是讲稿。模型使用用户语言；非中文用户的第一条回复会建议 fork 并本地化配置和 prompt，用普通文字询问是否先做，等待回复；跳过则以同一语言只读继续。接受本地化时保留 schema 和机器可读文字，UI 仍只支持 `en`/`zh`。fork 维护的译文先同步上游，再从 fork 工作树运行 `/update-omp`，保持官方启动自动更新关闭。命令不调用 `ask` 工具，不逐章确认。明确的安装要求进入本机适配与 `/update-omp`；缺少的个人决定用普通文字沟通，思考翻译按 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme) 设置。传 `check` 做本机只读诊断；传 `<plane>` 可指定主题、组件名或原有主题编号。
-   - 若已熟悉配置、只需直接安装，运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件执行 `omp install`）。
+   - 若已熟悉配置、只需直接安装，运行 `/update-omp`（写入配置文件、扩展与更新器，安装 `omp-light`，并对必装插件及已安装的可选插件执行 `omp install`）。
    - 若本机使用 `~/.claude`，在 `~/.omp/agent/config.yml` 的 `extensions` 第一项加上 `~/.claude`，然后重启 `omp`。
    - 跟随官方仓库、而非维护 fork 译文的安装，需要开启启动自动更新时运行 `/omp-config-autoupdate on`（下次启动起生效）。
    - 用 `omp config list --json`、`omp plugin list --json`、`git status --short` 检查结果。
@@ -107,7 +107,7 @@ omp-config-autoupdate.exclude:
 `omp-config-update.ts auto` 的执行顺序：
 1. 在根主会话 `session_start` 中由 `ctx.setTimeout` 异步启动子进程，获取锁目录 `~/.omp/omp-config-update.lock`（锁中 PID 已不存在时自动接管）。
 2. 拉取 `https://github.com/oh-my-omp/omp-config.git` 的 `release` 分支到 `~/.omp/omp-config-src`（自动修正旧的 `mouriya-s-lab/omp-config.git` 远程地址；离线拉取失败时直接退出，不使用本地旧克隆）。
-3. 当远端提交与 `<agentDir>/.omp-config-applied` 不同时，从新拉取的克隆导入 `applySnapshot`，依次执行：配置解析及 `TODO_RETIREMENTS`、`CTX_RETIREMENTS` 归属预检 → `omp install` 安装/升级必装插件 → 重新向 OMP 插件目录确认 `omp-todo-more` 已启用且声明的入口存在 → 位置迁移 → 普通文件与结构化配置三方合并 → 删除源中已删除且本机未改的文件及精确列出的 Todo 退休叶文件 → 记录基准 → `omp plugin link` 注册 `extensions/_shared`，并把 `omomp.*` 段一次性迁入插件设置。ctx 退休叶文件只有在就绪插件携带 `src/ctx` 时才删除，否则保留。
+3. 当远端提交与 `<agentDir>/.omp-config-applied` 不同时，从新拉取的克隆导入 `applySnapshot`，依次执行：配置解析及 `TODO_RETIREMENTS`、`CTX_RETIREMENTS` 归属预检 → `omp install` 安装/升级必装插件及已安装的可选插件 → 重新向 OMP 插件目录确认 `omp-todo-more` 已启用且声明的入口存在 → 位置迁移 → 普通文件与结构化配置三方合并 → 删除源中已删除且本机未改的文件及精确列出的 Todo 退休叶文件 → 记录基准 → `omp plugin link` 注册 `extensions/_shared`，并把 `omomp.*` 段一次性迁入插件设置。ctx 退休叶文件只有在就绪插件携带 `src/ctx` 时才删除，否则保留。
 4. 当远端提交与 `.omp-config-applied` 相同时，不写配置文件，仍对 `install-plugins.sh` 中每个不带 `#ref` 或处在 `#release` 通道的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，并只读重新扫描冲突。因此某插件的 `release` 分支前进后，即使 omp-config 没有发布，下次启动也会把它升到新的分支头；`release` 分支没动的插件保持原样。已安装的 GitHub 源按 owner/repo 匹配，兼容 `github:`、HTTPS 与 Git URL 形式；npm 条目与钉在其他引用上的 URL 等到下次配置提交变化时才更新。
 5. 移动或写入阶段只要报错，就跳过全部删除步骤、保留原 `.omp-config-applied` 不变，并报告 `Cutover incomplete; do not restart OMP`。冲突不算错误：提交照常记录，冲突保持待处理。
 6. 只有配置文件或插件实际发生变化时，才在编辑框上方显示 5 秒提示框：配置文件有变化时显示 omp-config 一行（如 `omp-config 93d519e → e5a34bc (3 files)`）和重启提示。插件版本变化只写日志，变了什么由 [omomp-changelog](extensions.zh-CN.md#omomp-changelog) 在下次启动时显示；无变化、锁占用与离线只写日志，失败弹 warning。

@@ -110,7 +110,7 @@
 			"omp-config-autoupdate.enabled": {
 				"type": "boolean",
 				"default": false,
-				"description": "Apply GitHub main at OMP start (next start)"
+				"description": "Apply the GitHub release branch at OMP start (next start)"
 			},
 			"omp-config-autoupdate.conflicts": {
 				"type": "enum",

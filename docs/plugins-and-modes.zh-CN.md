@@ -6,7 +6,7 @@
 
 独立插件通过 `install-plugins.sh` 安装到 `~/.omp/plugins/`（必装项加默认注释掉的可选项，不固定版本号，`~/.omp/plugins/` 不纳入本仓库）。每个 omomp 插件声明为 `<url>#release`，机器安装的是它 `release` 分支的头，该分支由插件的每日发布移动，`main` 上未发布的改动不会装到机器上。下表只记录安装源与 omp-config 的集成关系；插件的用法与配置由链接指向的插件来源维护。
 
-- 每次运行更新器都会对全部必装项执行 `omp install`，安装缺失插件并升级已安装插件。
+- 每次运行更新器都会按 `install-plugins.sh` 中声明的 spec，对全部必装项及每个已安装的可选项执行 `omp install`：缺失的必装插件被安装，已安装插件被升级并改记为声明的 spec（从不带 ref 的 URL 安装的可选插件改为 `#release`）。
 - 启动自动更新在远端配置提交未变时，仍会对每个不带 `#ref` 或处在 `#release` 通道的 GitHub 条目（必装项及已安装的可选项）执行 `omp install`，使各插件跟随自己的发布（不带 ref 的跟随默认分支），不必等配置提交；钉在其他引用上的条目等到下次配置提交。已安装条目按 owner/repo 与声明的 GitHub 来源匹配，兼容 OMP 记录的 `github:`、HTTPS 和 git URL 等形式。
 - `./plugin-audit.sh` 以 `omp install` 在 `~/.omp/plugins/package.json` 中记录的包名（下表第二列）比对 Git/URL 条目；本机已安装的可选插件列在 `[保留]` 下，不算缺失也不进卸载候选。
 

@@ -6,7 +6,7 @@
 
 Independent plugins are installed into `~/.omp/plugins/` via `install-plugins.sh` (required entries plus commented-out optional ones, none version-pinned, and `~/.omp/plugins/` is not tracked in git). Every omomp plugin is declared as `<url>#release`, so machines install the head of its `release` branch, which its daily release moves, never unreleased work on its `main`. The inventory below records installation sources and omp-config integration; plugin usage and configuration belong to the linked plugin sources.
 
-- Every updater apply runs `omp install` on all required entries, installing missing plugins and upgrading installed ones.
+- Every updater apply runs `omp install` on all required entries and on every installed optional one, with the spec declared in `install-plugins.sh`: missing required plugins are installed, and installed plugins are upgraded and recorded under the declared spec (an optional plugin installed from a bare URL moves to `#release`).
 - When startup auto-update sees an unchanged config commit, it still runs `omp install` on every GitHub entry without a `#ref` or on the `#release` channel (required plugins and already-installed optional plugins), so each plugin follows its own release (or, without a ref, its default branch) without waiting for a config commit; entries pinned to any other ref wait for the next config commit. Installed entries match a declared GitHub source by owner/repo across the forms OMP records, including `github:`, HTTPS and git URLs.
 - `./plugin-audit.sh` matches each Git/URL entry by the package name recorded in `~/.omp/plugins/package.json` (second column below); an installed optional plugin is listed under `[保留]` (keep) rather than missing or uninstall candidate.
 

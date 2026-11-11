@@ -187,8 +187,10 @@
 // process only releases a lock it holds.
 //
 // PLUGINS. Every required entry of install-plugins.sh (an uncommented quoted
-// line) runs through `omp install` before managed file operations: missing
-// ones are installed, installed ones are re-resolved (npm to the latest
+// line) and every installed optional one (a comment line holding only a
+// source) runs through `omp install` with its declared spec before managed
+// file operations: missing required ones are installed, installed ones are
+// re-resolved and take the declared spec (npm to the latest
 // version, a GitHub URL to the head of its `#ref`, else of its default
 // branch). omomp plugins are declared as `<url>#release`, so they follow
 // each plugin's daily release, not its main. A plugin counts as
@@ -1826,10 +1828,11 @@ function installPlugins(omp: string, specs: readonly string[]): PluginRefresh {
 	return refresh;
 }
 
-/** The apply's plugin step: every required plugin, before managed file operations. */
-function syncPlugins(opts: ApplyOptions, report: ApplyReport, declared: readonly string[]): void {
+/** The apply's plugin step: every required plugin and every installed optional one, before managed file operations. */
+function syncPlugins(opts: ApplyOptions, report: ApplyReport, plugins: DeclaredPlugins): void {
 	const installed = installedPlugins();
-	const missing = declared.filter((spec) => installedName(spec, installed) === undefined);
+	const declared = [...plugins.required, ...plugins.optional.filter((spec) => installedName(spec, installed) !== undefined)];
+	const missing = plugins.required.filter((spec) => installedName(spec, installed) === undefined);
 	if (opts.check || !opts.plugins) {
 		report.pluginsMissing.push(...missing);
 		if (opts.check && opts.plugins && declared.length > 0)
@@ -2292,7 +2295,7 @@ function applyPluginGates(state: ApplyState): "stop" | undefined {
 		if (readiness?.kind === "invalid") report.errors.push(readiness.message);
 	}
 	if (report.errors.length > 0 && !opts.check) return "stop";
-	syncPlugins(opts, report, declaredPlugins(opts.source).required);
+	syncPlugins(opts, report, declaredPlugins(opts.source));
 	if (!opts.check && report.errors.length > 0) {
 		cutoverNote(state);
 		return "stop";

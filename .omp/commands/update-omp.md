@@ -4,7 +4,7 @@ description: 用本仓库工作区更新本机 OMP 配置（repo → 本机）�
 
 用当前仓库工作区（含未推送的改动）手动执行一次 repo → 本机更新，与 `/sync-omp-config` 方向相反。实际写入全部由更新器 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 完成，规则以它文件头的说明和代码为准；本命令只负责运行、补上脚本不做的插件卸载判断、报告结果。不使用 subagent，直接执行。
 
-`omp-config-autoupdate` 扩展可以在每次 OMP 启动时从 GitHub 默认分支自动更新，但默认关闭，要执行 `/omp-config-autoupdate on` 打开。没打开时，repo → 本机靠本命令；打开后，本命令用于新机器首次安装更新器、自动更新报 `has no agent/omp-config-update.ts`（机器上还是更新器挪位置之前的旧版）时装上新位置的更新器，以及把未推送的本地改动先应用到本机。
+`omp-config-autoupdate` 扩展可以在每次 OMP 启动时从 GitHub 的 `release` 分支自动更新，但默认关闭，要执行 `/omp-config-autoupdate on` 打开。没打开时，repo → 本机靠本命令；打开后，本命令用于新机器首次安装更新器、自动更新报 `has no agent/omp-config-update.ts`（机器上还是更新器挪位置之前的旧版）时装上新位置的更新器，以及把未推送的本地改动先应用到本机。
 
 `$ARGUMENTS`：
 - 为空：执行更新。
@@ -17,7 +17,7 @@ description: 用本仓库工作区更新本机 OMP 配置（repo → 本机）�
    - `check`：`bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source . --check`
 
    agent 目录默认取 `PI_CODING_AGENT_DIR`，否则 `~/.omp/agent`；使用 named profile 时加 `--agent-dir <omp config path 的输出>`。脚本报告 `another update holds …` 时，说明有一次自动更新正在进行，稍后重跑。
-   更新器先完整 preflight（含 `TODO_RETIREMENTS` 与 `CTX_RETIREMENTS` 的归属），再对每个必装声明插件执行 `omp install`（缺的补装，已装的升级），并重新向 OMP owner 核对 `omp-todo-more` 的 enabled、manifest entry 与实际入口；就绪后才写消费者并退休已知的旧 Todo 路径，ctx 路径还要求就绪插件携带 `src/ctx`，否则保留。插件无法安装或升级、disabled、坏 entry、app-managed/父链接/异常退休对象时不切换；退休归属出错会在安装插件前停止。报告 errors 时停止后续卸载、冲突适配和初始化项流程：保留实际部分结果，先修复并重跑；出现 `Cutover incomplete; do not restart OMP` 时不能重启混合状态。
+   更新器先完整 preflight（含 `TODO_RETIREMENTS` 与 `CTX_RETIREMENTS` 的归属），再按 `install-plugins.sh` 声明的 spec 对每个必装插件及已安装的可选插件执行 `omp install`（缺的必装插件补装，已装的升级并改记为声明的 spec），并重新向 OMP owner 核对 `omp-todo-more` 的 enabled、manifest entry 与实际入口；就绪后才写消费者并退休已知的旧 Todo 路径，ctx 路径还要求就绪插件携带 `src/ctx`，否则保留。插件无法安装或升级、disabled、坏 entry、app-managed/父链接/异常退休对象时不切换；退休归属出错会在安装插件前停止。报告 errors 时停止后续卸载、冲突适配和初始化项流程：保留实际部分结果，先修复并重跑；出现 `Cutover incomplete; do not restart OMP` 时不能重启混合状态。
    写入按更新器文件头的 CUSTOMIZATIONS 三方合并：本机没改过的受管项取工作区版本，改过的保留本机修改，文本文件两边都改时用 `git merge-file` 合并；`*.ts` 代码以仓库为准，被覆盖的本机修改列在 `overwrote customized code`。
    `agents/*.md` 子代理定义是本机级用户设置（更新器的 `MACHINE_OWNED_PLAIN`）：无基准记录时播种一次，本机未改仍随工作区更新和删除，本机改过的一律保留、不合并不报冲突，本机删掉或改名的不再重建。
    `thinking-translator.json` 不属于受管项：不会创建、重写或删除已有本机文件，旧结构化基准也不参与操作；翻译设置只参考 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme)。
@@ -31,7 +31,7 @@ description: 用本仓库工作区更新本机 OMP 配置（repo → 本机）�
 
 - 手动更新做 RELOCATIONS 的删除/移动及插件就绪后的精确退休（见更新器文件头）：旧平铺扩展、旧位置结构化配置和数据按迁移规则处理；根目录 `PROMPT-INJECT-*` / `TURN-JUDGE-*` 仓库模板仅在等于旧路径或新路径的仓库自带版本或本机已接受版本时删除，定制模板保留并记 note 提醒移植，符号链接不移动。`TODO_RETIREMENTS`、`CTX_RETIREMENTS` 与 `FORK_RETIREMENTS` 都在安装插件前预检归属；声明的 Todo 插件就绪后仅 unlink `TODO_RETIREMENTS` 列出的叶文件，`CTX_RETIREMENTS` 还要求就绪插件携带 `src/ctx`，否则保留；`FORK_RETIREMENTS` 在声明的 omp-subagent-more 插件就绪后同样 unlink。不删除目录、host-owned、app-managed 或链接 backing。其余删除与自动更新相同，依据记录的基准：基准里有、工作区已删除的受管文件，本机未改就删除，改过就报告冲突。本机还没有基准时，源中早已删除的文件保留：那需要自动更新才有的“上次应用的提交”。
 - 手动更新不改写 `<agent 目录>/.omp-config-applied`，但会把基准记录为工作区版本。自动更新开着时，下次启动只要 GitHub `release` 分支的提交与 `.omp-config-applied` 不同就会运行：本机此后没改过的项更新为 `release` 版本，包括手动应用、尚未发布的内容；本机此后改过的项按定制合并或报告冲突。合并并发布后再启动即可保持一致。
-- 自动更新遇到配置提交未变化时仍刷新 `install-plugins.sh` 中不带 `#ref` 或处在 `#release` 通道的 GitHub 必装项及已安装的可选项，插件因此随各自的发布更新。已安装源按 owner/repo 匹配，兼容 `github:`、HTTPS 与 Git URL 形式；npm 条目和钉在其他引用上的 URL 等到配置提交变化时再更新。手动更新每次都安装或升级必装声明插件。
+- 自动更新遇到配置提交未变化时仍刷新 `install-plugins.sh` 中不带 `#ref` 或处在 `#release` 通道的 GitHub 必装项及已安装的可选项，插件因此随各自的发布更新。已安装源按 owner/repo 匹配，兼容 `github:`、HTTPS 与 Git URL 形式；npm 条目和钉在其他引用上的 URL 等到配置提交变化时再更新。手动更新每次都安装或升级必装声明插件，并升级已安装的可选插件。
 - `omomp` 段的迁移属于更新器本身，随每次 apply 检查一次；`--check` 与 `--no-plugins` 只报告不写。
 
 ## 生效时机
