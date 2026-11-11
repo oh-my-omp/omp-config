@@ -39,8 +39,12 @@
 // `_shared/prompt-conditions.ts` (shared with append-system-model): `target`,
 // `cwd`, `model`, `provider`, `mode`, `delegation` and the same keys under
 // `exclude.`; without `target` a rule applies to every session. `delegation`
-// lists OMP's delegation-bias tiers (`eager`, `balanced`, `restrained`, `gated`) of the
-// current model, for text OMP renders only under some tiers. A `model` /
+// lists delegation biases (`eager`, `balanced`, `restrained`, `gated`) tested
+// against `resolveDelegationBias` of the current model, for tool-description
+// text OMP renders only under some biases. The system prompt's own
+// `delegationTier` differs when `task.eager` is on: `eager` in the main session
+// with `task.eager` other than `default` and a bias other than `gated`, the
+// bias otherwise. A `model` /
 // `provider` string is the regex source exactly as YAML decodes it. Any other
 // key makes the file invalid. Files apply in discovery order and rules in file
 // order, each to the text the previous one left, across every system-prompt

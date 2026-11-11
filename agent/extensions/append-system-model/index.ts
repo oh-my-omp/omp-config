@@ -33,8 +33,12 @@
 // `enabled` keeps the file on only for true/yes/on/1; `target` defaults to
 // main; `cwd` lists absolute or ~/ globs; `model` / `provider` are regexes on
 // the model and provider ids; `mode` lists full and/or light; `delegation`
-// lists OMP's delegation-bias tiers (eager, balanced, restrained, gated) of the current
-// model; each `exclude.*` key has the grammar of its inclusion key. Any other
+// lists delegation biases (eager, balanced, restrained, gated) tested against
+// `resolveDelegationBias` of the current model, the value OMP renders the
+// delegation wording of tool descriptions from; the system prompt's
+// `delegationTier` differs when `task.eager` is on: `eager` in the main session
+// with `task.eager` other than `default` and a bias other than `gated`, the
+// bias otherwise; each `exclude.*` key has the grammar of its inclusion key. Any other
 // key makes the file invalid.
 //
 // MATCHING. `_shared/prompt-conditions.ts` (shared with system-prompt-replace):
