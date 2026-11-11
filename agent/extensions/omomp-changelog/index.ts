@@ -177,7 +177,7 @@ async function showHistory(pi: ExtensionAPI, ctx: ExtensionCommandContext, args:
 	);
 }
 
-export default function omomp(pi: ExtensionAPI): void {
+export default function omompChangelog(pi: ExtensionAPI): void {
 	pi.registerCommand("omomp-changelog", {
 		description: tr(
 			"Changelog of the installed omomp components: /omomp-changelog [full|last [N]] (default: the latest 3 release days)",
