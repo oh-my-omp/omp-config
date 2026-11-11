@@ -1,6 +1,6 @@
 {
 	"name": "omp-config",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"private": true,
 	"type": "module",
 	"description": "Settings of the omp-config extensions; the extensions themselves load from config.yml and the extensions directory.",
