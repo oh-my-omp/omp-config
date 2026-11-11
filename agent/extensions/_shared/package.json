@@ -4,6 +4,9 @@
 	"private": true,
 	"type": "module",
 	"description": "Settings of the omp-config extensions; the extensions themselves load from config.yml and the extensions directory.",
+	"omomp": {
+		"changelog": "CHANGELOG.md"
+	},
 	"omp": {
 		"settings": {
 			"omomp-lang.language": {

@@ -40,11 +40,15 @@ omomp 的完整定制面向高能力主 agent：编排和监督机制增强其�
 | [子代理](docs/agents.zh-CN.md) | 可选 worker/顾问定义、模型绑定、顾问上下文、派发规则与 worktree 隔离 |
 | [本地扩展](docs/extensions.zh-CN.md) | 全部本地扩展总表，以及派发/交付检查（`isolation-nudge`、`task-split-check`、`task-completion-judge`）与估算子代理剩余可派发次数的 AI 侧 `/usage`（`subagent-usage`）、`JUDGE` 判定扩展（`tool-policy-nag`、`watchdog-agent`、`turn-judge`、`lang-nag`）、bash 与 eval 删除拦截和只收字面路径的 `delete` 工具（`delete-guard`）与宿主/TUI 扩展 |
 | [插件与运行模式](docs/plugins-and-modes.zh-CN.md) | `install-plugins.sh` 中的外部插件（`omp-todo-more`、`omp-sessions`、`omp-thinking-translator` 等）以及 `omp` 与 `omp-light` 的差异 |
-| [安装、同步与维护](docs/operations.zh-CN.md) | 仓库与本机的文件归属、`/onboard-omp`、`/update-omp`、`/sync-omp-config`、`omp-config-autoupdate`、`_shared` 模块与升级检查 |
+| [安装、同步与维护](docs/operations.zh-CN.md) | 仓库与本机的文件归属、`/onboard-omp`、`/update-omp`、`/sync-omp-config`、`omp-config-autoupdate`、每日发布与变更记录、`_shared` 模块与升级检查 |
 | [配置检查（`ci/README.zh-CN.md`）](ci/README.zh-CN.md) | `bun ci/check.ts` 如何安装 `omp`、应用配置、接入免费模型与影子代理并去重报告故障 |
 | [测试沙箱（`sandbox/README.zh-CN.md`）](sandbox/README.zh-CN.md) | `bun sandbox/sandbox.ts` 如何用本机 `~/.omp` 配置、凭据与工作树建一次性容器，按模型驱动真实会话，导出其提示缓存命中情况，并删除和登记每次运行 |
 | [`extensions-last`（`agent/extensions-last/README.zh-CN.md`）](agent/extensions-last/README.zh-CN.md) | 扩展加载顺序，以及 `system-prompt-replace` 放在 `agent/extensions/` 之外的原因 |
 | [子代理编写说明（`agent/agents/README.zh-CN.txt`）](agent/agents/README.zh-CN.txt) | 子代理 frontmatter、`spawns` 白名单、depth 2 递归上限与 `yield` 常见陷阱 |
+
+## 发布
+
+omp-config 是 omomp 发布成员。发布 workflow 每天 GMT+9 02:00 发布仓库根目录 [`CHANGELOG.md`](CHANGELOG.md) 的 `## [Unreleased]` 下累积的内容：在 `main` 上提交 `chore: release X.Y.Z` 并打 `vX.Y.Z` tag，`release` 分支移到该提交，并建 GitHub Release；`## [Unreleased]` 为空时不发布。更新器把这份变更记录复制到各机器的 `~/.omp/agent/extensions/_shared/CHANGELOG.md`，由 [`omomp-changelog`](docs/extensions.zh-CN.md#omomp-changelog) 读取。启动自动更新仍然拉取 `main`。详见[发布与变更记录](docs/operations.zh-CN.md#发布与变更记录)。
 
 ## 常用命令
 

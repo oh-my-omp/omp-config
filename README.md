@@ -40,11 +40,15 @@ This configuration is organized around the following design choices:
 | [Subagents](docs/agents.md) | The selectable worker/advisor definitions, model bindings, advisor context, dispatch rules, and worktree isolation |
 | [Local Extensions](docs/extensions.md) | Index of every local extension, dispatch/yield gates (`isolation-nudge`, `task-split-check`, `task-completion-judge`) and the agent-side `/usage` for subagent dispatch budgets (`subagent-usage`), `JUDGE`-backed monitors (`tool-policy-nag`, `watchdog-agent`, `turn-judge`, `lang-nag`), the bash and eval deletion guard and literal-path `delete` tool (`delete-guard`), and host/TUI extensions |
 | [Plugins and Runtime Modes](docs/plugins-and-modes.md) | External plugins in `install-plugins.sh` (`omp-todo-more`, `omp-sessions`, `omp-thinking-translator`, etc.) and `omp` vs `omp-light` |
-| [Setup, Sync and Maintenance](docs/operations.md) | Repo ↔ machine ownership rules, `/onboard-omp`, `/update-omp`, `/sync-omp-config`, `omp-config-autoupdate`, `_shared` modules, and upgrade checks |
+| [Setup, Sync and Maintenance](docs/operations.md) | Repo ↔ machine ownership rules, `/onboard-omp`, `/update-omp`, `/sync-omp-config`, `omp-config-autoupdate`, the daily release and changelog, `_shared` modules, and upgrade checks |
 | [CI Configuration Check (`ci/README.md`)](ci/README.md) | How `bun ci/check.ts` installs `omp`, applies the config, wires the free model and shadow proxy, and deduplicates diagnostics |
 | [Test Sandbox (`sandbox/README.md`)](sandbox/README.md) | How `bun sandbox/sandbox.ts` builds a throwaway container with this machine's `~/.omp` config, credentials and the working tree, drives real sessions per model, exports their prompt-cache hits, and removes and ledgers each run |
 | [`extensions-last` (`agent/extensions-last/README.md`)](agent/extensions-last/README.md) | Extension load order and why `system-prompt-replace` sits outside `agent/extensions/` |
 | [Subagent Authoring Notes (`agent/agents/README.txt`)](agent/agents/README.txt) | Subagent frontmatter, `spawns` lists, the depth-2 recursion limit, and `yield` pitfalls |
+
+## Releases
+
+omp-config is an omomp release member. Every day at 02:00 GMT+9 the release workflow publishes what has accumulated under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) at the repository root: a `chore: release X.Y.Z` commit and a `vX.Y.Z` tag on `main`, the `release` branch moved to it, and a GitHub Release. Nothing is published while `## [Unreleased]` is empty. The updater copies the changelog to `~/.omp/agent/extensions/_shared/CHANGELOG.md` on each machine, where [`omomp-changelog`](docs/extensions.md#omomp-changelog) reads it. Startup auto-update still fetches `main`. See [Releases and Changelog](docs/operations.md#releases-and-changelog).
 
 ## Commands
 
