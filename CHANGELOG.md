@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-14
+
 ### Fixed
 
 - The default system-prompt-replace rule that rewrites the eval prompt's `agent`/`workpool` line matches omp 18.20.0 again, which prints `xd://eval/agents` without backticks; the startup warning "found no target" for `REPLACE-SYSTEM-default.yml[6]` is gone
