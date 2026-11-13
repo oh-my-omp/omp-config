@@ -26,5 +26,5 @@ bun.lock
 **/logs/
 .omp/mcp.json
 
-# Machine-local rules for this user's Windows test VMs
-.omp/rules/windows-*.md
+# Machine-local rule for this user's Windows test VMs
+.omp/RULES.md
