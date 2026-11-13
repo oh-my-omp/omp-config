@@ -10,6 +10,7 @@ on:
     paths:
       - agent/extensions/delete-guard/**
       - ci/windows-guard*.ts
+      - ci/windows-env.ts
       - .github/workflows/delete-guard-windows.yml
 
 permissions:

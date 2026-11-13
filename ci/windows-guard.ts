@@ -9,14 +9,13 @@
 // Exit 0: every step passed. 1: a step failed, or setup failed.
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { bindModelRoles, MODEL } from "./windows-env.ts";
 import { type Session, type Step, type StepUi, steps, type ToolCall } from "./windows-guard-steps.ts";
 
 const REPO = resolve(import.meta.dir, "..");
-const MODEL = "opencode-go/deepseek-v4.1-flash";
-const ROLES = ["default", "smol", "slow", "plan", "commit", "tiny", "memory", "task", "advisor"];
 const SESSION_TIMEOUT_MS = 300_000;
 const SETUP_TIMEOUT_MS = 600_000;
 
@@ -40,12 +39,7 @@ function setup(agentDir: string): string | null {
 	const updater = join(REPO, "agent/extensions/omp-config-autoupdate/omp-config-update.ts");
 	const apply = run(["bun", updater, "apply", "--source", REPO, "--agent-dir", agentDir, "--json"], REPO);
 	if (apply.code !== 0) return `updater apply exited ${apply.code}: ${apply.out}`;
-	// modelRoles and skills are machine-local: bind every role to the test model and keep
-	// plugin skills from being compressed in the background.
-	const configPath = join(agentDir, "config.yml");
-	const config: unknown = Bun.YAML.parse(readFileSync(configPath, "utf8"));
-	const modelRoles = Object.fromEntries(ROLES.map((role) => [role, MODEL]));
-	writeFileSync(configPath, Bun.YAML.stringify({ ...(isMapping(config) ? config : {}), modelRoles, skills: { enabled: false } }, null, 2));
+	bindModelRoles(agentDir);
 	return null;
 }
 

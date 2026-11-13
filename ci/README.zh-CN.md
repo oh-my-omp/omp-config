@@ -9,7 +9,7 @@
 - **非目标**：让模型执行任务或调用工具；验证付费 helper 的判定（`task-split-check`、`task-completion-judge`）；TUI 专属行为；拦截合并（不设 branch protection）。
 - **输入**：仓库工作区（被检查对象），npm 上的 `@oh-my-pi/pi-coding-agent`，`install-plugins.sh` 声明的插件，Kilo 网关的匿名免费模型。
 
-实现：`ci/check.ts`（检查运行），`.github/workflows/config-check.yml`（触发；其中的 `omp-session` job）。本目录另有独立的 [delete-guard Windows 验收](#delete-guard-windows-验收) 节点，有自己的 workflow，见文末。
+实现：`ci/check.ts`（检查运行），`.github/workflows/config-check.yml`（触发；其中的 `omp-session` job）。本目录另有两个独立节点 [delete-guard Windows 验收](#delete-guard-windows-验收) 与 [windows-accept 入口](#windows-accept-入口)，各有自己的 workflow，见文末。
 
 ## 问题
 
@@ -158,7 +158,7 @@ CI_KEEP_ROOT=1 bun ci/check.ts       # 保留临时根目录以便排查
 
 本节点在真实 omp 会话里验证 `delete-guard` 在 Windows 上的行为（issue #69）：嵌套的 PowerShell 与 cmd 方言、eval 交给 cmd 的调用、回收站后端与 Windows 拒绝集。OrbStack 不提供 Windows 容器，无法在本地观察这些 Windows 行为。
 
-- **实现**：`ci/windows-guard.ts`（准备与会话）、`ci/windows-guard-steps.ts`（步骤与判定）、`.github/workflows/delete-guard-windows.yml`（`windows-latest` 上的 `windows` job）。
+- **实现**：`ci/windows-guard.ts`（准备与会话）、`ci/windows-guard-steps.ts`（步骤与判定）、`ci/windows-env.ts`（模型绑定）、`.github/workflows/delete-guard-windows.yml`（`windows-latest` 上的 `windows` job）。
 - **准备**：`bun install -g @oh-my-pi/pi-coding-agent@latest`，用仓库更新器 `apply` 到 runner 的 `~/.omp/agent`，把 `modelRoles` 的每个角色绑定到 `opencode-go/deepseek-v4.1-flash`，并设 `skills.enabled: false`。runner 是一次性虚拟机，因此直接使用 runner 账户真实的家目录与回收站。
 - **步骤**：每步一个 RPC 会话（`--mode rpc --no-session`，cwd 为 `$RUNNER_TEMP\omp-dg-work`；除需要回答确认的 permanent 步骤外都加 `--no-ui`），要求模型只发一次工具调用。用例定义在 `ci/windows-guard-steps.ts`。有界面的步骤里，脚本对每个 `confirm` 的 `extension_ui_request` 按该步的取值作答，其他对话框一律取消。prompt 写明这是删除 guard 的验收、操作对象都是一次性探针，模型因此没有理由拒绝或改写调用。每步之前创建对应探针（`C:\omp-dg\d\f`、`C:\omp-dg\p\f` 或 `C:\omp-dg\keep\f`）。
 - **每步通过条件**：所要求工具的第一次调用存在（否则报「model did not call <tool>」），输入与要求一字不差，结果符合预期——`bash`/`eval` 返回 `delete-guard:` 错误，`delete` 成功，拒绝时错误点名危险路径，被拒的 permanent 调用返回「nothing was deleted」并提示省略 `mode`——且之后探针状态符合预期：`C:\omp-dg\d\f`、`C:\omp-dg\p\f` 或 `C:\omp-dg\keep` 仍在；`trash` 后目录消失且回收站（`Shell.Application` 的 `NameSpace(10)`）列出它；确认通过的 `permanent` 后目录消失且回收站不列出它。有界面的 permanent 步骤还要求出现点名该路径的确认，无界面的那一步要求没有确认。runner 账户没有回收站时以「no recycle bin on runner」失败。日志打印每个确认、每次工具调用、结果原文、`Test-Path` 与回收站列表，步骤失败时另打印模型的最后一条回复。
@@ -168,3 +168,14 @@ CI_KEEP_ROOT=1 bun ci/check.ts       # 保留临时根目录以便排查
 - **不覆盖**：`exec_command` 退回 PowerShell 的情况；WSL；其他低档模型的矩阵。
 
 本地运行：无，本节点需要 Windows。workflow 进入 `main` 后用 `gh workflow run delete-guard-windows.yml --ref <branch>` 触发，或推送改动上述路径的 PR。
+
+## windows-accept 入口
+
+本节点在 Windows 上运行一段给定的 Bun 脚本做验收（issue #311）：oh-my-omp Windows 树（#310）各 issue 的验收脚本是写在 issue 里的固定文本，它们的缺陷只在没有 POSIX userland 的 Windows 机器上出现，本仓库在本地提供不了这样的环境。
+
+- **实现**：`ci/windows-accept.ts`（本地命令）、`ci/windows-accept-remote.ts`（runner 端）、`ci/windows-env.ts`（与 delete-guard 节点共用的模型绑定）、`.github/workflows/windows-accept.yml`（`windows-latest` 上的 `accept` job）。
+- **命令**：`bun ci/windows-accept.ts --checkout <owner/repo>@<ref> [--checkout …] --script <file.ts>`。触发任何东西之前，先检查脚本存在、每个 ref（分支、tag 或 SHA 前缀）都能由 GitHub 解析成提交；参数无效时以 2 退出并点名该参数。它从 `oh-my-omp/omp-config` 上以本地检出 HEAD 为分支尖的那个分支触发 workflow（所以 PR 分支验证的是它自己的 runner 端；HEAD 未推送时拒绝），按名字里的随机 nonce 找到这次运行，等它结束，把 job 日志去掉 GitHub 时间戳与终端颜色序列后打印到 stdout，并以远端脚本的退出码退出。无法触发、找不到或等不到运行结束，或准备阶段在脚本运行前失败时，以 1 退出。
+- **Runner 环境**：最新 Bun 与 `bun install -g @oh-my-pi/pi-coding-agent@latest`；在 runner 的 `~/.omp/agent/config.yml` 里把全部 `modelRoles` 角色绑到 `opencode-go/deepseek-v4.1-flash`，并设 `skills.enabled: false`（不应用本仓库配置）。每个检出克隆到 `%RUNNER_TEMP%\src\<repo>` 并 detach 到解析出的提交；有 `package.json` 的执行 `bun install`。脚本写到 `%RUNNER_TEMP%\windows-accept\script.ts`，以 `bun <脚本>` 运行，cwd 与 `SRC` 都是 `%RUNNER_TEMP%\src`，带 `OPENCODE_API_KEY`；PATH 里 Git for Windows 的条目只保留 `Git\cmd`，即 Git 默认安装放进用户 PATH 的内容。缩减后的 PATH 仍能找到 `sh`、`env` 或 `ps`，或者 `git` 不解析到 `Git\cmd\git.exe` 时，准备失败，脚本不运行。
+- **输出**：准备读数（omp 版本、各检出、缩减后 PATH 解析出的程序），然后是脚本输出，位于 `windows-accept: script begin` 与 `windows-accept: script exit <n>` 之间；本地命令取最后一行这样的输出作为退出码。
+- **触发与权限**：`workflow_dispatch`，输入 `checkouts`、`script` 与 `nonce`；改动这些文件的 `pull_request` 只做准备、不跑脚本，作为本入口自己的检查，也让该分支上的 workflow 完成注册、可以被触发。fork PR 跳过此 job。`contents: read`、`persist-credentials: false`，action 按提交 SHA 钉定。触发需要仓库写权限，所以只有协作者能运行看得到 `OPENCODE_API_KEY` 的脚本。
+- **不覆盖**：脚本自己不检查的内容；runner 是 Windows Server，不是带用户会话的桌面 Windows。
