@@ -1,0 +1,54 @@
+# windows-accept (#311): run a given Bun script on windows-latest beside the
+# requested checkouts and the latest omp, with a PATH that has only Git\cmd of
+# Git for Windows. Dispatched by `bun ci/windows-accept.ts`; a pull request that
+# touches the entry runs it without a script, as a setup self-check. Design:
+# ci/README.md.
+name: windows-accept
+run-name: windows-accept ${{ inputs.nonce }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      checkouts:
+        description: Newline-separated owner/repo@<40-hex sha>, each checked out under %RUNNER_TEMP%\src\<repo>
+        required: false
+        type: string
+        default: ""
+      script:
+        description: Bun script text, run with cwd and SRC = %RUNNER_TEMP%\src; empty only sets up
+        required: false
+        type: string
+        default: ""
+      nonce:
+        description: Unique id the local command finds this run by
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - ci/windows-accept*.ts
+      - ci/windows-env.ts
+      - .github/workflows/windows-accept.yml
+
+permissions:
+  contents: read
+
+jobs:
+  accept:
+    name: windows-accept
+    # Fork pull requests get no secrets; scripts may need OPENCODE_API_KEY.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+      - name: Run the acceptance script
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          WA_CHECKOUTS: ${{ inputs.checkouts }}
+          WA_SCRIPT: ${{ inputs.script }}
+        run: bun ci/windows-accept-remote.ts
