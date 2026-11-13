@@ -143,13 +143,13 @@ function jobLog(run: number): Outcome<string> {
 	if (jobs.kind === "error") return jobs;
 	const job = isMapping(jobs.value) && Array.isArray(jobs.value.jobs) ? jobs.value.jobs[0] : undefined;
 	if (!isMapping(job) || typeof job.id !== "number") return error(`run ${run} has no job`);
-	const log = gh(["api", `repos/${SLUG}/actions/jobs/${job.id}/logs`]);
+	const log = gh(["api", "--allow-escape-sequences", `repos/${SLUG}/actions/jobs/${job.id}/logs`]);
 	if (log.code !== 0) return error(`job ${job.id} log: ${log.err.trim()}`);
 	return ok(
 		log.out
 			.replace(/^\uFEFF/, "")
 			.split(/\r?\n/)
-			.map((line) => line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, ""))
+			.map((line) => Bun.stripANSI(line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, "")))
 			.join("\n"),
 	);
 }
