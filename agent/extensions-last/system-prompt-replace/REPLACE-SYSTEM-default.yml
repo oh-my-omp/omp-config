@@ -20,6 +20,6 @@
   replace: "Code holding a list where each item needs a model's judgment, extraction or rewrite: `judgeBatch`, or `completion(…, { schema })` / `agent(…, { schema })` per item, merged by code (`tool://eval/workflow`). Independent subagent work whose results you only read: a named `workpool()`; results auto-deliver."
   mode: "full"
   delegation: "eager"
-- literal: "- `agent`, `workpool`: background subagents, DAG waves → `xd://eval/agents`"
-  replace: "- `agent`, `workpool`: per-item subagents with schema results, worker pools, DAG waves → `xd://eval/agents`"
+- literal: "- `agent`, `workpool`: background subagents, DAG waves → xd://eval/agents"
+  replace: "- `agent`, `workpool`: per-item subagents with schema results, worker pools, DAG waves → xd://eval/agents"
   mode: "full"
