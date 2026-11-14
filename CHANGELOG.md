@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-15
+
 ### Added
 
 - Added a `loop:verifier` agent that executes one acceptance row needing a live interactive session, drives the program through a PTY, and yields a `pass`, `fail` or `blocked` verdict with the steps, readings and cleanup it observed
