@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `loop:worker-free`, `loop:worker-low` and `loop:worker-mid` agents that implement an assigned issue in a checkout, record a plan to the whiteboard, and accept only a gate-tool pass on the last commit as proof of completion
+- Added worker escalation of open contract points via `yield` help across five categories, with `decisions`, `deviations` and `risks` handoff fields cited to path:line
+- Added read-only `loop:reviewer-low` and `loop:reviewer-mid` agents that return a pass/fail/unsure verdict per check id with evidence and require a `blocker` or `ruling_needed` finding for every fail
+- Added a read-only `loop:adjudicator` agent that rules on dispute categories including `contract_gap`, `gate_unclear`, `environment`, `scope_conflict` and `review_dispute` without widening scope or relaxing the contract
+- Bound the new loop agents in `agentModelOverrides`: low tier to `claude-haiku-5-5`, mid tier to `deepseek-v4.1-flash` with a second provider fallback, and adjudicator to `claude-sonnet-5-5`
+
 ### Changed
 
 - Rebound `task:mid`, `task:low`, `task:free`, `discuss:steady` and `mentor:default` to `commandcode/deepseek/deepseek-v4.1-flash`, with `task:free` at low thinking and the others at high

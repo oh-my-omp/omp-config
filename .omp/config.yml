@@ -1,3 +1,9 @@
 task:
   agentModelOverrides:
     consult:carbon: google-antigravity/gemini-4-carbon:high
+    loop:worker-free: "devin/swe-2:high,ernie-5.5-flash-preview:high"
+    loop:worker-low: anthropic/claude-haiku-5-5:high
+    loop:worker-mid: "opencode-go/deepseek-v4.1-flash:high,commandcode/deepseek/deepseek-v4.1-flash:high"
+    loop:reviewer-low: anthropic/claude-haiku-5-5:high
+    loop:reviewer-mid: "opencode-go/deepseek-v4.1-flash:high,commandcode/deepseek/deepseek-v4.1-flash:high"
+    loop:adjudicator: anthropic/claude-sonnet-5-5:high
