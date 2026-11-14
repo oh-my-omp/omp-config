@@ -37,8 +37,9 @@
  * `agents` scope. TTSR rules (`condition`, `astCondition`, `question`) and OMP's bundled rules keep
  * OMP's own triggering. Patterns are relative to the cwd for user-level rules, to the directory
  * holding the rule's dot directory (`.claude`, `.omp`, …) for project rules, and to the plugin or
- * extension root for rules in its `rules/`. A pattern starting with `/` or `~/` matches the absolute
- * path instead (beyond Claude Code, which never matches such a pattern).
+ * extension root for rules in its `rules/`. A pattern starting with `~/` or absolute by
+ * `path.isAbsolute` (`/…`, on Windows also `C:/…` or `C:\…`) matches the absolute path instead
+ * (beyond Claude Code, which never matches such a pattern).
  *
  * Delta. One delta of `_shared/context-delta.ts` with source `omp-config/repo-rules`, computed from
  * OMP's system prompt (`event.systemPrompt` at a prompt, `ctx.getSystemPrompt()` after a tool call),

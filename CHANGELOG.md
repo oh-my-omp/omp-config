@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed `~`-expanded cwd glob patterns failing to match on Windows by normalizing separators to `/`
+- Fixed repo-rules `paths` patterns written as Windows absolute paths (`C:/…` or `C:\…`) never matching: absoluteness is now decided by `path.isAbsolute` and the pattern is normalized to `/` separators
 
 ## [1.0.3] - 2026-11-14
 
