@@ -142,7 +142,7 @@ flowchart TB
 - TUI 专属行为（`input-polish` 的按键与 overlay，`omp-thinking-translator` 的渲染）；
 - 自动更新的联网路径（`auto`、`/omp-config-autoupdate run`）和维护命令（`/update-omp`、`/sync-omp-config`、`/migrate-omp-keys`）；
 - skills：检查以 `skills.enabled: false` 运行，插件自带的 skills 与 omp 的 skill 描述压缩都不经过；
-- Windows 的 `omp-light.cmd`。
+- Windows 的 `omp-light.exe`。
 
 ## 本地复现
 

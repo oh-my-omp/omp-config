@@ -54,4 +54,4 @@
 | 已安装插件 | 全部加载 | 全部加载，除上面 `disabledExtensions` 列出的 `fork-task` 插件扩展入口外 |
 | 轻量模式减少的本地工具 | — | 无（`fork_task` 是插件 `omp-subagent-more` 的工具，其 `fork-task` 扩展入口被 `config-light.yml` 禁用） |
 
-**启动器安装**：`/update-omp` 和启动自动更新会把 `agent/omp-light.ts` 安装到 `PATH` 上 `omp` 所在目录（POSIX/macOS/Linux 为可执行文件 `omp-light`；Windows 为 `omp-light.ts` 加生成的 `omp-light.cmd`）。`omp-light` 从 `PI_CODING_AGENT_DIR`（未设置时为 `~/.omp/agent`）读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`，任一文件缺失即退出，其余命令行参数原样传给 `omp`。
+**启动器安装**：`/update-omp` 和启动自动更新会把 `agent/omp-light.ts` 安装到 `PATH` 上 `omp` 所在目录（POSIX/macOS/Linux 为可执行文件 `omp-light`；Windows 为用 `bun build --compile` 从 `omp-light.ts` 编译出的 `omp-light.exe`，所以安装或更新启动器时 `PATH` 上要有 `bun`）。`omp-light` 从 `PI_CODING_AGENT_DIR`（未设置时为 `~/.omp/agent`）读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`，任一文件缺失即退出，其余命令行参数原样传给 `omp`。

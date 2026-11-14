@@ -142,7 +142,7 @@ The check does not cover:
 - TUI-only behavior (`input-polish`'s keys and overlay, `omp-thinking-translator`'s rendering);
 - the networked path of automatic update (`auto`, `/omp-config-autoupdate run`) and the maintenance commands (`/update-omp`, `/sync-omp-config`, `/migrate-omp-keys`);
 - skills: the check runs with `skills.enabled: false`, so neither the skills plugins ship nor omp's skill description compression is exercised;
-- `omp-light.cmd` on Windows.
+- `omp-light.exe` on Windows.
 
 ## Local reproduction
 

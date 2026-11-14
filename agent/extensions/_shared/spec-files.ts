@@ -15,7 +15,8 @@ export function discoverSpecFiles(pattern: RegExp, extensionDir: string, cwd: st
 	const realHome = realpathOr(home);
 	const start = resolve(cwd);
 	// Boundary by lexical and real path: `homedir()` can name the same directory
-	// through a symlink that `cwd` does not share (`/tmp` → `/private/tmp`).
+	// through a symlink that `cwd` does not share (`/tmp` → `/private/tmp`), or,
+	// on Windows, in another letter case (`c:\users\…`).
 	let top = start;
 	while (!isBoundary(top, home, realHome)) {
 		const parent = dirname(top);
@@ -55,10 +56,14 @@ function isBoundary(dir: string, home: string, realHome: string): boolean {
 	return dir === home || realpathOr(dir) === realHome || existsSync(join(dir, ".git"));
 }
 
-/** The real path of an existing path; an unresolvable one keeps its lexical form. */
+/**
+ * The real path of an existing path; an unresolvable one keeps its lexical form. The native
+ * resolver also gives Windows paths their stored letter case, which the JavaScript one keeps
+ * as written.
+ */
 function realpathOr(path: string): string {
 	try {
-		return realpathSync(path);
+		return realpathSync.native(path);
 	} catch {
 		return resolve(path);
 	}
