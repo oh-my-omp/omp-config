@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { unquote } from "./spec-files.ts";
 
@@ -130,7 +130,8 @@ function parseCwds(raw: string | undefined, key: string): Parsed<readonly CwdPat
 	if (items.length === 0) return { kind: "invalid", problem: { kind: "empty", key } };
 	const patterns: CwdPattern[] = [];
 	for (const source of items) {
-		const expanded = source === "~" || source.startsWith("~/") ? join(homedir(), source.slice(1)) : source;
+		// Bun.Glob patterns are `/`-separated on every platform; on win32 a `\` in the pattern matches nothing.
+		const expanded = source === "~" || source.startsWith("~/") ? join(homedir(), source.slice(1)).split(sep).join("/") : source;
 		if (!isAbsolute(expanded)) return { kind: "invalid", problem: { kind: "relative", key, pattern: source } };
 		patterns.push({ source, glob: new Bun.Glob(expanded) });
 	}

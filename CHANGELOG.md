@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `~`-expanded cwd glob patterns failing to match on Windows by normalizing separators to `/`
+
 ## [1.0.3] - 2026-11-14
 
 ### Fixed
