@@ -8,7 +8,7 @@
 
 - Added a `loop:verifier` agent that executes one acceptance row needing a live interactive session, drives the program through a PTY, and yields a `pass`, `fail` or `blocked` verdict with the steps, readings and cleanup it observed
 - Required `loop:verifier` to interrupt a session whose model has not answered within 30 seconds and restart it with the next model of the assignment's list, running each row step once without retrying
-- Added a read-only `loop:scout` agent that splits an issue into dependency-ordered implementable slices, reports open points with the producer's `path:line` or `none`, and flags contract rows the acceptance commands never observe
+- Added a read-only `loop:scout` agent that splits an issue into dependency-ordered implementable slices that each change file content and name only the tracked files they change in `files`, reports open points with the producer's `path:line` or `none`, and flags contract rows the acceptance commands never observe
 - Required `loop:worker` to build a todo list before its first edit, use `ast_grep` for identifiers, edit only absolute paths inside the assigned checkout, and avoid shell deletion, sleeps and commands over five minutes
 - Added `loop:worker` and `loop:worker-free` agents that implement a dispatched issue slice in a checkout and accept only a gate-tool pass on the last commit as proof of completion
 - Added worker escalation of open points via `yield` help, with `decisions`, `followups`, `deviations` and `risks` reported on completion
