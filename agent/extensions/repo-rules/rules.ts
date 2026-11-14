@@ -47,8 +47,9 @@ type ScopedOrigin =
 
 /**
  * One compiled `paths` pattern. Claude Code patterns are relative to the rule's base directory; a
- * pattern starting with `/` or `~/` (an extension of Claude Code's syntax, where such a pattern
- * matches nothing) is matched against the touched file's absolute path, `~` being the home directory.
+ * pattern starting with `~/` or absolute by `path.isAbsolute` (`/…`, and on Windows also `C:/…` or
+ * `C:\…`; an extension of Claude Code's syntax, where such a pattern matches nothing) is matched
+ * against the touched file's absolute path, `~` being the home directory.
  */
 type PathGlob = { readonly kind: "relative"; readonly glob: Bun.Glob } | { readonly kind: "absolute"; readonly glob: Bun.Glob };
 
@@ -128,7 +129,7 @@ function splitPatterns(value: string): string[] {
 	return out;
 }
 
-/** Claude Code `paths`: a YAML list or a comma-separated string of globs relative to the rule's base directory, or absolute (`/`, `~/`). */
+/** Claude Code `paths`: a YAML list or a comma-separated string of globs relative to the rule's base directory, or absolute (`~/` or `path.isAbsolute`). */
 function parsePaths(value: unknown): string[] {
 	let items: string[];
 	if (typeof value === "string") items = splitPatterns(value);
@@ -231,7 +232,8 @@ function readText(filePath: string): string | null {
 function compilePattern(pattern: string): PathGlob {
 	if (pattern.startsWith("~/"))
 		return { kind: "absolute", glob: new Bun.Glob(path.posix.join(os.homedir().split(path.sep).join("/"), pattern.slice(2))) };
-	if (pattern.startsWith("/")) return { kind: "absolute", glob: new Bun.Glob(pattern) };
+	// Bun.Glob patterns are `/`-separated on every platform, like the absolute paths they are matched against.
+	if (path.isAbsolute(pattern)) return { kind: "absolute", glob: new Bun.Glob(pattern.split(path.sep).join("/")) };
 	return { kind: "relative", glob: new Bun.Glob(pattern) };
 }
 
