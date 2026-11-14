@@ -4,11 +4,12 @@
 
 ### Added
 
-- Added `loop:worker-free`, `loop:worker-low` and `loop:worker-mid` agents that implement an assigned issue in a checkout, record a plan to the whiteboard, and accept only a gate-tool pass on the last commit as proof of completion
-- Added worker escalation of open contract points via `yield` help across five categories, with `decisions`, `deviations` and `risks` handoff fields cited to path:line
-- Added read-only `loop:reviewer-low` and `loop:reviewer-mid` agents that return a pass/fail/unsure verdict per check id with evidence and require a `blocker` or `ruling_needed` finding for every fail
-- Added a read-only `loop:adjudicator` agent that rules on dispute categories including `contract_gap`, `gate_unclear`, `environment`, `scope_conflict` and `review_dispute` without widening scope or relaxing the contract
-- Bound the new loop agents in `agentModelOverrides`: low tier to `claude-haiku-5-5`, mid tier to `deepseek-v4.1-flash` with a second provider fallback, and adjudicator to `claude-sonnet-5-5`
+- Added a read-only `loop:scout` agent that splits an issue into dependency-ordered implementable slices, reports open points with the producer's `path:line` or `none`, and flags contract rows the acceptance commands never observe
+- Required `loop:worker` to build a todo list before its first edit, use `ast_grep` for identifiers, edit only absolute paths inside the assigned checkout, and avoid shell deletion, sleeps and commands over five minutes
+- Added `loop:worker` and `loop:worker-free` agents that implement a dispatched issue slice in a checkout and accept only a gate-tool pass on the last commit as proof of completion
+- Added worker escalation of open points via `yield` help, with `decisions`, `followups`, `deviations` and `risks` reported on completion
+- Added a read-only `loop:guardian` agent that opens one session per issue, rules on open contract points as `contract_decides`, `dismissed` or `ruled`, returns rulings as runtime input/output gate cases, and signs off at session end
+- Bound the new loop agents in `agentModelOverrides`: `loop:worker` to `claude-haiku-5-5:high`, `loop:worker-free` to `devin/swe-2:high`, `loop:scout` to a `deepseek-v4.1-flash` chain ending in `claude-haiku-5-5`, and `loop:guardian` to `claude-sonnet-5-5:high`
 
 ### Changed
 
