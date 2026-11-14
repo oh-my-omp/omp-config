@@ -5,9 +5,9 @@
 `agent/config.yml` 在 `task.disabledAgents` 中禁用了 OMP 内置子代理（`task`、`scout`、`sonic`、`security-reviewer`；即使写进 `spawns` 也会在 preflight 被拒）。`agent/agents/*.md` 包含可选的 worker/顾问定义、`reviewer`（OMP 内置审查代理的副本，按同名覆盖内置定义）（frontmatter 陷阱见 [`agent/agents/README.zh-CN.txt`](../agent/agents/README.zh-CN.txt)；非 agent 笔记使用 `.txt`）。
 
 子代理体系基于以下设计原则：
-1. **跨模型特性互补**：以少量调用延迟换取不同模型的特性组合——如 `gpt-*-sol` 偏稳健保守（`discuss:steady`、`mentor:default`、`task:mid`）、`gpt-*-luna` 成本低（`task:low` 及各角色回退链）、`claude-opus` 适合发散设计（`discuss:divergent`、`task:high`）——通过跨模型校验收敛单一模型的推理偏差。
-2. **跨订阅分摊综合成本**：将不同子代理档位与回退链分布到多个订阅与免费渠道（`anthropic`、`openai-codex`、`opencode-go`、`bansos`），分摊调用额度以降低整体成本。
-3. **无状态 `task` 执行器与受机制约束的少量顾问角色**：主代理编写子代理 prompt 时会将自身假设带入子代理，因此常规任务不使用预设人设或固定工作流节点（禁用 `scout`、`security-reviewer` 等内置角色），统一由主代理编排无状态的通用 `task` 执行器（按成本与可信度分为 `task:high/mid/low/free`）。非 `task` 角色仅在需要严格隔离职责边界时设立（使顾问既不受主代理转述偏差主导，也不替代主代理决策），并通过 [`user-prompt-inject`](#user-prompt-inject) 注入根会话用户消息、`discuss:*` 限制只读工具、`mentor:default` 移除全部工具在运行期约束边界，因此顾问角色只定义 `discuss:steady`、`discuss:divergent` 与 `mentor:default`；`reviewer` 是唯一的审查角色。
+1. **跨模型特性互补**：以少量调用延迟换取不同模型的特性组合——`claude-opus` 适合发散设计（`discuss:divergent`、`task:high`），DeepSeek V4.1 Flash 承担执行、保守讨论与顾问（`task:mid`、`task:low`、`task:free`、`discuss:steady`、`mentor:default`）——通过跨模型校验收敛单一模型的推理偏差。
+2. **每条绑定在应用本仓库的机器上都能解析**：链里只写机器带有凭据的渠道（`anthropic`、`commandcode`），不留答不了的回退环；`task.disabledAgents` 里的 agent 不设绑定。
+3. **无状态 `task` 执行器与受机制约束的少量顾问角色**：主代理编写子代理 prompt 时会将自身假设带入子代理，因此常规任务不使用预设人设或固定工作流节点（禁用 `scout`、`security-reviewer` 等内置角色），统一由主代理编排无状态的通用 `task` 执行器（按模型与可信度分为 `task:high/mid/low/free`）。非 `task` 角色仅在需要严格隔离职责边界时设立（使顾问既不受主代理转述偏差主导，也不替代主代理决策），并通过 [`user-prompt-inject`](#user-prompt-inject) 注入根会话用户消息、`discuss:*` 限制只读工具、`mentor:default` 移除全部工具在运行期约束边界，因此顾问角色只定义 `discuss:steady`、`discuss:divergent` 与 `mentor:default`；`reviewer` 是唯一的审查角色。
 
 ## 子代理定义与模型绑定
 
@@ -16,12 +16,12 @@
 | 子代理 | `description` 标明的成本（每 1M token） | `config.yml` 绑定的模型链 | 允许派生 (`spawns`) / 工具 (`tools`) | 职责与限制 |
 |---|---|---|---|---|
 | `task:high` | Claude Opus 5.5，约 $0.45 | `anthropic/claude-opus-5-5:high` | `spawns: task:mid, task:low, task:free, task:high, discuss:steady, discuss:divergent, mentor:default` | 未经用户在当前对话明确允许不得调用。唯一可承担架构/核心设计并继续向下派生一层（depth 1 → depth 2）的 worker（首项默认 `spawns` 为 `task:mid`），负责其子批次的接口契约、验收与集成。 |
-| `task:mid` | Opus 级，约 $0.30 | `openai-codex/gpt-6-1-sol:high` | `spawns: mentor:default` | 默认 worker 档位：负责架构与核心设计之外的实现、调查、调试和验证，并裁决低档位 worker 之间的分歧。 |
-| `task:low` | Opus 级，约 $0.01 | `openai-codex/gpt-5.6-luna:max` | `spawns: mentor:default` | 在成本优先于额外判断力时使用（批量机械修改、查找、例行检查），并用于独立复现和验证 `task:free` 的结果。 |
-| `task:free` | Opus 级，$0.00 | `bansos/muse-spark-1.3-contributor:xhigh, opencode-go/muse-spark-1.3-contributor:xhigh, openai-codex/gpt-6-luna:max` | `spawns: mentor:default` | 仅用于找线索、候选位置和出错无妨的试探；任何实质结论必须由父会话或 `task:low+` 独立验证，多个 `task:free` 结果一致不代表已验证。 |
-| `discuss:divergent` | — | `anthropic/claude-opus-5-5:medium, openai-codex/gpt-5.6-luna:max` | `tools: read, grep, glob` | 只读发散讨论者：审视问题提法与给定约束，在存在实质不同的做法（删功能、改状态归属、一次解决同类问题）时给出带 `path:line` 依据和取舍代价的替代方案。 |
-| `discuss:steady` | — | `openai-codex/gpt-5.6-sol:medium` | `tools: read, grep, glob` | 只读保守讨论者：对照实际代码与 `path:line` 检查方案的隐含假设、未覆盖状态、迁移影响面以及更简单的做法。 |
-| `mentor:default` | — | `openai-codex/gpt-5.6-sol:high, openai-codex/gpt-5.6-luna:max` | `tools: []`（仅 `yield`） | 无工具顾问：长调查开始前协助收敛计划与决定性检查点，交付前核对改动、已跑验证与未验证项；回复内容必须放在 `yield` 参数内。 |
+| `task:mid` | DeepSeek V4.1 Flash | `commandcode/deepseek/deepseek-v4.1-flash:high` | `spawns: mentor:default` | 默认 worker 档位：负责架构与核心设计之外的实现、调查、调试和验证，并裁决 `task:low` 与 `task:free` worker 之间的分歧。 |
+| `task:low` | DeepSeek V4.1 Flash | `commandcode/deepseek/deepseek-v4.1-flash:high` | `spawns: mentor:default` | 用于不需要默认 `task:mid` 的例行片段（批量机械修改、查找、例行检查），并用于独立复现和验证 `task:free` 的结果。 |
+| `task:free` | DeepSeek V4.1 Flash | `commandcode/deepseek/deepseek-v4.1-flash:low` | `spawns: mentor:default` | 仅用于找线索、候选位置和出错无妨的试探；任何实质结论必须由父会话或 `task:low+` 独立验证，多个 `task:free` 结果一致不代表已验证。 |
+| `discuss:divergent` | — | `anthropic/claude-opus-5-5:medium` | `tools: read, grep, glob` | 只读发散讨论者：审视问题提法与给定约束，在存在实质不同的做法（删功能、改状态归属、一次解决同类问题）时给出带 `path:line` 依据和取舍代价的替代方案。 |
+| `discuss:steady` | — | `commandcode/deepseek/deepseek-v4.1-flash:high` | `tools: read, grep, glob` | 只读保守讨论者：对照实际代码与 `path:line` 检查方案的隐含假设、未覆盖状态、迁移影响面以及更简单的做法。 |
+| `mentor:default` | — | `commandcode/deepseek/deepseek-v4.1-flash:high` | `tools: []`（仅 `yield`） | 无工具顾问：长调查开始前协助收敛计划与决定性检查点，交付前核对改动、已跑验证与未验证项；回复内容必须放在 `yield` 参数内。 |
 | `reviewer` | — | `@slow` | `tools: read, find, grep, glob, bash, lsp, web_search, ast_grep`；`spawns: scout`（已禁用，派生会在 preflight 被拒） | OMP 内置 `reviewer` 的副本，作为定制审查角色的基础：只读审查补丁，以 `yield` 交付 `overall_correctness`、`explanation`、`confidence` 与增量 `findings`（P0–P3，锚定补丁）。 |
 
 ### 本仓库的项目级子代理
