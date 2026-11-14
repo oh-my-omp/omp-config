@@ -41,16 +41,14 @@ task:
     - sonic
     - security-reviewer
   agentModelOverrides:
-    discuss:divergent: "anthropic/claude-opus-5-5:medium, openai-codex/gpt-5.6-luna:max"
-    discuss:steady: openai-codex/gpt-5.6-sol:medium
-    mentor:default: "openai-codex/gpt-5.6-sol:high, openai-codex/gpt-5.6-luna:max"
+    discuss:divergent: anthropic/claude-opus-5-5:medium
+    discuss:steady: commandcode/deepseek/deepseek-v4.1-flash:high
+    mentor:default: commandcode/deepseek/deepseek-v4.1-flash:high
     task:high: anthropic/claude-opus-5-5:high
-    task:mid: openai-codex/gpt-6-1-sol:high
-    task:low: openai-codex/gpt-5.6-luna:max
+    task:mid: commandcode/deepseek/deepseek-v4.1-flash:high
+    task:low: commandcode/deepseek/deepseek-v4.1-flash:high
     reviewer: "@slow"
-    task:free: "bansos/muse-spark-1.3-contributor:xhigh, opencode-go/muse-spark-1.3-contributor:xhigh, openai-codex/gpt-6-luna:max"
-    sonic: openai-codex/gpt-6-luna:max
-    task: openai-codex/gpt-6-luna:max
+    task:free: commandcode/deepseek/deepseek-v4.1-flash:low
   agentPrewalk:
     {}
   isolation:

@@ -1,6 +1,6 @@
 ---
 name: task:free
-description: "General-purpose zero-cost tier on an Opus-class model with effectively unlimited parallel capacity. Handles any bounded slice outside design and core work, but each result is low-trust: fits work whose output needs no independent validation — leads, candidates, and probes whose errors are harmless or surface in the caller's next step. Never assign it any design or core work: architecture, domain types and state model, interfaces and cross-slice contracts, the central logic of a change, or the design of docs, prompts, skills, or agent definitions. It cannot delegate: its only subagent is `mentor:default` for plan review, so hand it a slice it executes itself."
+description: "General-purpose probe tier on DeepSeek V4.1 Flash at low thinking. Handles any bounded slice outside design and core work, but each result is low-trust: fits work whose output needs no independent validation — leads, candidates, and probes whose errors are harmless or surface in the caller's next step. Never assign it any design or core work: architecture, domain types and state model, interfaces and cross-slice contracts, the central logic of a change, or the design of docs, prompts, skills, or agent definitions. It cannot delegate: its only subagent is `mentor:default` for plan review, so hand it a slice it executes itself."
 spawns: mentor:default
 completionJudge: true
 splitCheck: true

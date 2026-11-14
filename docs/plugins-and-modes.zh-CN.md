@@ -14,7 +14,7 @@
 |---|---|---|---|
 | [`https://github.com/oh-my-omp/omp-todo-more#release`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | 必装（GitHub） | 运行在原生 Todo 之上，原生 Todo 保持开启（`agent/config.yml` 中 `todo.enabled: true`）；见 [todo-more](#todo-more)。 |
 | [`https://github.com/oh-my-omp/omp-unified-exec#release`](https://github.com/oh-my-omp/omp-unified-exec) | `omp-unified-exec` | 必装（GitHub fork） | 原生 launch 已关闭（`agent/config.yml` 中 `launch.enabled: false`）；本地 bash 表层说明指向 `xd://exec_command`。 |
-| [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | 必装（GitHub fork） | `agent/config.yml` 的 `task:free` 绑定中包含 `bansos/...` 模型。 |
+| [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | 必装（GitHub fork） | — |
 | [`https://github.com/oh-my-omp/omp-thinking-translator#release`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | 必装（GitHub） | 插件拥有的配置不由更新器或同步操作写入；见 [思考翻译](#思考翻译)。 |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | 必装（npm） | — |
 | [`https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | 必装（GitHub） | — |
