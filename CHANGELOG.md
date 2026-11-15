@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-16
+
 ### Changed
 
 - Limited `loop:scout` slices to work that changes file content: a slice's `files` lists exactly the tracked files it changes, and acceptance runs, evidence collection, dependency or lockfile refreshes and repository checks are no longer returned as slices
