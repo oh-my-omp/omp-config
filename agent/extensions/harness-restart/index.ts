@@ -17,8 +17,12 @@
 // completion arrives after restart, not as the tool result. Just before
 // restarting, the request (reason, timestamp) is appended as a durable `custom`
 // session entry. On `session_start` or `session_switch`, activation scans the
-// branch for a pending request, sends an attributed restart-completed user
-// message, then appends a consumed marker so later activation does not replay it.
+// branch for a pending request and sends an attributed restart-completed user
+// message; only once OMP accepts that message (the send settles when the turn it
+// starts ends) does it re-read the branch and append a consumed marker for the
+// same request, so later activation does not replay it. A refused send is logged
+// and leaves the request pending, so the next activation sends it again. Every
+// notice goes through one send helper that logs each refusal as `harness-restart:`.
 // If the process does not relaunch (`restart()` throws, or returns after a host
 // teardown failure), the failure is sent and a consumed marker is appended in
 // its place, so a later activation never reports the request as completed.
@@ -103,6 +107,35 @@ function pendingMarker(ctx: ExtensionContext): Marker | undefined {
 	return found;
 }
 
+type SendSite =
+	| "completion notice"
+	| "queued restart not run notice"
+	| "queued restart failed notice"
+	| "queued restart failed before marker notice"
+	| "queued restart cancelled notice";
+
+/**
+ * Sends one extension notice and handles the send's outcome. The promise settles
+ * only after the turn the notice starts ends, so nothing here is awaited; a
+ * rejection is logged and never counts as delivery, while `onDelivered` runs only
+ * after OMP accepted the notice.
+ */
+function sendNotice(pi: ExtensionAPI, site: SendSite, text: string, onDelivered?: () => void): void {
+	void pi.sendUserMessage(text, { attribution: "agent" }).then(
+		() => {
+			if (onDelivered === undefined) return;
+			try {
+				onDelivered();
+			} catch (error) {
+				pi.logger.warn(`harness-restart: ${site} accepted but the consumed marker was not written`, { error: errorText(error) });
+			}
+		},
+		(error: unknown) => {
+			pi.logger.warn(`harness-restart: ${site} not delivered`, { error: errorText(error) });
+		},
+	);
+}
+
 async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request): Promise<void> {
 	runtime.state = { kind: "running", request };
 	let marked = false;
@@ -112,7 +145,7 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 		if (live.kind !== "ok") {
 			const reason = captureFailureText(live);
 			runtime.pi.logger.warn("harness-restart: queued restart not run", { reason });
-			runtime.pi.sendUserMessage(`The queued harness restart did not run: ${reason}`, { attribution: "agent" });
+			sendNotice(runtime.pi, "queued restart not run notice", `The queued harness restart did not run: ${reason}`);
 			return;
 		}
 		runtime.pi.appendEntry(ENTRY_TYPE, request.marker);
@@ -121,7 +154,7 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 			// Every path that does not relaunch must consume the marker written above.
 			runtime.pi.appendEntry(ENTRY_TYPE, { consumed: true, at: Date.now() });
 			runtime.pi.logger.warn("harness-restart: restart failed", { error: detail });
-			runtime.pi.sendUserMessage(`The queued harness restart failed: ${detail}`, { attribution: "agent" });
+			sendNotice(runtime.pi, "queued restart failed notice", `The queued harness restart failed: ${detail}`);
 		};
 		try {
 			if (ctx.hasUI) ctx.ui.notify(tr("Restarting omp…", "正在重启 omp…"), "info");
@@ -139,7 +172,7 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 			runtime.pi.logger.warn("harness-restart: failed after marker", { error: errorText(error) });
 		} else {
 			runtime.pi.logger.warn("harness-restart: queued restart failed before marker", { error: errorText(error) });
-			runtime.pi.sendUserMessage(`The queued harness restart failed: ${errorText(error)}`, { attribution: "agent" });
+			sendNotice(runtime.pi, "queued restart failed before marker notice", `The queued harness restart failed: ${errorText(error)}`);
 		}
 	} finally {
 		runtime.state = { kind: "idle" };
@@ -163,11 +196,16 @@ async function activate(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 		const marker = pendingMarker(ctx);
 		if (marker !== undefined) {
 			const when = Number.isFinite(marker.at) ? new Date(marker.at).toISOString() : "unknown time";
-			pi.sendUserMessage(
+			sendNotice(
+				pi,
+				"completion notice",
 				`Harness restart completed (${when}). ${marker.reason ? `Reason was: ${marker.reason}.` : "No reason was recorded."} Continue what you were doing.`,
-				{ attribution: "agent" },
+				() => {
+					const pending = pendingMarker(ctx);
+					if (pending === undefined || pending.at !== marker.at || pending.reason !== marker.reason) return;
+					pi.appendEntry(ENTRY_TYPE, { consumed: true, at: Date.now() });
+				},
 			);
-			pi.appendEntry(ENTRY_TYPE, { consumed: true, at: Date.now() });
 		}
 	}
 	if (ctx.mode !== "tui" || ctx.agent.kind !== "main") return;
@@ -227,9 +265,11 @@ function onAgentEnd(runtime: Runtime, event: AgentEndEvent, ctx: ExtensionContex
 	if (last?.role === "assistant" && last.stopReason === "aborted" && isUserInterruptAbort(last)) {
 		runtime.state = { kind: "idle" };
 		ctx.ui.notify(tr("Queued harness restart cancelled: the turn was interrupted.", "已取消排队的 Harness 重启：本轮被中断。"), "info");
-		runtime.pi.sendUserMessage("The queued harness restart was cancelled because the user interrupted the turn; nothing changed.", {
-			attribution: "agent",
-		});
+		sendNotice(
+			runtime.pi,
+			"queued restart cancelled notice",
+			"The queued harness restart was cancelled because the user interrupted the turn; nothing changed.",
+		);
 		return;
 	}
 	arm(runtime, ctx, request);

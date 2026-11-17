@@ -253,7 +253,7 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 
 源码：`agent/extensions/harness-restart/`。仅在主会话交互式 TUI 启用（轻量模式同样启用）。
 
-使用与 `wt-tool` 相同的空闲队列机制与武装条件触发 `InteractiveMode.restart()`。在调用 `restart()` 前向当前分支写入自定义条目 `mouriya.omp.harness-restart.request`（记录 `reason` 与时间戳）；新进程恢复会话时，在 `session_start` 读到该条目并发送 `"Harness restart completed（<时间>）。Reason was: <原因>。Continue what you were doing."`（`attribution: "agent"`）。
+使用与 `wt-tool` 相同的空闲队列机制与武装条件触发 `InteractiveMode.restart()`。在调用 `restart()` 前向当前分支写入自定义条目 `mouriya.omp.harness-restart.request`（记录 `reason` 与时间戳）；新进程恢复会话时，在 `session_start` 读到该条目并发送 `"Harness restart completed（<时间>）。Reason was: <原因>。Continue what you were doing."`（`attribution: "agent"`）。只有 OMP 受理该消息之后（该消息引发的回合结束时这次发送才结清）才写入该请求的 `consumed` 标记，写入前重新读取当前分支，待报请求已不是这一个时跳过；消息未被受理时记一条 `harness-restart:` 日志且不写标记，请求保持待报，下一次 `session_start` 或 `session_switch` 再发一次。本扩展发出的每条通知都走同一个发送入口，被拒绝时都会留下日志。
 
 ### argon-long-output
 
