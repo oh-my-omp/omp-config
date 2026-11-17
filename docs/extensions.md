@@ -249,6 +249,8 @@ OMP's `/wt` and `/move` reject calls while a turn is streaming, and `ExtensionAP
 - **`wt`**: runs `/wt [<branch>]`. If the session is already in a linked worktree, the first call creates nothing and returns the current worktree path, branch, HEAD, uncommitted count, main checkout path, and a `confirm` hash; pass that `confirm` value on a second call to create another worktree. Its description tells the model to propose a worktree when the working tree holds changes it did not make, asking the human first when unsure whether they are interference.
 - **`wt_remove`**: requires two calls. Calling without `confirm` runs a read-only check returning the worktree/main paths, `SAFE`/`UNSAFE`/`BLOCKED` status, files that removal would delete (staged, unstaged, untracked, ignored, up to 50 per category with totals), unmerged branch commits (kept on the branch), active job/subagent blockers, and a `confirm` hash bound to the worktree state. Calling with `confirm` re-checks the state when idle, runs `/move <main checkout>`, verifies the new `cwd`, re-checks the state, and calls `worktreeRemove(path, true)`, stopping immediately if anything changed.
 
+In vibe mode both tools return an error result at the call and queue nothing, `wt_remove`'s check-only call included. The error says the session is in vibe mode and to exit vibe mode first. A request queued before vibe mode was entered is refused when it runs, and that outcome message carries `Exit vibe mode first.` as well.
+
 ### harness-restart
 
 Source: `agent/extensions/harness-restart/`. Main interactive TUI only (enabled in light mode).

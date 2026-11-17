@@ -6,6 +6,10 @@
 
 - Enabled the `lang-nag` extension in light mode
 
+### Changed
+
+- Made the `wt` and `wt_remove` tools refuse calls while the session is in vibe mode, queueing nothing and returning an error that asks to exit vibe mode first
+
 ### Fixed
 
 - Restricted `lang-nag` language detection to the run's terminal reply: interrupted, tool-stopped, errored and truncated runs are no longer judged, and earlier mid-run narration no longer stands in
