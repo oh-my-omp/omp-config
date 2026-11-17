@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
+- Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
 - Fixed spec-file discovery on Windows missing the home-directory boundary when the home path differed in letter case from the resolved cwd
 - Fixed `~`-expanded cwd glob patterns failing to match on Windows by normalizing separators to `/`
 - Fixed repo-rules `paths` patterns written as Windows absolute paths (`C:/…` or `C:\…`) never matching: absoluteness is now decided by `path.isAbsolute` and the pattern is normalized to `/` separators
