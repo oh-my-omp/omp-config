@@ -4,10 +4,17 @@
 
 ### Added
 
+- Added `xd://read/urls` guidance for further read sub-paths, queries and limits when the read tool is available
+- Added optional result-shaping guidance to the system prompt
 - Enabled the `lang-nag` extension in light mode
+
+### Changed
+
+- Directed the agent to make file edits with the edit tool and never through sed/perl/python when shell tools are available
 
 ### Fixed
 
+- Extended the system-prompt replacement rule to match backtick-quoted `xd://<tool>` references
 - Restricted `lang-nag` language detection to the run's terminal reply: interrupted, tool-stopped, errored and truncated runs are no longer judged, and earlier mid-run narration no longer stands in
 - Fixed `model-compaction` thresholds being lost after a session was resumed or omp restarted: the rules are now applied on `session_start` and `session_switch` as well as on user prompts, so a resumed session driven only by agent-started turns (notices, continuations, IRC wakes) no longer compacts at OMP's default threshold
 
