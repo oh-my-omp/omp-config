@@ -23,14 +23,15 @@
  * FAIL OPEN. An unterminated line, a program word from `$…` or a substitution,
  * a program fed by `xargs` (or run by `find -exec`/`parallel`, which are not
  * command positions), an eval cell that does not tokenize or parse, a launch
- * through a renamed import, and any non-literal launch argument all pass: a
- * missed refusal is preferred over a wrong one.
+ * through a renamed import or a name bound to a launcher, and any non-literal
+ * launch argument all pass: a missed refusal is preferred over a wrong one.
  *
  * EVAL. Only these launches, spelled under their own names with literal
  * arguments, are judged: py `subprocess.run|call|check_call|check_output|Popen`
- * (argv; shell text with `shell=True`), `os.system`, `os.popen`, `!cmd` lines
- * and `%%bash` bodies; js `Bun.$` templates without `${}`, `Bun.spawn|spawnSync`
- * array literals, child_process `exec|execSync` (shell text) and
+ * (argv; shell text with `shell=True`), `os.system`, `os.popen`, `!cmd` lines,
+ * `%%bash` bodies and the `sh` helper's command; js `Bun.$` templates without
+ * `${}`, `Bun.spawn|spawnSync` array literals, the `sh` helper (`sh("…")`,
+ * `globalThis.sh`, a tagged template), child_process `exec|execSync` (shell text) and
  * `spawn|spawnSync|execFile|execFileSync` (argv). A py cell that uses
  * `pexpect` or `pty.spawn`/`pty.fork` is a terminal hit. The `tool.bash`
  * bridge is not read here: it reaches the lane as a real `bash` call.
@@ -628,6 +629,13 @@ function pythonHit(code: string): PtyHit | null {
 				if (hit !== null) return hit;
 				continue;
 			}
+			case "shellHelper": {
+				// Only the helper's own name: a name bound to it is a renamed launch, which this lane lets pass.
+				if (launch.via !== "direct") continue;
+				const hit = scriptHit(launch.text);
+				if (hit !== null) return hit;
+				continue;
+			}
 			case "bridge":
 				// The bridged command reaches the lane as its own `bash` call.
 				continue;
@@ -655,13 +663,14 @@ function pythonHit(code: string): PtyHit | null {
 /**
  * Every name the js lane's reader can match, in any casing: `Bun` (`Bun.$`,
  * `Bun.spawn*`), a launcher member or alias (`spawn*`, `exec*`), the
- * `child_process` and `bun` modules, and the `tool.bash`/`tool.write` bridges.
+ * `child_process` and `bun` modules, the eval `sh` helper, and the
+ * `tool.bash`/`tool.write` bridges.
  * A cell spelling none of them starts no process here, so the parse is skipped;
  * a cell spelling one is parsed and judged as before. The hint reads the source
  * text, where a name may be written with `\u` or `\x` escapes that only the
  * parse decodes, so a cell containing a backslash is always parsed.
  */
-const JS_LAUNCH_HINT = /bun|spawn|exec|child_process|tool|\\/i;
+const JS_LAUNCH_HINT = /bun|spawn|exec|child_process|tool|\bsh\b|\\/i;
 
 async function javascriptHit(code: string): Promise<PtyHit | null> {
 	if (!JS_LAUNCH_HINT.test(code)) return null;
@@ -679,6 +688,9 @@ async function javascriptHit(code: string): Promise<PtyHit | null> {
 		switch (launch.kind) {
 			case "bunShell":
 				hit = scriptHit(launch.text);
+				return hit !== null;
+			case "shellHelper":
+				if (launch.via === "direct") hit = scriptHit(launch.text);
 				return hit !== null;
 			case "bunSpawn":
 				hit = argvHit(launch.words);
