@@ -50,10 +50,15 @@
 // tier a model currently runs with is refused for that model with a warning;
 // this extension never changes a context window.
 //
-// TIMING. Main session `before_agent_start`: the files are re-discovered and
-// re-read every prompt against the session's current cwd, so edits and worktree
-// moves apply from the next main prompt (subagents follow the main session's
-// latest write). Subagent sessions write nothing.
+// TIMING. Main session `session_start`, `session_switch` and
+// `before_agent_start`: the files are re-discovered and re-read against the
+// session's current cwd when the session is built, resumed or switched and on
+// every user prompt, so edits and worktree moves apply from the next of these
+// (subagents follow the main session's latest write). The runtime layer lives
+// only in the process, so a resumed session gets its entries back from
+// `session_start` even when only agent-started turns (notices, continuations,
+// IRC wakes) follow it: those skip `before_agent_start`. Subagent sessions
+// write nothing.
 //
 // OWNERSHIP. The extension writes the runtime layer of
 // `compaction.modelThresholds` only. Before its first write it keeps the
@@ -330,7 +335,7 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 		}
 	};
 
-	pi.on("before_agent_start", (_event, ctx) => {
+	const sync = (ctx: ExtensionContext): void => {
 		if (ctx.agent.kind !== "main") return;
 		try {
 			const settings = sessionSettings(ctx);
@@ -341,7 +346,11 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 		} catch (error) {
 			pi.logger.warn("model-compaction: cannot apply compaction thresholds", { error: errorText(error) });
 		}
-	});
+	};
+
+	pi.on("session_start", (_event, ctx) => sync(ctx));
+	pi.on("session_switch", (_event, ctx) => sync(ctx));
+	pi.on("before_agent_start", (_event, ctx) => sync(ctx));
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (ownership.kind !== "owned") return;
