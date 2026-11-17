@@ -5,8 +5,10 @@
  * prompt has not been reminded before, the call is blocked and the reason tells
  * the model to re-dispatch writers with `isolated: true`. The block is the
  * reminder: the same prompt re-dispatched as it was runs untouched, while a new
- * prompt gets its own reminder. Prompts are keyed by a hash of the item's
- * `task` text. The extension never sets `isolated` itself.
+ * prompt gets its own reminder. Prompts are keyed by a hash of the item's task
+ * text: its `task`, or all its `steps` in order when the host's `task.steps`
+ * shape is on — one run, one key, never one key per step. The extension never
+ * sets `isolated` itself.
  *
  * "Shared" means spawned without `isolated: true`. Only items that leave
  * `isolated` out count as undecided; an explicit `isolated: false` is a
@@ -41,17 +43,47 @@ import { errorText } from "../_shared/errors.ts";
  */
 const isWriter = (agent: string | undefined): boolean => agent === undefined || /^task(?::|$)/.test(agent) || /^m\d+$/.test(agent);
 
-/** One spawn as the model wrote it. */
+/**
+ * One spawn as the model wrote it, reduced to what this reminder keys. With
+ * `task.steps` on, items carry `steps` instead of `task`; both are the text of
+ * one subagent run, so a steps item's text is all its steps joined in their
+ * order. An item the host would reject — both fields, neither, or steps that
+ * are not a non-empty list of non-empty instructions — does not parse, so the
+ * call is left to the host's own validation and nothing is reminded.
+ */
+type TaskItem = {
+	readonly text: string;
+	readonly name: string | undefined;
+	readonly agent: string | undefined;
+	readonly isolated: boolean | undefined;
+};
+
 const taskItemSchema = z
 	.object({
-		task: z.string(),
+		task: z
+			.string()
+			.refine((task) => task.trim() !== "")
+			.optional(),
+		steps: z
+			.array(z.string())
+			.min(1)
+			.refine((steps) => steps.every((step) => step.trim() !== ""))
+			.optional(),
 		name: z.string().optional(),
 		agent: z.string().optional(),
 		isolated: z.boolean().optional(),
 	})
-	.passthrough();
+	.passthrough()
+	.refine((item) => (item.task === undefined) !== (item.steps === undefined))
+	.transform(
+		(item): TaskItem => ({
+			text: item.steps?.join("\n") ?? item.task ?? "",
+			name: item.name,
+			agent: item.agent,
+			isolated: item.isolated,
+		}),
+	);
 const batchSchema = z.object({ tasks: z.array(taskItemSchema) }).passthrough();
-type TaskItem = z.infer<typeof taskItemSchema>;
 
 /** Batch calls carry `tasks[]`; the runtime still accepts a flat single item. */
 const parseTaskItems = (input: unknown): readonly TaskItem[] | null => {
@@ -69,7 +101,7 @@ const spawnProgress = (details: unknown): readonly { readonly index: number; rea
 	return parsed.success ? parsed.data.progress : [];
 };
 
-const promptHash = (item: TaskItem): string => createHash("sha256").update(item.task).digest("hex");
+const promptHash = (item: TaskItem): string => createHash("sha256").update(item.text).digest("hex");
 
 const itemLabel = (item: TaskItem, index: number): string => `\`${item.name ?? `item ${index + 1}`}\``;
 
