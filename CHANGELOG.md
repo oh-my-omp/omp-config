@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `task` guidance for staged `steps` execution and its mutual exclusivity with `task`, gated on the `task.steps` setting
 - Enabled the `lang-nag` extension in light mode
 
 ### Fixed

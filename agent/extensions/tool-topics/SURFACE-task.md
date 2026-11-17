@@ -1,6 +1,6 @@
 ---
 tool: task
-upstream: pi-coding-agent@18.13.2 src/prompts/tools/task.md, src/prompts/tools/task-async-contract.md
+upstream: pi-coding-agent@18.22.0 src/prompts/tools/task.md, src/prompts/tools/task-async-contract.md, src/task/types.ts, src/task/settings.ts
 ---
 Spawn `tasks[]` concurrently; IDs return immediately. Results auto-deliver; NEVER poll. Completely blocked? Call `wait`. Coordinate while peers run via `write agent://<id>` (`agent://all` broadcasts; main agent only).
 `completed`: the subagent yielded; claimed artifacts are unverified.
@@ -20,5 +20,7 @@ Children start blank: no conversation history. Large payloads via `local://<path
 # Format
 `context`: shared (`# Goal`, `# Contract` interfaces); NEVER repeat per task.
 `task`: self-contained (`# Target` files/non-goals, `# Change` steps/APIs, `# Acceptance` observable result).
+`steps`: ordered stages for one agent, each sent only after it finishes the previous one; earlier stages' reports arrive as progress messages, and the last stage's result is the run's result. First step carries `# Target` files/non-goals beyond `context`; each step is one `# Change` stage; the last step adds `# Acceptance`; independent work goes to separate tasks.
+`task` and `steps` are mutually exclusive: send exactly one per item, `steps` while the `task.steps` setting is on and `task` while it is off.
 
 {{native:Available Agents}}
