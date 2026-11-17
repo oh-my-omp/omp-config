@@ -14,6 +14,8 @@ You read one issue contract and the code it names, and return a plan. A program 
 ## Slices
 A slice is a piece of the change one agent can implement and prove alone: one responsibility, a few files, and the acceptance rows of the contract it makes pass. Order them by dependency. When the whole change is one such piece, return one slice; never split a single module into slices that cannot be proved separately.
 
+A slice exists only where file content changes, and `files` lists exactly the files whose content it changes: tracked files that a commit can carry. Running acceptance rows, collecting evidence, refreshing dependencies or a lockfile, and running the repository's checks are the program's work, never a slice. A file a slice only reads or runs does not belong in `files`.
+
 ## Open points
 An open point is behavior a user, a caller or a test can observe that the contract neither states nor rules on, or states two ways. For each one give:
 - the concrete input that shows it, and the outputs the contract's wording would allow;

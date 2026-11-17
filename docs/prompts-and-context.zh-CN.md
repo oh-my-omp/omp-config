@@ -111,7 +111,7 @@ OMP 的 `agents-md` 与 `claude-md` provider 把独立的 `AGENTS.md` / `CLAUDE.
 
 源码：`agent/extensions/model-compaction/`。
 
-OMP 原生的 `compaction.modelThresholds` 只支持精确 `provider/id` 或 `*` 前缀。该扩展在主会话每次 `before_agent_start` 时重新发现并读取 `COMPACTION-<label>.md` 文件：扩展自己的目录（本机规则）加上会话 cwd 向上至 git 根或家目录先到者（含）的每一层目录及各自的 `.omp/`（向上未遇边界即达文件系统根时只扫 `cwd`；项目规则）。一个文件一条规则，`---` 包围的 frontmatter 含 `provider` 和/或 `model` 的 JavaScript 正则（不锚定；`"model": ".*"` 匹配全部模型）与正整数 `thresholdTokens`：
+OMP 原生的 `compaction.modelThresholds` 只支持精确 `provider/id` 或 `*` 前缀。该扩展在主会话的 `session_start`、`session_switch` 以及每次 `before_agent_start` 时重新发现并读取 `COMPACTION-<label>.md` 文件：扩展自己的目录（本机规则）加上会话 cwd 向上至 git 根或家目录先到者（含）的每一层目录及各自的 `.omp/`（向上未遇边界即达文件系统根时只扫 `cwd`；项目规则）。一个文件一条规则，`---` 包围的 frontmatter 含 `provider` 和/或 `model` 的 JavaScript 正则（不锚定；`"model": ".*"` 匹配全部模型）与正整数 `thresholdTokens`：
 
 ```markdown
 ---
@@ -121,7 +121,7 @@ thresholdTokens: 150000
 ---
 ```
 
-对 `ctx.models.list()` 中的每个模型，取第一条命中的有效规则——项目规则全部在前，扩展目录里的本机规则全部在后作回退，与文件名无关；每层内部按发现顺序（从 cwd 向上，每个目录内按文件名排序）——把 `"<provider>/<id>": "f<thresholdTokens>"` 写入主会话的运行时设置层（不改磁盘上的 `config.yml`；`/model` 切换、重试回退以及读取主会话设置的子代理都会按各自模型使用对应阈值）。仓库不带规则文件。
+对 `ctx.models.list()` 中的每个模型，取第一条命中的有效规则——项目规则全部在前，扩展目录里的本机规则全部在后作回退，与文件名无关；每层内部按发现顺序（从 cwd 向上，每个目录内按文件名排序）——把 `"<provider>/<id>": "f<thresholdTokens>"` 写入主会话的运行时设置层（不改磁盘上的 `config.yml`；`/model` 切换、重试回退以及读取主会话设置的子代理都会按各自模型使用对应阈值）。运行时设置层只存在于 omp 进程内，恢复的会话靠 `session_start` 重新写回条目；agent 自己发起的轮次（通知、续跑提醒、IRC 唤醒）不经过 `before_agent_start`，否则恢复后只由这类轮次推进的会话会按 OMP 默认阈值压缩。仓库不带规则文件。
 
 由于原生 `f<N>` 条目可能改变模型的上下文窗口档位（standard vs extended），会让某个模型切换当前窗口档位的规则对该模型拒绝并记 warning。未知键和非空正文都是错误，写错的键不会悄悄放宽规则；无法读取或无效的文件跳过并记 warning，其他文件仍生效，没有任何有效文件时不应用规则。其他来源已写入的运行时条目会被保留，并在无规则命中或 `session_shutdown` 时恢复；若运行期间有其他代码修改了这张映射表，扩展会记一次 warning 并停止更新。
 ### ctx

@@ -4,9 +4,12 @@
 // instruction (e.g. "说中文") to the front of the NEXT user message so the model
 // self-corrects on its own next turn.
 //
-// What gets classified. Only the assistant's REPLY BODY — the `type: "text"`
-// content blocks of the messages `agent_end` delivers. Thinking and tool calls
-// (`toolCall`) are never treated as reply text. From that body we take the LAST
+// What gets classified. Only the run's terminal reply: the last assistant
+// message `agent_end` delivers, when it ended with `stopReason: "stop"`. A run
+// the user interrupted (Esc), one that stopped at a tool call, an error or a
+// truncated reply is not judged, and its earlier mid-run narration never
+// stands in. Of that message only the `type: "text"` blocks count; thinking and
+// tool calls are never reply text. From that body we take the LAST
 // paragraph (blank-line separated) and
 // hand the judge the first 200 code points of it — the natural-language
 // sign-off, not the whole turn.
@@ -36,11 +39,12 @@
 // hooks. Reads only the config above; writes no files and sends no extra turns.
 // ============================================================================
 
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Judge } from "@oh-my-pi/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { type JudgeOpen, openJudge } from "../_shared/judge.ts";
-import { lastAssistantText } from "../_shared/messages.ts";
+import { textOf } from "../_shared/messages.ts";
 import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
 
 const DETECT_CHAR_LIMIT = 200; // code points of the last paragraph handed to the judge; never more.
@@ -70,6 +74,20 @@ async function loadConfig(pi: ExtensionAPI, cwd: string): Promise<LangNagConfig 
 			return exhaustive;
 		}
 	}
+}
+
+// The text of the run's terminal reply: its last assistant message when that
+// message ended with `stopReason: "stop"`. A run the user interrupted (Esc:
+// `aborted`), one that stopped at a tool call (`toolUse`), an error or a
+// truncated reply has no terminal reply, and earlier mid-run narration never
+// stands in for one.
+function terminalReplyText(messages: readonly AgentMessage[]): string {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message === undefined || message.role !== "assistant") continue;
+		return message.stopReason === "stop" ? textOf(message.content) : "";
+	}
+	return "";
 }
 
 // The judge sees the reply's last blank-line-separated paragraph, capped at
@@ -228,7 +246,7 @@ export default function langNag(pi: ExtensionAPI): void {
 			if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
 			// A newer terminal reply supersedes any verdict still pending for an older one.
 			cancelDetection();
-			const sample = lastParagraphSample(lastAssistantText(event.messages));
+			const sample = lastParagraphSample(terminalReplyText(event.messages));
 			if (sample === "") return;
 			const controller = new AbortController();
 			const running: Detection = { kind: "running", controller };

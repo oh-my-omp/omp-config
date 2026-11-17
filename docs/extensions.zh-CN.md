@@ -19,7 +19,7 @@
 | 9 | `tool-policy-nag` | [tool-policy-nag](#tool-policy-nag) | 主会话（`pty` 通道：主 + 子） | 否 | `tool-policy-nag.*` 设置与 `INTENT-policy.md` | 按工作方式调整检测模式、提醒措辞与频率、意图及风险设置和终端路由通道 |
 | 10 | `watchdog-agent` | [watchdog-agent](#watchdog-agent) | 主 + 子，按文件条件 | 否 | `WATCHDOG-*.md`（本机或项目） | 定义审阅内容、目标会话、间隔和投递方式；存在匹配文件后运行 |
 | 11 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子，按文件条件 | 否 | `TURN-JUDGE-*.md`（仓库示例或本机文件） | 编写判定问题、触发规则、提醒和会话条件，绑定适合的判定或聊天模型 |
-| 12 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 否 | `lang-nag.language`、`lang-nag.instruction` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
+| 12 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 是 | `lang-nag.language`、`lang-nag.instruction` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
 | 13 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局，仅 macOS | 是 | `child-memory-warning.thresholdGiB` | 在本机或项目中按自己的硬件和负载选择告警阈值 |
 | 14 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `input-polish.key`、`input-polish.instruction` | 选择快捷键和改写指令；将 `@input-polish` 绑定到自己的可用模型 |
 | 15 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
@@ -180,7 +180,7 @@ cwd: /absolute/path/to/leader-checkout
 
 源码：`agent/extensions/lang-nag/`。仅在主会话运行。
 
-在 `agent_end` 取最后一条非空回复最后一段的前 200 个字符，通过 `openJudge` 判断是否主要使用 `lang-nag.language` 设置的语言（`omp-config`；manifest 默认 `language: 中文`、`instruction: 说中文`，会话开始或切换时读取；项目覆盖优先于机器值）。会话等待后台任务时交还控制权的回复同样检测；会话自行安排的续跑不检测。若不符，在用户下一条输入前加上配置的 instruction（斜杠命令会清除待发标记；用户发送时若判定仍未返回则直接中止判定并原样发出）。
+在 `agent_end` 只判定本轮的终态回复：最后一条助手消息，且它以 `stopReason: "stop"` 结束。用户中断（Esc）、停在工具调用、出错或被截断的一轮不判定，也不改用本轮更早的中途文字。取该回复最后一段的前 200 个字符，通过 `openJudge` 判断是否主要使用 `lang-nag.language` 设置的语言（`omp-config`；manifest 默认 `language: 中文`、`instruction: 说中文`，会话开始或切换时读取；项目覆盖优先于机器值）。会话等待后台任务时交还控制权的回复同样检测；会话自行安排的续跑不检测。若不符，在用户下一条输入前加上配置的 instruction（斜杠命令会清除待发标记；用户发送时若判定仍未返回则直接中止判定并原样发出）。
 
 ---
 

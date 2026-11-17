@@ -4,12 +4,31 @@
 
 ### Added
 
+- Enabled the `lang-nag` extension in light mode
+
+### Fixed
+
+- Restricted `lang-nag` language detection to the run's terminal reply: interrupted, tool-stopped, errored and truncated runs are no longer judged, and earlier mid-run narration no longer stands in
+- Fixed `model-compaction` thresholds being lost after a session was resumed or omp restarted: the rules are now applied on `session_start` and `session_switch` as well as on user prompts, so a resumed session driven only by agent-started turns (notices, continuations, IRC wakes) no longer compacts at OMP's default threshold
+
+## [1.1.1] - 2026-11-16
+
+### Changed
+
+- Limited `loop:scout` slices to work that changes file content: a slice's `files` lists exactly the tracked files it changes, and acceptance runs, evidence collection, dependency or lockfile refreshes and repository checks are no longer returned as slices
+
+## [1.1.0] - 2026-11-15
+
+### Added
+
+- Added a `loop:verifier` agent that executes one acceptance row needing a live interactive session, drives the program through a PTY, and yields a `pass`, `fail` or `blocked` verdict with the steps, readings and cleanup it observed
+- Required `loop:verifier` to interrupt a session whose model has not answered within 30 seconds and restart it with the next model of the assignment's list, running each row step once without retrying
 - Added a read-only `loop:scout` agent that splits an issue into dependency-ordered implementable slices, reports open points with the producer's `path:line` or `none`, and flags contract rows the acceptance commands never observe
 - Required `loop:worker` to build a todo list before its first edit, use `ast_grep` for identifiers, edit only absolute paths inside the assigned checkout, and avoid shell deletion, sleeps and commands over five minutes
 - Added `loop:worker` and `loop:worker-free` agents that implement a dispatched issue slice in a checkout and accept only a gate-tool pass on the last commit as proof of completion
 - Added worker escalation of open points via `yield` help, with `decisions`, `followups`, `deviations` and `risks` reported on completion
 - Added a read-only `loop:guardian` agent that opens one session per issue, rules on open contract points as `contract_decides`, `dismissed` or `ruled`, returns rulings as runtime input/output gate cases, and signs off at session end
-- Bound the new loop agents in `agentModelOverrides`: `loop:worker` to `claude-haiku-5-5:high`, `loop:worker-free` to `devin/swe-2:high`, `loop:scout` to a `deepseek-v4.1-flash` chain ending in `claude-haiku-5-5`, and `loop:guardian` to `claude-sonnet-5-5:high`
+- Bound the new loop agents in `agentModelOverrides`: `loop:worker` to `claude-haiku-5-5:high`, `loop:worker-free` to `devin/swe-2:high`, `loop:scout` to a `deepseek-v4.1-flash` chain ending in `claude-haiku-5-5`, `loop:guardian` to `claude-sonnet-5-5:high`, and `loop:verifier` to a `deepseek-v4.1-flash` chain from `opencode-go` to `commandcode`
 
 ### Changed
 

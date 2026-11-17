@@ -5,3 +5,4 @@ task:
     loop:worker: anthropic/claude-haiku-5-5:high
     loop:worker-free: devin/swe-2:high
     loop:guardian: anthropic/claude-sonnet-5-5:high
+    loop:verifier: "opencode-go/deepseek-v4.1-flash:high,commandcode/deepseek/deepseek-v4.1-flash:high"
