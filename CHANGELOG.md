@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Enabled the `lang-nag` extension in light mode
+
 ### Fixed
 
+- Restricted `lang-nag` language detection to the run's terminal reply: interrupted, tool-stopped, errored and truncated runs are no longer judged, and earlier mid-run narration no longer stands in
 - Fixed `model-compaction` thresholds being lost after a session was resumed or omp restarted: the rules are now applied on `session_start` and `session_switch` as well as on user prompts, so a resumed session driven only by agent-started turns (notices, continuations, IRC wakes) no longer compacts at OMP's default threshold
 
 ## [1.1.1] - 2026-11-16
