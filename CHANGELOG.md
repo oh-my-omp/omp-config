@@ -4,6 +4,7 @@
 
 ### Added
 
+- Warned once per process when the `input-polish` shortcut is also held by an omp keybinding, a reserved chord, or another extension, naming the holder while `input-polish` keeps the chord
 - Enabled the `lang-nag` extension in light mode
 
 ### Fixed
