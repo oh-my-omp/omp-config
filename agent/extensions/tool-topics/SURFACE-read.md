@@ -1,6 +1,6 @@
 ---
 tool: read
-upstream: pi-coding-agent@18.22.0 src/prompts/tools/read.md, src/tools/read.ts, src/internal-urls/out-protocol.ts
+upstream: pi-coding-agent@18.22.2 src/prompts/tools/read.md, src/tools/read.ts, src/internal-urls/out-protocol.ts
 ---
 `read` is an almost universal reading tool: files/directories, archives, structured data, documents/notebooks, images/video, web pages and remote/internal resources.
 Pass one `path`. Common selectors: `file:20-60` (lines), `file:-20` (tail), `file:raw` (exact text without edit anchors). Repeat the selector on every paged call; follow returned omissions and continuation hints. Before anchored edits, read non-raw and copy the returned `[FILENAME#TAG]` snapshot header; never invent anchors.
