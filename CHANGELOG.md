@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Documented in the `tool-topics` surfaces that `out://` is a write-only mid-turn reply channel (`read`) and that the shell runs in-process utilities ahead of PATH, handed back by `PI_DISABLE_UUTILS_BUILTINS` (`bash`)
+
 ## [1.2.0] - 2026-11-18
 
 ### Added
