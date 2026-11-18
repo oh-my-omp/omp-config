@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `delete-guard` inspection of eval `sh` helper commands (also `globalThis.sh`, tagged templates and names bound to the helper) as posix shell scripts on every platform, blocking non-literal commands
+- Added `sh` helper commands to `tool-policy-nag`'s terminal and open-ended detection when the helper is spelled under its own name
+
 ### Changed
 
 - Updated `grep` tool guidance for per-file caps of 10 matches across many files and 50 within one file, context shown only via `grep.contextBefore`/`grep.contextAfter`, and control characters stripped from match lines
