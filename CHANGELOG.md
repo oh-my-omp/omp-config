@@ -2,11 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `task` guidance for staged `steps` execution and its mutual exclusivity with `task`, gated on the `task.steps` setting
+
 ## [1.2.0] - 2026-11-18
 
 ### Added
 
-- Added `task` guidance for staged `steps` execution and its mutual exclusivity with `task`, gated on the `task.steps` setting
 - Enabled the `lang-nag` extension in light mode
 
 ### Fixed
