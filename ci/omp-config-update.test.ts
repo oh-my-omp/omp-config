@@ -138,6 +138,20 @@ describe("plain files", () => {
 		expect(host(agentDir, "extensions/foo/index.ts")).toBe("export default 3;\n");
 	});
 
+	test("shared-code copies one level deeper under _shared are managed code", async () => {
+		const src = source();
+		const agentDir = temp("omp-agent-");
+		src.commit({ "agent/extensions/_shared/omomp-shared/i18n.ts": "v1\n" });
+		await apply(src.dir, agentDir);
+		expect(host(agentDir, "extensions/_shared/omomp-shared/i18n.ts")).toBe("v1\n");
+		writeTree(agentDir, { "extensions/_shared/omomp-shared/i18n.ts": "local\n" });
+		src.commit({ "agent/extensions/_shared/omomp-shared/i18n.ts": "v2\n" });
+		const report = await apply(src.dir, agentDir);
+		expect(report.conflicts).toEqual([]);
+		expect(report.overwritten).toEqual([join(agentDir, "extensions/_shared/omomp-shared/i18n.ts")]);
+		expect(host(agentDir, "extensions/_shared/omomp-shared/i18n.ts")).toBe("v2\n");
+	});
+
 	test("an upstream deletion removes an unmodified file and conflicts on a customized one", async () => {
 		const src = source();
 		const agentDir = temp("omp-agent-");
