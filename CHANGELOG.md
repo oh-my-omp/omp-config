@@ -2,12 +2,6 @@
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-11-18
-
-### Added
-
-- Enabled the `lang-nag` extension in light mode
-
 ### Changed
 
 - Updated `grep` tool guidance for per-file caps of 10 matches across many files and 50 within one file, context shown only via `grep.contextBefore`/`grep.contextAfter`, and control characters stripped from match lines
@@ -15,6 +9,12 @@
 - Updated `find` tool guidance so a deadline that cuts verification short returns the verified hits with a `partial:` notice and fails only when no hit was verified
 - Updated `ask` tool guidance for answers returned as JSON keyed by control name with `details.answers[]`, timeout submissions marked `timedOut`, and the no-named-controls error
 - Updated `bash`, `task` and `write` tool guidance: `proc://<id>/kill` writes require `content: ""`, jobs can report a `cancelled` state, and settled-job reports carry a `Delivery:` line
+
+## [1.2.0] - 2026-11-18
+
+### Added
+
+- Enabled the `lang-nag` extension in light mode
 
 ### Fixed
 
