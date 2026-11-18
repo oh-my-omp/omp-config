@@ -21,7 +21,7 @@ Configuration files expose choices users can adapt to their own work. Shipped ru
 | 11 | `turn-judge` | [turn-judge](#turn-judge) | Main + Sub, per file conditions | No | `TURN-JUDGE-*.md` (shipped examples or local files) | Write judgment questions, trigger rules, prompts and session conditions; bind a suitable judge or chat model |
 | 12 | `lang-nag` | [lang-nag](#lang-nag) | Main | Yes | `lang-nag.language`, `lang-nag.instruction` | Choose reply language and reminder wording at machine or project scope; bind `@lang-nag` when a dedicated chat judge is useful |
 | 13 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | Process-wide, macOS only | Yes | `child-memory-warning.thresholdGiB` | Choose an alert threshold for your hardware and workloads at machine or project scope |
-| 14 | `input-polish` | [input-polish](#input-polish) | Main TUI | Yes | `input-polish.key`, `input-polish.instruction` | Choose shortcut and rewrite instruction; bind `@input-polish` to your available models |
+| 14 | `input-polish` | [input-polish](#input-polish) | Main TUI | Yes | `input-polish.key`, `input-polish.instruction` | Choose shortcut and rewrite instruction; bind `@input-polish` to your available models; warns once when the shortcut is also held |
 | 15 | `wt-tool` | [wt-tool](#wt-tool) | Main TUI | Yes | No config file | Choose the worktree branch and review removal state through the tools |
 | 16 | `harness-restart` | [harness-restart](#harness-restart) | Main TUI | Yes | No config file | Request a restart with a reason; the session resumes after it |
 | 17 | `omp-config-autoupdate` | [Setup, Sync and Maintenance](operations.md#omp-config-autoupdate) | Root main | Yes | `omp-config-autoupdate.enabled`, `.conflicts`, `.exclude` | Choose startup updates and conflict handling through `/omp-config-autoupdate`; adapt conflicts when needed |
@@ -235,10 +235,11 @@ On the first main session's `session_start`, opens `libproc`/`sysctl` via Bun FF
 
 Source: `agent/extensions/input-polish/`. Main interactive TUI only.
 
-Intercepts the `input-polish.key` shortcut (`omp-config`; default `ctrl+enter`, or `alt+enter` on terminals without Kitty keyboard protocol / `modifyOtherKeys`) and rewrites the input draft using `@input-polish` then the `default` role chain (with `input-polish.instruction`, manifest default `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`; a project override wins over the machine values) in a tool-less `taskDepth: 1` helper session. Streams the rewrite into a read-only overlay above the editor while leaving the original draft untouched:
+Intercepts the `input-polish.key` shortcut (`omp-config`; default `ctrl+enter`, or `alt+enter` on terminals without Kitty keyboard protocol / `modifyOtherKeys`, which omp reserves, so that choice always logs the reserved-chord warning below) and rewrites the input draft using `@input-polish` then the `default` role chain (with `input-polish.instruction`, manifest default `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`; a project override wins over the machine values) in a tool-less `taskDepth: 1` helper session. Streams the rewrite into a read-only overlay above the editor while leaving the original draft untouched:
 
 - `Enter` after completion replaces the draft with the rewrite and submits it; `Esc` or `Ctrl+C` cancels and closes the overlay.
 - Blank drafts and drafts starting with `/`, `!`, or `$` are ignored. Rewrites that alter `[Paste #N …]` or `[Image #N …]` placeholders are rejected with an error in the overlay.
+- On attach in the main TUI session, if the shortcut is also held by omp or by another extension, one warning per process is logged and shown: it names the omp keybinding actions that hold it (rebind them in `~/.omp/agent/keybindings.yml`), or says omp reserves the chord, or names the extension that binds it. `input-polish` keeps the shortcut either way.
 
 ### wt-tool
 

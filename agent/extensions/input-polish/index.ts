@@ -29,10 +29,13 @@
 // Registers session_start/session_switch/session_shutdown and a terminal-input
 // listener, only in the main TUI session. Reads config; writes no files. Model
 // failures stay in the preview without changing the editor; hook failures log.
+// On each attach the chord is checked with `pi.getShortcutConflict`: when omp
+// holds it, or another extension binds it, one warning per process names the
+// holder. The chord stays with polish either way.
 // ============================================================================
 
 import { stripVTControlCharacters } from "node:util";
-import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type ShortcutConflict, z } from "@oh-my-pi/pi-coding-agent";
 import { type Component, isKeyRelease, parseKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
@@ -69,6 +72,64 @@ async function loadConfig(pi: ExtensionAPI, cwd: string): Promise<PolishConfig |
 			return unreachable;
 		}
 	}
+}
+
+// --- shortcut conflicts -----------------------------------------------------
+
+type Chord = PolishConfig["key"];
+
+/** Chords already reported in this process: `/new` and session switches attach again. */
+const reportedChords = new Set<Chord>();
+
+/** One conflict as a log line (fixed English) and an operator notice (translated). */
+interface ConflictReport {
+	readonly log: string;
+	readonly notice: string;
+}
+
+function conflictReport(chord: Chord, conflict: ShortcutConflict): ConflictReport {
+	switch (conflict.kind) {
+		case "keybinding": {
+			const actions = conflict.keybindings.join(", ");
+			return {
+				log: `input-polish: ${chord} conflicts with keybinding ${actions}; rebind them in ~/.omp/agent/keybindings.yml`,
+				notice: tr(
+					`input-polish: ${chord} is held by ${actions}; rebind them in ~/.omp/agent/keybindings.yml`,
+					`input-polish：${chord} 被 ${actions} 占用，请在 ~/.omp/agent/keybindings.yml 中改绑`,
+				),
+			};
+		}
+		case "reserved":
+			return {
+				log: `input-polish: ${chord} conflicts with a reserved omp chord; input-polish still takes it`,
+				notice: tr(
+					`input-polish: omp reserves ${chord}; input-polish still takes it`,
+					`input-polish：omp 保留了 ${chord}，input-polish 仍会占用它`,
+				),
+			};
+		case "extension":
+			return {
+				log: `input-polish: ${chord} conflicts with extension ${conflict.extensionPath}; only one of them runs`,
+				notice: tr(
+					`input-polish: ${chord} is also bound by extension ${conflict.extensionPath}; only one of them runs`,
+					`input-polish：${chord} 也被扩展 ${conflict.extensionPath} 绑定，二者只有一个会运行`,
+				),
+			};
+		default: {
+			const unreachable: never = conflict;
+			return unreachable;
+		}
+	}
+}
+
+function reportShortcutConflict(pi: ExtensionAPI, ctx: ExtensionContext, chord: Chord): void {
+	if (reportedChords.has(chord)) return;
+	const conflict = pi.getShortcutConflict(chord);
+	if (conflict === undefined) return;
+	reportedChords.add(chord);
+	const report = conflictReport(chord, conflict);
+	pi.logger.warn(report.log);
+	if (ctx.hasUI) ctx.ui.notify(report.notice, "warning");
 }
 
 // --- polishing --------------------------------------------------------------
@@ -454,6 +515,7 @@ export default function inputPolish(pi: ExtensionAPI): void {
 				return { consume: true };
 			}
 		});
+		reportShortcutConflict(pi, ctx, cfg.key);
 	};
 
 	const onAttach = async (_event: unknown, ctx: ExtensionContext): Promise<void> => {

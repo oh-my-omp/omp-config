@@ -21,7 +21,7 @@
 | 11 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子，按文件条件 | 否 | `TURN-JUDGE-*.md`（仓库示例或本机文件） | 编写判定问题、触发规则、提醒和会话条件，绑定适合的判定或聊天模型 |
 | 12 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 是 | `lang-nag.language`、`lang-nag.instruction` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
 | 13 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局，仅 macOS | 是 | `child-memory-warning.thresholdGiB` | 在本机或项目中按自己的硬件和负载选择告警阈值 |
-| 14 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `input-polish.key`、`input-polish.instruction` | 选择快捷键和改写指令；将 `@input-polish` 绑定到自己的可用模型 |
+| 14 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `input-polish.key`、`input-polish.instruction` | 选择快捷键和改写指令；将 `@input-polish` 绑定到自己的可用模型；快捷键同时被占用时告警一次 |
 | 15 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
 | 16 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
 | 17 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omp-config-autoupdate.enabled`、`.conflicts`、`.exclude` | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
@@ -235,10 +235,11 @@ cwd: /absolute/path/to/leader-checkout
 
 源码：`agent/extensions/input-polish/`。仅在主会话交互式 TUI 运行。
 
-在输入框按下 `input-polish.key` 设置（`omp-config`；默认 `ctrl+enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可设 `alt+enter`）时，用 `@input-polish` 及 `default` 角色链（改写指令取 `input-polish.instruction`，manifest 默认 `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`；项目覆盖优先于机器值）在 `taskDepth: 1` 无工具内存会话中改写草稿，流式显示在输入框上方的只读浮层中（输入框内原草稿不变）：
+在输入框按下 `input-polish.key` 设置（`omp-config`；默认 `ctrl+enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可设 `alt+enter`；omp 保留了该键，选它时总会出现下文「omp 保留了该键」的告警）时，用 `@input-polish` 及 `default` 角色链（改写指令取 `input-polish.instruction`，manifest 默认 `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`；项目覆盖优先于机器值）在 `taskDepth: 1` 无工具内存会话中改写草稿，流式显示在输入框上方的只读浮层中（输入框内原草稿不变）：
 
 - 生成完成后按 `Enter` 用改写稿替换输入框内容并提交；按 `Esc` 或 `Ctrl+C` 取消并关闭浮层。
 - 空白草稿及以 `/`、`!`、`$` 开头的草稿不处理。若改写结果改变了 `[Paste #N …]` 或 `[Image #N …]` 占位符的数量或内容，直接报错并显示在浮层中。
+- 主会话交互式 TUI 附着时，若快捷键同时被 omp 或其他扩展占用，每个进程告警一次（写入日志并显示）：点名占用它的 omp 键位动作（可在 `~/.omp/agent/keybindings.yml` 中改绑），或说明 omp 保留了该键，或点名绑定它的扩展。无论哪种情况，`input-polish` 仍占用该快捷键。
 
 ### wt-tool
 
