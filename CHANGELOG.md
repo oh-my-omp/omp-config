@@ -2,12 +2,15 @@
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-11-18
-
 ### Added
 
 - Added `delete-guard` inspection of eval `sh` helper commands (also `globalThis.sh`, tagged templates and names bound to the helper) as posix shell scripts on every platform, blocking non-literal commands
 - Added `sh` helper commands to `tool-policy-nag`'s terminal and open-ended detection when the helper is spelled under its own name
+
+## [1.2.0] - 2026-11-18
+
+### Added
+
 - Enabled the `lang-nag` extension in light mode
 
 ### Fixed
