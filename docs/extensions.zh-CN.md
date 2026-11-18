@@ -199,7 +199,7 @@ cwd: /absolute/path/to/leader-checkout
 - **解释器**（`python`/`python3` 可带版本后缀、`node`、`bun`、`deno`、`perl`、`ruby`；按 basename、小写、去掉 `.exe` 匹配）：内联代码按其自身语言判定。`python -c` 按 Python 的 eval 单元格判定；`node`/`bun` 的 `-e`/`--eval`/`-p`/`--print` 与 `deno eval`（其中 `-p` 是标志）按 JavaScript 单元格判定；`deno repl --eval` 同理；`perl -e`/`-E`/`-M` 与 `ruby -e` 按名称扫描 `unlink`、`rmtree`、`remove_tree`、`File.delete`、`FileUtils.rm*`。通过 here-document 引号喂给解释器的正文按代码判定。遇到不认识的选项时，按"带值"与"不带值"两种读法判定，每次调用最多四个这样的选项。
 - **非字面的解释器输入**：内联代码来自展开（`python3 -c "$CODE"`）、脚本文件来自展开（`python3 "$F"`）、脚本之前的参数来自展开（`node "$FLAGS" -e …`）；stdin 来自管道、here-string、未加引号的 here-document 或继承的标准输入（`echo … | python3`、未加引号的 `python3 - <<EOF`、`python3 /dev/stdin`）；以及脚本是 URL（`deno run https://…`、`node --import data:…`）。
 - **放行**：只作参数出现的词（`echo rm -rf /`、`git rm`、`npm rm`）、参数中的展开（`ls $HOME`）、不含删除的字面嵌套脚本、字面的脚本文件（`bash x.sh`、`sh < x.sh`、`source x.sh`、`omp bash x.sh`）、`omp` 的其他子命令、`-n` 语法检查（`+n` 会撤销它）以及 `--version`/`--help`。
-- **不覆盖**：`exec_command`、自带删除语义的程序（`git clean`、`rsync --delete`）、自行删除文件、且不在上文列出的外部程序（`awk`、`php`、`lua` 等）、脚本文件的内容，以及 bash 工具从用户 shell rc 引入的 alias 与函数。
+- **不覆盖**：`exec_command`、自带删除语义的程序（`git clean`、`rsync --delete`）、脚本文件的内容、bash 工具从用户 shell rc 引入的 alias 与函数，以及程序经自己的语言交给 shell 的命令行：只有 shell 以及上文按 eval 单元格判定的 Python、JavaScript 内联代码会分类其中的命令字符串；Perl 与 Ruby 止于名称扫描，其余程序止于程序名。`awk` 会运行自己的命令行——`system()`、`print | cmd`、`cmd | getline` 由 bash 工具的内嵌 shell 执行，每个平台都一样——`perl`/`ruby` 的 `system()`、`php`、`lua` 与 `sed` 的 `e` 同理。
 
 **Eval。** 同一钩子在 `eval` 单元格执行前按文本判定，规则与 reason 同上。交给 shell 的命令不是字面字符串时（带占位符的 f-string 或模板字面量、变量、拼接）按非字面拦截。
 

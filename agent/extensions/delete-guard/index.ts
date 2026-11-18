@@ -120,8 +120,14 @@
 // `os.exec*`/`os.spawn*`/`pty.spawn` are not covered. A definition whose body
 // calls a deletion API is blocked even if this cell does not call it.
 //
-// Not covered: `exec_command`, and aliases or functions the bash tool sources
-// from the user's shell rc.
+// Not covered: `exec_command`; aliases or functions the bash tool sources
+// from the user's shell rc; and command lines a program hands to a shell
+// through its own language. Only shells and the Python and JavaScript inline
+// code above (judged as eval cells) have their command strings classified;
+// Perl and Ruby stop at the name scan and every other program at its name,
+// so these run unclassified: `awk`'s `system()`, `print | cmd` and
+// `cmd | getline` (run by the embedded shell's `awk` builtin as `sh -c cmd`
+// would), `perl`/`ruby` `system()`, `php`, `lua`, and `sed`'s `e`.
 //
 // DELETE TOOL. Registers `delete` (approval `write`, top-level) on macOS,
 // Linux and Windows; on any other platform no tool is registered.
