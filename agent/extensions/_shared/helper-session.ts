@@ -81,7 +81,7 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 	}
 
 	let partial = "";
-	/** Set by the terminal `agent_end`; held as a property so the subscription's assignment is seen after it. */
+	/** Set by the session's `agent_end`, emitted once when the run can no longer resume; held as a property so the subscription's assignment is seen after it. */
 	const final: { answer: FinalAnswer | null } = { answer: null };
 	const unsubscribe = session.subscribe((event) => {
 		if (event.type === "message_update") {
@@ -90,7 +90,7 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 				partial += update.delta;
 				if (!signal?.aborted) request.onText?.(partial);
 			}
-		} else if (event.type === "agent_end" && event.isTerminal !== false) {
+		} else if (event.type === "agent_end") {
 			final.answer = finalAnswer(event.messages);
 		}
 	});
