@@ -481,6 +481,8 @@ function managedPlain(rel: string): boolean {
 		/^agent\/(config-light\.yml|omp-light\.ts)$/.test(rel) ||
 		/^agent\/agents\/.+$/.test(rel) ||
 		/^agent\/(extensions|extensions-last)\/[^/]+\/[^/]+\.ts$/.test(rel) ||
+		// Shared-code copies sit one level deeper (`extensions/_shared/omomp-shared/<file>.ts`).
+		/^agent\/extensions\/_shared\/omomp-shared\/[^/]+\.ts$/.test(rel) ||
 		/^agent\/extensions\/append-system-model\/APPEND-SYSTEM-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions-last\/system-prompt-replace\/REPLACE-SYSTEM-[^/]+\.ya?ml$/.test(rel) ||
 		/^agent\/extensions\/user-prompt-inject\/PROMPT-INJECT-[^/]+\.md$/.test(rel) ||

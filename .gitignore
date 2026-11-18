@@ -15,7 +15,6 @@ agent/subagent-usage/
 plugins/node_modules/
 plugins/.cache/
 node_modules/
-bun.lock
 
 
 # Credential-bearing and generated files
