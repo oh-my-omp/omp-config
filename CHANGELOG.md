@@ -6,6 +6,8 @@
 
 - Added `delete-guard` inspection of eval `sh` helper commands (also `globalThis.sh`, tagged templates and names bound to the helper) as posix shell scripts on every platform, blocking non-literal commands
 - Added `sh` helper commands to `tool-policy-nag`'s terminal and open-ended detection when the helper is spelled under its own name
+- Added `xd://read/urls` guidance for further read sub-paths, queries and limits when the read tool is available
+- Added optional result-shaping guidance to the system prompt
 
 ### Changed
 
@@ -14,6 +16,11 @@
 - Updated `find` tool guidance so a deadline that cuts verification short returns the verified hits with a `partial:` notice and fails only when no hit was verified
 - Updated `ask` tool guidance for answers returned as JSON keyed by control name with `details.answers[]`, timeout submissions marked `timedOut`, and the no-named-controls error
 - Updated `bash`, `task` and `write` tool guidance: `proc://<id>/kill` writes require `content: ""`, jobs can report a `cancelled` state, and settled-job reports carry a `Delivery:` line
+- Directed the agent to make file edits with the edit tool and never through sed/perl/python when shell tools are available
+
+### Fixed
+
+- Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
 
 ## [1.2.0] - 2026-11-18
 
