@@ -253,7 +253,7 @@ OMP's `/wt` and `/move` reject calls while a turn is streaming, and `ExtensionAP
 
 Source: `agent/extensions/harness-restart/`. Main interactive TUI only (enabled in light mode).
 
-Queues a restart using the same idle-turn `InteractiveMode` mechanism and arming rule as `wt-tool`. Right before calling `InteractiveMode.restart()`, appends custom session entry `mouriya.omp.harness-restart.request` (`reason` and timestamp); when the restarted process resumes the session, `session_start` sends `"Harness restart completed (<time>). Reason was: <reason>. Continue what you were doing."` with `attribution: "agent"`.
+Queues a restart using the same idle-turn `InteractiveMode` mechanism and arming rule as `wt-tool`. Right before calling `InteractiveMode.restart()`, appends custom session entry `mouriya.omp.harness-restart.request` (`reason` and timestamp); when the restarted process resumes the session, `session_start` sends `"Harness restart completed (<time>). Reason was: <reason>. Continue what you were doing."` with `attribution: "agent"`. The `consumed` marker for that request is appended only after OMP accepts the message (the send settles when the turn it starts ends), and only if a re-read of the branch still finds the same request pending; an unaccepted message is logged as `harness-restart:` and leaves the request pending, so the next `session_start` or `session_switch` sends it again. Every notice this extension sends shares that send path and logs a refusal.
 
 ### argon-long-output
 
