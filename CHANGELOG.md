@@ -13,7 +13,7 @@
 
 ### Fixed
 
-- Extended the system-prompt replacement rule to match backtick-quoted `xd://<tool>` references
+- Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
 
 ## [1.2.0] - 2026-11-18
 
