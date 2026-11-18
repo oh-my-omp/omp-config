@@ -2,15 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Made the `wt` and `wt_remove` tools refuse calls while the session is in vibe mode, queueing nothing and returning an error that asks to exit vibe mode first
+
 ## [1.2.0] - 2026-11-18
 
 ### Added
 
 - Enabled the `lang-nag` extension in light mode
-
-### Changed
-
-- Made the `wt` and `wt_remove` tools refuse calls while the session is in vibe mode, queueing nothing and returning an error that asks to exit vibe mode first
 
 ### Fixed
 
