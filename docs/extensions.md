@@ -235,7 +235,7 @@ On the first main session's `session_start`, opens `libproc`/`sysctl` via Bun FF
 
 Source: `agent/extensions/input-polish/`. Main interactive TUI only.
 
-Intercepts the `input-polish.key` shortcut (`omp-config`; default `ctrl+enter`, or `alt+enter` on terminals without Kitty keyboard protocol / `modifyOtherKeys`) and rewrites the input draft using `@input-polish` then the `default` role chain (with `input-polish.instruction`, manifest default `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`; a project override wins over the machine values) in a tool-less `taskDepth: 1` helper session. Streams the rewrite into a read-only overlay above the editor while leaving the original draft untouched:
+Intercepts the `input-polish.key` shortcut (`omp-config`; default `ctrl+enter`, or `alt+enter` on terminals without Kitty keyboard protocol / `modifyOtherKeys`, which omp reserves, so that choice always logs the reserved-chord warning below) and rewrites the input draft using `@input-polish` then the `default` role chain (with `input-polish.instruction`, manifest default `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`; a project override wins over the machine values) in a tool-less `taskDepth: 1` helper session. Streams the rewrite into a read-only overlay above the editor while leaving the original draft untouched:
 
 - `Enter` after completion replaces the draft with the rewrite and submits it; `Esc` or `Ctrl+C` cancels and closes the overlay.
 - Blank drafts and drafts starting with `/`, `!`, or `$` are ignored. Rewrites that alter `[Paste #N …]` or `[Image #N …]` placeholders are rejected with an error in the overlay.

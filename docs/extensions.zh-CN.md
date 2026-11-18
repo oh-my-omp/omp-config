@@ -235,7 +235,7 @@ cwd: /absolute/path/to/leader-checkout
 
 源码：`agent/extensions/input-polish/`。仅在主会话交互式 TUI 运行。
 
-在输入框按下 `input-polish.key` 设置（`omp-config`；默认 `ctrl+enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可设 `alt+enter`）时，用 `@input-polish` 及 `default` 角色链（改写指令取 `input-polish.instruction`，manifest 默认 `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`；项目覆盖优先于机器值）在 `taskDepth: 1` 无工具内存会话中改写草稿，流式显示在输入框上方的只读浮层中（输入框内原草稿不变）：
+在输入框按下 `input-polish.key` 设置（`omp-config`；默认 `ctrl+enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可设 `alt+enter`；omp 保留了该键，选它时总会出现下文「omp 保留了该键」的告警）时，用 `@input-polish` 及 `default` 角色链（改写指令取 `input-polish.instruction`，manifest 默认 `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`；项目覆盖优先于机器值）在 `taskDepth: 1` 无工具内存会话中改写草稿，流式显示在输入框上方的只读浮层中（输入框内原草稿不变）：
 
 - 生成完成后按 `Enter` 用改写稿替换输入框内容并提交；按 `Esc` 或 `Ctrl+C` 取消并关闭浮层。
 - 空白草稿及以 `/`、`!`、`$` 开头的草稿不处理。若改写结果改变了 `[Paste #N …]` 或 `[Image #N …]` 占位符的数量或内容，直接报错并显示在浮层中。
