@@ -2,11 +2,12 @@
  * Delta messages: an extension's customization of OMP's base prompt reaches the model as a hidden
  * message appended to the conversation, never as an edit of the system prompt or tool definitions.
  *
- * RENDERING. A delta is `<system-reminder source="omp-config/<id>">`, a newline, the body, a newline
- * and `</system-reminder>`. A delta that replaces an earlier one of the same source opens its body
- * with a line saying it supersedes them; a source whose customization stopped applying sends a delta
- * that says only that. The bytes depend only on the source id, the extension's body and whether the
- * context already holds a delta of that source.
+ * RENDERING. A delta is `<system-reminder source="<source>">`, a newline, the body, a newline
+ * and `</system-reminder>`, where `<source>` is the full string the caller gives
+ * `createDeltaStream` (`<plugin>/<id>`). A delta that replaces an earlier one of the same source
+ * opens its body with a line saying it supersedes them; a source whose customization stopped
+ * applying sends a delta that says only that. The bytes depend only on the source, the body's text
+ * and whether the context already holds a delta of that source.
  *
  * DELIVERY. Two points: the `before_agent_start` result `message` (a hidden custom message whose
  * `customType` is the source, `attribution: "agent"`) and the `tool_result` `additionalContext`
@@ -16,11 +17,11 @@
  * Nothing is sent when the wanted body equals it, or when nothing applies and no body of the
  * source is effective. Delivered messages are never rewritten; once compaction drops one from the
  * projection, the next delivery point sends it again. The only process state is what a tool batch
- * of the current turn returned before OMP persists the batch's developer message; `turn_start`
- * drops it.
+ * of the current turn returned before OMP persists the batch's developer message; `turnStarted`,
+ * called from the consumer's `turn_start` handler, drops it.
  */
 import { getAnthropicCompactionPayload } from "@oh-my-pi/pi-agent-core";
-import type { CompactionEntry, ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import type { CompactionEntry, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { resolveSessionLeafId } from "@oh-my-pi/pi-coding-agent";
 import { getOpenAiRemoteCompactionPayload } from "@oh-my-pi/pi-coding-agent/session/session-context";
 
@@ -40,6 +41,8 @@ export interface DeltaStream {
 	atPrompt(ctx: ExtensionContext, delta: Delta): { message: DeltaMessage } | undefined;
 	/** `tool_result` result carrying the delta, or undefined when the context or this batch already holds it. */
 	afterTools(ctx: ExtensionContext, delta: Delta): { additionalContext: string } | undefined;
+	/** Call from the consumer's `turn_start` handler: a new turn persists the previous batch's message. */
+	turnStarted(): void;
 }
 
 /** The source's latest delta in the context: none yet, a retraction, or a body. */
@@ -231,13 +234,12 @@ function nextText(source: string, effective: Effective, wanted: Delta): string |
 	}
 }
 
-/** The delta stream of extension `id`; one per extension instance, created in its factory. */
-export function createDeltaStream(pi: ExtensionAPI, id: string): DeltaStream {
-	const source = `omp-config/${id}`;
+/**
+ * The delta stream of `source` — the caller's full `<plugin>/<id>` string; one per plugin
+ * instance, created in its factory. Call `turnStarted` from the consumer's `turn_start` handler.
+ */
+export function createDeltaStream(source: string): DeltaStream {
 	let batch: Effective | undefined;
-	pi.on("turn_start", () => {
-		batch = undefined;
-	});
 	return {
 		atPrompt(ctx, delta) {
 			const text = nextText(source, inProjection(ctx, source), delta);
@@ -249,6 +251,9 @@ export function createDeltaStream(pi: ExtensionAPI, id: string): DeltaStream {
 			if (text === undefined) return undefined;
 			batch = delta.kind === "text" ? { kind: "text", body: delta.body } : { kind: "retracted" };
 			return { additionalContext: text };
+		},
+		turnStarted() {
+			batch = undefined;
 		},
 	};
 }

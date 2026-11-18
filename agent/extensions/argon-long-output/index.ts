@@ -42,7 +42,7 @@
 //
 // PROMPT. In the main session and in every subagent, each matched against its
 // own model, `ARGON_PROMPT.md` (beside this module, re-read at every delivery
-// point) reaches an argon session as one delta of `_shared/context-delta.ts`
+// point) reaches an argon session as one delta of `_shared/omomp-shared/context-delta.ts`
 // with source `omp-config/argon-long-output`: keep every `write`/`edit`
 // payload and final reply within 8,000 characters by writing a skeleton first
 // and filling it one section per `edit`. The system prompt stays as OMP built
@@ -54,7 +54,7 @@
 // revive's `before_agent_start` delivers nothing, because OMP discards its result.
 //
 // Registers session_start, before_agent_start, context, session.compacting,
-// tool_result and the delta stream's turn_start; no tools or commands; writes
+// turn_start (to clear the delta stream's same-turn batch) and tool_result; no tools or commands; writes
 // no files. Failure policy: a missing or unreadable ARGON_PROMPT.md warns once
 // per reason and delivers nothing, leaving any delta already in the context in
 // effect; any other error is logged and the prompt or request proceeds
@@ -65,8 +65,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { createDeltaStream, type Delta } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
+import { createDeltaStream, type Delta } from "../_shared/omomp-shared/context-delta.ts";
 
 const API = "google-gemini-cli";
 const ARGON_ID = /^gemini-4-argon/;
@@ -156,7 +156,10 @@ export default function argonLongOutput(pi: ExtensionAPI): void {
 		}
 	});
 
-	const deltas = createDeltaStream(pi, "argon-long-output");
+	const deltas = createDeltaStream("omp-config/argon-long-output");
+	pi.on("turn_start", () => {
+		deltas.turnStarted();
+	});
 	pi.on("before_agent_start", (event, ctx) => {
 		sweepHook(event, ctx);
 		// OMP discards the result of a revive.
