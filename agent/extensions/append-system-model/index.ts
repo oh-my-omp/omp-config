@@ -5,8 +5,13 @@
 //
 // WHY THIS EXISTS. OMP's APPEND_SYSTEM.md / SYSTEM.md / SYSTEM_TEMPLATE.md and
 // the rulebook cannot be conditioned on the session (main or subagent, cwd,
-// full or light mode) or on its model, so a rule meant for one case reaches
-// every case. A new conditional rule here is a new file, not new code.
+// full or light mode), so a rule meant for one case reaches every case. OMP's
+// `systemPromptTemplates` setting (since 18.19.0) selects a template file by
+// model only, and that file replaces the whole base prompt: it is not read
+// while a discovered SYSTEM_TEMPLATE.md applies (this repo installs one), and
+// adopting it means one full template per model, re-compared after every OMP
+// upgrade. Fragments here add text per session and per model on top of the
+// base prompt instead. A new conditional rule here is a new file, not new code.
 //
 // FILES. `APPEND-SYSTEM-<label>.md`, discovered by `_shared/spec-files.ts`:
 //   - beside this module: fragments the repo ships and machine-local ones;
