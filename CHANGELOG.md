@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-19
+
 ### Changed
 
 - Updated the shared copy of `i18n.ts` to oh-my-omp/shared@33dbe00.
+
+### Fixed
+
+- Fixed `bun run check` failing on OMP 18.22.0 host types: the shared helper session no longer reads the removed `isTerminal` field of the session `agent_end` event, which OMP now emits once per run
 
 ## [1.2.0] - 2026-11-18
 
@@ -14,7 +20,6 @@
 
 ### Fixed
 
-- Fixed `bun run check` failing on OMP 18.22.0 host types: the shared helper session no longer reads the removed `isTerminal` field of the session `agent_end` event, which OMP now emits once per run
 - Restricted `lang-nag` language detection to the run's terminal reply: interrupted, tool-stopped, errored and truncated runs are no longer judged, and earlier mid-run narration no longer stands in
 - Fixed `model-compaction` thresholds being lost after a session was resumed or omp restarted: the rules are now applied on `session_start` and `session_switch` as well as on user prompts, so a resumed session driven only by agent-started turns (notices, continuations, IRC wakes) no longer compacts at OMP's default threshold
 
