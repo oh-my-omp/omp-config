@@ -101,7 +101,7 @@ function conflictReport(chord: Chord, conflict: ShortcutConflict): ConflictRepor
 		}
 		case "reserved":
 			return {
-				log: `input-polish: ${chord} conflicts with a chord omp reserves; input-polish still takes it`,
+				log: `input-polish: ${chord} conflicts with a reserved omp chord; input-polish still takes it`,
 				notice: tr(
 					`input-polish: omp reserves ${chord}; input-polish still takes it`,
 					`input-polish：omp 保留了 ${chord}，input-polish 仍会占用它`,
