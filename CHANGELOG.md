@@ -9,6 +9,7 @@
 ### Changed
 
 - Made the `wt` and `wt_remove` tools refuse calls while the session is in vibe mode, queueing nothing and returning an error that asks to exit vibe mode first
+- Imported `XDEV_KEEP_TOP_LEVEL`, `isMountableUnderXdev` and the internal URL router types from OMP's exported entry points (`@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-coding-agent/internal-urls`) in `ast-top-level` and `tool-topics` instead of host-internal file paths
 
 ## [1.2.0] - 2026-11-18
 
