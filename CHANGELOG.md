@@ -2,16 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Extended `isolation-nudge` to remind on steps-based task items, keying each run by all its steps joined in order instead of skipping the item
+- Extended `task-split-check` to judge steps-based task items as one run using their steps joined in order
+
 ## [1.2.0] - 2026-11-18
 
 ### Added
 
 - Enabled the `lang-nag` extension in light mode
-
-### Changed
-
-- Extended `isolation-nudge` to remind on steps-based task items, keying each run by all its steps joined in order instead of skipping the item
-- Extended `task-split-check` to judge steps-based task items as one run using their steps joined in order
 
 ### Fixed
 
