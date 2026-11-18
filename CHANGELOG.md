@@ -6,6 +6,11 @@
 
 - Added `task` guidance for staged `steps` execution and its mutual exclusivity with `task`, gated on the `task.steps` setting
 
+### Changed
+
+- Extended `isolation-nudge` to remind on steps-based task items, keying each run by all its steps joined in order instead of skipping the item
+- Extended `task-split-check` to judge steps-based task items as one run using their steps joined in order
+
 ### Fixed
 
 - Kept the `harness-restart` completion notice pending until OMP accepted it: a refused or failed send is now logged and re-sent on the next session start or switch instead of being marked consumed
