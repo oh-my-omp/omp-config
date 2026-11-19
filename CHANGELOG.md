@@ -25,6 +25,10 @@
 - Imported `XDEV_KEEP_TOP_LEVEL`, `isMountableUnderXdev` and the internal URL router types from OMP's exported entry points (`@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-coding-agent/internal-urls`) in `ast-top-level` and `tool-topics` instead of host-internal file paths
 - Documented in the `tool-topics` surfaces that `out://` is a write-only mid-turn reply channel (`read`) and that the shell runs in-process utilities ahead of PATH, handed back by `PI_DISABLE_UUTILS_BUILTINS` (`bash`)
 
+### Removed
+
+- Removed `task` guidance for consulting a past session with `agent: "seance"` and the rule that isolated items cannot use it
+
 ### Fixed
 
 - Kept the `harness-restart` completion notice pending until OMP accepted it: a refused or failed send is now logged and re-sent on the next session start or switch instead of being marked consumed
