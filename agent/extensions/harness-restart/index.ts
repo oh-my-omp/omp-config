@@ -34,10 +34,10 @@
 // No extension config files. Failures are returned to the agent; hook failures are logged.
 import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { applyActiveTools } from "../_shared/active-tools.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { captureInteractiveMode, type InteractiveModeFailure } from "../_shared/interactive-mode.ts";
+import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";
 
 const TOOL = "harness_restart";
 const ENTRY_TYPE = "mouriya.omp.harness-restart.request";

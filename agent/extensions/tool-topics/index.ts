@@ -32,7 +32,7 @@
 // renders gets a `<tool>` element — its surface replacing that description (`description="replaced"`)
 // or none (`"kept"`), then its index. `{{native:<Heading>}}` in a surface becomes a reference to
 // that `# Heading` section of the rendered description, for content OMP generates per session
-// (task's agent list). The elements form one delta of `_shared/context-delta.ts` with source
+// (task's agent list). The elements form one delta of `_shared/omomp-shared/context-delta.ts` with source
 // `omp-config/tool-topics`, sent only when it differs from the source's effective delta in the
 // current context; a session without `read` gets none, or a retraction of an earlier one, since
 // it could not read the topics. The system prompt is only read: prompt.ts finds each tool by name
@@ -44,9 +44,9 @@
 // found, or whose `{{native:…}}` section is missing, is left out of the delta, with a log warning
 // and one main-session notice per tool and reason. Hooks never throw into omp.
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { createDeltaStream, type Delta } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
+import { createDeltaStream, type Delta } from "../_shared/omomp-shared/context-delta.ts";
 import { type Catalog, loadCatalog, type ToolDocs } from "./catalog.ts";
 import { installToolTopicInjection } from "./injection.ts";
 import { indexPrompt, renderDelta, toolEntry } from "./prompt.ts";
@@ -74,9 +74,10 @@ function publish(pi: ExtensionAPI, catalog: Catalog): boolean {
 	const topics = new Map([...catalog.tools.values()].filter((docs) => docs.topics.length > 0).map((docs) => [docs.tool, docs.topics]));
 	const result = publishTopics(topics);
 	switch (result.kind) {
-		case "published":
+		case "registered":
 			return true;
-		case "taken":
+		case "builtin":
+		case "held":
 			pi.logger.warn("tool-topics: topics not published", { reason: result.reason });
 			return false;
 		default: {
@@ -166,7 +167,10 @@ export default function toolTopics(pi: ExtensionAPI): void {
 		});
 	}
 
-	const deltas = createDeltaStream(pi, "tool-topics");
+	const deltas = createDeltaStream("omp-config/tool-topics");
+	pi.on("turn_start", () => {
+		deltas.turnStarted();
+	});
 	pi.on("before_agent_start", (event, ctx) => {
 		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;

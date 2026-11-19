@@ -70,7 +70,7 @@ Shell commands run from the repository root:
 omp                           # full mode
 omp-light                     # light mode (skips the governance extensions in config-light.yml)
 bun run check                 # biome check . && tsc --noEmit
-bun run test                  # bun test ci: delete-guard, tool-policy-nag pty and updater three-way apply tests
+bun run test                  # bun test --isolate ci: delete-guard, tool-policy-nag pty and updater three-way apply tests
 ./plugin-audit.sh             # compare install-plugins.sh against `omp plugin list`
 bun ci/check.ts               # isolated HOME install + full and light RPC session check
 ```

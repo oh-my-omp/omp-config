@@ -67,10 +67,10 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { cfgWorktreeCleanSource } from "@oh-my-pi/pi-coding-agent/task/settings";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { applyActiveTools } from "../_shared/active-tools.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { captureInteractiveMode, type InteractiveModeFailure } from "../_shared/interactive-mode.ts";
+import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";
 import { describeShown, runSlashCommand } from "./interactive.ts";
 import { formatCheck, git, inspect, porcelainCount, realpathOr, recheck, type WorktreeCheck } from "./worktree.ts";
 
