@@ -2,75 +2,100 @@
 
 [English](README.md) | 简体中文
 
-## 安装
-
-`/onboard-omp` 是 omomp 的安装入口。先安装 [Oh My Pi（`omp`）](https://github.com/can1357/oh-my-pi)，再克隆本仓库并在仓库根目录启动 `omp`：
-
-```bash
-git clone https://github.com/oh-my-omp/omp-config.git
-cd omp-config
-omp
-```
-
-在 `omp` 会话中运行：
-
-```text
-/onboard-omp
-```
-
-agent 默认先只读了解你已有的规则与 skills，用你的语言讲清 omomp 能替代什么、增加什么，并帮助你选择定制。你明确要求安装 omomp 后，agent 才会适配配置并通过 `/update-omp` 流程应用到本机；单独运行 `/onboard-omp` 不会安装配置。诊断、更新与同步见[安装、同步与维护](docs/operations.zh-CN.md#常用维护操作)。
-
-## 设计
-
-omomp 的完整定制面向高能力主 agent：编排和监督机制增强其执行能力，为任务质量提供保障；同样的要求对低能力主 agent 是沉重负担。个人与领域规则有意留给用户。入门先从本机已有的全局规则和 skills 出发，讲清哪些语义约束可以由 omomp 机制承担、还能增加什么能力，再以组件介绍补充理解。
-
-本仓库的配置围绕以下设计取舍展开：
-
-1. **消除 system prompt 内部的重复与前后矛盾。** 非空壳 harness 在基础模板、内置工具说明与子代理包装层中自带的预定义文本极易与用户规则重复或冲突，而模型遇到前后矛盾的提示词时会直接忽略。依托 Pi 系（含 `omp`）的 Handlebars 模板、personality 槽位与追加提示词，本仓库从 `SYSTEM_TEMPLATE.md` 中剔除重复的工具说明；[`tool-topics`](docs/extensions.zh-CN.md#tool-topics) 只把 OMP 自身工具的说明压到常用调用说明加 `Topics` 索引，详细调用说明按需读取 `tool://<tool>/<topic>`（扩展与插件工具保留各自说明）；[`system-prompt-replace`](docs/prompts-and-context.zh-CN.md#system-prompt-replace) 做其余措辞级修改（如移除原生子代理禁用 Todo 的冲突句子），使每条规则只出现一次且前后一致。扩展保持 OMP 的 system prompt 与工具定义为 OMP 构建的原样，把各自的定制作为[增量消息](docs/prompts-and-context.zh-CN.md#提示词文件)追加到对话中：OMP 在每次 prompt 结束后丢弃钩子对 system prompt 的改写，agent 发起的轮次也不经过钩子，改写只到达部分请求，每次出现或消失都重写提示缓存；已投递的增量则一直留在历史里。compaction 之后已没有可保留的缓存前缀，`system-prompt-replace` 改为直接发送修改好的 system prompt，不再发增量。
-2. **文件读写固定使用 `read` + hashline `edit`，并以工具失范作为 system prompt 偏离的触发信号。** 允许用 `eval` 或 shell 组合命令检索和修改文件，会让模型跳过目标行周围的上下文直接按匹配结果修改；在长任务中读取邻近上下文增加的 token 占比很小，而在缺少编译器与测试保护的配置、脚本和命令行操作中，脱离上下文的修改容易造成破坏，因此配置启用 `edit.mode: hashline`（修改前须经非 `:raw` `read` 获取行快照标签）并禁止在 `eval` 中检索本地文件。同时，包括 Claude Opus 在内的前沿模型在长会话中普遍会逐步忽略静态 system prompt；[`tool-policy-nag`](docs/extensions.zh-CN.md#tool-policy-nag) 以工具调用不规范作为可观测信号，在违规调用执行完后，把以直接观察措辞写成的提醒附在这次调用的结果上（developer 角色的上下文消息），借此提醒模型重新遵守整个 system prompt，同时不打断这一轮里仍在运行的其他调用。其启发式检测刻意保持较高误报率：对触发后的 thinking 块逐条检查表明，误报除消耗少量自检思考 token 外未观察到负面影响。回合中途与结束状态另由 [`watchdog-agent`](docs/extensions.zh-CN.md#watchdog-agent) 与 [`turn-judge`](docs/extensions.zh-CN.md#turn-judge) 抽查。
-3. **推迟有损上下文压缩，并保留已确认的约束。** 长会话上下文除文件内容外，还记录已与用户确认的需求边界与排除方案，过早压缩或截断命令输出会丢失这些前提。配置将压缩方式按信息损耗从低到高排列（`remote → soft → snapcompact → handoff → shake`），关闭提前 32k token 的后台预摘要（`compaction.asyncEnabled: false`），通过 [`model-compaction`](docs/prompts-and-context.zh-CN.md#model-compaction) 按模型调整触发阈值，并在子代理需要完整对话背景时通过 [omp-subagent-more](https://github.com/oh-my-omp/omp-subagent-more#readme) 插件的 `fork_task` 提供。
-4. **[`omp-todo-more`](https://github.com/oh-my-omp/omp-todo-more#readme) 拥有 Todo 与 `ctx`，运行在原生 Todo 之上；`config.yml` 保持原生 Todo 开启（`todo.enabled: true`）。** 工具文档：`xd://todo`、`xd://ctx`。
-5. **子代理（subagent）按模型互补、绑定可解析与职责边界划分。** 一是以少量调用延迟换取不同模型的特性互补（`claude-opus` 适合发散设计，DeepSeek V4.1 Flash 承担执行与保守审查），收敛单一模型的推理偏差；二是各档位只绑定机器带有凭据的渠道（`anthropic`、`commandcode`），不留答不了的回退环，也不为已禁用的 agent 设绑定；三是区分任务执行与角色边界——主代理编写派工 prompt 时会将自身假设带入子代理，因此执行侧不设预设人设或固定工作流节点（禁用 `scout`、`security-reviewer` 等内置子代理），统一由主代理编排无状态的 `task:high/mid/low/free` 执行器，并在派发与交付时由 [`task-split-check`](docs/extensions.zh-CN.md#task-split-check)、[`isolation-nudge`](docs/extensions.zh-CN.md#isolation-nudge) 与 [`task-completion-judge`](docs/extensions.zh-CN.md#task-completion-judge) 校验；非 `task` 子代理仅用于需要隔离职责边界的场景（使顾问既不受主代理转述偏差主导，也不替代主代理决策），通过 [`user-prompt-inject`](docs/agents.zh-CN.md#user-prompt-inject) 注入根会话用户消息、`discuss:*` 限制只读工具、`mentor:default` 移除全部工具来约束边界，因此顾问角色只设 `discuss:steady`、`discuss:divergent` 与 `mentor:default`。`reviewer` 是 OMP 内置审查代理在仓库里的副本，作为定制审查角色的基础。
-
-## 文档
-
-| 页面 | 内容 |
-|---|---|
-| [提示词与上下文](docs/prompts-and-context.zh-CN.md) | 提示词分层（`SYSTEM_TEMPLATE.md`、`PERSONALITY.md`、`APPEND_SYSTEM.md`、`tool-topics`、`system-prompt-replace`、`append-system-model`、`argon-long-output`、`repo-rules`）与上下文保留（`model-compaction`） |
-| [子代理](docs/agents.zh-CN.md) | 可选 worker/顾问定义、模型绑定、顾问上下文、派发规则与 worktree 隔离 |
-| [本地扩展](docs/extensions.zh-CN.md) | 全部本地扩展总表，以及派发/交付检查（`isolation-nudge`、`task-split-check`、`task-completion-judge`）与估算子代理剩余可派发次数的 AI 侧 `/usage`（`subagent-usage`）、`JUDGE` 判定扩展（`tool-policy-nag`、`watchdog-agent`、`turn-judge`、`lang-nag`）、bash 与 eval 删除拦截和只收字面路径的 `delete` 工具（`delete-guard`）与宿主/TUI 扩展 |
-| [插件与运行模式](docs/plugins-and-modes.zh-CN.md) | `install-plugins.sh` 中的外部插件（`omp-todo-more`、`omp-sessions`、`omp-thinking-translator` 等）以及 `omp` 与 `omp-light` 的差异 |
-| [安装、同步与维护](docs/operations.zh-CN.md) | 仓库与本机的文件归属、`/onboard-omp`、`/update-omp`、`/sync-omp-config`、`omp-config-autoupdate`、每日发布与变更记录、`_shared` 模块与升级检查 |
-| [配置检查（`ci/README.zh-CN.md`）](ci/README.zh-CN.md) | `bun ci/check.ts` 如何安装 `omp`、应用配置、接入免费模型与影子代理并去重报告故障 |
-| [测试沙箱（`sandbox/README.zh-CN.md`）](sandbox/README.zh-CN.md) | `bun sandbox/sandbox.ts` 如何用本机 `~/.omp` 配置、凭据与工作树建一次性容器，按模型驱动真实会话，导出其提示缓存命中情况，并删除和登记每次运行 |
-| [`extensions-last`（`agent/extensions-last/README.zh-CN.md`）](agent/extensions-last/README.zh-CN.md) | 扩展加载顺序，以及 `system-prompt-replace` 放在 `agent/extensions/` 之外的原因 |
-| [子代理编写说明（`agent/agents/README.zh-CN.txt`）](agent/agents/README.zh-CN.txt) | 子代理 frontmatter、`spawns` 白名单、depth 2 递归上限与 `yield` 常见陷阱 |
-
-## 发布
-
-omp-config 是 omomp 发布成员。发布 workflow 每天 GMT+9 02:00 发布仓库根目录 [`CHANGELOG.md`](CHANGELOG.md) 的 `## [Unreleased]` 下累积的内容：在 `main` 上提交 `chore: release X.Y.Z` 并打 `vX.Y.Z` tag，`release` 分支移到该提交，并建 GitHub Release；`## [Unreleased]` 为空时不发布。更新器把这份变更记录复制到各机器的 `~/.omp/agent/extensions/_shared/CHANGELOG.md`，由 [`omomp-changelog`](docs/extensions.zh-CN.md#omomp-changelog) 读取。机器只收到已发布的内容：启动自动更新拉取 `release` 分支，`install-plugins.sh` 以 `<url>#release` 安装每个 omomp 插件，合并到 `main` 的改动随下一次发布到达。详见[发布与变更记录](docs/operations.zh-CN.md#发布与变更记录)。
-
-## 常用命令
-
-在仓库根目录启动 `omp` 后运行的斜杠命令：
-
-```text
-/onboard-omp [check|<plane>]                 # 安装引导：讲清配置取舍，明确要求后适配并安装
-/update-omp [check]                          # 仓库工作区 -> ~/.omp/agent、omp-light 与插件；保留本机定制并当场适配冲突
-/sync-omp-config [check]                     # 本机受管改动 -> 仓库（按字段比对修改、校验、提交并推送）
-/omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]
-                                             # 启动自动更新开关（默认关）、立即从 GitHub 拉取更新，或适配与上游冲突的本机定制
-/omomp-changelog [full|last [N]]            # 已装 omomp 组件合并后的变更记录：默认最近 3 个发布日，`last [N]` 或 `full`
-/migrate-omp-keys <target>                   # 经 SSH 将本机 auth_credentials 表复制到远端主机 agent.db
-```
-
-在仓库根目录运行的终端命令：
-
-```bash
-omp                           # 完整模式
-omp-light                     # 轻量模式（跳过 config-light.yml 列出的治理扩展）
-bun run check                 # biome check . && tsc --noEmit
-bun run test                  # bun test --isolate ci：delete-guard、tool-policy-nag pty 与更新器三方应用测试
-./plugin-audit.sh             # 只读比对 install-plugins.sh 与 `omp plugin list`
-bun ci/check.ts               # 隔离 HOME 安装 + 免费模型跑完整模式与轻量模式 RPC 会话检查
-```
+- **宿主配置**
+  - `agent/config.yml` — 功能：应用到 `~/.omp/agent` 的机器级宿主配置：模型角色标签（`modelTags`）、子代理模型绑定（`task.agentModelOverrides`）、worktree 隔离（`task.isolation`）、compaction 方法顺序、把 shell 命令改路由到内置工具的 `bashInterceptor` 模式、`edit.mode: hashline`、`retry.fallbackChains.web` 及其他会话设置。时机：更新器应用后由 OMP 在每次启动时读取。实例：`task.agentModelOverrides` 把 `task:mid` 绑定到 `commandcode/deepseek/deepseek-v4.1-flash:high`；`compaction.methodOrder` 为 `remote → soft → snapcompact → handoff → shake` 且 `asyncEnabled: false`；一条拦截模式把 `cat`/`head`/`tail` 调用改给 `read`，提示 "Use the `read` tool instead of cat/head/tail/less/more"。
+  - 模型角色标签 — 功能：为各扩展的 `@<extension>` 助手角色在 `/model` 选择器中命名绑定项。时机：扩展请求自己的角色时解析。实例：`modelTags.input-polish.name: Input polish`、`modelTags.task-completion-judge.name: Task completion judge`。
+  - `agent/config-light.yml` — 功能：light 模式覆盖：用 `extensions-last/system-prompt-replace` 替换 `extensions` 列表，经 `disabledExtensions` 关掉八个交互/判定扩展，`task.eager: "default"`，并关闭 `bashInterceptor`。时机：`omp-light` 启动 OMP 时代替 `config.yml` 加载。实例：`disabledExtensions: extension-module:turn-judge, extension-module:tool-policy-nag, extension-module:watchdog-agent`。
+  - `agent/omp-light.ts` — 功能：一个 Bun 启动器，以 `OMOMP_MODE=light` 和 `config-light.yml` 拉起 `omp`，并把机器 `config.yml` 自带的扩展路径（`~/.claude` 这类非 `extensions-last` 条目）经 `-e` 传回，让 light 模式保留它们。时机：用户以安装在 `omp` 旁的 `omp-light` 命令运行。实例：子进程以 `env: { ...process.env, OMOMP_MODE: "light" }` 启动。
+- **提示词层文件**
+  - `agent/SYSTEM_TEMPLATE.md` — 功能：OMP 渲染的 Handlebars 系统提示词母版（`{{personality}}`、`{{#if renderMermaid}}`、`{{#ifAny skills.length alwaysApplyRules.length rules.length}}` 插槽），已删减到工具专属文案都放到别处。时机：渲染进每个会话的基础系统提示词。实例：`{{#if personality}}# Personality\n{{personality}}{{/if}}`。
+  - `agent/PERSONALITY.md` — 功能：经 `{{personality}}` 注入的人格插槽文本。时机：渲染进每个会话的基础提示词。实例：`Evidence-first terse engineer: every sentence fact, decision, or risk.`
+  - `agent/APPEND_SYSTEM.md` / `APPEND_SYSTEM_LIGHT.md` — 功能：OMP 在模板之后无条件追加的附录（用户指令优先级、最终回复写作要求、文档上下文规则）；light 版是占位文件。时机：追加进每个会话的系统提示词（分别为 full 与 light）。实例：`# User instructions take precedence — Every rule in this appendix is a default for when the user has said nothing else`。
+- **tool-topics（`agent/extensions/tool-topics/`）**
+  - 工具说明改写 — 功能：把每个被覆盖的内置工具的渲染后说明替换为对应 `SURFACE-*.md` surface 加 topic 索引，按工具名在 OMP 渲染出的提示词版式中定位。时机：每次 `before_agent_start`，主会话与子代理，会话持有 `read` 时；作为结果的 `systemPrompt` 返回。实例：`SURFACE-read.md` 替换 `read` 的说明，提示词随后把 `tool://read/json` 列为一个 topic。
+  - `tool://` URL 方案 — 功能：在 OMP 内部 URL 路由器上注册 `tool` 方案，提供 `TOPIC-*.md` 正文：`tool://` 列出有 topic 的工具，`tool://<tool>` 列出其 topic，`tool://<tool>/<topic>` 返回一篇正文；接管此前注册的 handler。时机：模型读取某个 `tool://` URL 时解析。实例：`read tool://edit/hashline-moves` 返回该 topic 的 markdown。
+  - topic 注入 — 功能：`TOPIC-*.md` 前置元数据里的 `inject:` 规则 `{id, tool, parameter, pattern}`：当某次工具结果中被点名的字符串参数匹配 pattern 时，把该 topic 正文以可信 `additionalContext` 投递一次（marker 为 `omp-config/tool-topic-injection`），每个 context 只投一次。时机：在匹配的 `tool_result` 之后，含失败结果。实例：`TOPIC-read-json.md` 在 `read` 调用的 `path` 以 `.json` 结尾时注入，模型随即拿到 jq 查询说明。
+- **system-prompt-replace（`agent/extensions-last/system-prompt-replace/`）**
+  - 措辞级改写 — 功能：`REPLACE-SYSTEM-*.yml` 规则改写渲染后系统提示词中的段落（`literal` 逐字、`regex` 支持 `$1` 替换，条件键 `target`/`cwd`/`model`/`provider`/`mode`/`delegation`/`exclude.*`）；context 未压缩时以 `<system-reminder>` delta 投递，压缩重建对话后则直接以改写后的 `systemPrompt` 返回。时机：每次 `before_agent_start` 与 `tool_result` 重新读取并匹配；作为 `config.yml` 的 `extensions` 最后一项加载，排在所有扩展之后。实例：`REPLACE-SYSTEM-default.yml` 对 `subagents` 清空 "No TODO tracking, no progress updates."，并在 `mode: full` 下改写 `xd://<tool>` 调用指引。
+- **append-system-model（`agent/extensions/append-system-model/`）**
+  - 条件提示词片段 — 功能：每个命中的 `APPEND-SYSTEM-*.md`（前置键 `enabled`、`target`、`cwd`、`model`、`provider`、`mode`、`delegation`、`exclude.*`；发现于扩展目录及 cwd 到 git 根沿途各目录与其 `.omp/`）合并成一条隐藏 delta 消息，source 为 `omp-config/append-system-model`。时机：每次 `before_agent_start` 与 `tool_result` 重新读取并匹配，主会话与子代理各自按自身身份、cwd、模型匹配。实例：`APPEND-SYSTEM-decision-support.md`（`target: main`、`exclude.model: ^claude-opus-5-5$`）注入 "For a consequential decision, consult both `discuss:steady` and `discuss:divergent`"。
+- **repo-rules（`agent/extensions/repo-rules/`）**
+  - 上下文文件 — 功能：把 cwd 到仓库根沿途的 `AGENTS.md` / `CLAUDE.md` 以消息形式投递（`config.yml` 禁用了会把它们按绝对路径渲染进提示词的原生 `agents-md`/`claude-md` provider），路径写成相对仓库根，使各 worktree 得到相同字节。时机：每次 `before_agent_start` 与每个 `tool_result` 之后，只在 delta 变化时投递。实例：本仓库根的 `AGENTS.md` 经 `omp-config/repo-rules` delta 送达模型。
+  - 无作用域与被忽略的 rule 文件 — 功能：扫描 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中 OMP 原生发现跳过的规则文件（无 `alwaysApply`、无 `description`、未知目录），投递其正文，或按 `name`/`description`/路径列出带前置元数据的文件。时机：同上 delta 投递点。实例：无前置元数据的 `.pi/rules/foo.md` 会被原文投递。
+  - 路径作用域规则 — 功能：前置元数据带 `paths:` glob 的规则（项目级、用户级、插件与扩展根目录下的 `rules/` 都算）在 `read`/`write`/`edit`（或纯 `cat`/`head`/`tail` 的 `bash` 调用）首次触碰匹配文件后，以 `tool_result` `additionalContext` 投递，每个 context 一次；带 `paths` 的原生规则保留提示词位置但按路径重新限定。时机：在触碰匹配路径的工具调用之后。实例：本仓库 `.claude/rules/judge-prompts.md` 在触碰 `agent/extensions/turn-judge/**` 或 `INTENT-*.md` 时送达。
+- **子代理名册（`agent/agents/`）**
+  - `task:high` — 功能：唯一能继续委派的 worker 档（`spawns: task:mid, task:low, task:free, task:high, discuss:steady, discuss:divergent, mentor:default`）；其说明禁止在无用户明确许可时派发。时机：经 `task` 工具 spawn；`task.agentModelOverrides` 绑定 `anthropic/claude-opus-5-5:high`。实例：`task-high.md` 描述 "FORBIDDEN without explicit user permission"。
+  - `task:mid` — 功能：默认 worker 档，处理设计与核心工作之外的有界切片；`completionJudge: true` 与 `splitCheck: true` 前置键使其进入判定扩展。时机：经 `task` 工具 spawn；绑定 `commandcode/deepseek/deepseek-v4.1-flash:high`。实例：仅 `spawns: mentor:default`，切片由它自己执行。
+  - `task:low` — 功能：DeepSeek V4.1 Flash 上的常规 worker 档，同时是 free 档结果的验证者。时机：经 `task` 工具 spawn；绑定 `commandcode/deepseek/deepseek-v4.1-flash:high`。实例：`task-low.md` 描述称其为 "the validator for free-tier work"。
+  - `task:free` — 功能：低信任探测档，用于错误无害的线索、候选与探测。时机：经 `task` 工具 spawn；绑定 `commandcode/deepseek/deepseek-v4.1-flash:low`。实例：`task-free.md` 前置 `completionJudge: true, splitCheck: true`。
+  - `discuss:divergent` / `discuss:steady` — 功能：只读讨论伙伴（`tools: read, grep, glob`），发散与保守两种立场，用于论证方案与决策。时机：经 `task` spawn 或任务中发消息；分别绑定 `anthropic/claude-opus-5-5:medium` 与 `commandcode/deepseek/deepseek-v4.1-flash:high`。实例：`discuss-steady` "stress-tests a plan, design, or diagnosis against the actual code and evidence"。
+  - `mentor:default` — 功能：无工具 mentor：长调查前锐化计划、交付前复盘；任务期间可用 `write agent://<id>` 持续联系。时机：按任务 spawn；绑定 `commandcode/deepseek/deepseek-v4.1-flash:high`。实例：前置 `tools: []`；随仓库的 `PROMPT-INJECT-user-goal.md` 把用户原话喂给它。
+  - `reviewer` — 功能：代码评审专职 agent，固定绑定 `@slow` 角色。时机：`task` 以 `agent: "reviewer"` spawn。实例：`task.agentModelOverrides.reviewer: "@slow"`。
+  - 禁用内置 agent — 功能：`task.disabledAgents` 隐藏 OMP 自带的 `task`、`scout`、`sonic`、`security-reviewer`，使 spawn 只解析到本名册。时机：每次 `task` 调用的 preflight。实例：`disabledAgents: [task, scout, sonic, security-reviewer]`。
+  - `agents/README.txt`（及 `README.zh-CN.txt`）— 功能：仓库自带的子代理定义编写笔记，记录实测过的坑（缺 `spawns` 时 `task` 工具作废、`disabledAgents` 使白名单失效、此文件为何是 `.txt`）。时机：编辑这些定义的人阅读；不进入提示词。实例：第 1 条记录报错 `Cannot spawn 'mentor:default'. Allowed: none (spawns disabled for this agent)`。
+- **派发闸门**
+  - task-split-check — 功能：派发前对 `task` 调用逐项提是非题：`split`（主会话；agent 声明 `splitCheck: true` 的项——该项是否覆盖多个主题）与 `report-limit`（所有会话；每个 `task:*` 或未写 `agent` 的项——派发是否给报告长度设上限）；任一项被 flag 即整体 block 并给出各项理由，提示按内容哈希按进程记忆。时机：`task` 的 `tool_call`；模型取 `@task-split-check` 角色再回退 `default`，25 秒截止。实例：原样重发被 `split` flag 过的提示按 `repeat` 放行，而受限报告必须改为把长输出写进文件。
+  - isolation-nudge — 功能：当一次 `task` 调用会让两个及以上有写权限的 agent（`task:*`、`m1`…`m9` 或未写 `agent`）在不加 `isolated: true` 的情况下共享会话工作目录时 block；每个未见过的提示文本只提醒一次；显式 `isolated: false` 是有意选择，不触发。时机：`tool_call`（`assistant_message`/`tool_result` 维护每条消息的状态）。实例：block 理由要求模型 "re-dispatch writers with `isolated: true`"。
+  - task-completion-judge — 功能：在定义声明 `completionJudge: true` 的子代理内部，用快模型比对任务指派、子代理近期调用与其 `yield` 载荷，把首个被判 `NOT_DONE` 的终结 `yield` 打回（`DONE` 但 `omp-todo-more:read` 投影仍有未完结项时同样打回一次），每会话各至多一次。时机：被判定子代理会话中 yield 工具的 `tool_call`；模型取 `@task-completion-judge` 再回退 `default`，25 秒截止。实例：裁决取 "the reply's leading first-line token: `DONE`, `NOT_DONE` or `NOT DONE`"。
+  - user-prompt-inject — 功能：把 `PROMPT-INJECT-*.md` 模板（`{{user_prompt[i]}}`、`{{user_prompt[a:e]}}`、`{{ask_answers}}`，取自根会话的用户提示与 `ask` 回答）渲染成一条仅本次请求有效的开发者消息，置于最前发给目标子代理。时机：目标子代理的每个 `context` 事件（每次模型调用，含 IRC 唤醒）。实例：`PROMPT-INJECT-user-goal.md` 目标 `mentor:default, discuss:steady, discuss:divergent`，正文 "These are the human user's own requests to the root session, verbatim and in order"。
+- **删除边界**
+  - delete-guard 拦截 — 功能：把每个 `bash` 调用（含写 `xd://bash`）按 pi-shell 方言解析、每个 `eval` 单元用自带的 py/js 解析器读取，在任何东西运行前拦下删除命令（`rm`、`unlink`、`rmdir`、`shred`、`find -delete`、PowerShell `Remove-Item`、cmd `del`/`rd`、解释器调用如 `shutil.rmtree`/`fs.rmSync`）与非字面命令文本（展开拼出的命令名、从 stdin 读脚本的嵌套 shell、`eval`/`trap` 体）；解析不了时按失败拦截。时机：`bash` 与 `eval` 的 `tool_call`；与 `tools.approvalMode`、`bashInterceptor` 无关。实例：`bash rm -rf build/` 被拒，理由指向 `delete` 工具。
+  - `delete` 工具 — 功能：唯一被认可的删除途径：只收字面路径（不展开 `~`、环境变量、glob），默认 `mode: "trash"` 移入系统回收站，`mode: "permanent"` 需交互确认，并拒绝根目录、home、会话 cwd 及其祖先。时机：在支持的平台上注册；由模型代替 shell 删除调用。实例：`delete({paths: ["dist/"]})` 报告 "delete (trash): all 1 done"。
+- **tool-policy-nag（`agent/extensions/tool-policy-nag/`）**
+  - pty 车道 — 功能：在任何进程启动前拒掉会启动透传、终端交互或开放式命令的 `bash` 调用与 `eval` 单元，并给出 `exec_command` 指针，主会话与子代理都生效。时机：`tool_call`；要求 `tool-policy-nag.pty.enabled` 开启且会话持有 `exec_command`。实例：`bash ssh host` 或 `bash htop` 被拒，附一条 `xd://exec_command` 指针。
+  - form 车道（`heuristic`）— 功能：确定性统计内置工具覆盖的操作（`shell-parser`/`shell-command`/`shell-programs` 分类每个程序；有 `details.trace` 的执行取实际运行的命令），命中超过 `form.afterHits` 后用 `form.prompt` 提醒，每个 context 至多 `form.maxNags` 次；该 detector 启用时还在运行期设置层覆盖 `bashInterceptor.enabled = false`。时机：主会话 `tool_result` 判定；提醒随 `additionalContext` 送达。实例：连续 `cat`/`ls`/`grep` 的 shell 调用收到改用 `read`/`glob`/`grep` 的提醒。
+  - intent 车道（`jev`）— 功能：对被观察的每次调用向 JUDGE 后端提一个 `choice` 问题——该调用要达成什么、属于哪个内置工具——按 `INTENT-*.md` 规范的选项判定，超过 `intent.threshold` 时提醒并点名意图与应使用的工具。时机：问题在 `tool_call` 发出，提醒落在 `tool_result`；主会话。实例：`INTENT-policy.md` 的 `read` 选项 `title: 读文件内容`、`` tool: "`read`" ``，覆盖 `cat package.json`、`tar -xO -f b.tar x`。
+  - risk 车道 — 功能：提醒模型无法从结果读出的风险：traced 执行中静默失败的步骤（非零退出、无人断言、自身无输出），或按文本判定超过 `risk.minCommands`/`risk.minChars`/`risk.minPrograms` 的调用。时机：`tool_result`；主会话；`tool-policy-nag.risk.enabled` 开启时。实例：链式命令中某步非零退出且无输出，得到一条静默失败提醒。
+  - `tool-policy-nag.*` 插件设置 — 功能：全部车道行为由 `omp-config` 插件设置配置，每次被观察的调用重读（项目 `.omp/plugin-overrides.json` 优先于机器值）。时机：每次被观察调用；经 `/settings → Plugins → omp-config` 或 `omp plugin config` 修改。实例：键 `tool-policy-nag.detector`、`tool-policy-nag.form.afterHits`、`tool-policy-nag.intent.threshold`、`tool-policy-nag.risk.minPrograms`、`tool-policy-nag.pty.enabled`。
+- **会话迁移与重启工具**
+  - `wt` — 功能：经 `executeBuiltinSlashCommand` 排队执行人类自己的 `/wt`：创建 git worktree（默认分支 `wt/<yyyymmdd-hhmmss>`）并在回合结束后把会话迁入；已在 worktree 的会话改为得到一份报告与 `confirm` 哈希。时机：`agent_end` 时激活，会话空闲后执行；仅 TUI 主会话，vibe 模式拒用。实例：`wt({branch: "fix-x"})` 返回已排队确认，结果作为下一条消息到达。
+  - `wt_remove` — 功能：两次调用移除会话所在 worktree：第一次调用只做干跑，报告将删除的内容、阻塞项（运行中的 job、身处其中的子代理）与对 worktree 状态生成的 `confirm` 指纹；第二次调用携匹配指纹时，排队 `/move` 回主检出并强制 `git worktree remove`（保留分支）。时机：与 `wt` 相同的排队/激活节奏；仅 TUI 主会话。实例：`wt_remove({})` 然后 `wt_remove({confirm: "<hash>"})`。
+  - `harness_restart` — 功能：排队执行人类的 `/restart`（相同启动参数、会话从磁盘恢复），把请求记为持久 `custom` 会话条目，重启后投递一条带 `reason` 的重启完成消息。时机：调用时入队，`agent_end` 激活，空闲后执行；仅 TUI 主会话。实例：`harness_restart({reason: "load new extension"})`。
+- **评审与判定监视**
+  - watchdog-agent — 功能：`WATCHDOG-<label>.md` 文件（扩展目录加仓库向上遍历）声明按目标定制的评审员：`target`/`cwd`/`watchModel`/`watchProvider` 作用域过滤、聊天评审模型（`model:`）或 JUDGE 选项（`option.<label>`）、`every: 30` 节奏、`scope: full|window`、`delivery: aside|steer|nextTurn|followUp`、`inject: system|user`；每个被观察动作（匹配消息的工具调用或文本回复）推进计数器，到点立即评审（运行中）或在 `agent_end` 补齐，游标持久化为会话条目。时机：`session_start/switch/branch/tree/compact/shutdown`、`tool_result`、`input`、`before_agent_start`、`message_end`、`agent_end`；主会话与子代理。实例：一份 `target: task:mid`、`every: 30`、`option.halt: …` 的文件每 30 个动作评审该档会话。
+  - `/watchdog` 命令 — 功能：列出发现的 watchdog，按会话或全局开关（`on|off <name> [session|global]` 改写文件 `enabled:`），并以 `add`/`edit`/`rm` 管理规范文件。时机：TUI 中输入 `/watchdog`。实例：`usage: /watchdog [list] | on|off <name> [session|global] | add <requirement> | edit <name> [change] | rm <name>`。
+  - turn-judge — 功能：`TURN-JUDGE-<label>.md` 文件（同一路径发现，另有 `skipTools`、`inject: system|user`、`maxBytes` 状态预算）就该轮的 `{ 时间线, 本轮回复 }` 状态向 `openJudge` 提 `question.<id>` 是非题，某个 `when.<name>` 概率表达式成立时发送文件的 `prompt:`。时机：对以 `stopReason: "stop"` 结束且文本非空的一轮，在 `message_end` 触发，限 `target`/`cwd`/`model`/`provider` 作用域；主会话与子代理。实例：随仓库的 `TURN-JUDGE-gpt-talk-only.md`（`target: main`、`model: (^|/)[Gg][Pp][Tt]`、`skipTools: wt, harness_restart`）在 `says_remaining >= 0.6 & announces_future >= 0.3` 成立时发送其中文复工提示。
+  - lang-nag — 功能：判定主会话终结回复最后一段（`agent_end` 的最后文本、`stopReason: "stop"`、前 200 码点）是否符合配置语言，不符时把配置的指令（如 `说中文`）前缀加到下一条用户消息前；判定未完成时下一条消息原样发出。时机：`agent_end` 启动判定，`input` 时注入；仅主会话；设置 `lang-nag.language`/`lang-nag.instruction`。实例：`lang-nag.language: 中文` + `lang-nag.instruction: 说中文`。
+- **按模型的条件处理**
+  - model-compaction — 功能：`COMPACTION-<label>.md` 规则（`provider:`/`model:` 正则加 `thresholdTokens`，发现于扩展目录及 cwd→git 根沿途含 `.omp/`）把匹配模型的原生 `compaction.modelThresholds` 项（`"provider/id": "f<threshold>"`）写入运行期设置层，不落任何配置文件；会改变模型 context window 档位的规则按模型拒绝。时机：主会话 `session_start`、`session_switch` 与 `before_agent_start`；`session_shutdown` 还原。实例：规则 `provider: ^anthropic$, model: opus, thresholdTokens: 150000`。
+  - argon-long-output — 功能：对 `api: google-gemini-cli` 且 id 匹配 `^gemini-4-argon` 的模型，补齐 OMP 默认封顶 300 秒的流式看门狗超时（写 compat 层，options/settings/env 仍优先），并把 `ARGON_PROMPT.md` 作为 delta 注入，要求模型把每个 `write`/`edit` 载荷和最终回复控制在 8000 字符内。时机：`context`（每次模型调用前）修补模型，全量扫描在 `session_start`/`before_agent_start`/`session.compacting`；提示 delta 在 `before_agent_start`/`tool_result`。实例：`ARGON_PROMPT.md` — "No single `write` content, no single `edit` body, and no single final reply text exceeds 8,000 characters."
+  - ast-top-level — 功能：把 `ast_grep`、`ast_edit` 写入宿主进程级 `XDEV_KEEP_TOP_LEVEL` 表，使它们保持为函数工具而非 `xd://` 设备，然后重放会话的活动工具集使分区生效。时机：扩展加载时与 `session_start`。实例：`XDEV_KEEP_TOP_LEVEL["ast_grep"] = true` 让 `ast_grep` 可直接调用，`ast_edit` 的预览仍经 `xd://resolve` 应用。
+- **TUI 与语言**
+  - omomp-lang — 功能：每进程一次，把 `omomp-lang.language` 插件设置导出为 `process.env.OMOMP_LANG`，让所有 omomp 插件与扩展据此解析面向人的文字（`_shared/i18n.ts`、`omomp-shared/i18n.ts`）；启动环境里已有的 `OMOMP_LANG` 优先。时机：模块加载时，早于同批扩展工厂；首个主会话 `session_start` 报告无效设置。实例：`omomp-lang.language: zh` 使 `tr("Subagent Usage", "子代理用量")` 返回中文标签。
+  - input-polish — 功能：绑定和弦键（`input-polish.key`：`ctrl+enter` 或 `alt+enter`），按下它代替 Enter 时用 `@input-polish` 角色模型在浮层中改写输入草稿；Enter 把润色稿写入编辑器并提交，Esc/Ctrl+C 中止；以 `/`、`!`、`$` 开头的草稿原样放行。时机：主 TUI 会话的原始终端输入监听（`session_start`/`session_switch` 挂载）；改写要求来自 `input-polish.instruction`。实例：和弦键 `ctrl+enter`，浮层流式显示改写，编辑器全程保留原稿。
+  - child-memory-warning — 功能：进程共享监视器在自有子孙 OS 子进程的 macOS phys_footprint 超过 `child-memory-warning.thresholdGiB` 时警告 UI 与 agent（libproc 每 2 秒扫描，重挂父后凭 PID+出生时间保持归属；不做任何 kill）。时机：主 `session_start` 启动，`session_switch` 刷新投递，`session_shutdown` 清理；每次扫描重读设置。实例：`child-memory-warning.thresholdGiB` 插件设置，取正数 GiB。
+- **用量与发布面**
+  - `subagent_usage` 工具 — 功能：估算每个可用子代理在其首个绑定模型的 provider 配额耗尽前还能派发多少次：按本机近 21 天会话记录校准的每次派发均值与每美元配额常数（`<agentDir>/cache/subagent-usage/`、`calibration.json`），按 provider 分池输出，池内数字互为择一。时机：经 `/subagent-usage on` 同意后可调用；`defaultInactive`，由 `session_start`/`session_switch` 激活。实例：输出把共享同一配额的 agent 归入 `POOL`。
+  - `/subagent-usage` 命令 — 功能：`status|on|off|recalibrate|reset`——人类的同意开关（`subagent-usage.enabled`，仅机器作用域）外加重新校准与数据删除；未 `on` 不读任何会话记录、工具保持不激活。时机：输入 `/subagent-usage`。实例：`/subagent-usage on` 即 "consents to reading this machine's sessions and usage history"。
+  - omomp-changelog — 功能：发现已装 omomp 成员（`package.json` 顶层声明 `omomp.changelog` 的包，加 `_shared/package.json` 让 omp-config 自身也算），把各成员 `CHANGELOG.md` 与 `<agentDir>/omomp-changelog/seen.json` 做差，在编辑器上方 widget 显示新版本段（`startup.changelogMode` `summary`/`expanded`/`hidden`）；`/omomp-changelog [full|last [N]]` 打印发布日且不碰 marker。时机：widget 在有 UI 的主 `session_start` 显示，用户发首条消息后撤下；命令在 `/omomp-changelog` 触发。实例：`/omomp-changelog` 默认按日期分组显示最近 3 个发布日。
+  - omp-config-autoupdate — 功能：把 omp-config 仓库应用到 `~/.omp/agent`：`omp-config-autoupdate.enabled` 开启时于 `session_start` 从 GitHub `release` 自动应用，或按需手动；运行 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 完成 preflight、三方定制合并、按 `install-plugins.sh` 装/升插件、退役清理、`_shared` 插件链接与 `omomp.*` 设置迁移；`exclude` 项从不写动；有变更的运行显示 5 秒 widget。时机：每次启动自动（需开启）或经命令；冲突按 `omp-config-autoupdate.conflicts`（`notify`，或 `agent` 即在会话中启动适配）。实例：`/omp-config-autoupdate [status|on|off|run|adapt|conflicts notify|agent]`。
+- **插件清单与审计**
+  - `install-plugins.sh` — 功能：更新器与入门流程安装的 omomp 插件单向声明：对 `plugins=(…)` 每项执行 `omp install`；`omp-remote-build` 被注释为可选项。时机：用户手动运行，或被更新器 apply 读取。实例：条目 `https://github.com/oh-my-omp/omp-unified-exec#release`、`omp-todo-more#release`、`pi-pretty-codeblocks`、`omp-thinking-translator#release`、`omp-playbooks#release`、`omp-ask-more#release`、`omp-peers#release`、`omp-sessions#release`、`omp-subagent-more#release`，以及 `https://github.com/mouriya-s-lab/pi-bansos`。
+  - `plugin-audit.sh` — 功能：把 `install-plugins.sh` 历史上要求过的插件名（自基准提交 `BASE=5974c4fa…` 到 HEAD）与 `omp plugin list --json` 对比并分类：`[安装]` 缺失、`[卸载候选]` 已移除但本机仍装、`[保留]` 自装或可选、`[已同步]`。时机：仓库内手动运行，及 `/update-omp check` 调用。实例：输出节 `[安装] 脚本要求但本机缺失 -> 跑 ./install-plugins.sh` 与 `[卸载候选] … -> 询问用户后 omp plugin uninstall <name>`。
+- **测试沙箱（`sandbox/`）**
+  - `sandbox/sandbox.ts` — 功能：在 OrbStack 上搭一次性网络与容器（`omp-sandbox-<run>`，`oven/bun:latest`），装入 `~/.omp` 配置与凭据副本和位于 `/repo` 的工作树，在其中跑真实 `omp` 会话，结束后按 `omp-sandbox.run` 标签清理并记账。时机：手动 `bun sandbox/sandbox.ts hold|run|matrix|cache|down`；不进 CI。实例：`bun sandbox/sandbox.ts run scenarios/echo-hi.json futureppo-pool/ernie-5.5-flash-preview`。
+  - `sandbox/recorder.ts` — 功能：给 `models.yml` 里每个有 `baseUrl` 的 provider 分配 loopback recorder 端口，原样转发每个请求到上游，并向场景的 `<name>.requests.jsonl` 证据文件追加 `{"seq","provider","tools","body"}`（请求头永不记录；证据写不进去则该请求 500，不放行）。时机：沙箱内的每个模型请求。实例：`tools` 列出各 `tools[]` 项的 `name`，无 `tools` 时为 `[]`。
+  - `sandbox/driver.ts` + `scenarios/*.json` — 功能：每个模型各起一个全新 `omp --mode rpc --no-ui --model <model>` 会话，在 `/runs/<provider>_<model>/<name>-<ms>` 执行场景的 `init`/`finalAssertion`，并导出各模型的 prompt-cache 命中。时机：`run`/`matrix` 之下。实例：随仓库场景 `echo-hi.json`、`image-gen.json`、`pty-remote-quotes.json`、`task-completion-judge.json`、`discovery-futureppo-pool.json`。
+  - 凭据处理 — 功能：在一次 SQLite 只读事务内序列化 `agent.db`（主机端逐行校验），在容器内删除没有 recorder 目标的 provider 的 `auth_credentials` 行，`models.yml` 其余字段保持逐字节一致。时机：沙箱构建阶段；剩余 provider 无目标则构建失败。实例：`sandbox/autoupdate-off.ts` 随后仅把容器内 `omp-config-autoupdate.enabled` 置为 `false`。
+- **CI（`ci/`、`.github/workflows/`）**
+  - `ci/check.ts` + `config-check.yml` — 功能：配置检查：在一次性 HOME 中安装最新 omp、用仓库自带更新器应用配置、注册 Kilo 匿名 `ci-free` 模型并为每个被引用 `provider/model` 挂 shadow 代理，跑真实会话并输出去重诊断（`config`/`environment`/`provider`），finding 取稳定 12 位十六进制 id。时机：push 到 `main`、PR、每日 `cron: "17 3 * * *"`、`workflow_dispatch`；只报告，不卡合并。实例：`bun ci/check.ts`。
+  - `ci/windows-guard.ts` + `delete-guard-windows.yml` — 功能：在 `windows-latest` runner 上做 delete-guard 的 Windows 验收。时机：`workflow_dispatch` 与同仓库 PR。实例：`bun ci/windows-guard.ts`。
+  - `ci/windows-accept.ts` + `windows-accept.yml` — 功能：在 Windows runner 上对 `%RUNNER_TEMP%\src` 下 `owner/repo@sha` 的检出执行传入的 Bun 脚本，按 run id 定位。时机：`workflow_dispatch` 与同仓库 PR。实例：输入 `repos`（"owner/repo@<40-hex sha>"）与 `script`。
+  - `omomp-check.yml` — 功能：调用 `oh-my-omp/.github` 的共享检查 workflow（bun install、Biome、`tsc --noEmit`、`bun run test` 跑 `ci/*.test.ts`、omomp-shared 副本比对），为测试的 `git show` 夹具取全量历史。时机：按共享 workflow 的 push/PR 触发。实例：`uses: oh-my-omp/.github/.github/workflows/omomp-check.yml@main`。
+  - `omomp-release.yml` — 功能：调用共享 omomp 发布 workflow：按 `CHANGELOG.md` `## [Unreleased]` 分类定版本号、打 `vX.Y.Z` tag、快进 `release` 分支、建 GitHub Release。时机：每日 `cron: "0 17 * * *"`（GMT+9 02:00）与 `workflow_dispatch`。实例：`uses: oh-my-omp/.github/.github/workflows/omomp-release.yml@main`。
+  - `ci/*.test.ts` — 功能：扩展与更新器的 bun 单元测试（`bun test --isolate ci`）。时机：本地 `bun run test` 与 `omomp-check` 中。实例：`ci/delete-guard-tool.test.ts`、`ci/omp-config-update.test.ts`、`ci/tool-topics-catalog.test.ts`。
+  - `package.json` scripts — 功能：`bun run check`（Biome + `tsc --noEmit`）、`bun run format`、`bun run test`。时机：本地开发与 CI。实例：`"test": "bun test --isolate ci"`。
+- **共享扩展运行时（`agent/extensions/_shared/`）**
+  - `omp-config` 插件 manifest — 功能：`_shared/package.json` 是更新器链接为 `omp-config` 的本地插件；其 `omp.settings` 声明全部扩展设置键、类型与默认值（`lang-nag.*`、`input-polish.*`、`tool-policy-nag.*`、`child-memory-warning.thresholdGiB`、`omp-config-autoupdate.*`、`subagent-usage.enabled`），顶层 `omomp.changelog` 让配置本身成为 What's New 成员。时机：`/settings → Plugins`、`omp plugin config` 与 `getPluginSettings` 读取。实例：`"omomp": { "changelog": "CHANGELOG.md" }`，`"omp-config-autoupdate.enabled"` 默认关。
+  - `omomp-shared/` 副本 — 功能：`omomp-shared.json` 声明的 `oh-my-omp/shared` 逐字节副本：`active-tools.ts`（工具规范顺序）、`context-delta.ts`（`<system-reminder source=…>` delta 流）、`i18n.ts`（`OMOMP_LANG` → locale → 英文）、`internal-url.ts`（带 owner 仲裁的方案注册）、`todo-read.ts`（`omp-todo-more:read` 线协议）。时机：各扩展加载时 import；由 shared 仓库的同步 PR 与检查 workflow 保持一致。实例：`omomp-shared.json` 列出 `active-tools.ts, biome.base.json, context-delta.ts, i18n.ts, internal-url.ts, todo-read.ts`。
+  - 规范文件与会话过滤助手 — 功能：`spec-files.ts` 发现 `<KIND>-*.md` 文件（扩展目录，再 cwd→git 根沿途含 `.omp/`），`session-filter.ts`/`prompt-conditions.ts` 解析共用的 `target`/`cwd`/`model`/`provider`/`mode`/`delegation` 条件语法，`context-delivery.ts` 做每个实际 context 一次的 `additionalContext` 去重。时机：append-system-model、system-prompt-replace、model-compaction、turn-judge、watchdog-agent、user-prompt-inject 在每个投递点使用。实例：发现顺序 "the extension's own directory first, then every directory between `cwd` and the first of: a directory holding `.git`, or the home directory"。
+  - 判定与助手会话 — 功能：`judge.ts`（`openJudge`：`@<extension>` 角色 → JUDGE 角色链 → 回退 prompted judge）、`role-chain.ts`/`roles.ts`（角色解析与链式补全）、`helper-session.ts`（input-polish 这类无工具内存助手会话）。时机：各判定扩展需要裁决或改写时内部调用。实例：turn-judge 的 `openJudge` purpose `turn-judge`；input-polish 的 `runHelperPrompt`。
+  - 管线助手 — 功能：`interactive-mode.ts` 为 `wt`/`harness_restart` 捕获存活 `InteractiveMode`；`plugin-settings.ts` 读写 manifest 声明的设置；`caller-session.ts`/`settings.ts` 解析存活会话；`eval-py-launches.ts`/`eval-js-launches.ts` 按内核语义解析 eval 单元；`agent-definition.ts` 读 agent 前置标志；`ask-answers.ts` 提取 `ask` 回答；`messages.ts`/`tool-calls.ts`/`errors.ts`/`models.ts`/`i18n.ts` 是文本/调用/错误助手。时机：由需要的扩展 import。实例：`captureInteractiveMode` 换掉 `ctx.ui.setEditorComponent` 以拿到存活实例执行 `executeBuiltinSlashCommand("/wt …")`。
+- **仓库本地 omp 配置（`.omp/`，在本仓库工作时生效）**
+  - `.omp/agents/*.md` — 功能：issue 流水线程序（`fl`）用的项目级 agent 定义：`loop:scout`、`loop:worker`、`loop:worker-free`、`loop:guardian`、`loop:verifier`，模型绑定在 `.omp/config.yml` 的 `task.agentModelOverrides`（另有 `consult:carbon`）。时机：流水线程序在根于此处的会话里 spawn。实例：`loop:worker-free: devin/swe-2:high`、`loop:guardian: anthropic/claude-sonnet-5-5:high`。
+  - `.omp/commands/*.md` — 功能：omomp 维护用项目级 slash command：`/onboard-omp`（引导式入门与定制）、`/update-omp`（repo → 本机应用，含 `check` 干跑）、`/sync-omp-config`（本机 → 仓库快照）、`/migrate-omp-keys`（SSH 迁移 `auth_credentials`）。时机：根于此处的会话输入 `/<command>`。实例：`/update-omp check` 执行 `bun agent/extensions/omp-config-autoupdate/omp-config-update.ts apply --source . --check` 加 `./plugin-audit.sh`。
+  - `.omp/rules/hard-decisions-go-to-carbon.md` — 功能：`alwaysApply` 规则（`agents: main` 作用域），把所有难决策路由给 `consult:carbon` 而不是人类或 discuss 系 agent。时机：本仓库会话启动起进入提示词。实例："`consult:carbon` is the only partner for a decision you find hard … no `ask` call, no reply that ends with a question"。
+  - `.omp/RULES.md` — 功能：记录 `g16pro` Windows 测试机与 `omptest` 沙箱启动器约定的项目上下文文件。时机：根于此处的会话中作为仓库上下文加载。实例：测试根 `D:\omp-test`，会话放 `runs\<name>`。
+  - `.omp/mcp.json` — 功能：声明 `g16pro` 测试机的 `windows-mcp` HTTP MCP server。时机：本仓库会话打开时连接。实例：`http://g16pro.mouriya.lan:8000/mcp`，暴露 `xd://mcp__windows_mcp_*` 工具。
+  - `.claude/rules/judge-prompts.md` — 功能：judge 问题文件的路径作用域编写规则，经 repo-rules 扩展投递。时机：触碰 `agent/extensions/` 下 `TURN-JUDGE-*`/`INTENT-*`/`WATCHDOG-*`/`lang-nag`/`judge.ts` 相关路径时。实例：`paths: agent/extensions/turn-judge/**, agent/extensions/tool-policy-nag/INTENT-*.md`。
+  - `docs/` — 功能：开发者文档集（`prompts-and-context`、`agents`、`extensions`、`plugins-and-modes`、`operations`，中英各一），供 `AGENTS.md` 的 "read the matching one before changing it" 表引用。时机：维护者与改对应子系统的 agent 阅读；不进入提示词。实例：`docs/extensions.md` 是 README 让位的逐扩展索引。
