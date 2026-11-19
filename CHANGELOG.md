@@ -25,6 +25,7 @@
 - Imported `XDEV_KEEP_TOP_LEVEL`, `isMountableUnderXdev` and the internal URL router types from OMP's exported entry points (`@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-coding-agent/internal-urls`) in `ast-top-level` and `tool-topics` instead of host-internal file paths
 - Documented in the `tool-topics` surfaces that `out://` is a write-only mid-turn reply channel (`read`) and that the shell runs in-process utilities ahead of PATH, handed back by `PI_DISABLE_UUTILS_BUILTINS` (`bash`)
 - Made `system-prompt-replace` send the edited system prompt itself once the context starts from a compaction, instead of a reminder that quotes each original passage and its replacement; uncompacted contexts keep the reminder so the cached prompt prefix holds
+- Made `tool-topics` write each OMP tool's surface and `Topics` index into the system prompt in place of the native description at every prompt, instead of an `omp-config/tool-topics` reminder that was sent again after every compaction; the replaced descriptions no longer reach the model twice
 
 ### Removed
 

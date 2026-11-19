@@ -98,7 +98,7 @@ SHOULD resolve prerequisites, parallelize independent calls. Retry empty/partial
 {{#if resultShaping}}
 {{resultShaping}}
 {{/if}}
-{{#has tools "read"}}- A tool description ending in `Topics` (in the prompt, in an `omp-config/tool-topics` reminder, or in the full docs `xd://<tool>` returns for a device) lists call instructions kept out of the prompt, one line per topic with its exact URL. Before a call that matches a topic's condition, read that URL; read only the topics your call needs. A topic may also arrive after a call to a read-only tool; apply it to the next call.{{/has}}
+{{#has tools "read"}}- A tool description ending in `Topics` (in the prompt, or in the full docs `xd://<tool>` returns for a device) lists call instructions kept out of the prompt, one line per topic with its exact URL. Before a call that matches a topic's condition, read that URL; read only the topics your call needs. A topic may also arrive after a call to a read-only tool; apply it to the next call.{{/has}}
 
 {{#if encourageEdits}}
 {{#has tools "edit"}}

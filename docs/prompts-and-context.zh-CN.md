@@ -4,7 +4,7 @@
 
 ## 提示词文件
 
-非空壳 harness 在基础模板、内置工具说明与子代理包装层中自带的预定义文本容易与本地规则重复或冲突，而模型遇到前后矛盾的提示词时会直接忽略。提示词按职责与作用域拆分为以下文件与扩展，使每条指令只出现一次、消除内置文本与本地规则之间的矛盾，并将主会话文体/顾问规则与子代理或特定模型的增量隔离开来。文件决定 OMP 构建的基础提示；扩展保持该提示为 OMP 构建的原样，以增量消息补充各自的定制：
+非空壳 harness 在基础模板、内置工具说明与子代理包装层中自带的预定义文本容易与本地规则重复或冲突，而模型遇到前后矛盾的提示词时会直接忽略。提示词按职责与作用域拆分为以下文件与扩展，使每条指令只出现一次、消除内置文本与本地规则之间的矛盾，并将主会话文体/顾问规则与子代理或特定模型的增量隔离开来。文件决定 OMP 构建的基础提示；[tool-topics](extensions.zh-CN.md#tool-topics) 改写该提示中 OMP 自有工具的说明，其余扩展以增量消息补充各自的定制：
 
 | 文件 / 扩展 | 作用域 | 内容与职责 |
 |---|---|---|
@@ -12,7 +12,7 @@
 | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充 `# Personality` 下的 `{{personality}}`。前半部分保留 OMP `personality: default` 原文（`Evidence-first terse engineer`）；后半部分定义 `# Writing` 分析与研究写作规范：结论、数字或机制直接开篇，一句话写清时间、主体、动作、规模与来源，多项对象或指标合并进一张表且不在正文逐行复述，删去过程自述、重复解释、叠加免责声明与文末总结。 |
 | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理（子代理不含 AGENTS.md） | 以相对仓库根的路径投递工作目录的 `AGENTS.md` / `CLAUDE.md`，取代 OMP 原生的上下文文件注入；加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件；二者合为一条增量消息，并处理所有规则来源的 `paths` 按路径触发。 |
-| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 只为 OMP 自己的工具实例添加 surface 与 `Topics` 索引；由插件或扩展注册的工具保留自己的说明与专题，包括以相同名称替换内置工具的情况，例如 `omp-ask-more` 的 `ask`。OMP 工具的详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
+| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 只把 system prompt 中 OMP 自己的工具实例的说明改写为 surface 加 `Topics` 索引；由插件或扩展注册的工具保留自己的说明与专题，包括以相同名称替换内置工具的情况，例如 `omp-ask-more` 的 `ask`。OMP 工具的详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
 | [system-prompt-replace](#system-prompt-replace) | 按规则（默认所有会话；完整与轻量模式） | 按 `REPLACE-SYSTEM-*.yml` 规则文件对渲染出的 system prompt 给出措辞级修改，作为一条增量消息送达，逐条引出命中的原文与替换后文本；上下文从 compaction 开始后，改为直接发送修改好的 system prompt；每条规则可以全局生效，也可以限定会话、cwd、模型、provider、当前模型的委派倾向（delegation bias）或模式，并用 `exclude.*` 写明何时不生效。 |
 | [append-system-model](#append-system-model) | 按片段（默认仅主会话） | 把 frontmatter 条件（会话、cwd、模型、provider、当前模型的委派倾向、完整/轻量模式，以及表示何时不注入的 `exclude.*`）命中的 `APPEND-SYSTEM-*.md` 片段作为一条增量消息送达。仓库自带 `APPEND-SYSTEM-decision-support.md`：完整模式的主会话中，重大决策询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`；主模型为 `claude-opus-5-5` 时不注入。 |
 | [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时把仓库下发的 `ARGON_PROMPT.md` 作为一条增量消息送达：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
@@ -20,7 +20,7 @@
 
 OMP 自带的 `systemPromptTemplates` 设置（`config.yml`，18.19.0 起）把模型选择子串映射到 Handlebars 模板文件，最长命中优先；选择键只有模型，命中的文件为该模型整份替换内置基础提示词。OMP 只在没有显式或已发现的提示词时读取它，而本仓库安装的 `agent/SYSTEM_TEMPLATE.md` 就是已发现的 `SYSTEM_TEMPLATE.md`，所以 omomp 会话里按模型选的模板文件从不被读取。采用它还意味着每个模型各维护一份完整模板，并在每次 OMP 升级后逐份对照内置模板。因此按会话或按模型增补的文字仍写成 [append-system-model](#append-system-model) 片段，措辞修改仍写成 [system-prompt-replace](#system-prompt-replace) 规则。
 
-扩展不改写 OMP 发出的工具定义；system prompt 只由 [system-prompt-replace](#system-prompt-replace) 改写，且只在 compaction 之后。每个扩展的定制是 `_shared/omomp-shared/context-delta.ts` 的一条增量流：一条隐藏的 `<system-reminder source="omp-config/<扩展>">` 消息，`attribution: "agent"`，在 prompt 开始时作为 `before_agent_start` 结果的 `message`，或在工具批次之后作为 `tool_result` 的 `additionalContext` 投递。每次投递前以活动叶节点的上下文为准（增量流读取 `buildSessionContext` 定义的同一投影：沿叶节点的 parent 链按投影边界反走，而不物化投影）：其中该来源最新的增量已是同一文本时不投递；文本变了就追加一条新增量，声明它取代较早的同源增量；定制不再适用时，追加一条声明较早增量不再适用的增量。已投递的消息从不修改，被 compaction 移出上下文的增量在下一个投递点重新投递。因此 system prompt 与之前的对话在相邻请求之间逐字不变；输入变化后、下一个投递点之前的请求沿用上一份增量。钩子改写 system prompt 做不到这一点：OMP 在每次 prompt 结束后丢弃改写，agent 发起的轮次（IRC 唤醒、异步结果、`triggerTurn` 消息）不经过 `before_agent_start`，于是相邻请求一次带定制、一次不带，提示缓存随之重写。compaction 重建了对话，已没有可保留的缓存前缀，所以 system-prompt-replace 从此直接发送修改好的提示词。
+扩展不改写 OMP 发出的工具定义。system prompt 由 [tool-topics](extensions.zh-CN.md#tool-topics) 在每条 prompt 改写，由 [system-prompt-replace](#system-prompt-replace) 在上下文从 compaction 开始后改写，二者都把改写后的提示作为 `before_agent_start` 结果的 `systemPrompt` 返回，按加载顺序串联。OMP 在本轮发送该提示，并在之后把它保留为 agent 的提示：compaction 之后、以及不经过 `before_agent_start` 的 agent 发起轮次（IRC 唤醒、异步结果、`triggerTurn` 消息）都沿用它，直到 OMP 重建基础提示（换模型、memory 刷新、`/clear`、切换会话）；因此只由传入提示计算出的改写在每个请求里发出相同字节。其余每项定制是 `_shared/omomp-shared/context-delta.ts` 的一条增量流：一条隐藏的 `<system-reminder source="omp-config/<扩展>">` 消息，`attribution: "agent"`，在 prompt 开始时作为 `before_agent_start` 结果的 `message`，或在工具批次之后作为 `tool_result` 的 `additionalContext` 投递。每次投递前以活动叶节点的上下文为准（增量流读取 `buildSessionContext` 定义的同一投影：沿叶节点的 parent 链按投影边界反走，而不物化投影）：其中该来源最新的增量已是同一文本时不投递；文本变了就追加一条新增量，声明它取代较早的同源增量；定制不再适用时，追加一条声明较早增量不再适用的增量。已投递的消息从不修改，被 compaction 移出上下文的增量在下一个投递点重新投递。因此之前的对话在相邻请求之间逐字不变；输入变化后、下一个投递点之前的请求沿用上一份增量。
 
 ### system-prompt-replace
 

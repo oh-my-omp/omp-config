@@ -1,7 +1,7 @@
 // tool-topics — progressive instructions for tools omp-config does not own (OMP's built-in tools):
-// a short surface plus a topic index per tool, delivered as a delta message beside OMP's system
-// prompt, which keeps the native descriptions, with the detailed call instructions served on
-// demand as tool://<tool>/<topic>. Tools a plugin or another extension registers serve their own
+// a short surface plus a topic index per tool, written into OMP's system prompt in place of the
+// native descriptions, with the detailed call instructions served on demand as
+// tool://<tool>/<topic>. Tools a plugin or another extension registers serve their own
 // topics as xd://<tool>/<topic> through `docTopics()` and list them in their own description;
 // this extension neither indexes nor describes them, including a plugin tool that replaces a
 // built-in under the same name (OMP reports a filesystem source path for it).
@@ -26,30 +26,30 @@
 // this extension bound. When OMP or another handler holds `tool://`, no tool gets an index and
 // injection is off, so nothing points at or injects topics this extension does not serve.
 //
-// PROMPT. At every prompt (`before_agent_start`, from the prompt it is handed) and after every
-// tool call (`tool_result`, from `ctx.getSystemPrompt()`), main and sub, full and light: when the
-// session has `read`, every OMP-owned tool with authored docs whose description the system prompt
-// renders gets a `<tool>` element — its surface replacing that description (`description="replaced"`)
-// or none (`"kept"`), then its index. `{{native:<Heading>}}` in a surface becomes a reference to
-// that `# Heading` section of the rendered description, for content OMP generates per session
-// (task's agent list). The elements form one delta of `_shared/omomp-shared/context-delta.ts` with source
-// `omp-config/tool-topics`, sent only when it differs from the source's effective delta in the
-// current context; a session without `read` gets none, or a retraction of an earlier one, since
-// it could not read the topics. The system prompt is only read: prompt.ts finds each tool by name
-// in OMP's rendered layout, not by wording. A revive's `before_agent_start` is skipped, because
-// OMP discards its result.
+// PROMPT. At every prompt (`before_agent_start`), main and sub, full and light: when the session
+// has `read`, every OMP-owned tool with authored docs whose description the handed system prompt
+// renders gets its description rewritten in place — replaced by its surface when it has one, then
+// its index appended. `{{native:<Heading>}}` in a surface becomes that `# Heading` section of the
+// rendered description, for content OMP generates per session (task's agent list). prompt.ts
+// finds each tool by name in OMP's rendered layout, not by wording. The rewritten prompt is the
+// result's `systemPrompt`; the rewrite is a pure function of the handed prompt and the files
+// loaded at start, so every prompt of a session sends the same bytes and the cached prefix holds.
+// OMP keeps the agent's prompt through the run's continuations, compaction and the
+// agent-initiated runs that follow (which skip `before_agent_start`), until it rebuilds its base
+// prompt; nothing is delivered as a message. A session without `read` keeps the native
+// descriptions, since it could not read the topics. A revive's `before_agent_start` is skipped,
+// because OMP discards its result.
 //
 // FAILURE. A malformed or unreadable file — including a bad `inject` entry or a duplicate id — is
 // skipped with one warning each; the rest still load. An active tool whose description cannot be
-// found, or whose `{{native:…}}` section is missing, is left out of the delta, with a log warning
+// found, or whose `{{native:…}}` section is missing, keeps its native description, with a log warning
 // and one main-session notice per tool and reason. Hooks never throw into omp.
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { createDeltaStream, type Delta } from "../_shared/omomp-shared/context-delta.ts";
 import { type Catalog, loadCatalog, type ToolDocs } from "./catalog.ts";
 import { installToolTopicInjection } from "./injection.ts";
-import { indexPrompt, renderDelta, toolEntry } from "./prompt.ts";
+import { indexPrompt, type Rewrite, toolLines } from "./prompt.ts";
 import { publishTopics } from "./registry.ts";
 
 /** Drift already reported, per tool and reason, for the life of the process. */
@@ -88,7 +88,7 @@ function publish(pi: ExtensionAPI, catalog: Catalog): boolean {
 }
 
 /**
- * The catalog's tools as the delta sees them: each tool's docs, the names the prompt index answers
+ * The catalog's tools as the rewrite sees them: each tool's docs, the names the prompt index answers
  * for, and the same names for membership while scanning the registry.
  */
 interface Covered {
@@ -110,20 +110,26 @@ function fileRegistered(pi: ExtensionAPI, known: ReadonlySet<string>): ReadonlyS
 	return foreign;
 }
 
-/** The `<tool>` elements for every covered tool `systemPrompt` renders, as one delta. */
-function toolsDelta(pi: ExtensionAPI, ctx: ExtensionContext, systemPrompt: readonly string[], covered: Covered, indexed: boolean): Delta {
+/** `systemPrompt` with every covered tool it renders rewritten, or undefined when nothing changes. */
+function rewritePrompt(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	systemPrompt: readonly string[],
+	covered: Covered,
+	indexed: boolean,
+): string[] | undefined {
 	const active = pi.getActiveTools();
-	if (!active.includes("read")) return { kind: "none" };
+	if (!active.includes("read")) return undefined;
 	const prompt = indexPrompt(systemPrompt, covered.names);
 	const foreign = fileRegistered(pi, covered.known);
-	const entries: string[] = [];
+	const rewrites: Rewrite[] = [];
 	for (const docs of covered.docs) {
 		if (foreign.has(docs.tool)) continue;
 		const rendered = prompt.description(docs.tool);
 		switch (rendered.kind) {
 			case "found": {
-				const entry = toolEntry(rendered.description, docs, indexed);
-				if (entry?.kind === "ok") entries.push(entry.text);
+				const entry = toolLines(rendered.description, docs, indexed);
+				if (entry?.kind === "ok") rewrites.push({ description: rendered.description, lines: entry.lines });
 				else if (entry?.kind === "drift") report(pi, ctx, docs.tool, entry.reason);
 				break;
 			}
@@ -139,7 +145,7 @@ function toolsDelta(pi: ExtensionAPI, ctx: ExtensionContext, systemPrompt: reado
 			}
 		}
 	}
-	return entries.length === 0 ? { kind: "none" } : { kind: "text", body: renderDelta(entries) };
+	return rewrites.length === 0 ? undefined : prompt.rewrite(rewrites);
 }
 
 export default function toolTopics(pi: ExtensionAPI): void {
@@ -167,24 +173,14 @@ export default function toolTopics(pi: ExtensionAPI): void {
 		});
 	}
 
-	const deltas = createDeltaStream("omp-config/tool-topics");
-	pi.on("turn_start", () => {
-		deltas.turnStarted();
-	});
 	pi.on("before_agent_start", (event, ctx) => {
 		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;
 		try {
-			return deltas.atPrompt(ctx, toolsDelta(pi, ctx, event.systemPrompt, covered, indexed));
+			const systemPrompt = rewritePrompt(pi, ctx, event.systemPrompt, covered, indexed);
+			return systemPrompt === undefined ? undefined : { systemPrompt };
 		} catch (error) {
-			pi.logger.warn("tool-topics: cannot deliver tool descriptions", { error: errorText(error) });
-		}
-	});
-	pi.on("tool_result", (_event, ctx) => {
-		try {
-			return deltas.afterTools(ctx, toolsDelta(pi, ctx, ctx.getSystemPrompt(), covered, indexed));
-		} catch (error) {
-			pi.logger.warn("tool-topics: cannot deliver tool descriptions", { error: errorText(error) });
+			pi.logger.warn("tool-topics: cannot rewrite tool descriptions", { error: errorText(error) });
 		}
 	});
 }

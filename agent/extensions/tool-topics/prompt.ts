@@ -1,23 +1,47 @@
-// The tool-topics delta: what this extension adds to OMP's own tool descriptions, built from the
-// descriptions as OMP rendered them into its system prompt, which is only read. A tool counts as
-// rendered when its description is found by tool name, not wording, in one of two layouts:
+// The tool-topics rewrite of OMP's rendered system prompt: each covered tool's description is found
+// by tool name, not wording, and replaced in place by its surface, its topic index appended. A tool
+// counts as rendered when its description sits in one of two layouts:
 //   inline tools  — `// `-prefixed description lines right above `type <tool> = …` inside
 //                   `namespace functions { … }` (pi-ai dialect/inventory.ts renderToolInventory);
+//                   the tool's `@example` lines, after a lone `//`, are not part of the description
+//                   and stay as rendered;
 //   xd:// devices — `## <tool>[ — <label>]`, blank, description, blank, `### Schema`
 //                   (pi-coding-agent tools/xdev.ts renderDocs with the "##" heading).
-// Each block is split once and scanned once per layout; that locates every covered tool's section,
-// kept as an offset into the block; the description's text is only composed for a `{{native:<Heading>}}` reference that needs it.
-import type { ToolDocs, Topic } from "./catalog.ts";
+// Each block is split once and scanned once per layout; a tool's section is taken from the first
+// block that renders it, inline before device. A block without a rewritten tool is returned as the
+// same string.
+import type { ToolDocs } from "./catalog.ts";
 
-/** One tool's part of the delta, or why it cannot be written against the rendered description. */
-export type Entry = { readonly kind: "ok"; readonly text: string } | { readonly kind: "drift"; readonly reason: string };
+/** One tool's new description lines, or why it cannot be written against the rendered description. */
+export type Entry = { readonly kind: "ok"; readonly lines: readonly string[] } | { readonly kind: "drift"; readonly reason: string };
 
-/** A rendered description as the lines of the block that holds it, without its layout prefix. */
-export interface Description {
-	/** How many lines the description has. */
+type Layout = "inline" | "device";
+
+/** A rendered description: where it sits in the prompt, and its lines without the layout prefix. */
+export class Description {
+	readonly block: number;
+	readonly start: number;
 	readonly length: number;
-	/** Line `index`, with the `// ` comment prefix removed on an inline description. */
-	line(index: number): string;
+	readonly layout: Layout;
+	/** Inline only: the tool's `@example` lines follow, so a non-empty description needs the `//` separator. */
+	readonly examples: boolean;
+	readonly #lines: readonly string[];
+
+	constructor(block: number, lines: readonly string[], start: number, length: number, layout: Layout, examples: boolean) {
+		this.block = block;
+		this.#lines = lines;
+		this.start = start;
+		this.length = length;
+		this.layout = layout;
+		this.examples = examples;
+	}
+
+	/** Line `index`, with the `//` comment prefix removed on an inline description. */
+	line(index: number): string {
+		const raw = this.#lines[this.start + index] ?? "";
+		if (this.layout === "device") return raw;
+		return raw.startsWith("// ") ? raw.slice(3) : raw.slice(2);
+	}
 }
 
 /** A tool's description in the rendered prompt. */
@@ -26,10 +50,18 @@ export type Rendered =
 	| { readonly kind: "absent" }
 	| { readonly kind: "drift"; readonly reason: string };
 
+/** A rewritten description: the section it replaces and its new lines without the layout prefix. */
+export interface Rewrite {
+	readonly description: Description;
+	readonly lines: readonly string[];
+}
+
 /** The rendered prompt, with each covered tool's section located once. */
 export interface PromptIndex {
 	/** `tool`'s description in the first prompt block that renders it. */
 	description(tool: string): Rendered;
+	/** The prompt's blocks with every rewrite applied; untouched blocks keep their original strings. */
+	rewrite(rewrites: readonly Rewrite[]): string[];
 }
 
 const HEADING = /^(#{1,6}) (.+)$/;
@@ -38,33 +70,8 @@ const NAMESPACE_OPEN = "namespace functions {";
 const NAMESPACE_CLOSE = "} // namespace functions";
 const DEVICE_DRIFT = "xd:// device section no longer has the heading/blank/description/blank/### Schema layout";
 
-/** `length` lines of `block` from `start`; `comments` strips the `//` marker of an inline description. */
-class BlockLines implements Description {
-	readonly #block: readonly string[];
-	readonly #start: number;
-	readonly #length: number;
-	readonly #comments: boolean;
-
-	constructor(block: readonly string[], start: number, length: number, comments: boolean) {
-		this.#block = block;
-		this.#start = start;
-		this.#length = length;
-		this.#comments = comments;
-	}
-
-	get length(): number {
-		return this.#length;
-	}
-
-	line(index: number): string {
-		const raw = this.#block[this.#start + index] ?? "";
-		if (!this.#comments) return raw;
-		return raw.startsWith("// ") ? raw.slice(3) : raw.slice(2);
-	}
-}
-
 /** The inline-layout descriptions of `tools` in one block, the first signature of each winning. */
-function inlineDescriptions(lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
+function inlineDescriptions(block: number, lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
 	const found = new Map<string, Rendered>();
 	const open = lines.indexOf(NAMESPACE_OPEN);
 	const close = lines.indexOf(NAMESPACE_CLOSE);
@@ -76,14 +83,23 @@ function inlineDescriptions(lines: readonly string[], tools: readonly string[]):
 			if (found.has(tool) || !line.startsWith(tool, 5) || !line.startsWith(" = ", 5 + tool.length)) continue;
 			let start = index;
 			while (start - 1 > open && (lines[start - 1] ?? "").startsWith("//")) start--;
-			found.set(tool, { kind: "found", description: new BlockLines(lines, start, index - start, true) });
+			let end = index;
+			let examples = false;
+			for (let comment = start; comment < index; comment++) {
+				const text = lines[comment] ?? "";
+				if (text !== "// @example" && !text.startsWith("// @example ")) continue;
+				examples = true;
+				end = comment > start && lines[comment - 1] === "//" ? comment - 1 : comment;
+				break;
+			}
+			found.set(tool, { kind: "found", description: new Description(block, lines, start, end - start, "inline", examples) });
 		}
 	}
 	return found;
 }
 
 /** The description a `## <tool>` heading opens, or the reason its section no longer fits the layout. */
-function deviceSection(lines: readonly string[], heading: number): Rendered {
+function deviceSection(block: number, lines: readonly string[], heading: number): Rendered {
 	let schema = -1;
 	for (let index = heading + 1; index < lines.length; index++) {
 		const line = lines[index] ?? "";
@@ -94,11 +110,11 @@ function deviceSection(lines: readonly string[], heading: number): Rendered {
 		}
 	}
 	if (schema < 0 || lines[heading + 1] !== "" || lines[schema - 1] !== "") return { kind: "drift", reason: DEVICE_DRIFT };
-	return { kind: "found", description: new BlockLines(lines, heading + 2, Math.max(0, schema - heading - 3), false) };
+	return { kind: "found", description: new Description(block, lines, heading + 2, Math.max(0, schema - heading - 3), "device", false) };
 }
 
 /** The xd:// device descriptions of `tools` in one block, the first heading of each winning. */
-function deviceDescriptions(lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
+function deviceDescriptions(block: number, lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
 	const found = new Map<string, Rendered>();
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index] ?? "";
@@ -107,10 +123,24 @@ function deviceDescriptions(lines: readonly string[], tools: readonly string[]):
 			if (found.has(tool)) continue;
 			const rest = 3 + tool.length;
 			if (!line.startsWith(tool, 3) || (line.length !== rest && !line.startsWith(" — ", rest))) continue;
-			found.set(tool, deviceSection(lines, index));
+			found.set(tool, deviceSection(block, lines, index));
 		}
 	}
 	return found;
+}
+
+/** `line` as the layout renders a description line. */
+function prefixed(layout: Layout, line: string): string {
+	switch (layout) {
+		case "inline":
+			return line === "" ? "//" : `// ${line}`.trimEnd();
+		case "device":
+			return line;
+		default: {
+			const unreachable: never = layout;
+			return unreachable;
+		}
+	}
 }
 
 /**
@@ -119,12 +149,14 @@ function deviceDescriptions(lines: readonly string[], tools: readonly string[]):
  */
 export function indexPrompt(blocks: readonly string[], tools: readonly string[]): PromptIndex {
 	const found = new Map<string, Rendered>();
+	const split = new Map<number, string[]>();
 	let pending = tools;
-	for (const block of blocks) {
+	for (const [block, text] of blocks.entries()) {
 		if (pending.length === 0) break;
-		const lines = block.split("\n");
-		const inline = inlineDescriptions(lines, pending);
-		const device = deviceDescriptions(lines, pending);
+		const lines = text.split("\n");
+		split.set(block, lines);
+		const inline = inlineDescriptions(block, lines, pending);
+		const device = deviceDescriptions(block, lines, pending);
 		for (const tool of pending) {
 			const section = inline.get(tool) ?? device.get(tool);
 			if (section !== undefined) found.set(tool, section);
@@ -135,57 +167,82 @@ export function indexPrompt(blocks: readonly string[], tools: readonly string[])
 		description(tool) {
 			return found.get(tool) ?? { kind: "absent" };
 		},
+		rewrite(rewrites) {
+			const byBlock = new Map<number, Rewrite[]>();
+			for (const rewrite of rewrites) {
+				const list = byBlock.get(rewrite.description.block);
+				if (list === undefined) byBlock.set(rewrite.description.block, [rewrite]);
+				else list.push(rewrite);
+			}
+			return blocks.map((text, block) => {
+				const list = byBlock.get(block);
+				const original = split.get(block);
+				if (list === undefined || original === undefined) return text;
+				const lines = [...original];
+				// Splice from the bottom up so earlier sections keep their offsets.
+				list.sort((a, b) => b.description.start - a.description.start);
+				for (const { description, lines: replacement } of list) {
+					const rendered = replacement.map((line) => prefixed(description.layout, line));
+					if (description.examples && description.length === 0 && rendered.length > 0) rendered.push("//");
+					lines.splice(description.start, description.length, ...rendered);
+				}
+				return lines.join("\n");
+			});
+		},
 	};
 }
 
-/** The `# Heading` line of a description, when exactly one of its lines is that heading. */
-function nativeHeading(description: Description, heading: string): string | undefined {
-	let hit: string | undefined;
+/** The `#` section of `description` opened by the one heading line titled `heading`, through the line before the next heading of its level or above. */
+function nativeSection(description: Description, heading: string): string | undefined {
+	let start = -1;
+	let level = 0;
 	for (let index = 0; index < description.length; index++) {
-		const line = description.line(index);
-		if (HEADING.exec(line)?.[2] !== heading) continue;
-		if (hit !== undefined) return undefined;
-		hit = line;
+		const match = HEADING.exec(description.line(index));
+		if (match?.[2] !== heading) continue;
+		if (start >= 0) return undefined;
+		start = index;
+		level = match[1]?.length ?? 0;
 	}
-	return hit;
-}
-
-/** Index lines: one line per topic with its full URL and when to read it. */
-function renderIndex(tool: string, topics: readonly Pick<Topic, "name" | "when">[]): string {
-	return [
-		"Topics — read the one a call needs before making it:",
-		...topics.map((topic) => `- \`tool://${tool}/${topic.name}\` — ${topic.when}`),
-	].join("\n");
+	if (start < 0) return undefined;
+	const lines = [description.line(start)];
+	for (let index = start + 1; index < description.length; index++) {
+		const line = description.line(index);
+		const match = HEADING.exec(line);
+		if (match !== null && (match[1]?.length ?? 0) <= level) break;
+		lines.push(line);
+	}
+	while (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+	return lines.join("\n");
 }
 
 /**
- * The `<tool>` element for one tool: its surface, where `{{native:<Heading>}}` becomes a reference
- * to that section of the rendered description, then its index when `indexed`. Undefined when the
- * tool has neither a surface nor topics to show.
+ * The new description of one tool: its surface, where `{{native:<Heading>}}` becomes that section of
+ * the rendered description, or the rendered description itself when it has no surface; then its
+ * index when `indexed`. Undefined when the tool has neither a surface nor topics to show.
  */
-export function toolEntry(description: Description, docs: ToolDocs, indexed: boolean): Entry | undefined {
-	const index = indexed && docs.topics.length > 0 ? renderIndex(docs.tool, docs.topics) : undefined;
+export function toolLines(description: Description, docs: ToolDocs, indexed: boolean): Entry | undefined {
+	// Index lines: one line per topic with its full URL and when to read it.
+	const index =
+		indexed && docs.topics.length > 0
+			? [
+					"Topics — read the one a call needs before making it:",
+					...docs.topics.map((topic) => `- \`tool://${docs.tool}/${topic.name}\` — ${topic.when}`),
+				]
+			: undefined;
+	let body: string[];
 	if (docs.surface === undefined) {
-		return index === undefined ? undefined : { kind: "ok", text: `<tool name="${docs.tool}" description="kept">\n${index}\n</tool>` };
+		if (index === undefined) return undefined;
+		body = Array.from({ length: description.length }, (_, line) => description.line(line));
+	} else {
+		const missing: string[] = [];
+		const surface = docs.surface.replace(NATIVE, (whole, heading: string) => {
+			const section = nativeSection(description, heading);
+			if (section === undefined) missing.push(heading);
+			return section ?? whole;
+		});
+		if (missing.length > 0) return { kind: "drift", reason: `native section(s) not found exactly once: ${missing.join(", ")}` };
+		body = surface.split("\n");
 	}
-	const missing: string[] = [];
-	const surface = docs.surface.replace(NATIVE, (_whole, heading: string) => {
-		const line = nativeHeading(description, heading);
-		if (line === undefined) missing.push(heading);
-		return `${line}\nSame as the \`${line}\` section of \`${docs.tool}\`'s description in the system prompt.`;
-	});
-	if (missing.length > 0) return { kind: "drift", reason: `native section(s) not found exactly once: ${missing.join(", ")}` };
-	const body = index === undefined ? surface : `${surface}\n\n${index}`;
-	return { kind: "ok", text: `<tool name="${docs.tool}" description="replaced">\n${body}\n</tool>` };
-}
-
-/** The delta body around the entries. */
-export function renderDelta(entries: readonly string[]): string {
-	return [
-		"Descriptions of OMP's own tools from omp-config. Each <tool> element names one tool; its parameters stay as the system prompt declares them. " +
-			"With description=\"replaced\", the element's text replaces that tool's description in the system prompt. " +
-			"With description=\"kept\", the system prompt's description stands and the element's Topics list is appended to it. " +
-			"A Topics list names call instructions kept out of the prompt, read on demand.",
-		...entries,
-	].join("\n\n");
+	if (index === undefined) return { kind: "ok", lines: body };
+	return { kind: "ok", lines: body.length === 0 ? index : [...body, "", ...index] };
 }
