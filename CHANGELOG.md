@@ -15,6 +15,7 @@
 ### Fixed
 
 - Skipped prompted judge candidates for five minutes after a 401/402/403/404 rejection instead of re-requesting them on every judgment
+
 ## [1.2.1] - 2026-11-19
 
 ### Changed
