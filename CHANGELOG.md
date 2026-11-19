@@ -21,6 +21,8 @@
 ### Fixed
 
 - Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
+- Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
+- Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
 
 ## [1.2.1] - 2026-11-19
 
@@ -70,8 +72,6 @@
 
 ### Fixed
 
-- Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
-- Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
 - Fixed spec-file discovery on Windows missing the home-directory boundary when the home path differed in letter case from the resolved cwd
 - Fixed `~`-expanded cwd glob patterns failing to match on Windows by normalizing separators to `/`
 - Fixed repo-rules `paths` patterns written as Windows absolute paths (`C:/…` or `C:\…`) never matching: absoluteness is now decided by `path.isAbsolute` and the pattern is normalized to `/` separators
