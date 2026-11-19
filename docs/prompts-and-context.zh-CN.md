@@ -20,7 +20,7 @@
 
 OMP 自带的 `systemPromptTemplates` 设置（`config.yml`，18.19.0 起）把模型选择子串映射到 Handlebars 模板文件，最长命中优先；选择键只有模型，命中的文件为该模型整份替换内置基础提示词。OMP 只在没有显式或已发现的提示词时读取它，而本仓库安装的 `agent/SYSTEM_TEMPLATE.md` 就是已发现的 `SYSTEM_TEMPLATE.md`，所以 omomp 会话里按模型选的模板文件从不被读取。采用它还意味着每个模型各维护一份完整模板，并在每次 OMP 升级后逐份对照内置模板。因此按会话或按模型增补的文字仍写成 [append-system-model](#append-system-model) 片段，措辞修改仍写成 [system-prompt-replace](#system-prompt-replace) 规则。
 
-扩展不改写 OMP 发出的 system prompt 与工具定义。每个扩展的定制是 `_shared/context-delta.ts` 的一条增量流：一条隐藏的 `<system-reminder source="omp-config/<扩展>">` 消息，`attribution: "agent"`，在 prompt 开始时作为 `before_agent_start` 结果的 `message`，或在工具批次之后作为 `tool_result` 的 `additionalContext` 投递。每次投递前以活动叶节点的上下文为准（增量流读取 `buildSessionContext` 定义的同一投影：沿叶节点的 parent 链按投影边界反走，而不物化投影）：其中该来源最新的增量已是同一文本时不投递；文本变了就追加一条新增量，声明它取代较早的同源增量；定制不再适用时，追加一条声明较早增量不再适用的增量。已投递的消息从不修改，被 compaction 移出上下文的增量在下一个投递点重新投递。因此 system prompt 与之前的对话在相邻请求之间逐字不变；输入变化后、下一个投递点之前的请求沿用上一份增量。钩子改写 system prompt 做不到这一点：OMP 在每次 prompt 结束后丢弃改写，agent 发起的轮次（IRC 唤醒、异步结果、`triggerTurn` 消息）不经过 `before_agent_start`，于是相邻请求一次带定制、一次不带，提示缓存随之重写。
+扩展不改写 OMP 发出的 system prompt 与工具定义。每个扩展的定制是 `_shared/omomp-shared/context-delta.ts` 的一条增量流：一条隐藏的 `<system-reminder source="omp-config/<扩展>">` 消息，`attribution: "agent"`，在 prompt 开始时作为 `before_agent_start` 结果的 `message`，或在工具批次之后作为 `tool_result` 的 `additionalContext` 投递。每次投递前以活动叶节点的上下文为准（增量流读取 `buildSessionContext` 定义的同一投影：沿叶节点的 parent 链按投影边界反走，而不物化投影）：其中该来源最新的增量已是同一文本时不投递；文本变了就追加一条新增量，声明它取代较早的同源增量；定制不再适用时，追加一条声明较早增量不再适用的增量。已投递的消息从不修改，被 compaction 移出上下文的增量在下一个投递点重新投递。因此 system prompt 与之前的对话在相邻请求之间逐字不变；输入变化后、下一个投递点之前的请求沿用上一份增量。钩子改写 system prompt 做不到这一点：OMP 在每次 prompt 结束后丢弃改写，agent 发起的轮次（IRC 唤醒、异步结果、`triggerTurn` 消息）不经过 `before_agent_start`，于是相邻请求一次带定制、一次不带，提示缓存随之重写。
 
 ### system-prompt-replace
 

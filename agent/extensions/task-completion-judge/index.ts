@@ -65,6 +65,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { declaresFlag } from "../_shared/agent-definition.ts";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
+import { readTodos, type TodoReadResponse } from "../_shared/omomp-shared/todo-read.ts";
 import { completeRoleChain } from "../_shared/role-chain.ts";
 
 /** The OMP model role this extension's judge model comes from: the extension's own name. */
@@ -86,35 +87,25 @@ const SHORT_JSON_DEPTH = 64;
 /** Code units of a string written per native JSON.stringify call; a longer string is written in chunks of this size. */
 const STRING_CHUNK = 4096;
 
-const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not be empty");
-const todoReadSchema = z.union([
-	z.object({
-		kind: z.literal("ok"),
-		goal: z.object({ objective: nonEmpty, measure: nonEmpty, doneWhen: nonEmpty }).nullable(),
-		openItems: z.array(z.object({ phase: z.string(), title: z.string(), explanation: z.string().nullable() })),
-	}),
-	z.object({ kind: z.literal("unavailable") }),
-]);
-type TodoMoreReadResponse = z.infer<typeof todoReadSchema>;
-type ReviewTodo = Extract<TodoMoreReadResponse, { kind: "ok" }>;
+type ReviewTodo = Extract<TodoReadResponse, { kind: "ok" }>;
 
-/** The owner replies before emit returns; missing or malformed replies are not an empty list. */
-function readTodoForReview(pi: ExtensionAPI, agentId: string): TodoMoreReadResponse {
-	let value: unknown;
-	pi.events.emit("omp-todo-more:read", {
-		agentId,
-		reply: (response: unknown) => {
-			value = response;
-		},
-	});
-	const parsed = todoReadSchema.safeParse(value);
-	return parsed.success ? parsed.data : { kind: "unavailable" };
-}
-
+/** The session's todo projection; every non-`ok` outcome is a failed review, not an empty list. */
 function requireReviewTodo(pi: ExtensionAPI, agentId: string): ReviewTodo {
-	const response = readTodoForReview(pi, agentId);
-	if (response.kind === "unavailable") throw new Error("todo-more review state unavailable");
-	return response;
+	const result = readTodos(pi.events, agentId);
+	switch (result.kind) {
+		case "ok":
+			return result;
+		case "unavailable":
+			throw new Error("todo-more review state unavailable");
+		case "no_reply":
+			throw new Error("todo-more did not answer the read request");
+		case "malformed":
+			throw new Error(`todo-more replied out of protocol: ${result.reason}`);
+		default: {
+			const unreachable: never = result;
+			return unreachable;
+		}
+	}
 }
 
 const SYSTEM_PROMPT = [

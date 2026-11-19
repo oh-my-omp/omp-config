@@ -41,7 +41,7 @@
  * `path.isAbsolute` (`/…`, on Windows also `C:/…` or `C:\…`) matches the absolute path instead
  * (beyond Claude Code, which never matches such a pattern).
  *
- * Delta. One delta of `_shared/context-delta.ts` with source `omp-config/repo-rules`, computed from
+ * Delta. One delta of `_shared/omomp-shared/context-delta.ts` with source `omp-config/repo-rules`, computed from
  * OMP's system prompt (`event.systemPrompt` at a prompt, `ctx.getSystemPrompt()` after a tool call),
  * read once per turn because a turn does not change it between deliveries (the derived text is kept
  * until the next `turn_start`, so it can reach the next prompt's `before_agent_start`, where it is
@@ -69,8 +69,8 @@ import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@oh-my-pi/
 import { ruleAppliesToAgent } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { cfgTtsr } from "@oh-my-pi/pi-coding-agent/export/ttsr-settings";
 import { createContextDelivery } from "../_shared/context-delivery.ts";
-import { createDeltaStream, type Delta } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
+import { createDeltaStream, type Delta } from "../_shared/omomp-shared/context-delta.ts";
 import { sessionSettings } from "../_shared/settings.ts";
 import { type ContextFileScope, contextFileScope, type DeliveredContextFile, loadContextFiles } from "./context-files.ts";
 import {
@@ -307,8 +307,9 @@ export default function repoRules(pi: ExtensionAPI): void {
 	/** The prompt's derived text, reused by a turn's deliveries and started over at the next turn. */
 	let view: PromptView | undefined;
 	const claimDeliveries = createContextDelivery(pi);
-	const deltas = createDeltaStream(pi, "repo-rules");
+	const deltas = createDeltaStream("omp-config/repo-rules");
 	pi.on("turn_start", () => {
+		deltas.turnStarted();
 		view = undefined;
 	});
 

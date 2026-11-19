@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-This node designs omp-config's configuration check: in a throwaway environment it installs the latest omp, applies the config with the repository's own updater, runs real sessions on a free model, and reports the faults and warnings that omp and the extensions print, deduplicated, one by one. The same workflow has another job, `code`, which runs `bun install`, `bun run check` (Biome formatting and lint, `tsc --noEmit`) and `bun run test` (the unit tests in `ci/`, such as `ci/omp-config-update.test.ts`); its rules are in the code conventions section of the repository's `AGENTS.md` and are not part of this node.
+This node designs omp-config's configuration check: in a throwaway environment it installs the latest omp, applies the config with the repository's own updater, runs real sessions on a free model, and reports the faults and warnings that omp and the extensions print, deduplicated, one by one. The code checks — `bun install`, `bun run check` (Biome formatting and lint, `tsc --noEmit`), `bun run test` (the unit tests in `ci/`, such as `ci/omp-config-update.test.ts`) and the shared-copy comparison — run in the `omomp-check` workflow, which needs full git history for the tests' `git show` fixtures; their rules are in the code conventions section of the repository's `AGENTS.md` and are not part of this node.
 
 - **Owns**: the stages of a check run, the criteria and classification of diagnostics, how the free model and shadow models are wired in, and the workflow's trigger events and permissions.
 - **Does not own**: the rules of the config items themselves (`README.md` and `docs/*.md`, Chinese version `README.zh-CN.md` and `docs/*.zh-CN.md`); what the updater writes and deletes (the header comment of `agent/extensions/omp-config-autoupdate/omp-config-update.ts`); the behavior of each extension (`docs/prompts-and-context.md`, `docs/agents.md`, and `docs/extensions.md`).
@@ -127,7 +127,7 @@ flowchart TB
 `.github/workflows/config-check.yml`:
 
 - Events: `push` to `main`, `pull_request`, a daily `schedule` at 03:17 UTC, `workflow_dispatch`. `pull_request_target` is not used.
-- Permissions: `contents: read`; checkout keeps no credentials (`persist-credentials: false`); no secrets are referenced. The `code` job checks out full history (`fetch-depth: 0`) because `ci/omp-config-update.test.ts` reads its legacy fixtures from earlier commits.
+- Permissions: `contents: read`; checkout keeps no credentials (`persist-credentials: false`); no secrets are referenced. The `omomp-check` workflow's checkout must keep full history (`fetch-depth: 0`) because `ci/omp-config-update.test.ts` reads its legacy fixtures from earlier commits.
 - Concurrency: a new run for the same event and ref cancels the old one.
 - Actions are pinned by commit SHA; Bun takes the latest version.
 

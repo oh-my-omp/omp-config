@@ -133,14 +133,14 @@ omp-config 是 omomp 发布成员。它的包根是 `agent/extensions/_shared`�
 
 ### 扩展目录结构与 `_shared` 模块
 
-OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展采用 `<name>/index.ts` 目录结构（扩展 ID 为 `extension-module:<name>`），同目录其他 `.ts` 为私有模块；`extensions/` 与 `extensions-last/` 下不直接放 `.ts` 文件。扩展之间不互相 import，共用代码放在 `agent/extensions/_shared/`（无 `index.ts`）：
+OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展采用 `<name>/index.ts` 目录结构（扩展 ID 为 `extension-module:<name>`），同目录其他 `.ts` 为私有模块；`extensions/` 与 `extensions-last/` 下不直接放 `.ts` 文件。扩展之间不互相 import，共用代码放在 `agent/extensions/_shared/`（无 `index.ts`）。`_shared/omomp-shared/` 存放 `oh-my-omp/shared` 公共文件的字节级副本，由仓库根的 `omomp-shared.json` 声明；副本只随 shared 的同步 PR 更新、由 `omomp-check` workflow 比对，绝不在本仓库直接编辑：
 
 | 模块 | 导出符号与用途 |
 |---|---|
 | `errors.ts` | `errorText(error)`：将 `unknown` 异常转为字符串 |
 | `messages.ts` | `textOf`、`lastAssistantText`：提取消息中的纯文本块 |
 | `ask-answers.ts` | `askAnswers`、`formatAskAnswers`、`AskAnswer`：从一次 `ask` 工具结果（原生或 omp-ask-more 的 `details`）读出用户的回答，取消、被拒或未作答时返回 null；`turn-judge` 与 `user-prompt-inject` 使用 |
-| `i18n.ts` | `tr`、`parseLanguage`、`omompLangSetting`、`LANGUAGE_ENV`：在每次调用处按 `OMOMP_LANG` → `omomp-lang.language` 设置（`plugin-settings` 读取一次）→ locale → 英文 解析界面语言（不在模块顶层调 `tr`） |
+| `i18n.ts` | `tr`、`omompLangSetting`、`LANGUAGE_ENV`：在每次调用处按 `OMOMP_LANG` → `omomp-lang.language` 设置（`plugin-settings` 读取一次）→ locale → 英文 解析界面语言（不在模块顶层调 `tr`）；环境变量与 locale 的判定及 `parseLanguage` 在 `omomp-shared/i18n.ts` 副本中 |
 | `plugin-settings.ts` | `defineSettings`、`readSettings`、`writeSetting`、`PLUGIN`：扩展设置是 `omp-config` 插件设置（manifest 在 `_shared/package.json` 的 `omp.settings`）；`readSettings` 在项目级时把 `<cwd>/.omp/plugin-overrides.json` 合并到机器值上，机器级从 OMP 设置存储读 |
 | `models.ts` | `Model`、`ThinkingLevel`：宿主模型与辅助会话思考强度类型 |
 | `roles.ts` | `roleModels`、`roleName`、`modelLabel`：每次调用从当前会话实时设置解析 OMP 模型角色的聊天模型链（`modelRoles.<role>` → `retry.fallbackChains.<role>` → 内置默认链）。扩展使用的角色名登记在 `agent/config.yml` 的 `modelTags` 中 |
@@ -151,7 +151,7 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 | `session-filter.ts` | `parseSessionFilter`、`parseInjectMode`、`targetsSession`、`producerMatches`、`describeFilter`、`SessionFilter`、`InjectMode`、`FilterProblem`：解析规格文件的 `target` 列表、`cwd` glob 列表、产出模型正则与 `inject` 形式，解析问题以数据返回、由调用方措辞；`watchdog-agent`、`turn-judge` 与 `prompt-conditions.ts` 使用 |
 | `prompt-conditions.ts` | `parseSessionConditions`、`conditionsApply`、`CONDITION_KEYS`、`SessionConditions`、`ConditionProblem`：`append-system-model` 片段与 `system-prompt-replace` 规则共用的注入与 `exclude.*` 条件（`target`、`cwd`、`model`、`provider`、`mode`、`delegation`），按会话、当前模型及其委派倾向与 `OMOMP_MODE` 匹配；默认 target 与问题措辞由各调用方决定 |
 | `context-delivery.ts` | `createContextDelivery(pi)`：`repo-rules` 和专题注入共用的真实上下文标记判重；内存只保存同 turn 待交付标记 |
-| `context-delta.ts` | `createDeltaStream(pi, id)`、`Delta`：扩展的增量流——把定制渲染成 `<system-reminder source="omp-config/<id>">` 消息，只在它与活动叶节点上下文中该来源最新的增量不同时，于 prompt 开始时（`atPrompt`，`before_agent_start` 的 `message`）或工具批次之后（`afterTools`，`tool_result` 的 `additionalContext`）投递，并取代较早的增量；内存只保存同 turn 工具批次已交付的增量；`append-system-model`、`system-prompt-replace`、`tool-topics` 与 `repo-rules` 使用 |
+| `omomp-shared/context-delta.ts` | `createDeltaStream(source)`、`Delta`：扩展的增量流——把定制渲染成 `<system-reminder source="…">` 消息（`source` 为调用方传入的完整 `omp-config/<id>` 字符串），只在它与活动叶节点上下文中该来源最新的增量不同时，于 prompt 开始时（`atPrompt`，`before_agent_start` 的 `message`）或工具批次之后（`afterTools`，`tool_result` 的 `additionalContext`）投递，并取代较早的增量；内存只保存同 turn 工具批次已交付的增量，由消费方在自己的 `turn_start` 里调 `turnStarted()` 清除；`append-system-model`、`system-prompt-replace`、`tool-topics`、`repo-rules` 与 `argon-long-output` 使用 |
 | `agent-definition.ts` | `declaresFlag(session, cwd, agentName, key)`：指定的 agent 定义 frontmatter 是否把某 flag 声明为 `true`（与 task 工具相同的发现顺序）；`completionJudge` 与 `splitCheck` 使用 |
 | `tool-calls.ts` | `watchedCallOf`、`WatchedCall`：从宿主 `tool_call` 事件读出 shell 命令（`bash`、`bash_bg` 及其 `xd://` 设备写入）或 eval 代码；忽略插件调用；`tool-policy-nag` 与 `delete-guard` 使用 |
 | `eval-py-launches.ts` | `scanPy`、`pyLaunchAt`、`isOp`、`PyLaunch`、`LaunchWord`、`LaunchVia`：对 Python eval cell 做词法分析（字符串、f-string、`!cmd`、`%%bash`、magic），读出 import 绑定，以及某个调用启动的进程，并标明识别来源 `direct`/`alias`/`distinctive`；`delete-guard`（失败即阻断）与 `tool-policy-nag` 的 pty 通道（失败即放行）使用 |
@@ -163,7 +163,7 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 3. **辅助会话传入 `taskDepth: 1`**：除 `runHelperPrompt` 外，直接调用 `createAgentSession` 的扩展必须传 `taskDepth: 1`。不传会让 SDK 把辅助会话当成主会话，在 `dispose()` 时销毁全局 `AgentLifecycleManager`，导致所有空闲或 parked 子代理变成 `Unknown agent`。
 4. **宿主包导入与真机加载验证**：只导入 OMP 宿主根包（`pi-agent-core`、`pi-ai`、`pi-catalog`、`pi-coding-agent`、`pi-natives`、`pi-tui`、`pi-utils`）、Node/Bun 内置模块和带 `.ts` 后缀的相对路径（平台相关的 native binding 先做平台判断再加载）。`tsc` 从开发目录的 `node_modules/` 解析类型，测不出未映射的宿主子路径（如 `@oh-my-pi/pi-tui/thinking` 在运行期会报错），改完扩展后在[测试沙箱](../sandbox/README.zh-CN.md)的真实会话里实际触发验证；沙箱带着本机配置与凭据应用工作区。
 
-`bun run test`（`bun test ci`）运行 `ci/` 下的单元测试：`delete-guard` 的测试（`delete` 工具的拒绝集、Linux 回收站布局与永久删除；posix 分类器、嵌套 PowerShell/cmd 方言与 py/js eval 分析器的拦截/放行表；`tool_call` 的 reason 与出错即拦截路径），以及更新器三方应用的测试（`ci/omp-config-update.test.ts`：未改的项随上游更新、本机定制被合并或在解决前一直是冲突、播种与本机路径保持不动、代码以仓库为准、删除、无基准机器按历史匹配、在 omp 首次启动写下的 `config.yml` 上首次安装、本机 `exclude` 条目保留被排除的文件与字段而兄弟项照常更新、只读的 `--check`）；CI 在 `code` job 中于 `bun run check` 之后运行它。`delete-guard` 在真实会话中的 Windows 行为由 [delete-guard Windows 验收](../ci/README.zh-CN.md#delete-guard-windows-验收) 单独检查。
+`bun run test`（`bun test --isolate ci`）运行 `ci/` 下的单元测试：`delete-guard` 的测试（`delete` 工具的拒绝集、Linux 回收站布局与永久删除；posix 分类器、嵌套 PowerShell/cmd 方言与 py/js eval 分析器的拦截/放行表；`tool_call` 的 reason 与出错即拦截路径），以及更新器三方应用的测试（`ci/omp-config-update.test.ts`：未改的项随上游更新、本机定制被合并或在解决前一直是冲突、播种与本机路径保持不动、代码以仓库为准、删除、无基准机器按历史匹配、在 omp 首次启动写下的 `config.yml` 上首次安装、本机 `exclude` 条目保留被排除的文件与字段而兄弟项照常更新、`_shared/omomp-shared/` 副本按代码管理、只读的 `--check`）；CI 在 `omomp-check` workflow 中于 `bun run check` 之后运行它。`delete-guard` 在真实会话中的 Windows 行为由 [delete-guard Windows 验收](../ci/README.zh-CN.md#delete-guard-windows-验收) 单独检查。
 
 ### 工具专题
 
@@ -179,7 +179,7 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 
 ### CI 配置检查（`bun ci/check.ts`）
 
-`.github/workflows/config-check.yml` 运行 `code`（`bun install && bun run check && bun run test`）和 `omp-session`（`bun ci/check.ts`）。`ci/check.ts` 在新建的临时 `HOME` 中安装最新 `@oh-my-pi/pi-coding-agent`，运行仓库更新器 `apply`（含安装插件），把主模型与 `modelRoles` 绑到 Kilo 匿名免费模型 `nvidia/nemotron-3-ultra-550b-a55b:free` 并为配置引用的付费模型启动本地回环影子代理，然后分别在 `omp` 与 `omp-light` 下跑一轮真实 RPC 会话。除 `HOST_LOG_WARNINGS` 列出的主机噪声外，任何非空 stderr、`extension_error` 事件或 `warn`/`error` 日志都会让检查失败（退出码 `0` 通过，`1` 配置或环境故障，`2` 免费模型服务故障）。完整说明见 [`ci/README.zh-CN.md`](../ci/README.zh-CN.md)。
+`.github/workflows/omomp-check.yml` 运行 `bun install && bun run check && bun run test` 并把 `omomp-shared.json` 声明的副本与 shared main 比对；`config-check.yml` 运行 `omp-session`（`bun ci/check.ts`）。`ci/check.ts` 在新建的临时 `HOME` 中安装最新 `@oh-my-pi/pi-coding-agent`，运行仓库更新器 `apply`（含安装插件），把主模型与 `modelRoles` 绑到 Kilo 匿名免费模型 `nvidia/nemotron-3-ultra-550b-a55b:free` 并为配置引用的付费模型启动本地回环影子代理，然后分别在 `omp` 与 `omp-light` 下跑一轮真实 RPC 会话。除 `HOST_LOG_WARNINGS` 列出的主机噪声外，任何非空 stderr、`extension_error` 事件或 `warn`/`error` 日志都会让检查失败（退出码 `0` 通过，`1` 配置或环境故障，`2` 免费模型服务故障）。完整说明见 [`ci/README.zh-CN.md`](../ci/README.zh-CN.md)。
 
 ### 升级与维护注意事项
 

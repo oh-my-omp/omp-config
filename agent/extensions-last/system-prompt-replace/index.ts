@@ -60,7 +60,7 @@
 // until then requests keep the delta already in the conversation. A revive's
 // `before_agent_start` is skipped, because OMP discards its result.
 //
-// OUTPUT. One delta of `_shared/context-delta.ts` with source
+// OUTPUT. One delta of `_shared/omomp-shared/context-delta.ts` with source
 // `omp-config/system-prompt-replace`: a hidden `<system-reminder>` message
 // appended to the conversation (after the prompt, or after the tool batch)
 // that lists, in rule order, each distinct matched passage and its replaced
@@ -77,16 +77,17 @@
 // process. Subagents are not checked: their prompts legitimately lack text
 // such as the `task` tool description. Warnings are a UI notification, or
 // stderr when headless, plus a log line. The prompt and tool results are
-// never blocked. It registers `before_agent_start`, `tool_result` and the
-// delta stream's `turn_start`, and writes no files.
+// never blocked. It registers `before_agent_start`, `tool_result` and
+// `turn_start` (which clears the delta stream's same-turn batch), and writes
+// no files.
 // ============================================================================
 
 import { readFileSync } from "node:fs";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
-import { createDeltaStream, type Delta } from "../../extensions/_shared/context-delta.ts";
 import { errorText } from "../../extensions/_shared/errors.ts";
 import { tr } from "../../extensions/_shared/i18n.ts";
+import { createDeltaStream, type Delta } from "../../extensions/_shared/omomp-shared/context-delta.ts";
 import {
 	CONDITION_KEYS,
 	type ConditionProblem,
@@ -479,7 +480,10 @@ function replacementDelta(pi: ExtensionAPI, ctx: ExtensionContext, systemPrompt:
 }
 
 export default function systemPromptReplace(pi: ExtensionAPI): void {
-	const deltas = createDeltaStream(pi, "system-prompt-replace");
+	const deltas = createDeltaStream("omp-config/system-prompt-replace");
+	pi.on("turn_start", () => {
+		deltas.turnStarted();
+	});
 	pi.on("before_agent_start", (event, ctx) => {
 		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;

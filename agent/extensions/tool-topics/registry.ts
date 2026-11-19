@@ -8,9 +8,8 @@ import {
 	type SchemeSpec,
 	type UrlCompletion,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { type RegisterSchemeResult, registerInternalScheme } from "../_shared/omomp-shared/internal-url.ts";
 import type { Topic } from "./catalog.ts";
-
-type Publish = { readonly kind: "published" } | { readonly kind: "taken"; readonly reason: string };
 
 function target(url: InternalUrl): { readonly tool: string; readonly topic: string | undefined } {
 	const tool = url.rawHost || url.hostname;
@@ -25,12 +24,11 @@ function markdown(url: string, content: string): InternalResource {
 	return { url, content, contentType: "text/markdown", size: Buffer.byteLength(content) };
 }
 
-/** Marks the handler as this extension's, so a later load (subagent, isolated child, other module copy) replaces it. */
+/** The owner id the shared scheme registrar brands this extension's handler with, so a later load of any copy replaces it. */
 const OWNER = "omp-config/tool-topics";
 
 class ToolTopicsHandler implements ProtocolHandler {
 	readonly scheme = "tool";
-	readonly owner = OWNER;
 	readonly spec: SchemeSpec = { backing: "virtual", selectors: "lines", immutable: true };
 	readonly #tools: ReadonlyMap<string, ReadonlyMap<string, Topic>>;
 
@@ -94,25 +92,14 @@ class ToolTopicsHandler implements ProtocolHandler {
 	}
 }
 
-/** Put the topics on the router as `tool://`, replacing an earlier load's handler; OMP's or a foreign handler is left alone. */
-export function publishTopics(tools: ReadonlyMap<string, readonly Topic[]>): Publish {
-	const router = InternalUrlRouter.instance();
-	if (router.isBuiltin("tool")) return { kind: "taken", reason: "OMP owns tool://" };
-	const existing = router.getHandler("tool");
-	if (existing && Reflect.get(existing, "owner") !== OWNER) return { kind: "taken", reason: "another handler already holds tool://" };
+/**
+ * Put the topics on the router as `tool://`. `registered` covers a fresh registration and replacing a
+ * handler an earlier load of this extension (or of another copy) registered under the same owner;
+ * `builtin` and `held` report why the router was left alone. The shared registrar also puts every
+ * non-built-in scheme in name order behind the built-ins.
+ */
+export function publishTopics(tools: ReadonlyMap<string, readonly Topic[]>): RegisterSchemeResult {
 	const byTool = new Map<string, ReadonlyMap<string, Topic>>();
 	for (const [tool, topics] of tools) byTool.set(tool, new Map(topics.map((topic) => [topic.name, topic])));
-	router.register(new ToolTopicsHandler(byTool));
-	// Canonical scheme order (§U1): builtins keep the host order first; every other
-	// scheme sorts by name. Re-registering in sorted order moves each entry to the
-	// tail (Map delete + set), so the non-builtin segment ends up sorted no matter
-	// when this extension bound. Only positions change; handlers are untouched.
-	const ordered = [...router.specs().keys()].filter((scheme) => !router.isBuiltin(scheme)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-	for (const scheme of ordered) {
-		const handler = router.getHandler(scheme);
-		if (!handler) continue;
-		router.unregister(scheme);
-		router.register(handler);
-	}
-	return { kind: "published" };
+	return registerInternalScheme(InternalUrlRouter.instance(), OWNER, new ToolTopicsHandler(byTool));
 }
