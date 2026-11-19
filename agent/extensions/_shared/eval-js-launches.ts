@@ -20,7 +20,9 @@ const { parse: babelParse } = await loadBabelParser();
  * text for the system shell; `childSpawn`: `spawn`/`spawnSync`/`execFile`/
  * `execFileSync` argv (`words` null when the argument list is not an array),
  * `shell` when the options may start a shell; `bunSpawn`: `Bun.spawn` argv
- * (null when not an array or `{ cmd: [...] }`); `bunShell`: a `Bun.$` template
+ * (null when not an array or `{ cmd: [...] }`); `shellHelper`: the eval `sh`
+ * helper, which runs its command on omp's embedded bash engine (posix on every
+ * platform); `bunShell`: a `Bun.$` template
  * (null text when it interpolates); `bridge`: `tool.bash({ command })` and
  * `tool.write` to `xd://bash`, which run as real `bash` tool calls. A `null`
  * command or word text is not a literal the code spells out.
@@ -39,6 +41,7 @@ export type JsLaunch =
 			readonly words: readonly LaunchWord[] | null;
 	  }
 	| { readonly kind: "bunSpawn"; readonly words: readonly LaunchWord[] | null }
+	| { readonly kind: "shellHelper"; readonly api: string; readonly via: LaunchVia; readonly text: string | null }
 	| { readonly kind: "bunShell"; readonly text: string | null }
 	| { readonly kind: "bridge"; readonly source: "bash" | "deviceWrite"; readonly command: string | null }
 	| { readonly kind: "indeterminate"; readonly what: string };
@@ -77,6 +80,8 @@ export function parseJs(code: string, prior: JsCarry = EMPTY_CARRY): JsCell {
 /** The launch a node starts — a child_process, Bun or harness-bridge call, or a `Bun.$` template — or null. */
 export function jsLaunchOf(node: Node, bindings: Bindings): JsLaunch | null {
 	if (node.type === "TaggedTemplateExpression") {
+		const helper = calleeApi(node.tag, bindings);
+		if (helper?.api === "sh") return { kind: "shellHelper", api: helper.api, via: helper.via, text: literalString(node.quasi) };
 		const tag = node.tag;
 		const isShellTag = isBunMember(tag, "$") || (tag.type === "Identifier" && memberName(bindings, tag.name) === "bun.$");
 		return isShellTag ? { kind: "bunShell", text: literalString(node.quasi) } : null;
@@ -105,6 +110,8 @@ export function jsLaunchOf(node: Node, bindings: Bindings): JsLaunch | null {
 			const shape = spawnArguments(args);
 			return shape.kind === "indeterminate" ? unknownLaunch(`${api} options`) : { kind: "childSpawn", api, via, ...shape.value };
 		}
+		case "sh":
+			return opaque ? unknownLaunch("the `sh` arguments") : { kind: "shellHelper", api, via, text: literalString(args[0]) };
 		case "bun.spawn":
 		case "bun.spawnSync": {
 			if (opaque) return unknownLaunch(api);
@@ -121,11 +128,13 @@ function calleeApi(callee: Node, bindings: Bindings): { readonly api: string; re
 	if (callee.type === "Identifier") {
 		const member = memberName(bindings, callee.name);
 		if (member !== undefined) return { api: member, via: member.endsWith(`.${callee.name}`) ? "direct" : "alias" };
+		if (callee.name === "sh") return { api: "sh", via: "direct" };
 		return DISTINCTIVE_LAUNCH.has(callee.name) ? { api: `child_process.${callee.name}`, via: "distinctive" } : null;
 	}
 	if (callee.type !== "MemberExpression" && callee.type !== "OptionalMemberExpression") return null;
 	const property = propertyName(callee);
 	if (property === null) return null;
+	if (isMember(callee, "globalThis", "sh")) return { api: "sh", via: "direct" };
 	if (callee.object.type === "Identifier" && callee.object.name === "tool") return { api: `tool.${property}`, via: "direct" };
 	if (isBunMember(callee, "spawn") || isBunMember(callee, "spawnSync")) return { api: `bun.${property}`, via: "direct" };
 	const module = receiverModule(callee.object, bindings);
@@ -187,6 +196,7 @@ const DISTINCTIVE_LAUNCH: ReadonlySet<string> = new Set(["execSync", "spawnSync"
 
 /** Launcher members a binding may hold: a name bound to one of them is a launcher wherever it is called. */
 const LAUNCHER_MEMBERS: ReadonlySet<string> = new Set([
+	"sh",
 	"bun.$",
 	"bun.spawn",
 	"bun.spawnSync",
@@ -293,11 +303,12 @@ export function isBunFile(node: Node, bindings: Bindings): boolean {
 /** The launcher member a value names: `Bun.$`, `Bun.spawn`, `tool.bash`, a child_process function, or a launcher name already bound. */
 function launcherMemberOf(node: Node, bindings: Bindings): string | null {
 	let member: string | null = null;
-	if (node.type === "Identifier") member = memberName(bindings, node.name) ?? null;
+	if (node.type === "Identifier") member = memberName(bindings, node.name) ?? (node.name === "sh" ? "sh" : null);
 	else if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
 		const property = propertyName(node);
 		if (property !== null) {
 			if (isBunMember(node, "$") || isBunMember(node, "spawn") || isBunMember(node, "spawnSync")) member = `bun.${property}`;
+			else if (isMember(node, "globalThis", "sh")) member = "sh";
 			else if (node.object.type === "Identifier" && node.object.name === "tool") member = `tool.${property}`;
 			else if (receiverModule(node.object, bindings) === "child_process") member = `child_process.${property}`;
 		}

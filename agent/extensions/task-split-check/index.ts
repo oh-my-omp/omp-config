@@ -5,7 +5,9 @@
  * are logged as warnings and let the call run.
  *
  * Dispatch checks for `task` calls. Each check is one yes/no
- * question about an item (shared context + item task). Per item, every check
+ * question about an item (shared context + the item's task text: its `task`,
+ * or all its `steps` in order — both are one subagent run, never judged step by
+ * step; an item the host would reject is left to the host's validation). Per item, every check
  * that covers it and still needs a verdict goes into ONE fast-model request
  * — prompt only, no tools, nothing read — that answers each question on its
  * own line. All items are judged concurrently under one deadline; when any
@@ -57,15 +59,44 @@ const EFFORT =
 	})();
 const DEADLINE_MS = 25_000;
 
+/**
+ * One spawn as the model wrote it, reduced to what the checks read. With
+ * `task.steps` on, items carry `steps` instead of `task`; both are the text of
+ * one subagent run, so a steps item's text is all its steps joined in their
+ * order. An item the host would reject — both fields, neither, or steps that
+ * are not a non-empty list of non-empty instructions — does not parse, so the
+ * call is left to the host's own validation and the checks stand aside.
+ */
+type TaskItem = {
+	readonly text: string;
+	readonly name: string | undefined;
+	readonly agent: string | undefined;
+};
+
 const taskItemSchema = z
 	.object({
-		task: z.string(),
+		task: z
+			.string()
+			.refine((task) => task.trim() !== "")
+			.optional(),
+		steps: z
+			.array(z.string())
+			.min(1)
+			.refine((steps) => steps.every((step) => step.trim() !== ""))
+			.optional(),
 		name: z.string().optional(),
 		agent: z.string().optional(),
 	})
-	.passthrough();
+	.passthrough()
+	.refine((item) => (item.task === undefined) !== (item.steps === undefined))
+	.transform(
+		(item): TaskItem => ({
+			text: item.steps?.join("\n") ?? item.task ?? "",
+			name: item.name,
+			agent: item.agent,
+		}),
+	);
 const batchSchema = z.object({ context: z.string().optional(), tasks: z.array(taskItemSchema) }).passthrough();
-type TaskItem = z.infer<typeof taskItemSchema>;
 type TaskCall = { readonly context: string | undefined; readonly items: readonly TaskItem[] };
 
 /** Batch calls carry `context` + `tasks[]`; the runtime still accepts a flat single item. */
@@ -153,11 +184,11 @@ const parseAnswer = (text: string, check: Check): Verdict => {
 };
 
 const renderPrompt = (context: string | undefined, item: TaskItem): string =>
-	["<shared-context>", context?.trim() || "(none)", "</shared-context>", "<assignment>", item.task.trim(), "</assignment>"].join("\n");
+	["<shared-context>", context?.trim() || "(none)", "</shared-context>", "<assignment>", item.text.trim(), "</assignment>"].join("\n");
 
 /**
  * Digest of one item prompt, without materializing the prompt: the same
- * normalized `context?.trim() || "(none)"` / `item.task.trim()` fragments
+ * normalized `context?.trim() || "(none)"` / `item.text.trim()` fragments
  * `renderPrompt` joins, length-framed (`<context UTF-16 code units>:<task UTF-16 code units>`
  * plus NUL separators) so fragment boundaries cannot collide, hashed
  * incrementally into a fixed-length sha256. Framing only distinguishes inputs
@@ -167,7 +198,7 @@ const renderPrompt = (context: string | undefined, item: TaskItem): string =>
  */
 const memoryDigest = (context: string | undefined, item: TaskItem): string => {
 	const contextText = context?.trim() || "(none)";
-	const taskText = item.task.trim();
+	const taskText = item.text.trim();
 	const hasher = new Bun.CryptoHasher("sha256");
 	hasher.update(`${contextText.length}:${taskText.length}\0`);
 	hasher.update(contextText);

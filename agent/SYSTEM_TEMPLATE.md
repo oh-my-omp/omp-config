@@ -65,7 +65,7 @@ Matching skill → MUST read `skill://<name>` first.
 {{/if}}
 
 # Internal URLs
-Most FS/bash tools resolve these; path selectors: `read` docs.
+Most FS/bash tools resolve these; path selectors: `read` docs.{{#has tools "read"}} Further sub-paths, queries, limits: xd://read/urls.{{/has}}
 {{#each internalUrls}}
 - {{this}}
 {{/each}}
@@ -95,7 +95,18 @@ SHOULD resolve prerequisites, parallelize independent calls. Retry empty/partial
 - Prefer relative `path`-like fields.
 {{#if intentTracing}}- Most tools take `{{intentField}}`: capitalized 2–6-word present-participle intent (e.g. "Reading model role settings").{{/if}}
 {{#if secretsEnabled}}- `$$HASH$$`, `$$HASH:CASE$$`, `$$NAME_HASH:CASE$$` output tokens: opaque strings.{{/if}}
+{{#if resultShaping}}
+{{resultShaping}}
+{{/if}}
 {{#has tools "read"}}- A tool description ending in `Topics` (in the prompt, in an `omp-config/tool-topics` reminder, or in the full docs `xd://<tool>` returns for a device) lists call instructions kept out of the prompt, one line per topic with its exact URL. Before a call that matches a topic's condition, read that URL; read only the topics your call needs. A topic may also arrive after a call to a read-only tool; apply it to the next call.{{/has}}
+
+{{#if encourageEdits}}
+{{#has tools "edit"}}
+<critical>
+File edits: MUST use `{{toolRefs.edit}}`{{#ifAny (includes tools "bash") (includes tools "eval")}}; NEVER sed/perl/python edits{{/ifAny}}.
+</critical>
+{{/has}}
+{{/if}}
 
 {{#ifAny (includes tools "ast_grep") (includes tools "ast_edit")}}
 # Code by Syntax Shape

@@ -34,6 +34,11 @@ function judgeLaunch(ctx: Context, launch: PyLaunch, at: number): Verdict {
 			return launch.text === null
 				? nonLiteral("the command handed to a shell")
 				: classify(ctx.shell, { kind: "script", text: launch.text }, ctx.depth + 1);
+		case "shellHelper":
+			// The eval prelude's `sh` runs on the embedded bash engine, whatever the platform.
+			return launch.text === null
+				? nonLiteral("the command handed to `sh`")
+				: classify(ctx.brush, { kind: "script", text: launch.text }, ctx.depth + 1);
 		case "argv":
 			return launch.words === null ? nonLiteral("the command") : classify(ctx.brush, { kind: "argv", words: launch.words }, ctx.depth + 1);
 		case "execEval":
@@ -81,7 +86,8 @@ function judgeTokens(ctx: Context): Verdict {
  * Classifies a py eval cell: filesystem deletion APIs block, and every command
  * handed to a shell or launched is classified — `subprocess`/`os`/`asyncio`
  * launches, `!cmd`, `%sx`/`%system` and `%%bash` (rewritten by the kernel into
- * shell calls), the `tool.bash` and `tool.write` to `xd://bash` bridges, and the
+ * shell calls), the `sh` helper's command (on the embedded bash engine), the
+ * `tool.bash` and `tool.write` to `xd://bash` bridges, and the
  * literal code of builtin `exec`/`eval`. `%time`/`%timeit` arguments, `%%capture`/`%%timeit`
  * bodies and f-string placeholders are classified as Python. Text that cannot
  * be tokenized (unterminated string or bracket) is blocked: it cannot run.
