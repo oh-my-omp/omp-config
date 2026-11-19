@@ -31,6 +31,8 @@ export type LaunchVia = "direct" | "alias" | "distinctive";
  *   its command runs as a real `bash` tool call.
  * - `script`: text handed to the system shell (`os.system`, `shell=True`,
  *   `getoutput`).
+ * - `shellHelper`: the eval `sh` helper, which runs its command on omp's
+ *   embedded bash engine (posix on every platform).
  * - `argv`: an argument list run without a shell.
  * - `execEval`: builtin `exec` or `eval`; `code` is the Python the cell runs.
  * - `opaque`: `__import__` or `importlib.import_module` whose module name is not
@@ -39,6 +41,7 @@ export type LaunchVia = "direct" | "alias" | "distinctive";
 export type PyLaunch =
 	| { readonly kind: "bridge"; readonly command: string | null }
 	| { readonly kind: "script"; readonly api: string; readonly via: LaunchVia; readonly text: string | null }
+	| { readonly kind: "shellHelper"; readonly api: string; readonly via: LaunchVia; readonly text: string | null }
 	| { readonly kind: "argv"; readonly api: string; readonly via: LaunchVia; readonly words: readonly LaunchWord[] | null }
 	| { readonly kind: "execEval"; readonly api: string; readonly code: string | null }
 	| { readonly kind: "opaque"; readonly api: string };
@@ -85,6 +88,7 @@ export function pyLaunchAt(scan: PyScan, k: number): PyLaunch | null {
 	const needsArgs =
 		qualified === "tool.bash" ||
 		qualified === "tool.write" ||
+		qualified === "sh" ||
 		EXEC_EVAL.has(qualified) ||
 		qualified === "__import__" ||
 		qualified === "importlib.import_module" ||
@@ -112,6 +116,14 @@ function launchOf(name: string, qualified: string, renamed: boolean, args: CallA
 		return { kind: "bridge", command: literalSource(command) };
 	}
 	if (EXEC_EVAL.has(qualified)) return { kind: "execEval", api: qualified, code: literalSource(args.positional[0]) };
+	// The eval prelude's `sh(command, cwd, timeout)`, which runs on the embedded bash engine; a name the cell binds to it reaches here too.
+	if (qualified === "sh")
+		return {
+			kind: "shellHelper",
+			api: qualified,
+			via: renamed ? "alias" : "direct",
+			text: literalSource(args.positional[0] ?? args.keywords.get("command")),
+		};
 	// `shell=` that is not a literal `False`/`None` may start a shell (`shell=flag`), so the command is a script.
 	const known: LaunchKind | null = SCRIPT_CALLS.has(qualified) ? "script" : ARGV_CALLS.has(qualified) ? "argv" : null;
 	const kind = known ?? DISTINCTIVE_LAUNCH.get(name) ?? null;
@@ -170,6 +182,7 @@ function withUnknownPayload(launch: PyLaunch): PyLaunch {
 		case "bridge":
 			return { kind: "bridge", command: null };
 		case "script":
+		case "shellHelper":
 			return { ...launch, text: null };
 		case "argv":
 			return { ...launch, words: null };
@@ -781,6 +794,8 @@ function collectBindings(tokens: readonly Token[]): Bindings {
 		const name = nameAt(tokens, k);
 		if (name === null || !isOp(tokens[k + 1], "=") || isOp(tokens[k - 1], ".")) continue;
 		const callee = dottedName(tokens, k + 2);
+		// `s = sh`: the helper under another name for the rest of the cell.
+		if (callee.name === "sh" && !isOp(tokens[callee.next], "(") && !isOp(tokens[callee.next], ".")) members.set(name, "sh");
 		if (!isOp(tokens[callee.next], "(")) continue;
 		const loaded = importCall(
 			qualifiedCallee(tokens, callee.next - 1, { modules, members }).names.join("."),

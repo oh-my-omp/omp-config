@@ -2,15 +2,14 @@
 tool: ask
 name: answers
 title: Reading the user's answers
-when: before acting on an `ask` result that has notes, images, a custom answer, no selection, or a chat redirect
-upstream: pi-coding-agent@18.13.2 src/tools/ask.ts, pi-tui src/overlays/ask-dialog.ts, omp://tools/ask.md § Modes / Variants, § Outputs
+when: before acting on an `ask` result that was submitted on a timeout, carries option notes, or leaves a field unanswered
+upstream: pi-coding-agent@18.22.0 src/tools/ask.ts, src/prompts/tools/ask-result.md, pi-tui src/html-form/data.ts, omp://tools/ask.md § Outputs
 ---
 # Reading the user's answers
 
-- One question: `User selected: …`, `User provided custom input: …`, `User added note [on <option>]: …` — several can appear together; a user may pick options and type their own answer too.
-- Several questions: `User answers:` then one line per id (`id: [a, b]`, custom answers quoted, `+` joins choices and custom text, `(note …)` appended). `details.results[]` has `selectedOptions`, `customInput`, `note`, `noteOption` per id.
-- `User did not select any options` (or `id: []`) is a real answer: the user chose none. `id: (cancelled)` means that question was left unanswered.
-- `User chose to chat about this instead of answering.` is not a choice: discuss the questions with the user before deciding.
-- Answers may carry pasted images, shown as `[Image #N, WxH]` and readable as `attachment://N` (with `?q=<question>` for a vision answer).
-- Cancelling the dialog aborts the tool call (`Ask tool was cancelled by the user`): stop and wait for the user instead of re-asking.
-- `Error: question ids must be unique` / `option labels must be unique` are your input errors, not answers.
+- Submit: `User answers:` then the submitted form data as JSON, keyed by each control's `name` (`{ "store": "sqlite" }`); a multiple choice (checkboxes sharing one name, or `<select multiple>`) gives an array.
+- Timeout: the first line is `No answer before the timeout; submitted the form's current values:` instead — those are the values the form opened with (`checked`/`selected`/`value`), not the user's answer; `details.timedOut` is `true`.
+- Option notes: notes on chosen options follow the JSON under `Option notes:`, one per line as `- <question>: <option> [<name>=<value>] — <text>`.
+- `details.answers[]`: one `{ name, question, answer }` per named control in form order; `answer` is the option's shown label (a multi-select joins labels with `, `), and an empty string for a field that submitted no value. `notes` and `timedOut` appear only when they exist.
+- A user cancel aborts the tool call (`Ask tool was cancelled by the user`): stop and wait for the user instead of re-asking.
+- A form with no named control returns an error result, `Error: the form has no named controls.` followed by which controls to add — your input error, not an answer.
