@@ -1,8 +1,7 @@
 // ============================================================================
 // system-prompt-replace — wording-level edits of OMP's system prompt, from
-// rule files with per-rule session conditions, delivered as a delta message
-// beside the system prompt while the context is uncompacted, and as the
-// edited system prompt itself once it starts from a compaction.
+// rule files with per-rule session conditions, delivered as the edited system
+// prompt itself.
 //
 // WHY THIS EXISTS. SYSTEM_TEMPLATE.md owns the base workflow. Whole tool
 // descriptions belong to the tool-topics extension (surface + topic index,
@@ -15,9 +14,9 @@
 // ORDER. This file lives outside `<agent dir>/extensions/` and is the LAST
 // `extensions` entry of config.yml and of config-light.yml
 // (agent/extensions-last/README.md), so its `before_agent_start` runs after
-// every path-loaded extension and its delta follows theirs in a prompt's
-// messages. Placing this file in `extensions/` would load it with the native
-// batch, and the config entry would be dropped as a duplicate path.
+// every path-loaded extension and edits the prompt they leave. Placing this
+// file in `extensions/` would load it with the native batch, and the config
+// entry would be dropped as a duplicate path.
 //
 // FILES. `REPLACE-SYSTEM-<label>.yml` (or `.yaml`), discovered by
 // `_shared/spec-files.ts`: beside this module (rule files the repo ships and
@@ -54,35 +53,25 @@
 // INPUT. The system prompt this extension is handed: `event.systemPrompt` at
 // a prompt, `ctx.getSystemPrompt()` after a tool call.
 //
-// TIMING. Rules are re-read and matched at every prompt (`before_agent_start`)
-// and after every tool call (`tool_result`), in the main session and in every
-// subagent, each matched against its own identity, cwd, model and mode. Edits
-// to rule files and `/model` switches apply from the next of those points
-// (from the next prompt while the edited prompt is sent); until then
-// requests keep what was already sent. A revive's
-// `before_agent_start` is skipped, because OMP discards its result.
+// OUTPUT. At every prompt (`before_agent_start`), in the main session and in
+// every subagent, each matched against its own identity, cwd, model and mode,
+// the result's `systemPrompt` is the edited prompt. It is byte-identical from
+// prompt to prompt until OMP rebuilds its base prompt or the rules that apply
+// change (rule-file edits, `/model`), which take effect from the next prompt.
+// A revive's `before_agent_start` is skipped, because OMP discards its result.
 //
-// OUTPUT, UNCOMPACTED CONTEXT. The system prompt is left as OMP built it, so
-// the cached prefix holds. One delta of `_shared/omomp-shared/context-delta.ts`
-// with source `omp-config/system-prompt-replace`: a hidden `<system-reminder>`
-// message appended to the conversation (after the prompt, or after the tool
-// batch) that lists, in rule order, each distinct matched passage and its
-// replaced text, or that the passage does not apply when the replacement is
-// empty. A rule without a match adds nothing. It is sent only when it differs
-// from the source's effective delta in the current context; a changed list
-// supersedes the earlier delta, and when no rule matches any longer a delta
-// saying so supersedes it.
+// OMP keeps the returned prompt as the agent's prompt after the run until its
+// next base rebuild. A run that skips `before_agent_start` (an IRC wake or an
+// async result) after such a rebuild sends OMP's own text; only then, after
+// its first tool call (`tool_result` finds the agent's prompt is not the
+// edited one), the edits go out as one delta of
+// `_shared/omomp-shared/context-delta.ts` with source
+// `omp-config/system-prompt-replace`: a hidden `<system-reminder>` listing,
+// in rule order, each distinct matched passage and its replaced text, or that
+// the passage does not apply when the replacement is empty. The next prompt
+// returns the edited prompt again and retracts that delta.
 //
-// OUTPUT, COMPACTED CONTEXT. When the leaf's branch holds a compaction after
-// its latest `/clear` boundary, the conversation was rebuilt and has no
-// cached prefix to keep: the `before_agent_start` result's `systemPrompt` is
-// the edited prompt, and a delta still in the context is retracted. OMP
-// keeps that prompt for the run and after it until its next base rebuild;
-// after a tool call that finds the agent's prompt edited nothing is sent,
-// otherwise (a rebuild before an agent-initiated run, which skips
-// `before_agent_start`) the delta above is sent until the next prompt.
-//
-// FAILURE POLICY. No file means no delta. An unreadable or invalid file is
+// FAILURE POLICY. No file means no edit. An unreadable or invalid file is
 // skipped on its own and warned once per path and reason; the other files
 // still apply. A rule that applies to the main session and finds no target
 // (template drift after an OMP upgrade, or a typo) warns once per rule per
@@ -492,21 +481,12 @@ function applyRules(
 	return { blocks, edits };
 }
 
-/** `edits` as one delta for a request that carries the system prompt unchanged. */
+/** `edits` as one delta for a request that carries OMP's own prompt instead of the edited one. */
 function editsDelta(edits: readonly Edit[]): Delta {
 	if (edits.length === 0) return { kind: "none" };
 	let body = PREAMBLE;
 	for (const edit of edits) body += `\n\n${renderEdit(edit)}`;
 	return { kind: "text", body };
-}
-
-/**
- * Whether the leaf's model context starts from a compaction: the branch holds a compaction after
- * its latest `/clear` boundary, as `buildSessionContext` projects it.
- */
-function compacted(ctx: ExtensionContext): boolean {
-	const latest = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "compaction" || entry.type === "reset_boundary");
-	return latest?.type === "compaction";
 }
 
 export default function systemPromptReplace(pi: ExtensionAPI): void {
@@ -523,20 +503,18 @@ export default function systemPromptReplace(pi: ExtensionAPI): void {
 		edited = undefined;
 		try {
 			const { blocks, edits } = applyRules(pi, ctx, event.systemPrompt);
-			if (edits.length > 0 && compacted(ctx)) {
-				// A compacted context has no cached prefix to keep: send the edited prompt itself and
-				// retract a delta still in the projection.
-				edited = blocks;
-				return { systemPrompt: [...blocks], ...deltas.atPrompt(ctx, { kind: "none" }) };
-			}
-			return deltas.atPrompt(ctx, editsDelta(edits));
+			// This request carries the edits in the prompt itself: retract a fallback delta still in context.
+			const retraction = deltas.atPrompt(ctx, { kind: "none" });
+			if (edits.length === 0) return retraction;
+			edited = blocks;
+			return { systemPrompt: [...blocks], ...retraction };
 		} catch (error) {
 			pi.logger.warn("system-prompt-replace: cannot deliver edits", { error: errorText(error) });
 		}
 	});
 	pi.on("tool_result", (_event, ctx) => {
 		const systemPrompt = ctx.getSystemPrompt();
-		// The request already carries the edited prompt; rule-file changes apply from the next prompt.
+		// The agent still sends the edited prompt; rule-file changes apply from the next prompt.
 		if (edited !== undefined && edited.length === systemPrompt.length && edited.every((block, index) => block === systemPrompt[index])) {
 			return;
 		}

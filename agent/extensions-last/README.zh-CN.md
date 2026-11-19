@@ -4,7 +4,7 @@
 
 这里的扩展必须在其他按路径加载的扩展之后执行，所以不放进 `extensions/`，而是由 `config.yml` 的 `extensions` 按路径加载，并且写在列表的最后一项。每个扩展一个目录，入口是 `<名字>/index.ts`；它的配置是 `index.ts` 旁边的文件（`system-prompt-replace` 读取 `REPLACE-SYSTEM-*.yml`）或以目录名命名的 `omp-config` 插件设置。`config.yml` 里写的是 `index.ts` 的完整路径（写文件路径而不是目录，加载方式与平铺时相同，`disabledExtensions` 按名字过滤不到它）。共享代码从 `../../extensions/_shared/` 导入。
 
-`system-prompt-replace/` 按其 `REPLACE-SYSTEM-*.yml` 规则文件给出对渲染后提示词的措辞级修订，包括 `toolInventory`、`xdevDocs` 工具描述里的句子，以一条增量消息放在提示词旁边，上下文从 compaction 开始后改为直接发送修改好的提示词；单独发送的工具 schema 从不改动；整段工具说明归更早运行的 `tool-topics` 扩展。提示词分层和规则格式见 [system-prompt-replace](../../docs/prompts-and-context.zh-CN.md#system-prompt-replace)。
+`system-prompt-replace/` 按其 `REPLACE-SYSTEM-*.yml` 规则文件给出对渲染后提示词的措辞级修订，包括 `toolInventory`、`xdevDocs` 工具描述里的句子，直接发送修改好的提示词；单独发送的工具 schema 从不改动；整段工具说明归更早运行的 `tool-topics` 扩展。提示词分层和规则格式见 [system-prompt-replace](../../docs/prompts-and-context.zh-CN.md#system-prompt-replace)。
 
 ## 加载顺序
 
