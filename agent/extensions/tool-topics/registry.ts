@@ -1,5 +1,3 @@
-// The `tool://` scheme on OMP's URL router: omp-config's topics for tools it does not own, built once
-// from the catalog. Nothing else registers here; plugin tools serve their own topics as `xd://<tool>/<topic>`.
 import {
 	type InternalResource,
 	type InternalUrl,
@@ -24,7 +22,6 @@ function markdown(url: string, content: string): InternalResource {
 	return { url, content, contentType: "text/markdown", size: Buffer.byteLength(content) };
 }
 
-/** The owner id the shared scheme registrar brands this extension's handler with, so a later load of any copy replaces it. */
 const OWNER = "omp-config/tool-topics";
 
 class ToolTopicsHandler implements ProtocolHandler {
@@ -92,12 +89,6 @@ class ToolTopicsHandler implements ProtocolHandler {
 	}
 }
 
-/**
- * Put the topics on the router as `tool://`. `registered` covers a fresh registration and replacing a
- * handler an earlier load of this extension (or of another copy) registered under the same owner;
- * `builtin` and `held` report why the router was left alone. The shared registrar also puts every
- * non-built-in scheme in name order behind the built-ins.
- */
 export function publishTopics(tools: ReadonlyMap<string, readonly Topic[]>): RegisterSchemeResult {
 	const byTool = new Map<string, ReadonlyMap<string, Topic>>();
 	for (const [tool, topics] of tools) byTool.set(tool, new Map(topics.map((topic) => [topic.name, topic])));

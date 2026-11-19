@@ -1,39 +1,3 @@
-// ============================================================================
-// input-polish — press the configured chord (default Ctrl+Enter) instead of
-// Enter and the draft in the input box is rewritten by a model. The result is
-// NOT written into the editor: it is shown in an overlay that sits on the
-// input box, and the editor keeps the original draft the whole time.
-//
-//   chord      → polish starts, overlay shows the streaming rewrite
-//   Enter      → editor text becomes the polished draft and that same Enter
-//                falls through to the editor, so the ordinary submit path runs
-//                (history, images, steer-while-streaming, `input` hooks)
-//   Esc/Ctrl+C → polish aborted, overlay closed, editor untouched
-//
-// Every key is decided in a raw terminal-input listener, which runs before the
-// focused component. The overlay itself is display-only.
-//
-// Polishing uses a dedicated in-memory helper: the OMP model role `@input-polish`
-// (assign it in `/model`; thinking per the entry's `:effort` suffix, off by
-// default), then the `default` role, resolved at every polish; a
-// provider failure moves to the next model of that chain with the preview
-// cleared. NO tools, empty system prompt, no MCP/LSP/extensions. Config —
-// the chord and the rewrite instruction — is the `input-polish.key` and
-// `input-polish.instruction` plugin settings of `omp-config` (`/settings →
-// Plugins → omp-config` or `omp plugin config`; the project's
-// `.omp/plugin-overrides.json` wins over the machine values); an unreadable
-// or invalid value warns and leaves the extension inert.
-//
-// Drafts that start with `/`, `!` or `$` (slash command, bash, python) and empty
-// drafts are not polished: the chord falls through to the host untouched.
-// Registers session_start/session_switch/session_shutdown and a terminal-input
-// listener, only in the main TUI session. Reads config; writes no files. Model
-// failures stay in the preview without changing the editor; hook failures log.
-// On each attach the chord is checked with `pi.getShortcutConflict`: when omp
-// holds it, or another extension binds it, one warning per process names the
-// holder. The chord stays with polish either way.
-// ============================================================================
-
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionAPI, type ExtensionContext, type ShortcutConflict, z } from "@oh-my-pi/pi-coding-agent";
 import { type Component, isKeyRelease, parseKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
@@ -43,22 +7,16 @@ import { tr } from "../_shared/i18n.ts";
 import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
 import { modelLabel, type RoleModel, roleModels } from "../_shared/roles.ts";
 
-// --- config (`input-polish` plugin settings) --------------------------------
-
 const configSchema = z.object({
-	/** Chord that starts a polish. Ctrl+Enter is what a Windows keyboard sends; Alt+Enter is Option+Enter on macOS. */
 	key: z.enum(["ctrl+enter", "alt+enter"]),
-	/** What the rewrite should do. The fidelity rules are always appended by the extension. */
 	instruction: z.string().min(1),
 });
 
 const settingsSection = defineSettings(import.meta.dir, configSchema);
-/** The OMP model role the rewrite model comes from: the extension's own name. */
 const ROLE = settingsSection.id;
 
 type PolishConfig = z.infer<typeof configSchema>;
 
-// An unreadable or invalid value warns and leaves the extension inert.
 async function loadConfig(pi: ExtensionAPI, cwd: string): Promise<PolishConfig | null> {
 	const loaded = await readSettings(settingsSection, { kind: "project", cwd });
 	switch (loaded.kind) {
@@ -74,14 +32,10 @@ async function loadConfig(pi: ExtensionAPI, cwd: string): Promise<PolishConfig |
 	}
 }
 
-// --- shortcut conflicts -----------------------------------------------------
-
 type Chord = PolishConfig["key"];
 
-/** Chords already reported in this process: `/new` and session switches attach again. */
 const reportedChords = new Set<Chord>();
 
-/** One conflict as a log line (fixed English) and an operator notice (translated). */
 interface ConflictReport {
 	readonly log: string;
 	readonly notice: string;
@@ -132,10 +86,6 @@ function reportShortcutConflict(pi: ExtensionAPI, ctx: ExtensionContext, chord: 
 	if (ctx.hasUI) ctx.ui.notify(report.notice, "warning");
 }
 
-// --- polishing --------------------------------------------------------------
-
-// The editor turns large pastes and attachments into atomic placeholder tokens
-// (`[Paste #2, +30 lines]`, `[Image #1, 800x600]`) that are expanded on submit.
 // A rewrite that loses or edits one would silently drop content, so tokens are
 // both protected in the prompt and verified in the result.
 const PLACEHOLDER_PATTERN = /\[(?:Paste|Image|Video) #\d+[^\]\n]*\]/g;
@@ -172,7 +122,6 @@ async function polish(
 ): Promise<Exclude<Preview, { readonly kind: "polishing" }>> {
 	const failures: string[] = [];
 	for (const { model, level } of models) {
-		// A new model starts from an empty preview, never from the last model's partial text.
 		onProgress("");
 		const result = await runHelperPrompt(ctx, {
 			agentId: "input-polish",
@@ -230,8 +179,6 @@ async function polish(
 	};
 }
 
-// --- preview overlay --------------------------------------------------------
-
 type Preview =
 	| { readonly kind: "polishing"; readonly partial: string }
 	| { readonly kind: "ready"; readonly text: string }
@@ -239,11 +186,6 @@ type Preview =
 
 type Theme = ExtensionContext["ui"]["theme"];
 
-/**
- * The last `count` rows of `raw` wrapped to `width`: the same rows wrapping every logical line of
- * `raw` would produce, computed from the tail of the text only, so a streaming body costs the rows
- * it shows rather than everything accumulated so far.
- */
 function wrappedTail(raw: string, width: number, count: number): string[] {
 	if (raw === "") return [""];
 	const reversed: string[] = [];
@@ -255,7 +197,6 @@ function wrappedTail(raw: string, width: number, count: number): string[] {
 		const line = raw.slice(start + 1, end);
 		const rows = line === "" ? [""] : wrapTextWithAnsi(line, width);
 		const need = count - reversed.length;
-		// This line alone fills the rest of the window: nothing before it can be shown.
 		if (rows.length >= need) {
 			for (const row of rows.slice(rows.length - need).reverse()) reversed.push(row);
 			break;
@@ -268,7 +209,6 @@ function wrappedTail(raw: string, width: number, count: number): string[] {
 	return reversed;
 }
 
-// Display-only: every key is decided by the raw input listener, not here.
 class PreviewView implements Component {
 	preview: Preview = { kind: "polishing", partial: "" };
 	requestRender: () => void = () => {};
@@ -285,7 +225,6 @@ class PreviewView implements Component {
 		this.requestRender();
 	}
 
-	/** The person-facing wording of the current state, resolved once per state rather than per frame. */
 	private texts(): { readonly title: string; readonly hint: string } {
 		switch (this.preview.kind) {
 			case "polishing":
@@ -376,8 +315,6 @@ class PreviewView implements Component {
 	handleInput(): void {}
 }
 
-// --- extension --------------------------------------------------------------
-
 type Phase =
 	| { readonly kind: "closed" }
 	| {
@@ -440,7 +377,6 @@ export default function inputPolish(pi: ExtensionAPI): void {
 			const view = new PreviewView(ctx.ui.theme);
 			phase = { kind: "open", controller, overlay, view };
 			const open = phase;
-			// Aborting `overlay` closes the overlay and restores editor focus synchronously.
 			ctx.ui
 				.custom<void>(
 					(tui) => {
@@ -450,12 +386,10 @@ export default function inputPolish(pi: ExtensionAPI): void {
 					{
 						overlay: true,
 						signal: overlay.signal,
-						// Bottom-anchored, full width: it lands on the input box.
 						overlayOptions: { anchor: "bottom-center", width: "100%", maxHeight: "100%", margin: 0 },
 					},
 				)
 				.catch((error: unknown) => {
-					// Aborting the overlay normally rejects custom(); the editor remains untouched.
 					if (!overlay.signal.aborted) {
 						pi.logger.warn("input-polish: overlay failed", { error: errorText(error) });
 					}
@@ -506,7 +440,6 @@ export default function inputPolish(pi: ExtensionAPI): void {
 
 				if (key !== cfg.key) return undefined;
 				const draft = ctx.ui.getEditorText();
-				// Slash command, bash (`!`) and python (`$`) drafts are host commands, not prose.
 				if (draft.trim() === "" || /^\s*[/!$]/.test(draft)) return undefined;
 				start(draft);
 				return { consume: true };

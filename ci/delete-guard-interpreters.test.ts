@@ -1,6 +1,3 @@
-// delete-guard bash entry: inline interpreter scripts (`python3 -c`, `node -e`, `bun -e`, `deno eval`, `perl -e`,
-// `ruby -e`) are judged like the same code in an eval cell; script files and non-deleting inline code pass;
-// non-literal scripts and stdin scripts block.
 import { describe, expect, test } from "bun:test";
 import deleteGuard from "../agent/extensions/delete-guard/index.ts";
 import { classifyPosix } from "../agent/extensions/delete-guard/posix.ts";
@@ -112,7 +109,6 @@ describe("deno and unknown options", () => {
 
 type Handler = (event: { toolName: string; input: unknown }) => Promise<{ block: true; reason: string } | undefined>;
 
-/** The registered `tool_call` handler, as the host calls it. */
 function toolCallHandler(): Handler {
 	let handler: Handler | undefined;
 	const pi = {

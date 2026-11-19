@@ -1,11 +1,3 @@
-// One-time move of the omp-config sections of a machine's omomp file into the
-// settings of the local OMP plugin `omp-config` (the manifest
-// `extensions/_shared/package.json`), for list data into the md files that now
-// describe it, and for `fallbackRole` into `modelRoles` role references.
-// Planned read-only at preflight; carried out by the updater after its file
-// operations, once the plugin is registered. Talks to OMP only through the
-// `omp plugin` CLI (this script runs outside OMP). `planProjectMigration`
-// plans the same move for a project's `.omp/omomp.*` (project-migration.ts).
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -13,11 +5,9 @@ import { parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 import { isMapping, type Mapping } from "./merge.ts";
 
 export const PLUGIN_NAME = "omp-config";
-/** Plugin root, agent-dir relative: the directory `omp plugin link` registers. */
 export const PLUGIN_DIR = "extensions/_shared";
 export const OMOMP_FILES = ["omomp.yml", "omomp.yaml", "omomp.json", "omomp.toml"] as const;
 
-/** Every omomp section omp-config ever owned; `system-prompt-replace` moves through its own migration. */
 const SECTIONS = [
 	"omomp-lang",
 	"judge",
@@ -37,7 +27,6 @@ type Section = (typeof SECTIONS)[number];
 export const REPLACEMENT_SECTION = "system-prompt-replace";
 const OWNED: readonly string[] = [...SECTIONS, REPLACEMENT_SECTION];
 
-/** The standalone JSON files that held a section before the omomp file existed, newest layout first. */
 const LEGACY_SOURCES: Partial<Record<Section, readonly string[]>> = {
 	"lang-nag": ["extensions/lang-nag/lang-nag.json", "extensions/lang-nag.json"],
 	"input-polish": ["extensions/input-polish/input-polish.json"],
@@ -48,11 +37,6 @@ const LEGACY_SOURCES: Partial<Record<Section, readonly string[]>> = {
 	"omp-config-autoupdate": ["extensions/omp-config-autoupdate/omp-config-autoupdate.json", "omp-config-autoupdate.json"],
 };
 
-/**
- * The model roles each section's `fallbackRole` followed: the migration binds
- * each one that is still unassigned to `@<fallbackRole>`. `judge` binds none:
- * an unassigned `@<purpose>` uses OMP's judge role chain.
- */
 const FALLBACK_ROLES: Partial<Record<Section, readonly string[]>> = {
 	judge: [],
 	"input-polish": ["input-polish"],
@@ -60,10 +44,8 @@ const FALLBACK_ROLES: Partial<Record<Section, readonly string[]>> = {
 	"task-split-check": ["task-split-check"],
 };
 
-/** Sections of retired extensions: nothing reads their values, so a move drops them whole. */
 const RETIRED: readonly Section[] = ["doc-polish"];
 
-/** `modelRoles.<role>` set to `value`, a role reference such as `@smol`. */
 export type RoleBinding = { readonly role: string; readonly value: string };
 
 export type Scalar = string | number | boolean;
@@ -85,7 +67,6 @@ const isString = (value: unknown): value is string => typeof value === "string";
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
 
-/** The plugin manifest's `omp.settings`; anything malformed throws, so the apply stops before writing. */
 export function parseManifest(text: string, path: string): Manifest {
 	const root: unknown = JSON.parse(text);
 	const settings = isMapping(root) && root.name === PLUGIN_NAME && isMapping(root.omp) ? root.omp.settings : undefined;
@@ -122,7 +103,6 @@ export function parseManifest(text: string, path: string): Manifest {
 	return out;
 }
 
-/** `value` as the manifest's `key` accepts it, or why not. */
 function checkSetting(
 	manifest: Manifest,
 	key: string,
@@ -150,21 +130,14 @@ function checkSetting(
 	}
 }
 
-// --- planning ---------------------------------------------------------------
-
-/** A file this migration writes: agent-dir relative `rel` (`agent/…`) and its content. */
 export type PlannedFile = { readonly rel: string; readonly content: string };
 
-/** One section that can move: its settings (values that differ from the manifest default), files, agent flags and role bindings. */
 export type SectionMove = {
 	readonly section: string;
-	/** Where the values came from: the omomp file, or an old standalone JSON (`agent/…`) deleted after the move. */
 	readonly from: { readonly kind: "omomp" } | { readonly kind: "legacy"; readonly rel: string };
 	readonly settings: ReadonlyMap<string, Scalar>;
 	readonly files: readonly PlannedFile[];
-	/** Agent names whose definitions get `splitCheck: true`. */
 	readonly splitAgents: readonly string[];
-	/** `modelRoles` entries written while the role is unassigned. */
 	readonly bindings: readonly RoleBinding[];
 	readonly notes: readonly string[];
 };
@@ -181,19 +154,15 @@ export type OmompPlan =
 	| { readonly kind: "blocked"; readonly reason: string; readonly pendingExclude: readonly string[] | undefined }
 	| {
 			readonly kind: "ready";
-			/** The omomp file holding omp-config sections; undefined when only old standalone JSON holds them. */
 			readonly file: OmompFile | undefined;
 			readonly moves: readonly SectionMove[];
-			/** Sections left in place, with the reason. */
 			readonly kept: readonly { readonly section: string; readonly reason: string }[];
-			/** The raw `omp-config-autoupdate.exclude` still in the omomp file or its old JSON; the machine's option until it moves. */
 			readonly pendingExclude: readonly string[] | undefined;
 	  };
 
 export interface PlanInput {
 	readonly agentDir: string;
 	readonly manifest: Manifest;
-	/** True when `value` is what the repo shipped for `section` (recorded base or a committed version): nothing of the machine's to move. */
 	readonly shipped: (section: string, value: unknown) => boolean;
 	readonly appManaged: (path: string) => boolean;
 }
@@ -209,7 +178,6 @@ type Translation =
 	  }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-/** Nested mapping → dotted leaves; arrays and nulls are not settings. */
 function flatten(value: Mapping, prefix: string, out: Map<string, unknown>): string | undefined {
 	for (const [key, entry] of Object.entries(value)) {
 		const dotted = `${prefix}.${key}`;
@@ -222,7 +190,6 @@ function flatten(value: Mapping, prefix: string, out: Map<string, unknown>): str
 	return undefined;
 }
 
-/** `tool-policy-nag`: a present `risk`/`pty` block turned its lane on; missing or null left it off. */
 function policyLanes(value: Mapping): Mapping | string {
 	const { risk, pty, form, ...rest } = value;
 	if (risk != null && !isMapping(risk)) return "risk must be a mapping or null";
@@ -235,7 +202,6 @@ function policyLanes(value: Mapping): Mapping | string {
 	};
 }
 
-/** Rule `index` as a COMPACTION file under `dir` (`agent/extensions/model-compaction` or a project's `.omp`). */
 function compactionFile(rule: unknown, index: number, dir: string): PlannedFile | string {
 	if (!isMapping(rule) || Object.keys(rule).some((key) => !["provider", "model", "thresholdTokens"].includes(key)))
 		return `rule ${index + 1} has keys other than provider, model, thresholdTokens`;
@@ -250,7 +216,6 @@ function compactionFile(rule: unknown, index: number, dir: string): PlannedFile 
 		} catch {
 			return `rule ${index + 1}: ${field} is not a valid regex`;
 		}
-		// The file format unquotes one pair of surrounding quotes; such a pattern cannot be written verbatim.
 		if (/^["']|["']$/.test(pattern.trim()) || pattern !== pattern.trim())
 			return `rule ${index + 1}: ${field} cannot be written as frontmatter`;
 		lines.push(`${field}: ${pattern}`);
@@ -266,18 +231,10 @@ function compactionFile(rule: unknown, index: number, dir: string): PlannedFile 
 	};
 }
 
-/**
- * Where a section's values go. `machine`: the agent dir, plugin settings that
- * differ from the manifest default, role bindings in `modelRoles`. `project`:
- * `<project>/.omp`, every value as a project override (it replaced the
- * machine's section, defaults included); data with no project-level place
- * keeps the section.
- */
 export type TranslateScope =
 	| { readonly kind: "machine"; readonly shipped: (section: string, value: unknown) => boolean }
 	| { readonly kind: "project" };
 
-/** Sections OMP only ever read from the agent dir; a project copy never applied. */
 const MACHINE_ONLY: readonly Section[] = ["omomp-lang", "omp-config-autoupdate", "subagent-usage"];
 
 function translate(section: Section, value: unknown, manifest: Manifest, scope: TranslateScope): Translation {
@@ -381,7 +338,6 @@ function parseOmomp(path: string, text: string): Mapping {
 	return value;
 }
 
-/** The raw `exclude` list of an `omp-config-autoupdate` section; a malformed one throws (the machine's option is unreadable). */
 function excludeOf(section: unknown, where: string): readonly string[] | undefined {
 	if (!isMapping(section) || section.exclude === undefined) return undefined;
 	const exclude = section.exclude;
@@ -390,12 +346,6 @@ function excludeOf(section: unknown, where: string): readonly string[] | undefin
 	return exclude;
 }
 
-/**
- * Read every omomp file and old JSON once and decide what moves; never writes.
- * omp-config sections in several omomp files make the machine's options
- * ambiguous and throw (the apply stops, as with any unreadable option); an
- * unreadable omomp file holding nothing readable is left alone with a note.
- */
 export function planOmompMigration(input: PlanInput): OmompPlan {
 	const present = OMOMP_FILES.filter((name) => existsSync(join(input.agentDir, name)));
 	const parsed: { path: string; text: string; root: Mapping }[] = [];
@@ -411,7 +361,6 @@ export function planOmompMigration(input: PlanInput): OmompPlan {
 		}
 	}
 	if (parsed.length > 1) {
-		// Only the switch section matters before the move: two copies of it leave the exclude list unknown.
 		const switches = parsed.filter((file) => Object.hasOwn(file.root, "omp-config-autoupdate"));
 		if (switches.length > 1)
 			throw new Error(`omp-config-autoupdate appears in ${switches.map((file) => file.path).join(" and ")}; the exclude list is ambiguous`);
@@ -485,12 +434,6 @@ export type ProjectPlan =
 			readonly kept: readonly { readonly section: string; readonly reason: string }[];
 	  };
 
-/**
- * A project's `<projectDir>/.omp/omomp.*`: what moves into its own
- * `.omp/plugin-overrides.json` and `.omp/COMPACTION-*.md`; never writes. OMP
- * skipped a project location holding several omomp files, so that is left
- * alone; a TOML file cannot be rewritten.
- */
 export function planProjectMigration(projectDir: string, manifest: Manifest): ProjectPlan {
 	const dir = join(projectDir, ".omp");
 	const holders: OmompFile[] = [];
@@ -532,12 +475,6 @@ export function planProjectMigration(projectDir: string, manifest: Manifest): Pr
 	return { kind: "ready", file, moves, kept };
 }
 
-// --- rewriting --------------------------------------------------------------
-
-/**
- * `text` without the top-level YAML blocks of `sections`, verified by parsing:
- * anything the block layout cannot express (anchors, flow mappings) is refused.
- */
 export function removeYamlSections(
 	text: string,
 	root: Mapping,
@@ -559,13 +496,10 @@ export function removeYamlSections(
 		const parsed: unknown = Bun.YAML.parse(remaining);
 		if (Bun.deepEquals(parsed ?? {}, expected))
 			return { kind: "ok", text: parsed == null ? `${remaining}{}\n` : remaining, empty: Object.keys(expected).length === 0 };
-	} catch {
-		// Anchors, flow mappings and other ambiguous layouts must be moved by hand.
-	}
+	} catch {}
 	return { kind: "invalid", reason: "removing the sections would change other YAML values" };
 }
 
-/** The file content after removing `sections`, or why it cannot be rewritten. */
 export function withoutSections(
 	file: OmompFile,
 	sections: readonly string[],
@@ -575,16 +509,10 @@ export function withoutSections(
 	return { kind: "ok", text: `${JSON.stringify(rest, null, 2)}\n`, empty: Object.keys(rest).length === 0 };
 }
 
-/** Whether a mapping still holds any section omp-config owns. */
 export function holdsOwnedSection(root: Mapping): boolean {
 	return Object.keys(root).some((key) => OWNED.includes(key));
 }
 
-/**
- * The agent definition files under `<agentDir>/agents` whose frontmatter `name`
- * is `name`, with `splitCheck: true` added; `present` when it already says true,
- * `declined` when it sets another value (the machine's own choice).
- */
 export function splitCheckEdit(
 	agentDir: string,
 	name: string,
@@ -600,7 +528,6 @@ export function splitCheckEdit(
 			.filter((entry) => entry.endsWith(".md"))
 			.sort();
 	} catch {
-		// No agents directory: nothing declares the name.
 		return { kind: "missing" };
 	}
 	for (const entry of entries) {
@@ -619,19 +546,12 @@ export function splitCheckEdit(
 	return { kind: "missing" };
 }
 
-// --- OMP plugin CLI -----------------------------------------------------------
-
 export type PluginState =
 	| { readonly kind: "registered"; readonly settings: Mapping }
 	| { readonly kind: "elsewhere"; readonly path: string; readonly settings: Mapping }
 	| { readonly kind: "unregistered" }
 	| { readonly kind: "failed"; readonly error: string };
 
-/**
- * One `omp plugin …` call, run from `/`: OMP lists a plugin's settings with the
- * cwd's `.omp/plugin-overrides.json` laid over them, and the updater reads and
- * writes the machine's own values (the machine scope of `_shared/plugin-settings.ts`).
- */
 function runOmp(
 	omp: string,
 	args: readonly string[],
@@ -646,12 +566,10 @@ function samePath(a: string, b: string): boolean {
 	try {
 		return realpathSync(a) === realpathSync(b);
 	} catch {
-		// A dangling registration is not this directory.
 		return false;
 	}
 }
 
-/** Whether OMP knows plugin `omp-config` and from where, and its stored settings; asked through the CLI. */
 export function pluginState(omp: string, pluginDir: string): PluginState {
 	const listed = runOmp(omp, ["plugin", "list", "--json"]);
 	if (!listed.ok) return { kind: "failed", error: listed.error };
@@ -678,13 +596,11 @@ export function pluginState(omp: string, pluginDir: string): PluginState {
 	return samePath(path, pluginDir) ? { kind: "registered", settings } : { kind: "elsewhere", path, settings };
 }
 
-/** `omp plugin link <dir>`; the error text, or undefined. */
 export function linkPlugin(omp: string, pluginDir: string): string | undefined {
 	const result = runOmp(omp, ["plugin", "link", pluginDir]);
 	return result.ok ? undefined : result.error;
 }
 
-/** `omp plugin config set omp-config <key> <value>`; OMP checks the value against the manifest. */
 export function setPluginSetting(omp: string, key: string, value: Scalar): string | undefined {
 	const result = runOmp(omp, ["plugin", "config", "set", PLUGIN_NAME, key, String(value)]);
 	return result.ok ? undefined : result.error;

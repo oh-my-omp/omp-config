@@ -1,6 +1,3 @@
-// The run's entry in the machine's OrbStack ledger (S7). The ledger is the directory
-// ~/Ext/work/orbstack/; sandbox runs have their own file there, one table row per run. The row is
-// written before any resource exists and rewritten in place once the resources are gone.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -21,14 +18,12 @@ function rowFor(run: string, started: string, purpose: string, state: string, ev
 	return `| \`omp-sandbox-${run}\` | ${cell(started)} | ${cell(purpose)} | ${cell(state)} | ${cell(evidence)} |`;
 }
 
-/** Registers the run as in progress. Throws (before anything is created) when the ledger directory is missing. */
 export function ledgerStart(run: string, started: string, purpose: string): void {
 	if (!existsSync(dirname(LEDGER))) throw new Error(`ledger directory ${dirname(LEDGER)} does not exist; nothing was created`);
 	const text = existsSync(LEDGER) ? readFileSync(LEDGER, "utf8") : HEADER;
 	writeFileSync(LEDGER, `${text.endsWith("\n") ? text : `${text}\n`}${rowFor(run, started, purpose, "进行中", "—")}\n`);
 }
 
-/** Rewrites the run's row with its final state and the cleanup evidence. */
 export function ledgerEnd(run: string, state: string, evidence: string): void {
 	const marker = `| \`omp-sandbox-${run}\` |`;
 	const lines = readFileSync(LEDGER, "utf8").split("\n");
@@ -36,7 +31,6 @@ export function ledgerEnd(run: string, state: string, evidence: string): void {
 	if (index < 0) {
 		lines.push(rowFor(run, "?", "（开始时未登记）", state, evidence));
 	} else {
-		// Keep the run, start and purpose cells as written; replace state and evidence.
 		const kept = (lines[index] ?? "").split(" | ").slice(0, 3).join(" | ");
 		lines[index] = `${kept} | ${cell(state)} | ${cell(evidence)} |`;
 	}

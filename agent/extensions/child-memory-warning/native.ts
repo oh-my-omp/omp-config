@@ -1,8 +1,6 @@
-/** Darwin LP64 libproc/sysctl ABI. Imported only after the platform guard; no sampling subprocesses. */
 import { dlopen, FFIType, type Library, ptr } from "bun:ffi";
 import type { ProcessRecord, ProcessSource, SnapshotResult } from "./tracker.ts";
 
-// SDK: libproc.h, sys/proc_info.h (PROC_PIDTBSDINFO), sys/resource.h (RUSAGE_INFO_V0).
 const BSD_INFO_SIZE = 136;
 const RUSAGE_SIZE = 96;
 const ZOMBIE_STATUS = 5; // sys/proc.h: SZOMB; rusage can return terminal accounting for zombies.
@@ -19,7 +17,6 @@ const LIBPROC_ABI = {
 
 type NativeSymbols = Library<typeof LIBPROC_ABI>["symbols"];
 
-/** Raw BSD identity halves as numbers; the BigInt identity is built only for new or changed PIDs. */
 interface RawIdentity {
 	parentPid: number;
 	groupId: number;
@@ -33,7 +30,6 @@ function freshIdentity(): RawIdentity {
 	return { parentPid: 0, groupId: 0, startSecLo: 0, startSecHi: 0, startUsecLo: 0, startUsecHi: 0 };
 }
 
-/** One BSD info row into `out`; false when unavailable, recycled, or a zombie. Allocates nothing. */
 function readIdentityInto(symbols: NativeSymbols, bytes: Uint8Array, view: DataView, pid: number, out: RawIdentity): boolean {
 	if (symbols.proc_pidinfo(pid, 3, 0, ptr(bytes), BSD_INFO_SIZE) !== BSD_INFO_SIZE) return false;
 	if (view.getUint32(12, true) !== pid || view.getUint32(4, true) === ZOMBIE_STATUS) return false;
@@ -77,7 +73,7 @@ function argumentCapacity(symbols: NativeSymbols): number | null {
 	return capacity !== undefined && capacity > 0 ? capacity + 4 : null;
 }
 
-/** KERN_PROCARGS2: argc, executable + padding NULs, then exactly argc argv strings; never decode the environment. */
+/** Never decode the environment. */
 function decodeCommand(bytes: Uint8Array, length: number): string | null {
 	if (length < 4) return null;
 	const argc = new DataView(bytes.buffer, bytes.byteOffset, length).getInt32(0, true);
@@ -112,7 +108,6 @@ export function openDarwinProcesses(): ProcessSource {
 	const argsLength = new BigUint64Array(1);
 	const argsMib = new Int32Array([1, 49, 0]); // CTL_KERN, KERN_PROCARGS2, pid
 	let pidBuffer = new Int32Array(1024);
-	// Reused across ticks: records for unchanged PIDs survive; per-tick allocation is proportional to change.
 	let current = new Map<number, ProcessRecord>();
 	let next = new Map<number, ProcessRecord>();
 	const birth = new Map<number, RawIdentity>();
@@ -173,7 +168,6 @@ export function openDarwinProcesses(): ProcessSource {
 					birth.delete(pid);
 				}
 			}
-			// Births of PIDs that left the table prove nothing about the next tick's reuse.
 			for (const pid of birth.keys()) if (!next.has(pid)) birth.delete(pid);
 			const previous = current;
 			current = next;

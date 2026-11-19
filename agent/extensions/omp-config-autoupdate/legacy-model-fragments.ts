@@ -1,5 +1,3 @@
-// One-time host migration from the former APPEND_SYSTEM_MODEL.md block format.
-// Keep its YAML/regex validation here: the extension no longer reads that format.
 import { isMapping } from "./merge.ts";
 
 type MatchField = "model" | "provider";
@@ -70,7 +68,6 @@ export function parseLegacyModelFragments(source: string): ParsedFragments {
 		if (header.kind === "invalid") return { kind: "invalid", reason: `line ${line}: ${header.reason}` };
 		const body = rest[i + 1]!.lines.join("\n").trim();
 		if (body === "") return { kind: "invalid", reason: `line ${line}: block has an empty body` };
-		// The fragment reader strips one outer quote pair without decoding escapes.
 		const fields = header.constraints.map(({ field, source: pattern }) => `${field}: "${pattern}"`);
 		fragments.push(["---", "target: *", ...fields, "---", body, ""].join("\n"));
 	}

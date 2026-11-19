@@ -1,87 +1,6 @@
-// ============================================================================
-// system-prompt-replace — wording-level edits of OMP's system prompt, from
-// rule files with per-rule session conditions, delivered as the edited system
-// prompt itself.
-//
-// WHY THIS EXISTS. SYSTEM_TEMPLATE.md owns the base workflow. Whole tool
-// descriptions belong to the tool-topics extension (surface + topic index,
-// keyed by tool name); this extension states the remaining wording-level
-// edits — template lines, and sentences inside tool descriptions that keep
-// their native text — instead of repeating them in the base template or
-// APPEND_SYSTEM.md. A new rule, global or for one model or agent, is a file
-// edit, not new code.
-//
-// ORDER. This file lives outside `<agent dir>/extensions/` and is the LAST
-// `extensions` entry of config.yml and of config-light.yml
-// (agent/extensions-last/README.md), so its `before_agent_start` runs after
-// every path-loaded extension and edits the prompt they leave. Placing this
+// Placing this
 // file in `extensions/` would load it with the native batch, and the config
 // entry would be dropped as a duplicate path.
-//
-// FILES. `REPLACE-SYSTEM-<label>.yml` (or `.yaml`), discovered by
-// `_shared/spec-files.ts`: beside this module (rule files the repo ships and
-// machine-local ones), then <dir>/ and <dir>/.omp/ from the session cwd up to
-// the git root. Each file is one YAML sequence of rules:
-//
-//   - literal: "exact text"
-//     replace: "new text"
-//   - regex: "JS regex source"
-//     replace: "new text, $1 allowed"
-//     target: subagents
-//     model: ^claude-opus
-//     delegation: eager
-//     exclude.target: mentor:default
-//
-// A rule sets exactly one of `literal` / `regex` (non-empty) plus `replace`.
-// A literal replaces every occurrence verbatim (no `$` handling). A regex is
-// compiled with the `g` flag and uses String.prototype.replace substitution
-// patterns. Optional condition keys, string values, follow
-// `_shared/prompt-conditions.ts` (shared with append-system-model): `target`,
-// `cwd`, `model`, `provider`, `mode`, `delegation` and the same keys under
-// `exclude.`; without `target` a rule applies to every session. `delegation`
-// lists delegation biases (`eager`, `balanced`, `restrained`, `gated`) tested
-// against `resolveDelegationBias` of the current model, for tool-description
-// text OMP renders only under some biases. The system prompt's own
-// `delegationTier` differs when `task.eager` is on: `eager` in the main session
-// with `task.eager` other than `default` and a bias other than `gated`, the
-// bias otherwise. A `model` /
-// `provider` string is the regex source exactly as YAML decodes it. Any other
-// key makes the file invalid. Files apply in discovery order and rules in file
-// order, each to the text the previous one left, across every system-prompt
-// block; that text exists only to find the next rule's matches.
-//
-// INPUT. The system prompt this extension is handed: `event.systemPrompt` at
-// a prompt, `ctx.getSystemPrompt()` after a tool call.
-//
-// OUTPUT. At every prompt (`before_agent_start`), in the main session and in
-// every subagent, each matched against its own identity, cwd, model and mode,
-// the result's `systemPrompt` is the edited prompt. It is byte-identical from
-// prompt to prompt until OMP rebuilds its base prompt or the rules that apply
-// change (rule-file edits, `/model`), which take effect from the next prompt.
-// A revive's `before_agent_start` is skipped, because OMP discards its result.
-//
-// OMP keeps the returned prompt as the agent's prompt after the run until its
-// next base rebuild. A run that skips `before_agent_start` (an IRC wake or an
-// async result) after such a rebuild sends OMP's own text; only then, after
-// its first tool call (`tool_result` finds the agent's prompt is not the
-// edited one), the edits go out as one delta of
-// `_shared/omomp-shared/context-delta.ts` with source
-// `omp-config/system-prompt-replace`: a hidden `<system-reminder>` listing,
-// in rule order, each distinct matched passage and its replaced text, or that
-// the passage does not apply when the replacement is empty. The next prompt
-// returns the edited prompt again and retracts that delta.
-//
-// FAILURE POLICY. No file means no edit. An unreadable or invalid file is
-// skipped on its own and warned once per path and reason; the other files
-// still apply. A rule that applies to the main session and finds no target
-// (template drift after an OMP upgrade, or a typo) warns once per rule per
-// process. Subagents are not checked: their prompts legitimately lack text
-// such as the `task` tool description. Warnings are a UI notification, or
-// stderr when headless, plus a log line. The prompt and tool results are
-// never blocked. It registers `before_agent_start`, `tool_result` and
-// `turn_start` (which clears the delta stream's same-turn batch), and writes
-// no files.
-// ============================================================================
 
 import { readFileSync } from "node:fs";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
@@ -108,26 +27,21 @@ type Matcher =
 	| { readonly kind: "literal"; readonly text: string }
 	| { readonly kind: "regex"; readonly pattern: RegExp; readonly tokens: readonly Token[] };
 
-/** One piece of a regex rule's `replace` template: literal text, or a substitution `String.prototype.replace` spells with `$`. */
 type Token =
 	| { readonly kind: "text"; readonly text: string }
 	| { readonly kind: "match" }
 	| { readonly kind: "before" }
 	| { readonly kind: "after" }
-	/** `$1`–`$99` as written: which capture it names depends on the pattern's group count, known per match. */
 	| { readonly kind: "group"; readonly digits: string }
-	/** `$<name>`, with the `<name>` text re-read as a template when the pattern has no named groups. */
 	| { readonly kind: "named"; readonly name: string; readonly fallback: readonly Token[] };
 
 interface Rule {
-	/** `path#index matcher`, the warning and dedupe identity. */
 	readonly label: string;
 	readonly matcher: Matcher;
 	readonly replace: string;
 	readonly conditions: SessionConditions;
 }
 
-/** One distinct passage a rule matched and the text it becomes; an empty replacement removes the passage. */
 interface Edit {
 	readonly original: string;
 	readonly replacement: string;
@@ -137,7 +51,6 @@ type Parse<T> = { readonly kind: "ok"; readonly value: T } | { readonly kind: "i
 
 const PREAMBLE = "OMP's system prompt keeps its original text. In this session, read it with these edits, applied in the order listed:";
 
-/** `path\0reason` of invalid files and labels of target-less rules already reported, shared by every session in this process. */
 const reported = new Set<string>();
 
 function describeProblem(problem: ConditionProblem): string {
@@ -243,7 +156,6 @@ function warn(pi: ExtensionAPI, ctx: ExtensionContext, key: string, english: str
 	else process.stderr.write(`${notice}\n`);
 }
 
-/** The tokens of one `replace` template: literal text and the `$` substitutions `String.prototype.replace` defines. */
 function parseTemplate(template: string): readonly Token[] {
 	const tokens: Token[] = [];
 	let text = "";
@@ -313,21 +225,17 @@ function parseTemplate(template: string): readonly Token[] {
 	return tokens;
 }
 
-/** Whether `value` is the named-captures object `String.prototype.replace` passes when a pattern names its groups. */
 function isNamedCaptures(value: unknown): value is Readonly<Record<string, string | undefined>> {
 	return typeof value === "object" && value !== null;
 }
 
-/** `value` as text: an absent capture, or any other non-string, contributes nothing. */
 function textAt(value: unknown): string {
 	return typeof value === "string" ? value : "";
 }
 
-/** `tokens` applied to one replacer call: `args` as `String.prototype.replace` passed them, `block` the text being replaced. */
 function expand(tokens: readonly Token[], args: readonly unknown[], block: string): string {
 	const last = args[args.length - 1];
 	const groups = isNamedCaptures(last) ? last : undefined;
-	// `args` is the matched text, its captures, the offset and the input, then the named captures.
 	const captures = args.length - 3 - (groups === undefined ? 0 : 1);
 	const offsetArg = args[captures + 1];
 	const offset = typeof offsetArg === "number" ? offsetArg : 0;
@@ -348,7 +256,6 @@ function expand(tokens: readonly Token[], args: readonly unknown[], block: strin
 				out += block.slice(offset + matched.length);
 				break;
 			case "group": {
-				// `$nn` needs a group that exists; otherwise `$n` plus the second digit as text.
 				const two = token.digits.length === 2 ? Number(token.digits) : 0;
 				if (two > 0 && two <= captures) {
 					out += textAt(args[two]);
@@ -375,7 +282,6 @@ function expand(tokens: readonly Token[], args: readonly unknown[], block: strin
 	return out;
 }
 
-/** One rule applied to one block, recording each matched passage, and how often it matched there. */
 function replaceIn(
 	block: string,
 	rule: Rule,
@@ -406,7 +312,6 @@ function replaceIn(
 	}
 }
 
-/** The blocks after `rule`, how many times it matched, and its distinct edits in match order. */
 function applyRule(
 	blocks: readonly string[],
 	rule: Rule,
@@ -422,7 +327,6 @@ function applyRule(
 		else replacements.add(replacement);
 		edits.push({ original, replacement });
 	};
-	// Unmatched blocks stay the same references, and a rule that matches nothing copies no array.
 	let next: string[] | undefined;
 	for (const [index, block] of blocks.entries()) {
 		const applied = replaceIn(block, rule, record);
@@ -441,7 +345,6 @@ function renderEdit(edit: Edit): string {
 		: `${passage}reads instead\n<replacement>\n${edit.replacement}\n</replacement>`;
 }
 
-/** `systemPrompt` after every rule that applies to this session, and the distinct edits in rule order. */
 function applyRules(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
@@ -481,7 +384,6 @@ function applyRules(
 	return { blocks, edits };
 }
 
-/** `edits` as one delta for a request that carries OMP's own prompt instead of the edited one. */
 function editsDelta(edits: readonly Edit[]): Delta {
 	if (edits.length === 0) return { kind: "none" };
 	let body = PREAMBLE;
@@ -491,19 +393,15 @@ function editsDelta(edits: readonly Edit[]): Delta {
 
 export default function systemPromptReplace(pi: ExtensionAPI): void {
 	const deltas = createDeltaStream("omp-config/system-prompt-replace");
-	// The edited system prompt returned at the latest prompt. OMP keeps it as the agent's prompt
-	// after that run until its next base rebuild, so agent-initiated runs may still send it.
 	let edited: readonly string[] | undefined;
 	pi.on("turn_start", () => {
 		deltas.turnStarted();
 	});
 	pi.on("before_agent_start", (event, ctx) => {
-		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;
 		edited = undefined;
 		try {
 			const { blocks, edits } = applyRules(pi, ctx, event.systemPrompt);
-			// This request carries the edits in the prompt itself: retract a fallback delta still in context.
 			const retraction = deltas.atPrompt(ctx, { kind: "none" });
 			if (edits.length === 0) return retraction;
 			edited = blocks;
@@ -514,7 +412,6 @@ export default function systemPromptReplace(pi: ExtensionAPI): void {
 	});
 	pi.on("tool_result", (_event, ctx) => {
 		const systemPrompt = ctx.getSystemPrompt();
-		// The agent still sends the edited prompt; rule-file changes apply from the next prompt.
 		if (edited !== undefined && edited.length === systemPrompt.length && edited.every((block, index) => block === systemPrompt[index])) {
 			return;
 		}

@@ -1,10 +1,7 @@
 type RedirectOperator = "write" | "append" | "hereDoc" | "hereString" | "other";
 export type CommandToken =
-	/** `dynamic`: the word's text holds an unexpanded `$…` or a command substitution, so its runtime value is unknown. */
 	| { readonly kind: "word"; readonly text: string; readonly dynamic: boolean }
-	/** `<` — the following word is a file the command reads. */
 	| { readonly kind: "readFrom"; readonly fd: number }
-	/** `>`, `>>`, `2>`, `<<`, `<<<` — the following word is not a file being read. */
 	| {
 			readonly kind: "otherRedirect";
 			readonly operator: RedirectOperator;
@@ -14,10 +11,6 @@ export type CommandToken =
 const isOperatorChar = (ch: string): boolean =>
 	ch === "|" || ch === "&" || ch === ";" || ch === "\n" || ch === "(" || ch === ")" || ch === "`";
 
-/**
- * `${` opens a Bash 5.3 function substitution only when whitespace or `|`
- * follows: `${ …; }` and `${| …; }`. The `|` belongs to the opener, not a pipeline.
- */
 const isFunctionSubstitutionOpener = (ch: string | undefined): boolean =>
 	ch === " " || ch === "\t" || ch === "\r" || ch === "\n" || ch === "|";
 
@@ -62,7 +55,6 @@ function parseRedirect(command: string, index: number, ch: "<" | ">", fdPrefix: 
 			operator = "other";
 			consumed = 1;
 		} else if (command[index + 1] === "|") {
-			// `>|` clobbers like `>`; the `|` is not a pipe.
 			operator = "write";
 			consumed = 1;
 		} else {
@@ -85,22 +77,6 @@ function parseRedirect(command: string, index: number, ch: "<" | ">", fdPrefix: 
 	return { token: { kind: "otherRedirect", operator, fd: fdPrefix ?? (ch === ">" ? 1 : 0) }, consumed, document };
 }
 
-/**
- * Splits a shell line into simple commands, keeping only what the detector needs:
- * command-position words, and whether a word is a redirection target. Quotes are
- * consumed (their content stays a single word), `$(`/backtick/`${ …; }`
- * substitutions and control operators end the current command, so
- * `echo $(cat f)` and `echo ${ cat f; }` still expose `cat f` as its own
- * simple command. A `${` opens a body only before whitespace or `|`, so
- * `${var}` parameter expansion stays a word. Here-document bodies are opaque.
- * `piped`: the command is a later stage of a `|`/`|&` pipeline, so its stdin is
- * the previous stage's stdout. `captured`: the command runs inside a `$(…)` or
- * backtick or `${ …; }` substitution, so its stdout becomes words of the enclosing command.
- * `background`: its pipeline ends in a lone `&` (not `&&`), so the shell does
- * not wait for it. `loopBody`: it runs between a `while`/`until`/`for` loop's
- * `do` and `done` (the `do` command included), so it repeats; the loop's
- * condition or header is not body.
- */
 export type SimpleCommand = {
 	readonly tokens: CommandToken[];
 	readonly pipelineId: number;
@@ -114,11 +90,6 @@ type ParsedCommand = Omit<SimpleCommand, "background" | "loopBody">;
 
 const LOOP_OPENERS: ReadonlySet<string> = new Set(["while", "until", "for"]);
 
-/**
- * Marks loop bodies from each command's first word: `while`/`until`/`for`
- * opens a loop, `do` starts its body, `done` closes it. Only a command's first
- * word counts, so `echo done` changes nothing.
- */
 function markLoops(commands: readonly ParsedCommand[], background: ReadonlySet<number>): SimpleCommand[] {
 	const loops: boolean[] = [];
 	return commands.map((command) => {
@@ -131,22 +102,15 @@ function markLoops(commands: readonly ParsedCommand[], background: ReadonlySet<n
 	});
 }
 
-/**
- * One lexical scan of a line: its simple commands, and whether the line can
- * run as written (`complete` false when a quote or a `$(`/backtick/`${ …; }`
- * substitution never closes, so the shell would refuse it).
- */
 export type ShellScan = {
 	readonly commands: SimpleCommand[];
 	readonly complete: boolean;
 };
 
-/** The simple commands of a line, best effort: an unterminated line yields what was read. */
 export function splitSimpleCommands(command: string): SimpleCommand[] {
 	return scanShell(command).commands;
 }
 
-/** Every simple command of a line with the line's completeness; one scan serves all of a call's checks. */
 export function scanShell(command: string): ShellScan {
 	const commands: ParsedCommand[] = [];
 	const background = new Set<number>();
@@ -155,9 +119,7 @@ export function scanShell(command: string): ShellScan {
 	let nextPipelineId = 1;
 	let word = "";
 	let wordStart: number | null = null;
-	/** One past the last source character a plain word spans. */
 	let wordEnd = 0;
-	/** `word` is still the source slice `[wordStart, wordEnd)`; quoted, escaped or substituted text materializes it. */
 	let wordVerbatim = true;
 	let wordCanBeFd = true;
 	let wordDynamic = false;
@@ -175,19 +137,16 @@ export function scanShell(command: string): ShellScan {
 		wordCanBeFd = true;
 		wordDynamic = false;
 	};
-	/** Materialize the plain prefix when the word stops being the source slice. */
 	const breakVerbatim = (): void => {
 		if (!wordVerbatim) return;
 		if (wordStart !== null && wordEnd > wordStart) word = command.slice(wordStart, wordEnd);
 		wordVerbatim = false;
 	};
-	/** Append quoted, escaped or substituted text; the word stops being the source slice. */
 	const appendWord = (text: string): void => {
 		breakVerbatim();
 		word += text;
 	};
 	const flushWord = (): void => {
-		// A plain word is the source slice around it: no per-character build.
 		const text = wordVerbatim ? (wordStart === null ? "" : command.slice(wordStart, wordEnd)) : word;
 		if (text.length === 0) {
 			resetWord();
@@ -213,7 +172,6 @@ export function scanShell(command: string): ShellScan {
 		pipelineId = nextPipelineId++;
 	};
 	const beginSubstitution = (delimiter: "$(" | "`" | "${", resumeQuote: '"' | null): void => {
-		// The word fragment before the substitution and any fragment glued after it are dynamic.
 		wordDynamic = true;
 		flushWord();
 		suspendedCommands.push({ current, pipelineId, piped });
@@ -242,8 +200,6 @@ export function scanShell(command: string): ShellScan {
 				appendWord(command.charAt(i + 1));
 				i++;
 			} else if (quote === '"' && ch === "$" && command[i + 1] === "(") {
-				// A substitution inside double quotes still runs a command. Restore
-				// the surrounding quote after its matching closing delimiter.
 				beginSubstitution("$(", '"');
 				quote = null;
 				i++;
@@ -251,7 +207,6 @@ export function scanShell(command: string): ShellScan {
 				beginSubstitution("`", '"');
 				quote = null;
 			} else if (quote === '"' && ch === "$" && command[i + 1] === "{" && isFunctionSubstitutionOpener(command[i + 2])) {
-				// `"${ …; }"` runs its body like `"$(…)"`; `|` of `${|` is consumed with the opener.
 				beginSubstitution("${", '"');
 				quote = null;
 				i++;
@@ -263,7 +218,6 @@ export function scanShell(command: string): ShellScan {
 			continue;
 		}
 		if (ch === "\\" && i + 1 < command.length) {
-			// An escaped character still starts a word: `\#` is not a comment.
 			if (wordStart === null) wordStart = i;
 			wordCanBeFd = false;
 			appendWord(command.charAt(i + 1));
@@ -298,8 +252,6 @@ export function scanShell(command: string): ShellScan {
 			finishSubstitution();
 			continue;
 		}
-		// `}` closes a `${ …; }` body only where the shell reads it as a reserved
-		// word: first word of a simple command. A `}` glued to a word stays literal.
 		if (ch === "}" && wordStart === null && current.length === 0 && substitutions[substitutions.length - 1]?.delimiter === "${") {
 			finishSubstitution();
 			continue;
@@ -328,7 +280,6 @@ export function scanShell(command: string): ShellScan {
 			continue;
 		}
 		if (ch === "&" && command[i + 1] === ">") {
-			// `&>` / `&>>` send stdout (and stderr) to the following word.
 			flushWord();
 			const redirect = parseRedirect(command, i + 1, ">", 1);
 			current.push(redirect.token);
@@ -347,12 +298,9 @@ export function scanShell(command: string): ShellScan {
 		}
 		if (ch === "<" || ch === ">") {
 			let fdPrefix: number | null = null;
-			// The fd number is a plain, unquoted word glued to the operator.
 			const pending = wordStart !== null && wordVerbatim && wordEnd === i ? command.slice(wordStart, wordEnd) : "";
 			if (wordCanBeFd && pending.length > 0 && /^\d+$/.test(pending)) {
 				fdPrefix = Number(pending);
-				// The fd number is consumed as a word; whether the word so far was
-				// dynamic still describes the word that follows it.
 				word = "";
 				wordStart = null;
 				wordEnd = 0;
@@ -368,8 +316,6 @@ export function scanShell(command: string): ShellScan {
 			continue;
 		}
 		if (ch === "#" && wordStart === null && !wordDynamic) {
-			// Unquoted `#` at a word boundary comments out the rest of the line;
-			// the newline itself still ends the command and skips heredoc bodies.
 			const newline = command.indexOf("\n", i + 1);
 			i = (newline === -1 ? command.length : newline) - 1;
 			continue;

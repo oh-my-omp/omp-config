@@ -1,17 +1,3 @@
-// Prompt-cache export, run inside the sandbox as
-//   bun /sandbox/cache.ts SESSIONS_DIR OUT_JSON
-// Reads every `*.jsonl` under SESSIONS_DIR (main sessions and the subagent transcripts nested in
-// their directories) and records each model call the transcripts carry: an assistant `message`
-// entry is a turn of the agent loop, a `model_usage` entry an auxiliary call tagged with its
-// `purpose`. Per call it keeps only the provider, model, stop reason, timestamp and token counts;
-// no message text leaves the file. Token counts follow omp's normalized usage, where `input`
-// excludes cached tokens, so a call's prompt is input + cacheRead + cacheWrite and its hit rate
-// is cacheRead / prompt (null for a call with no prompt tokens, such as a provider error).
-//
-// Writes OUT_JSON ({ sessionsDir, exportedAt, skipped, calls, byTranscript, byModel }) and prints
-// the two totals tables as Markdown. `skipped` counts lines that are not JSON objects (a torn last
-// line of a session still being written). Exit 0 on success (also with no sessions), 2 for a
-// malformed invocation, 1 when SESSIONS_DIR cannot be read.
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -53,7 +39,6 @@ function hitRate(tokens: Tokens): number | null {
 	return prompt === 0 ? null : tokens.cacheRead / prompt;
 }
 
-/** One transcript line → a call, or null when the line records no model call. */
 function callOf(entry: Mapping, transcript: string, line: number): Call | null {
 	let source: Source;
 	let carrier: Mapping;
@@ -99,7 +84,6 @@ function readCalls(dir: string): { readonly calls: Call[]; readonly skipped: num
 			try {
 				entry = JSON.parse(raw);
 			} catch {
-				// A torn last line of a session that is still being written.
 				skipped++;
 				continue;
 			}

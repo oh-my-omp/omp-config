@@ -1,5 +1,3 @@
-// Per-dispatch estimate and the tool's text. The text is read by models that may be weak and inattentive:
-// fixed status words lead every line, shared quota is the grouping itself, and rules come first.
 import type { UsageHistoryEntry, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Binding } from "./agents.ts";
 import type { Channel } from "./channels.ts";
@@ -14,12 +12,6 @@ type Estimate =
 
 type Resolved = Extract<Binding, { kind: "resolved" }>;
 
-/**
- * Observed dispatches (every eligible one of the project in the last OBSERVED_WINDOW_DAYS) win from n = 1:
- * the lognormal mean exp(mean ln c + sigma^2 / 2) with this machine's pooled sigma, or the arithmetic mean
- * without one or when a dispatch cost 0. Without observations, this machine's mean for agent+model+thinking,
- * else model+thinking; else no estimate.
- */
 function estimate(binding: Resolved, costs: readonly number[], dispatch: Calibration["dispatch"]): Estimate {
 	if (costs.length > 0) {
 		const sigma = dispatch.sigma;
@@ -75,7 +67,6 @@ function costText(cost: Exclude<Estimate, { kind: "none" }>): string {
 	}
 }
 
-/** The agent's line inside its pool, or why no account of the pool could be priced. */
 function pooledLine(
 	label: string,
 	cost: Estimate,

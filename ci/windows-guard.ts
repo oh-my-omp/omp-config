@@ -1,12 +1,4 @@
 #!/usr/bin/env bun
-// delete-guard Windows acceptance (omp-config #69). Runs on a throwaway
-// `windows-latest` runner: installs the latest omp, applies this repository
-// with its own updater, binds every model role to opencode-go DeepSeek (key in
-// OPENCODE_API_KEY), then runs one RPC session per step of
-// `windows-guard-steps.ts` and checks the requested tool call's result and the
-// probe files on disk. Every reading is printed. Design: ci/README.md.
-//
-// Exit 0: every step passed. 1: a step failed, or setup failed.
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -48,14 +40,8 @@ function textOf(result: unknown): string {
 	return result.content.flatMap((part) => (isMapping(part) && typeof part.text === "string" ? [part.text] : [])).join("\n");
 }
 
-/** Extension UI requests that wait for an answer; the rest (notify, setStatus, …) are fire-and-forget. */
 const DIALOGS = new Set(["select", "confirm", "input", "editor", "ask"]);
 
-/**
- * One RPC session: send the step's prompt after `ready`, close stdin at `prompt_result`, collect tool calls. With
- * `answer`, extensions get the RPC UI: every `confirm` is answered with the step's value and recorded, any other
- * dialog is cancelled.
- */
 async function runSession(prompt: string, cwd: string, ui: StepUi): Promise<Session> {
 	const uiFlags = ui.kind === "headless" ? ["--no-ui"] : [];
 	const proc = Bun.spawn(["omp", "--mode", "rpc", ...uiFlags, "--no-session", "--model", MODEL], {
@@ -79,7 +65,6 @@ async function runSession(prompt: string, cwd: string, ui: StepUi): Promise<Sess
 		try {
 			event = JSON.parse(line);
 		} catch {
-			// Not an RPC frame (a stray log line): ignored.
 			return;
 		}
 		if (!isMapping(event)) return;

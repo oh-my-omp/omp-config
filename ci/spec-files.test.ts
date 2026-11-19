@@ -49,7 +49,6 @@ describe("discoverSpecFiles walk boundary", () => {
 		expect(discoverSpecFiles(marker, extDir, cwd)).toContain(fromExt);
 	});
 
-	// homedir() is fixed at process start, so a fake HOME runs in a subprocess.
 	test("gitless cwd inside HOME walks up to HOME, inclusive", () => {
 		const outside = mkdtempSync(join(tmpdir(), "omp-spec-home-"));
 		const home = join(outside, "home");

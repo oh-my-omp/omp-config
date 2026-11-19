@@ -5,7 +5,7 @@
 本节点设计 omp-config 的配置检查：在一次性环境里安装最新 omp，用仓库自己的更新器应用配置，再用免费模型跑真实 session，把 omp 和扩展打印的故障与警告去重后逐个报告出来。代码检查——`bun install`、`bun run check`（Biome 格式与 lint、`tsc --noEmit`）、`bun run test`（`ci/` 下的单元测试，如 `ci/omp-config-update.test.ts`）与共享副本比对——由 `omomp-check` workflow 运行，其 checkout 必须保留完整历史，因为测试用 `git show` 读取历史夹具；这些规则在仓库 `AGENTS.md` 的代码规范一节，不属于本节点。
 
 - **拥有**：检查运行的阶段、诊断的判据与分类、免费模型和影子模型的接入、workflow 的触发事件与权限。
-- **不拥有**：配置项本身的规则（仓库 `README.zh-CN.md` 与 `docs/*.zh-CN.md`，英文版 `README.md` 与 `docs/*.md`）；更新器写什么、删什么（`agent/extensions/omp-config-autoupdate/omp-config-update.ts` 头注释）；各扩展的行为（`docs/prompts-and-context.zh-CN.md`、`docs/agents.zh-CN.md` 与 `docs/extensions.zh-CN.md`）。
+- **不拥有**：配置项本身的规则（仓库 `README.zh-CN.md` 与 `docs/*.zh-CN.md`，英文版 `README.md` 与 `docs/*.md`）；更新器写什么、删什么（`agent/extensions/omp-config-autoupdate/omp-config-update.ts`）；各扩展的行为（`docs/prompts-and-context.zh-CN.md`、`docs/agents.zh-CN.md` 与 `docs/extensions.zh-CN.md`）。
 - **非目标**：让模型执行任务或调用工具；验证付费 helper 的判定（`task-split-check`、`task-completion-judge`）；TUI 专属行为；拦截合并（不设 branch protection）。
 - **输入**：仓库工作区（被检查对象），npm 上的 `@oh-my-pi/pi-coding-agent`，`install-plugins.sh` 声明的插件，Kilo 网关的匿名免费模型。
 

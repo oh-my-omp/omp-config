@@ -1,7 +1,3 @@
-// Calibration from this machine's own data, run only with consent. The scan worker reads the transcripts;
-// this module turns its aggregates plus usage history and live reports into per-dispatch priors (computed when
-// the feature is enabled and on `recalibrate`) and per-account quota constants (a trailing window, refreshed
-// daily). Deterministic code only: no model is called.
 import type { UsageHistoryEntry, UsageReport } from "@oh-my-pi/pi-ai";
 import { defaultRankingStrategy } from "@oh-my-pi/pi-ai/usage/registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
@@ -14,17 +10,11 @@ import { type Calibration, type Prior, readCalibration, scanCachePath, writeCali
 
 const HOUR_MS = 3_600_000;
 const DAY_HOURS = 24;
-/** Quota constants use this trailing window, so plan or quota changes age out within it. */
 export const QUOTA_WINDOW_MS = 21 * 24 * HOUR_MS;
-/** Quota constants older than this are refreshed before use. */
 export const QUOTA_MAX_AGE_MS = 24 * HOUR_MS;
-/** Snapshot pairs further apart than this are not attributed. */
 const MAX_PAIR_SPAN_MS = 3 * HOUR_MS;
-/** A prior needs this many local dispatches. */
 const MIN_PRIOR_SAMPLES = 3;
-/** Groups with this many priced dispatches feed the pooled sigma. */
 const MIN_SIGMA_GROUP = 5;
-/** A day counts toward the low quantile when the account's limit moved at least this much. */
 const MIN_DAY_DELTA = 0.05;
 const MIN_QUALIFYING_DAYS = 3;
 
@@ -36,21 +26,14 @@ export type CalibrationOutcome =
 			readonly calibration: Calibration;
 			readonly files: number;
 			readonly parsed: number;
-			/** The scan this run used, so a caller that also needs the aggregates does not scan a second time. */
 			readonly scan?: ScanResult;
 	  }
-	/** Consent was off when the run would have started or committed; nothing was written. */
 	| { readonly kind: "declined" }
 	| { readonly kind: "failed"; readonly reason: string };
 
-/** Running totals of a group's dispatch costs; the per-agent log values feed the pooled spread. */
 type Totals = { n: number; total: number };
 type Spread = Totals & { logs: number[] };
 
-/**
- * Mean USD per eligible dispatch by agent+model+thinking and model+thinking, and the pooled log spread.
- * Each group accumulates its total in dispatch order, so the means match summing the whole list.
- */
 function priorsFrom(dispatches: readonly ScannedDispatch[], trackedModels: ReadonlySet<string>, now: number): Calibration["dispatch"] {
 	const byAgent = new Map<string, Spread>();
 	const byModel = new Map<string, Totals>();
@@ -95,11 +78,6 @@ function priorsFrom(dispatches: readonly ScannedDispatch[], trackedModels: Reado
 type Series = { readonly delta: Map<number, number>; readonly covered: Set<number>; readonly active: Set<number> };
 type AccountActivity = { readonly active: Set<number>; readonly covered: Set<number>; readonly moved: Map<number, number> };
 
-/**
- * Hourly increase of one limit's used fraction from same-reset snapshot pairs at most 3 h apart, plus the hours
- * near its snapshots and the hours its pairs cover. One call per limit feeds both the account's activity and the
- * constant, which read the same series twice before.
- */
 function seriesOf(entries: readonly UsageHistoryEntry[]): Series {
 	const delta = new Map<number, number>();
 	const covered = new Set<number>();
@@ -129,7 +107,6 @@ function seriesOf(entries: readonly UsageHistoryEntry[]): Series {
 	return { delta, covered, active };
 }
 
-/** Per account: hours near any snapshot, hours covered by some limit's pairs, and summed movement per hour. */
 function activityOf(limits: Iterable<Series>): AccountActivity {
 	const active = new Set<number>();
 	const covered = new Set<number>();
@@ -142,18 +119,11 @@ function activityOf(limits: Iterable<Series>): AccountActivity {
 	return { active, covered, moved };
 }
 
-/** 25th percentile by nearest rank. */
 function lowQuartile(values: readonly number[]): number {
 	const sorted = [...values].sort((a, b) => a - b);
 	return sorted[Math.floor((sorted.length - 1) * 0.25)] ?? Number.NaN;
 }
 
-/**
- * USD of local spend per 100% of each account's limit. An hour counts when the account's limit has a pair
- * covering it and every other account of the provider is covered and idle then; its spend is this machine's
- * spend on the models the provider strategy scopes to that limit for that account. The constant is the smaller
- * of the overall ratio and the 25th percentile of daily ratios (days moving at least 5%, three or more).
- */
 function quotaFrom(
 	spend: Readonly<Record<string, Readonly<Record<string, number>>>>,
 	reports: readonly UsageReport[],
@@ -180,7 +150,6 @@ function quotaFrom(
 			limits.set(id, entries);
 			limitsByAccount.set(entry.accountKey, limits);
 		}
-		// One series per limit, shared by the account's activity and by the constant computed from it.
 		const series = new Map<string, Map<string, Series>>();
 		const activity = new Map<string, AccountActivity>();
 		for (const [account, limits] of limitsByAccount) {
@@ -260,17 +229,12 @@ function runScan(): Promise<ScanResult> {
 	};
 	scanner.onmessage = (event: MessageEvent<ScanResult>) => finish(event.data);
 	scanner.onerror = (event) => finish({ kind: "failed", reason: event.message });
-	// Terminated by stopCalibration before it answered.
 	scanner.addEventListener("close", () => finish({ kind: "failed", reason: "scan stopped" }));
 	const request: ScanRequest = { sessionsRoot: getSessionsDir(), cachePath: scanCachePath() };
 	scanner.postMessage(request);
 	return promise;
 }
 
-/**
- * Every transcript's aggregate, reading only the bytes appended since the cached scan. One scan per process at
- * a time: callers arriving mid-scan share it, so two workers never write the cache together.
- */
 export function scanTranscripts(): Promise<ScanResult> {
 	if (scanning) return scanning;
 	const run = runScan().finally(() => {
@@ -280,7 +244,6 @@ export function scanTranscripts(): Promise<ScanResult> {
 	return run;
 }
 
-/** Stops a running scan; its run then commits nothing. `/subagent-usage off` and `reset`. */
 export function stopCalibration(): void {
 	worker?.terminate();
 	worker = undefined;
@@ -317,19 +280,13 @@ async function calibrateOnce(session: AgentSession, mode: CalibrationMode, conse
 		dispatch,
 		quota: quotaFrom(scan.spend, reports, index, accountKeys, tracked, trackedModels, sinceMs, now),
 	};
-	// Consent is re-read at commit: an `off` during the scan discards the result.
 	if (!(await consented())) return { kind: "declined" };
 	writeCalibration(calibration);
-	// The scan rides along so the tool call that triggered this calibration does not read the transcripts again.
 	return { kind: "ready", calibration, files: scan.files, parsed: scan.parsed, scan };
 }
 
 let running: Promise<CalibrationOutcome> | undefined;
 
-/**
- * One calibration per process at a time; a caller arriving mid-run shares it. A `full` request that arrives
- * during a `quota` run runs again afterwards, so its priors are recomputed.
- */
 export async function calibrate(
 	session: AgentSession,
 	mode: CalibrationMode,
@@ -339,7 +296,6 @@ export async function calibrate(
 		const shared = await running;
 		if (mode === "quota") return shared;
 	}
-	// Another full run may have started while this caller waited.
 	if (running) return running;
 	const run = calibrateOnce(session, mode, consented).finally(() => {
 		if (running === run) running = undefined;

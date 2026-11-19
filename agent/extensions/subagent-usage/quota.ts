@@ -1,4 +1,3 @@
-// Remaining provider quota for one model, priced per account with this machine's calibrated constants.
 import { createHash } from "node:crypto";
 import {
 	type CredentialRankingContext,
@@ -11,9 +10,6 @@ import {
 import { defaultRankingStrategy } from "@oh-my-pi/pi-ai/usage/registry";
 import type { Calibration } from "./store.ts";
 
-// The binary maps `@oh-my-pi/pi-ai/usage/*` for extensions but not `@oh-my-pi/pi-ai/auth/*`.
-// @upstream adapted @oh-my-pi/pi-ai@18.13.2 src/auth/usage-report.ts#reserveUsageLimits
-/** Select usage limits for account reserve evaluation. */
 export function reserveUsageLimits(
 	strategy: CredentialRankingStrategy | undefined,
 	report: UsageReport,
@@ -27,25 +23,16 @@ export function reserveUsageLimits(
 		return modelId === undefined || rankingContext.modelId === undefined || modelId === rankingContext.modelId;
 	});
 }
-// @upstream-end
 
-// @upstream adapted @oh-my-pi/pi-ai@18.13.2 src/auth/usage-report.ts#scopedUsageLimits
-/** Return the usage limits that apply to the requested model for this strategy. */
 function scopedUsageLimits(strategy: CredentialRankingStrategy, report: UsageReport, context: CredentialRankingContext): UsageLimit[] {
 	return strategy.scopeLimits?.(report, context) ?? report.limits;
 }
-// @upstream-end
 
-/**
- * Calibration key of one account's limit. The usage-history account key can carry an email and `|`, so it
- * enters the key as a short hash: the stored file names no account and the key splits unambiguously.
- */
 export function limitKey(provider: string, accountKey: string, limit: UsageLimit): string {
 	const account = createHash("sha256").update(accountKey).digest("hex").slice(0, 16);
 	return `${provider}|${account}|${limit.id}|${limit.window?.id ?? ""}`;
 }
 
-/** Usage-history rows grouped by provider: one pass over the history instead of one filter per report or provider. */
 export function historyByProvider(history: readonly UsageHistoryEntry[]): ReadonlyMap<string, readonly UsageHistoryEntry[]> {
 	const grouped = new Map<string, UsageHistoryEntry[]>();
 	for (const entry of history) {
@@ -56,7 +43,6 @@ export function historyByProvider(history: readonly UsageHistoryEntry[]): Readon
 	return grouped;
 }
 
-/** The usage-history `accountKey` of the account behind each live report, matched once per report within its rows. */
 export function accountKeysOf(
 	reports: readonly UsageReport[],
 	history: ReadonlyMap<string, readonly UsageHistoryEntry[]>,
@@ -66,7 +52,6 @@ export function accountKeysOf(
 	return keys;
 }
 
-/** The one account key among the rows `test` accepts; undefined when none or several distinct keys match. */
 function onlyAccountKey(rows: readonly UsageHistoryEntry[], test: (entry: UsageHistoryEntry) => boolean): string | undefined {
 	let found: string | undefined;
 	for (const entry of rows) {
@@ -77,11 +62,6 @@ function onlyAccountKey(rows: readonly UsageHistoryEntry[], test: (entry: UsageH
 	return found;
 }
 
-/**
- * The usage-history `accountKey` of the account behind a live report, from its provider's rows: the rows carrying
- * the report's account id, else its email, else its fetch time (each fetch is recorded with
- * `recordedAt = fetchedAt`). Undefined unless exactly one account matches.
- */
 function accountKeyOf(report: UsageReport, own: readonly UsageHistoryEntry[]): string | undefined {
 	const metadata = report.metadata ?? {};
 	const accountId = typeof metadata.accountId === "string" ? metadata.accountId : report.limits[0]?.scope.accountId;
@@ -97,17 +77,13 @@ function accountKeyOf(report: UsageReport, own: readonly UsageHistoryEntry[]): s
 	return onlyAccountKey(own, (entry) => entry.recordedAt === report.fetchedAt);
 }
 
-/** The applicable limit that leaves an account the least USD. */
 export type Binding = { readonly label: string; readonly remainingFraction: number; readonly resetsAt: number | undefined };
 
 export type AccountQuota =
 	| { readonly kind: "priced"; readonly usd: number; readonly binding: Binding }
-	/** No number for this account: unmatched to its history, or a limit without a constant yet. */
 	| { readonly kind: "pending"; readonly reason: string };
 
-type Pool =
-	/** No live report for the provider right now. */
-	{ readonly kind: "unreported" } | { readonly kind: "accounts"; readonly accounts: readonly AccountQuota[] };
+type Pool = { readonly kind: "unreported" } | { readonly kind: "accounts"; readonly accounts: readonly AccountQuota[] };
 
 function accountQuota(
 	report: UsageReport,
@@ -126,7 +102,6 @@ function accountQuota(
 		if (used === undefined) continue;
 		const key = limitKey(report.provider, accountKey, limit);
 		const constant = quota.constants[key];
-		// A limit without a constant may be the binding one, so the account gets no number.
 		if (constant === undefined) return { kind: "pending", reason: `${limit.label}: ${quota.missing[key] ?? "not calibrated yet"}` };
 		const remainingFraction = Math.max(0, 1 - used);
 		const usd = remainingFraction * constant.usdPer100;
@@ -135,7 +110,6 @@ function accountQuota(
 	return cheapest === undefined ? { kind: "pending", reason: "no quota limit applies to this model" } : { kind: "priced", ...cheapest };
 }
 
-/** One entry per live account report of `provider` that may serve `modelId` (plan gate). */
 export function poolFor(
 	reports: readonly UsageReport[],
 	accountKeys: ReadonlyMap<UsageReport, string | undefined>,

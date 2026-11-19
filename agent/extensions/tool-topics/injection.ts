@@ -1,12 +1,3 @@
-/**
- * Progressive topic delivery for any tool's string argument (dotted paths allowed).
- * installToolTopicInjection binds one provider, with a stable owner, to the calling
- * extension/session. It does not register topics: bodies come from the tool://
- * topics this extension serves. Matched rules are delivered after
- * the tool batch via trusted additionalContext, including failed tool results.
- * The actual-context guard also handles resume/branch/compaction; no durable
- * counters, fake context ids, user messages, command changes or body cache.
- */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { createContextDelivery } from "../_shared/context-delivery.ts";
@@ -29,12 +20,6 @@ function stringArgument(input: Record<string, unknown>, parameter: string): stri
 	return typeof value === "string" ? value : undefined;
 }
 
-/**
- * Install once per extension/session. owner + rule id is the delivery identity;
- * distinct rules targeting one topic each get one delivery. The rules are the
- * catalog's inject entries, fixed at load. Failed topic loads do not consume
- * delivery eligibility.
- */
 export function installToolTopicInjection(
 	pi: ExtensionAPI,
 	options: {
@@ -67,7 +52,6 @@ export function installToolTopicInjection(
 				ctx,
 				ready.map((entry) => entry.marker),
 			);
-			// Only the injection text of an accepted claim is composed; a rejected claim's marker was all that was built.
 			const parts: string[] = [];
 			for (let index = 0; index < ready.length; index++) {
 				const entry = ready[index];

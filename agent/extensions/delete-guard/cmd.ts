@@ -2,7 +2,6 @@ import type { ArgvWord } from "./classify.ts";
 import { classifyNestedProgram, programName } from "./nested.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
-/** cmd's internal deletion commands, plus the posix names Git for Windows puts on PATH. */
 const DELETE_COMMANDS: ReadonlySet<string> = new Set(["del", "erase", "rd", "rmdir", "rm", "unlink", "shred"]);
 
 type CmdWord = ArgvWord & { readonly raw: string };
@@ -11,10 +10,8 @@ type CmdCommand = { readonly words: readonly CmdWord[]; readonly raw: string };
 
 class CmdParseFailure extends Error {}
 
-/** A word holds `%VAR%` / `!VAR!` expansion: its runtime text is unknown. */
 const EXPANSION = /%[^%\s]+%|![^!\s]+!|%~?[0-9a-zA-Z*]/;
 
-/** Splits a cmd line into commands at `&`, `&&`, `||`, `|`, `(`, `)` and newlines; `^` escapes, `"…"` quotes. */
 function splitCmd(text: string): CmdCommand[] {
 	const commands: CmdCommand[] = [];
 	let words: CmdWord[] = [];
@@ -62,8 +59,6 @@ function splitCmd(text: string): CmdCommand[] {
 			continue;
 		}
 		if (ch === ">" || ch === "<") {
-			// A bare digit word glued to the operator is a descriptor (`2>nul`), not a command name.
-			// A `@` prefix, quotes or `^` escapes keep it a word (`@2` is still bare; `"2"` and `^2` differ).
 			if (inWord && /^@?[0-9]+$/.test(raw)) {
 				word = "";
 				raw = "";
@@ -93,7 +88,6 @@ function splitCmd(text: string): CmdCommand[] {
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
-/** Index of the command an `if` runs: after `/i`, `not`, and one condition (`exist X`, `defined X`, `errorlevel N`, `a==b`, `a OP b`). */
 function afterIf(words: readonly CmdWord[], start: number): number {
 	let i = start;
 	if (words[i]?.text.toLowerCase() === "/i") i++;
@@ -104,10 +98,8 @@ function afterIf(words: readonly CmdWord[], start: number): number {
 	return i + 3;
 }
 
-/** `start` options that take the next word as their value (`/d C:\dir`), unless the value is glued on (`/dC:\dir`). */
 const START_VALUE_OPTIONS: ReadonlySet<string> = new Set(["/d", "/node", "/affinity", "/machine"]);
 
-/** Index of the command `start` launches: after `/flags` (and their values) and an optional quoted title. */
 function afterStart(words: readonly CmdWord[], start: number): number {
 	let i = start;
 	if (words[i]?.raw.startsWith('"')) i++;
@@ -144,7 +136,6 @@ function classifyCmdCommand(command: CmdCommand, depth: number): Verdict {
 		}
 		const quote = word.raw.charAt(0);
 		if ((quote === "'" || quote === "`") && i === 0) {
-			// A `for /f` set in single quotes (or backquotes with usebackq) is a command cmd runs.
 			const inner = command.raw.trim();
 			return classifyCmd(inner.endsWith(quote) ? inner.slice(1, -1) : inner.slice(1), depth + 1);
 		}
@@ -157,7 +148,6 @@ function classifyCmdCommand(command: CmdCommand, depth: number): Verdict {
 	}
 }
 
-/** Classifies a cmd.exe command line: every command it runs, including `for … do`, `if …` and `(…)` blocks and nested shells. */
 export function classifyCmd(text: string, depth: number): Verdict {
 	if (depth > MAX_DEPTH) return block("nonLiteral", text, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
 	let commands: CmdCommand[];

@@ -1,4 +1,3 @@
-/** Kernel identities and live ancestry/group ownership; no IO or session state. */
 interface ProcessIdentity {
 	readonly pid: number;
 	readonly startedAt: bigint;
@@ -10,9 +9,7 @@ export interface ProcessRecord extends ProcessIdentity {
 }
 
 interface ProcessSnapshot {
-	/** Two-pass verified non-zombie rows only; an enumerated PID alone is not a live anchor. */
 	readonly processes: ReadonlyMap<number, ProcessRecord>;
-	/** Includes PIDs whose BSD info was unavailable; absence alone proves exit. */
 	readonly pids: ReadonlySet<number>;
 }
 
@@ -34,9 +31,7 @@ interface TrackedProcess {
 export class ProcessTracker {
 	readonly #root: ProcessIdentity;
 	readonly #owned = new Map<number, TrackedProcess>();
-	/** A generation is established only by observing its owned group leader. */
 	readonly #groups = new Map<number, bigint>();
-	// Reused across observe() calls: per-tick allocation is proportional to live edges, not the table size.
 	readonly #children = new Map<number, ProcessRecord[]>();
 	readonly #members = new Map<number, ProcessRecord[]>();
 	readonly #queue: ProcessRecord[] = [];
@@ -85,7 +80,6 @@ export class ProcessTracker {
 			touchedMembers.add(current.groupId);
 			group.push(current);
 		}
-		// PIDs that left the table keep no stale edge lists.
 		for (const pid of children.keys()) if (!touchedChildren.has(pid)) children.delete(pid);
 		for (const groupId of members.keys()) if (!touchedMembers.has(groupId)) members.delete(groupId);
 

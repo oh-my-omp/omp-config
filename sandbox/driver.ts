@@ -1,44 +1,7 @@
-// RPC driver (S5), run inside the sandbox as
-//   bun /sandbox/driver.ts SCENARIO_JSON MODEL EVIDENCE_DIR
-// One scenario against one model through `omp --mode rpc --no-ui`. Each run gets a fresh working
-// directory `/runs/<provider>_<model>/<name>-<ms>`; the scenario's `init` runs there in sh (the
-// driver, not the agent) before the session, the session runs there, the prompt is sent once,
-// every tool call is recorded, then `finalAssertion` runs there in sh and the declared call and
-// reply assertions are checked. The driver reads the scenario and never interprets what it means.
-//
-// Every model request of the session is recorded by the sandbox recorder (sandbox/recorder.ts) into
-// EVIDENCE_DIR/<name>.requests.jsonl. The driver names that file to the recorder through
-// /sandbox/.requests-sink for the session's duration and refuses to start without a live recorder.
-// The file is empty when the session sent no request.
-//
-// Scenario file (JSON):
-//   name            [a-z0-9][a-z0-9._-]*; names the evidence files
-//   init            sh command, exit 0 required
-//   prompt          the user message
-//   finalAssertion  sh command; exit 0 passes
-//   calls?          { expect?: Matcher[], forbid?: Matcher[] }
-//                   expect: matched in order as a subsequence of the tool calls;
-//                   forbid: no tool call may match any of them
-//   replyIncludes?  literal strings the last assistant reply must contain
-//   Matcher         { tool (a name, or a list of names any of which matches), isError?,
-//                     inputPattern? (regex over the call's JSON input), resultIncludes? }
-//
-// Result, one of:
-//   pass           every assertion held
-//   fail           the session ran and an assertion did not hold
-//   untested       omp does not know the model, or every assistant reply failed at the provider
-//                  and no tool ran (S3/S4)
-//   harness-error  init failed, omp exited before its ready frame for another reason, the prompt
-//                  was rejected, the session timed out, omp exited nonzero, or no session file was written
-//
-// Writes EVIDENCE_DIR/<name>.driver.json, <name>.events.jsonl (every RPC frame, streamed),
-// <name>.session.jsonl (the session file omp reports through get_state) and <name>.requests.jsonl
-// (every model request). Exit 0 for pass and untested, 1 otherwise, 2 for a malformed invocation.
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-// The recorder's readiness marker and sink pointer, both beside this file in /sandbox.
 const RECORDER_READY = join(import.meta.dir, "recorder.ready");
 const SINK_POINTER = join(import.meta.dir, ".requests-sink");
 
@@ -143,7 +106,6 @@ function matches(call: Call, matcher: Matcher): boolean {
 	return true;
 }
 
-/** The assertion failures of a finished session; empty means pass. */
 function assertionFailures(scenario: Scenario, calls: readonly Call[], finalCode: number | null, lastReply: string): string[] {
 	const failures: string[] = [];
 	if (finalCode !== 0) failures.push(`finalAssertion exited ${finalCode}`);
@@ -185,10 +147,8 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 		timedOut = true;
 		proc.kill();
 	}, SESSION_TIMEOUT_MS);
-	// Frames stream to disk as they arrive: a long session's deltas do not fit in memory.
 	const sink = Bun.file(eventsPath).writer();
 	const started = new Map<string, unknown>();
-	// Keyed by toolCallId in dispatch (start-frame) order; null until the call ends. Concurrent calls can end out of order.
 	const dispatched = new Map<string, Call | null>();
 	const replies: Mapping[] = [];
 	let ready = false;
@@ -204,7 +164,6 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 		try {
 			frame = JSON.parse(line);
 		} catch {
-			// Not an RPC frame; kept in the events file only.
 			return;
 		}
 		if (!isMapping(frame)) return;
@@ -263,7 +222,6 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 
 function classify(model: string, session: Session, failures: readonly string[]): Outcome {
 	if (!session.ready) {
-		// omp's own refusal of a model id it does not know: the model is unavailable here (S4).
 		if (session.stderr.startsWith(`Model "${model}" not found`))
 			return { kind: "untested", reason: `model not available: ${session.stderr.split("\n")[0]}` };
 		return { kind: "harness-error", reason: `omp exited ${session.exitCode} before its ready frame` };
@@ -297,7 +255,6 @@ async function main(argv: readonly string[]): Promise<number> {
 		return outcome.kind === "pass" || outcome.kind === "untested" ? 0 : 1;
 	};
 
-	// `init`, the session and `finalAssertion` share one fresh directory per model run.
 	const cwd = join("/runs", model.replaceAll("/", "_"), `${scenario.name}-${Date.now()}`);
 	mkdirSync(cwd, { recursive: true });
 	const init = shell(scenario.init, cwd);
@@ -307,7 +264,6 @@ async function main(argv: readonly string[]): Promise<number> {
 			{ kind: "harness-error", reason: "the model request recorder is not running (/sandbox/recorder.ready is missing)" },
 			{ cwd },
 		);
-	// Empty until the session sends a request: an empty file means no request was made.
 	writeFileSync(evidence("requests.jsonl"), "");
 	writeFileSync(SINK_POINTER, evidence("requests.jsonl"));
 	const session = await runSession(model, scenario.prompt, cwd, evidence("events.jsonl")).finally(() => writeFileSync(SINK_POINTER, ""));

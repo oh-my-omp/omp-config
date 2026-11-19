@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { forwardUrl, rewriteProviders } from "../sandbox/recorder.ts";
 
-/** The rewritten `baseUrl` of provider `name`, narrowed at runtime rather than cast. */
 function rewrittenBaseUrl(providers: Record<string, unknown>, name: string): string {
 	const value = providers[name];
 	if (typeof value !== "object" || value === null || !("baseUrl" in value) || typeof value.baseUrl !== "string")
@@ -9,7 +8,6 @@ function rewrittenBaseUrl(providers: Record<string, unknown>, name: string): str
 	return value.baseUrl;
 }
 
-/** The URL a client reaches when it requests `${baseUrl}${suffix}` from the rewritten provider. */
 function clientRequestTo(baseUrl: string, suffix: string): URL {
 	return new URL(`${baseUrl}${suffix}`);
 }

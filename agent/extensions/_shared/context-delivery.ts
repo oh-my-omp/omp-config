@@ -1,35 +1,9 @@
-/**
- * Once-per-actual-context delivery, shared by conditional prompt injectors.
- * Persisted developer messages in the active-leaf model projection are the
- * authority, not session ids, compaction counters or the full transcript.
- * The pending set only covers the current turn's batch before OMP persists its
- * additionalContext developer message; turn_start drops that transient copy.
- *
- * One claim call answers a whole tool_result's markers with a single
- * leaf-to-root walk that re-derives the projection's emitted region instead of
- * materializing `buildSessionContext` per marker. The walk stops at the region
- * edge, replicating the host's boundaries: a `reset_boundary` after the latest
- * compaction truncates everything above it; otherwise the latest compaction
- * emits its kept tail (from `firstKeptEntryId`, or after
- * `providerReplayThroughEntryId` for Anthropic empty-tail and OpenAI remote
- * replacement) plus everything appended after it. Only `type: "message"`
- * entries can hold a developer message: custom messages, branch and compaction
- * summaries all emit other roles.
- */
-
 import { getAnthropicCompactionPayload } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getOpenAiRemoteCompactionPayload } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { textOf } from "./messages.ts";
 
-/**
- * `textOf(content, "\n").includes(marker)` without joining: the join inserts a
- * newline only between text blocks, so a marker without a newline matches the
- * joined text exactly when it matches one block. A marker containing a newline
- * (or the empty marker, which even block-less content satisfies) falls back to
- * the joined check.
- */
 function contentIncludes(content: unknown, marker: string): boolean {
 	if (typeof content === "string") return content.includes(marker);
 	if (!Array.isArray(content) || marker === "" || marker.includes("\n")) {
@@ -43,13 +17,6 @@ function contentIncludes(content: unknown, marker: string): boolean {
 	return false;
 }
 
-/**
- * Contents of the developer messages `buildSessionContext` emits for the
- * active leaf, found by walking leaf-to-root through `getEntry` without
- * materializing the entry set, the path or the emitted message list. Entries
- * walked before the latest compaction are only candidates: a boundary reached
- * later decides whether they were emitted.
- */
 function deliveredContents(ctx: ExtensionContext): unknown[] {
 	const manager = ctx.sessionManager;
 	const leafId = manager.getLeafId();
@@ -71,7 +38,6 @@ function deliveredContents(ctx: ExtensionContext): unknown[] {
 	while (current !== undefined) {
 		const entry = current;
 		current = parentOf(entry);
-		// A boundary leaf-side of every compaction truncates the projection above it.
 		if (entry.type === "reset_boundary") return contents;
 		if (entry.type === "compaction") {
 			const remote = getOpenAiRemoteCompactionPayload(entry);
@@ -79,8 +45,6 @@ function deliveredContents(ctx: ExtensionContext): unknown[] {
 				remote === undefined && entry.firstKeptEntryId === "" && entry.providerReplayThroughEntryId !== undefined
 					? getAnthropicCompactionPayload(entry.preserveData)
 					: undefined;
-			// The id bounding the kept region root-side of the compaction:
-			// inclusive for a plain kept tail, exclusive after the replay markers.
 			const boundId =
 				remote !== undefined || anthropic !== undefined
 					? entry.providerReplayThroughEntryId

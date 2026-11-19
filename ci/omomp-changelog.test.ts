@@ -16,7 +16,6 @@ import {
 
 import { daysMarkdown, summaryLines } from "../agent/extensions/omomp-changelog/render.ts";
 
-// `tr` reads the variable at each call, not at import.
 process.env.OMOMP_LANG = "en";
 
 const member = (name: string, version: string): Member => ({ name, version, changelogPath: `/x/${name}/CHANGELOG.md` });
@@ -169,7 +168,6 @@ describe("settle", () => {
 describe("merged days", () => {
 	const fxB = log("## [0.1.1] - 2026-11-11", "", "### Fixed", "", "- b1");
 
-	/** The upgrade of `name` from `from` to its current version, as a start would take it. */
 	function upgrade(name: string, to: string, from: string, content: string): Upgrade {
 		const verdict = classify(member(name, to), from, () => loaded(content));
 		if (verdict.kind !== "newer") throw new Error(`unexpected ${verdict.kind}`);

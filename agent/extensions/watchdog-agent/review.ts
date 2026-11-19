@@ -9,7 +9,6 @@ import type { InjectMode, Producer } from "../_shared/session-filter.ts";
 import { type ChatWatchdog, type DeliverAs, hasKey, type JevWatchdog, type Scope, type Verdict } from "./spec.ts";
 
 const REVIEW_TIMEOUT_MS = 90_000;
-// --- transcript rendering ---------------------------------------------------
 
 function toolCallSummaries(content: unknown): string[] {
 	if (!Array.isArray(content)) return [];
@@ -27,7 +26,6 @@ function toolCallSummaries(content: unknown): string[] {
 		try {
 			args = rawArgs === undefined ? "" : JSON.stringify(rawArgs);
 		} catch {
-			// A malformed cyclic tool payload cannot be serialized in the transcript.
 			args = "";
 		}
 		calls.push(`${name}(${args})`);
@@ -35,7 +33,6 @@ function toolCallSummaries(content: unknown): string[] {
 	return calls;
 }
 
-/** Tool calls in one message's content, counted without serializing their arguments. */
 function toolCallCount(content: unknown): number {
 	if (!Array.isArray(content)) return 0;
 	let count = 0;
@@ -45,7 +42,6 @@ function toolCallCount(content: unknown): number {
 	return count;
 }
 
-/** Whether the content carries a text block with a non-whitespace character, without joining or copying the text. */
 function hasText(content: unknown): boolean {
 	const nonBlank = /\S/;
 	if (typeof content === "string") return nonBlank.test(content);
@@ -57,7 +53,6 @@ function hasText(content: unknown): boolean {
 	return false;
 }
 
-/** Watched actions in one message: each assistant tool call plus one for a nonempty text reply. */
 export function countActions(message: unknown): number {
 	if (!hasKey(message, "role") || message.role !== "assistant") return 0;
 	const content = hasKey(message, "content") ? message.content : undefined;
@@ -68,7 +63,6 @@ export function messageTimestamp(message: unknown): number | undefined {
 	return hasKey(message, "timestamp") && typeof message.timestamp === "number" ? message.timestamp : undefined;
 }
 
-/** Model and provider of an assistant message; null for any other message. */
 export function producerOf(message: unknown): Producer | null {
 	if (!hasKey(message, "role") || message.role !== "assistant") return null;
 	if (!hasKey(message, "model") || typeof message.model !== "string") return null;
@@ -76,17 +70,12 @@ export function producerOf(message: unknown): Producer | null {
 	return { model: message.model, provider: message.provider };
 }
 
-/**
- * Whether a branch message is a user-mode note a watchdog sent: an agent-attributed
- * user message whose trimmed text is among `ownNotes` (the texts recorded at sending).
- */
 export function isOwnUserNote(message: unknown, ownNotes: Pick<ReadonlySet<string>, "has">): boolean {
 	if (!hasKey(message, "role") || message.role !== "user") return false;
 	if (!hasKey(message, "attribution") || message.attribution !== "agent") return false;
 	return ownNotes.has(textBlocks(hasKey(message, "content") ? message.content : undefined).trim());
 }
 
-/** One message's full rendering, or undefined when it contributes nothing (incl. our own user-mode notes). */
 function renderMessage(m: unknown, ownNotes: Pick<ReadonlySet<string>, "has">): string | undefined {
 	if (!hasKey(m, "role") || typeof m.role !== "string") return undefined;
 	const role = m.role;
@@ -114,7 +103,6 @@ function renderMessage(m: unknown, ownNotes: Pick<ReadonlySet<string>, "has">): 
 	return undefined;
 }
 
-/** Messages on the branch, oldest first; non-message entries (compaction markers, labels, …) are skipped. */
 export function branchMessages(entries: ReadonlyArray<unknown>): unknown[] {
 	const out: unknown[] = [];
 	for (const e of entries) {
@@ -123,13 +111,6 @@ export function branchMessages(entries: ReadonlyArray<unknown>): unknown[] {
 	return out;
 }
 
-/**
- * The transcript one review covers, and the newest message timestamp in it. `full` covers every
- * branch message, `window` those stamped after `after`; the entries are walked once and nothing
- * but the rendered text is built. `tail` is the message that triggered a mid-run review:
- * `message_end` persistence is queued concurrently with the event, so it is added when the branch
- * lacks it yet — after the branch messages for `full`, inside the window for `window`.
- */
 export function reviewTranscript(
 	entries: ReadonlyArray<unknown>,
 	scope: Scope,
@@ -159,26 +140,17 @@ export function reviewTranscript(
 	return { transcript: parts.join("\n"), reviewed };
 }
 
-// --- model specs ------------------------------------------------------------
-
-/**
- * `provider/id:level` → base and level. A level is `off` or one of the host's
- * efforts (minimal … max); a missing suffix, or any other (`auto`, `inherit`),
- * leaves the spec whole.
- */
 function splitLevel(spec: string): { readonly base: string; readonly level: ThinkingLevel | undefined } {
 	const trimmed = spec.trim();
 	const colon = trimmed.lastIndexOf(":");
 	if (colon > 0) {
 		const suffix = trimmed.slice(colon + 1);
-		// The host's own effort values, so the level is typed without a cast; `off` is not an effort.
 		const level = suffix === "off" ? "off" : THINKING_EFFORTS.find((effort) => effort === suffix);
 		if (level !== undefined) return { base: trimmed.slice(0, colon), level };
 	}
 	return { base: trimmed, level: undefined };
 }
 
-/** A role alias or pattern through the host resolver, else an available `provider/id`, else a bare id. */
 function findModel(ctx: ExtensionContext, base: string): Model | undefined {
 	const resolved = ctx.models?.resolve?.(base);
 	if (resolved) return resolved;
@@ -186,9 +158,6 @@ function findModel(ctx: ExtensionContext, base: string): Model | undefined {
 	return available.find((model) => `${model.provider}/${model.id}` === base) ?? available.find((model) => model.id === base);
 }
 
-// --- reviewer ---------------------------------------------------------------
-
-/** Model a chat watchdog without `model` reviews with: the advisor role chain, else the session model. */
 export function defaultReviewerModel(ctx: ExtensionContext): Model | undefined {
 	for (const role of ["@advisor", "advisor", "@slow"]) {
 		const model = ctx.models?.resolve?.(role);
@@ -197,19 +166,16 @@ export function defaultReviewerModel(ctx: ExtensionContext): Model | undefined {
 	return ctx.models?.current?.();
 }
 
-/** Reviewer model + thinking level: explicit `model` (honoring `:effort`), else the `advisor` role. */
 function resolveReviewer(ctx: ExtensionContext, spec: ChatWatchdog): { model: Model; thinkingLevel: ThinkingLevel } | null {
 	if (!spec.model) {
 		const model = defaultReviewerModel(ctx);
 		return model ? { model, thinkingLevel: "off" } : null;
 	}
-	// Watchdog effort suffixes have always been case-insensitive.
 	const { base, level } = splitLevel(spec.model.replace(/:(off|minimal|low|medium|high|xhigh|max)$/i, (suffix) => suffix.toLowerCase()));
 	const model = findModel(ctx, base);
 	return model ? { model, thinkingLevel: level ?? "off" } : null;
 }
 
-/** How the note line is written: a reviewer's note, or the user talking to the agent. */
 function noteFormat(inject: InjectMode): string {
 	switch (inject) {
 		case "system":
@@ -255,7 +221,6 @@ function interpretVerdict(answer: string, delivery: DeliverAs): Verdict | null {
 	return { kind: "advice", severity, note, delivery };
 }
 
-/** Runs one reviewer session over the transcript. Never throws; failures → null. `signal` aborts on a session boundary; the review timeout still applies. */
 export async function runReviewer(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
@@ -300,7 +265,6 @@ export async function runReviewer(
 	}
 }
 
-/** JUDGE answers a typed choice; the chosen option supplies the injected text. `signal` aborts on a session boundary; the review timeout still applies. */
 export async function runJev(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,

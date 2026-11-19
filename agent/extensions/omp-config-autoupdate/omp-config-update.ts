@@ -1,219 +1,5 @@
 #!/usr/bin/env bun
 
-// ============================================================================
-// omp-config-update — apply the omp-config repo snapshot to an OMP agent dir.
-// Lives in extensions/omp-config-autoupdate/ beside the extension that spawns
-// it; it is a standalone Bun script, not an extension module (not index.ts).
-//
-// ENTRY POINTS.
-//   auto      Run by the omp-config-autoupdate extension at OMP start when the
-//             machine's switch is on (`/omp-config-autoupdate on`; off by
-//             default). Refreshes the updater-owned clone (~/.omp/omp-config-src)
-//             from origin's `release` branch (DEFAULT_BRANCH; the daily release
-//             moves it, so commits merged to main but not yet released never
-//             reach the machine), and applies only when the fetch succeeds and its
-//             commit differs from the commit last applied to this agent dir
-//             (`<agent dir>/.omp-config-applied`). A failed fetch (offline)
-//             applies nothing: the clone is a copy of origin as of the last
-//             fetch, never a stand-in for it. A clone of a previous repo
-//             location (PREVIOUS_REPO_URLS) is repointed to REPO_URL first;
-//             any other origin is left untouched and reported.
-//             The apply code is imported from the freshly fetched clone, so a
-//             commit that changes apply rules is applied by its own rules.
-//             An unchanged commit still refreshes the plugins whose GitHub
-//             source moves on its own (see PLUGINS) and re-scans conflicts.
-//   apply     Run by /update-omp against a working checkout (`--source`).
-//             `--check` reports without writing.
-//   conflicts Lists the current conflicts against `--source` (default: the
-//             updater clone) with the adaptation procedure; read-only.
-//   resolve   Records listed conflicts as adapted: their base becomes the
-//             source's current value. Stale ids (the source moved) are refused.
-//
-// OWNERSHIP. The repo ships the managed items listed in `managedPlain` and
-// `STRUCTURED`. Every structured path has one owner rule:
-//   - LOCAL_* paths are the machine's: never written, seeded or removed;
-//   - SEED_* paths are written only while the host lacks them (a first
-//     install gets the repo default), then belong to the machine;
-//   - MACHINE_LIST_FIELDS keep the host's own entries ahead of the repo's;
-//   - every other repo path is managed (see CUSTOMIZATIONS).
-// Agent definitions (MACHINE_OWNED_PLAIN, agents/*.md) are machine-level user
-// settings: the repo's copy is a default seeded while the rel has no record.
-// After that an unmodified copy still follows the repo (upstream edits and
-// drops apply, which is how repo-side renames propagate), a machine-modified
-// copy always wins without merge or conflict, and a rel absent with a
-// recorded base — removed or renamed by the machine — is never re-created.
-// /sync-omp-config never pulls them into the repo.
-// The repo-root CHANGELOG.md (written by lgit and the release run) is the one
-// managed file outside `agent/`: it lands at extensions/_shared/CHANGELOG.md,
-// where the plugin manifest's `omomp` declaration points, and merges like any
-// other non-code file. /sync-omp-config never pulls it into the repo.
-// Shipped APPEND-SYSTEM-*.md, PROMPT-INJECT-*.md, TURN-JUDGE-*.md and
-// REPLACE-SYSTEM-*.yml/.yaml rule files are managed templates; additional host
-// files stay machine-owned. Edits to APPEND-SYSTEM and REPLACE-SYSTEM files
-// take effect on the next prompt or tool call, TURN-JUDGE files on the next
-// turn, and PROMPT-INJECT files in the next subagent started.
-// Untouched by every rule: keys and files the repo never had, app-managed
-// files (`// @orca-managed-pi-extension` first line, or the Otty marker
-// anywhere; see OTTY_MARKER), runtime state. A symlinked target is written
-// through to its resolved file. The machine's own `omp-config-autoupdate.exclude`
-// setting (see EXCLUSIONS) overrides every rule below for the items it names.
-//
-// EXCLUSIONS. The machine lists items the updater never writes, creates or
-// deletes in the plugin setting `omp-config-autoupdate.exclude` of `omp-config`
-// (whitespace-separated; the machine's, the repo never ships a value), read
-// through `omp plugin config list`; until the SETTINGS step moved it, the list
-// still in the omomp section counts. Entries are agent-dir relative plain
-// paths or globs (`agents/task-high.md`, `extensions/foo/**`; a literal name
-// covers its subtree, so `config.yml` excludes the whole file), for config.yml
-// `config.yml:<dotted path>` (`config.yml:task.agentModelOverrides`), and
-// `omomp.yml:<section>`, which keeps that section out of the SETTINGS move. An
-// invalid option — two omomp copies of the section, a malformed entry — stops
-// the whole apply like every other preflight error. Excluded items keep their
-// host copy and their recorded base and are reported under `skipped`;
-// excluding the updater itself is only ever visible through that report.
-// Excluded structured paths merge like `local` ones (machine-owned),
-// relocation and retirement ops that touch an excluded path are dropped as
-// whole operations, and a final invariant check aborts the apply if any
-// planned op still touches one.
-//
-// SETTINGS. The extensions' settings are OMP plugin settings of the local
-// plugin `omp-config`, whose manifest is the managed
-// `extensions/_shared/package.json`. After every file operation succeeded,
-// apply links that directory (`omp plugin link`) unless OMP already lists the
-// plugin (registered elsewhere: left alone with a note). Then the omp-config
-// sections of the machine's omomp file (and of the standalone JSON files that
-// held them before it) move out (omomp-migration.ts): a value becomes a plugin
-// setting only when the machine has not set that key and it differs from the
-// manifest default; list data goes where it now lives (task-split-check
-// agents → `splitCheck: true` in agents/*.md, model-compaction rules →
-// `extensions/model-compaction/COMPACTION-rule-NN.md`, tool-topic-injection
-// rules → dropped only when equal to what the repo shipped, since the TOPIC
-// files carry them); `judge.fallbackRole` is dropped and every other
-// `fallbackRole` becomes `modelRoles.<role>: "@<fallbackRole>"` in config.yml
-// for each role it backed that the machine left unassigned. A section of a
-// retired extension (doc-polish) is dropped whole with a note. The `omp plugin`
-// CLI runs from `/`, so a project's plugin-overrides.json never hides the
-// machine's values. A section leaves the file only after OMP lists each of its
-// values and config.yml holds each binding; sections of other owners (omp-unified-exec) stay, and the file is
-// deleted once nothing is left in it. Invalid, ambiguous or blocked sections
-// stay with a note; nothing here stops the apply. `--check` and
-// `--no-plugins` never ask OMP to change anything and only report the move.
-//
-// CUSTOMIZATIONS. A managed item other than machine-owned agent definitions
-// (MACHINE_OWNED_PLAIN, see OWNERSHIP) is merged three-way: host H, base B
-// (the repo content this machine last accepted, recorded under BASE_DIR; see
-// base.ts) and repo R. H==R or H==B takes R; R==B keeps H; text files
-// changed on both sides go through `git merge-file`, and a clean merge is
-// written. Anything
-// else is a conflict: H and B stay as they are, so the next run finds the
-// conflict again until H converges to R or `resolve` moves B to R.
-// Structured files merge per path (merge.ts). Code (`*.ts`, the updater
-// included) stays repo-wins: R is written and a customized H is listed in
-// `overwritten`. An item without a base takes it from the repo's history: a
-// host copy equal to any committed version is unmodified; one equal to none
-// gets an unknown base and conflicts until resolved. A machine the updater
-// never ran on (no base record and no installed updater, see freshMachine)
-// has received no repo content: its structured files, written by OMP's own
-// first-run setup or by the user, are merged against an empty base, so every
-// managed key the host lacks is written and a host value that differs from
-// the repo is a conflict. Conflicts are not errors. `conflicts` prints them
-// with the adaptation procedure; `resolve` accepts them after the host copy
-// was adapted.
-//
-// DELETIONS. An item the base has and the source dropped is deleted when the
-// host copy is unmodified (code: always), else it conflicts; a machine-owned
-// agent definition that was modified is kept instead (see OWNERSHIP). Items
-// dropped
-// before this machine had a base use `git diff previousCommit HEAD` when the
-// caller passes the previous commit. The finite TODO_RETIREMENTS and
-// FORK_RETIREMENTS are different: when the source declares the corresponding
-// independent plugin (Todo, omp-subagent-more), both modes retire those exact
-// leaves after the OMP owner confirms plugin readiness, even on first apply
-// or without history. CTX_RETIREMENTS (the ctx leaves the Todo plugin now
-// ships) are inspected in the same preflight, but deleted only when the ready
-// plugin carries src/ctx; until then the old leaves stay.
-//
-// RELOCATIONS. Both modes, planned like every other op. Earlier layouts kept
-// extensions flat (extensions/<name>.ts) and their files at the agent root.
-//   - A file SUPERSEDED by one the source ships is deleted: a flat module
-//     would load beside its directory version (two modules, one extension
-//     id), the agent-root updater is replaced by the copy in
-//     extensions/omp-config-autoupdate/, and read-topics/index.ts would
-//     contest tool://read with the tool-topics extension that now owns it.
-//     An app-managed one is reported as an error instead.
-//     Every legacy source below that is app-managed stays in place and is
-//     skipped or blocks its migration; it is never imported or deleted.
-//   - The omp-config sections of the omomp file and their old standalone JSON
-//     files move into plugin settings; see SETTINGS.
-//   - The former system-prompt-replace section (or its standalone JSON) is
-//     removed when it matches this machine's accepted structured base, or a
-//     committed repo version if no base exists. The shipped REPLACE-SYSTEM
-//     default then installs as a normal managed template. Only customized host
-//     rules are converted into the destination's normal managed-template merge.
-//     Successful migration removes only that omomp.yml section and legacy JSON.
-//     Occupied destinations, a section coexisting with legacy JSON, invalid
-//     custom data, ambiguous layouts and other omomp formats stay in place with
-//     a note; the default template is not installed while such a migration is
-//     blocked.
-//   - DATA_MOVES split the host's old APPEND_SYSTEM_MODEL.md (at the agent
-//     root or beside append-system-model) into APPEND-SYSTEM-model-NN.md files
-//     in block order, with target: * preserving main/subagent scope. Every
-//     block and destination is checked before writing; malformed inputs or
-//     occupied destinations leave the old file in place with a note.
-//     Other data moves carry agent-root data into its extension directory:
-//     host files move only to free paths; a repo template (shipped now or by
-//     the previous commit) is deleted as the source writes or dropped it when
-//     it equals a version the repo shipped or this machine accepted at its old
-//     or new path; a customized one stays in place with a note to port it.
-//     Symlinks are never moved, only noted.
-//   - Retired config.yml list entries (RETIRED_LIST_ENTRIES) are dropped.
-//
-// SAFETY. Parse and plan all source/host inputs and retirement ownership before
-// plugin installation or file writes. Preflight errors stop the whole apply.
-// Install and upgrade plugins, then freshly query OMP for each required plugin
-// entry; failed readiness leaves all managed file operations unapplied. `--check`
-// only reports candidates, conflicts and prerequisites: it writes no file, no
-// base and fetches no history. Writes use a temp file and rename.
-// Order after readiness: moves, plain files, structured files, deletions, then
-// the base of every item whose host operation succeeded.
-// Any move/write error prevents the deletion phase entirely.
-// Automatic markers are written last after an error-free apply; manual apply
-// never records a working-tree HEAD but does record the base, so a later
-// commit that differs from the working tree updates unmodified items again.
-// Partial cutover errors require a rerun before restart. A lock dir
-// (~/.omp/omp-config-update.lock) keeps concurrent OMP starts, /update-omp and
-// `resolve` from refreshing, applying or recording at once; the loser skips.
-// The lock records its holder's pid: a dead holder's lock is taken over, and a
-// process only releases a lock it holds.
-//
-// PLUGINS. Every required entry of install-plugins.sh (an uncommented quoted
-// line) and every installed optional one (a comment line holding only a
-// source) runs through `omp install` with its declared spec before managed
-// file operations: missing required ones are installed, installed ones are
-// re-resolved and take the declared spec (npm to the latest
-// version, a GitHub URL to the head of its `#ref`, else of its default
-// branch). omomp plugins are declared as `<url>#release`, so they follow
-// each plugin's daily release, not its main. A plugin counts as
-// changed when ~/.omp/plugins/bun.lock or omp-plugins.lock.json changes; a
-// change sets restartNeeded. A failed install or upgrade is an error and stops
-// the apply before file operations. Packages are never enabled or disabled here.
-// When `auto` finds the config commit unchanged it still refreshes plugins
-// whose source moves on its own: every GitHub URL without a `#ref` or on the
-// `#release` channel (PLUGIN_CHANNEL), among the required entries and the
-// installed optional ones (a comment line holding only a source). An installed
-// plugin matches a declared GitHub URL by its owner/repo in any form omp
-// records (`github:`, https or git URL). The same `omp install` re-resolves
-// each one, so the plugin manager, not this script, decides whether the branch
-// moved; npm entries and URLs pinned to any other `#ref` wait for the next
-// config commit. The result rides on
-// `up-to-date`; a failed install is reported there and never touches the marker.
-// Each retirement handover requires a fresh enabled npm catalog entry, the
-// extension entry its manifest declares and the actual files (Todo: ./index.ts;
-// omp-subagent-more: ./extensions/fork-task/index.ts plus agents/fork-self.md).
-// No plugin internals or Tern catalog are imported here.
-// Nothing is uninstalled; /update-omp handles uninstall candidates.
-// ============================================================================
-
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
@@ -273,16 +59,10 @@ import {
 } from "./omomp-migration.ts";
 
 export const REPO_URL = "https://github.com/oh-my-omp/omp-config.git";
-/** Origins of updater clones made before the repo moved to oh-my-omp; repointed to REPO_URL on the next fetch. */
 const PREVIOUS_REPO_URLS: readonly string[] = ["https://github.com/mouriya-s-lab/omp-config.git"];
 export const DEFAULT_BRANCH = "release";
 export const APPLIED_MARKER = ".omp-config-applied";
 
-/**
- * config.yml paths owned by each machine, OMP or the user's own consent:
- * never written from the repo, never seeded, never removed.
- * /sync-omp-config never copies them into the repo.
- */
 export const LOCAL_CONFIG_FIELDS: readonly string[] = [
 	"providers.webSearchOrder",
 	"modelRoles",
@@ -306,10 +86,6 @@ export const LOCAL_CONFIG_FIELDS: readonly string[] = [
 	"claudeResets",
 ];
 
-/**
- * config.yml paths whose repo value is a starting default: written while the
- * host lacks them, then the machine's. /sync-omp-config never copies them.
- */
 export const SEED_CONFIG_FIELDS: readonly string[] = [
 	"browser",
 	"composer",
@@ -319,31 +95,17 @@ export const SEED_CONFIG_FIELDS: readonly string[] = [
 	"retry.fallbackChains",
 ];
 
-/**
- * config.yml lists shared by repo and machine: entries the repo lists (or its
- * base listed) are the repo's subsequence, merged three-way as one value;
- * other entries belong to the machine and stay ahead of the repo's.
- * /sync-omp-config never writes machine entries into the repo.
- */
 export const MACHINE_LIST_FIELDS: readonly string[] = ["extensions", "disabledProviders"];
 
-/**
- * Entries earlier repo versions put in a MACHINE_LIST_FIELDS list and later
- * replaced. A machine without a base cannot tell them from its own entries,
- * so they are named explicitly and dropped on every apply.
- */
 const RETIRED_LIST_ENTRIES: Readonly<Record<string, readonly string[]>> = {
 	extensions: ["~/.omp/agent/extensions-last/system-prompt-replace.ts"],
 };
 
-/** Where this script lives, relative to the agent dir (and to `agent/` in the repo). */
 const UPDATER_REL = "extensions/omp-config-autoupdate/omp-config-update.ts";
-/** Where layouts before the extension directory kept this script. */
 const LEGACY_UPDATER_REL = "omp-config-update.ts";
 
 const TODO_PLUGIN_URL = "https://github.com/oh-my-omp/omp-todo-more#release";
 const TODO_PLUGIN_NAME = "omp-todo-more";
-/** Exact legacy leaves; directories, interior links and neighboring host files are not retirement targets. */
 const TODO_RETIREMENTS: readonly string[] = [
 	"extensions/todo-more/index.ts",
 	"extensions/todo-more/tool.ts",
@@ -355,7 +117,6 @@ const TODO_RETIREMENTS: readonly string[] = [
 	"extensions/subagent-todo/index.ts",
 ];
 
-/** ctx leaves the Todo plugin now ships under src/ctx; retired only once the ready plugin carries them. */
 const CTX_RETIREMENTS: readonly string[] = [
 	"extensions/ctx-tool/index.ts",
 	"extensions/ctx-tool/inventory.ts",
@@ -366,12 +127,6 @@ const CTX_RETIREMENTS: readonly string[] = [
 
 const FORK_PLUGIN_URL = "https://github.com/oh-my-omp/omp-subagent-more";
 const FORK_PLUGIN_NAME = "omp-subagent-more";
-/**
- * Exact legacy leaves of the local fork-task extension and its agent
- * definition; the flat module is the SUPERSEDED-era layout the plugin also
- * replaces. Directories, interior links and neighboring host files are not
- * retirement targets.
- */
 const FORK_RETIREMENTS: readonly string[] = [
 	"extensions/fork-task/index.ts",
 	"extensions/fork-task/replica.ts",
@@ -384,12 +139,10 @@ const FORK_RETIREMENTS: readonly string[] = [
 	"agents/fork-self.md",
 ];
 
-/** True when an install-plugins.sh required entry names the omp-subagent-more repo, with or without a `#ref` pin. */
 function requiresForkPlugin(spec: string): boolean {
 	return spec.split("#", 1)[0] === FORK_PLUGIN_URL;
 }
 
-/** Files of earlier layouts (agent-dir relative) and the file that replaced each. */
 const SUPERSEDED: readonly { readonly from: string; readonly by: string }[] = [
 	...[
 		"append-system-model",
@@ -411,12 +164,6 @@ const SUPERSEDED: readonly { readonly from: string; readonly by: string }[] = [
 	{ from: LEGACY_UPDATER_REL, by: UPDATER_REL },
 ];
 
-/**
- * Data from earlier layouts (agent-dir relative). `host` files are the
- * machine's; `template` files are the repo's
- * when the source ships the new path or the previous commit shipped the old
- * one, and the machine's otherwise. A `pattern` matches names at the agent root.
- */
 type DataMove =
 	| { readonly kind: "split-model"; readonly owner: "host"; readonly from: readonly string[]; readonly toDir: string }
 	| { readonly kind: "pattern"; readonly owner: "host" | "template"; readonly pattern: RegExp; readonly toDir: string };
@@ -441,10 +188,8 @@ interface StructuredItem {
 	readonly rules: PathRules;
 }
 
-/** The machine's omomp file: no longer managed; its omp-config sections move out (see SETTINGS). */
 const OMOMP_REL = "agent/omomp.yml";
 
-/** Structured files. */
 const STRUCTURED: readonly StructuredItem[] = [
 	{
 		rel: "agent/config.yml",
@@ -453,27 +198,10 @@ const STRUCTURED: readonly StructuredItem[] = [
 	},
 ];
 
-/**
- * Agent definitions the repo ships as defaults: seeded while the rel has no
- * base record, then the machine's (see OWNERSHIP). agents/*.txt are not agent
- * definitions — non-agent notes stay managed.
- */
 const MACHINE_OWNED_PLAIN = /^agent\/agents\/[^/]+\.md$/;
 
-/**
- * omp-config's changelog: lgit writes it at the repo root so it covers every
- * commit; the plugin manifest declares `CHANGELOG.md`, so it lands beside the
- * manifest in PLUGIN_DIR (see agentPathOf). /sync-omp-config never carries it back.
- */
 const ROOT_CHANGELOG_REL = "CHANGELOG.md";
 
-/**
- * Repo files copied verbatim. `rel` uses `/` separators. Inside an extension
- * directory only modules and shipped templates are the repo's; any other file
- * there (settings, switches, the machine's own templates) is the host's.
- * MACHINE_OWNED_PLAIN paths match too: shipped files still plan through
- * `planPlainItem`, which keeps the machine's copy once a base is recorded.
- */
 function managedPlain(rel: string): boolean {
 	if (rel.split("/").some((part) => part.startsWith("."))) return false;
 	return (
@@ -481,7 +209,6 @@ function managedPlain(rel: string): boolean {
 		/^agent\/(config-light\.yml|omp-light\.ts)$/.test(rel) ||
 		/^agent\/agents\/.+$/.test(rel) ||
 		/^agent\/(extensions|extensions-last)\/[^/]+\/[^/]+\.ts$/.test(rel) ||
-		// Shared-code copies sit one level deeper (`extensions/_shared/omomp-shared/<file>.ts`).
 		/^agent\/extensions\/_shared\/omomp-shared\/[^/]+\.ts$/.test(rel) ||
 		/^agent\/extensions\/append-system-model\/APPEND-SYSTEM-[^/]+\.md$/.test(rel) ||
 		/^agent\/extensions-last\/system-prompt-replace\/REPLACE-SYSTEM-[^/]+\.ya?ml$/.test(rel) ||
@@ -495,29 +222,9 @@ function managedPlain(rel: string): boolean {
 	);
 }
 
-/** Extension code and the tool-topics files it loads at start take effect on the next start; the updater script itself runs fresh each time. */
 const RESTART_SCOPED =
 	/^agent\/(SYSTEM_TEMPLATE\.md|APPEND_SYSTEM\.md|PERSONALITY\.md|extensions\/.+\.ts|extensions-last\/.+\.ts|extensions\/tool-topics\/(TOPIC|SURFACE)-[^/]+\.md)$/;
 
-// --- exclusions ---------------------------------------------------------------
-
-/**
- * The machine's own `omp-config-autoupdate.exclude` setting (plugin settings
- * of `omp-config`, whitespace-separated; until the omomp migration moved it,
- * the list still in the omomp section): items the updater never writes,
- * creates or deletes. Plain entries are agent-dir relative paths or globs
- * (`agents/task-high.md`, `extensions/foo/**`, and a literal directory or file
- * name covers everything under it, so `config.yml` excludes the whole
- * structured file too); `<file>:<dotted.path>` excludes a field path inside a
- * structured file (`config.yml:task.agentModelOverrides`), and
- * `omomp.yml:<section>` keeps that omomp section out of the migration. The
- * setting is the machine's: the repo never writes it and /sync-omp-config never
- * carries it. Excluded items keep their host copy and their recorded base
- * untouched and are reported under `skipped`; the updater itself is only ever
- * excluded visibly, through the same report.
- */
-
-/** `field` names `path` or one of its ancestors; same contract as the `local` rule in merge.ts. */
 function coversPath(field: Path, path: Path): boolean {
 	return field.length <= path.length && field.every((part, index) => part === path[index]);
 }
@@ -528,21 +235,12 @@ type ExcludeEntry =
 
 interface Exclusions {
 	readonly entries: readonly ExcludeEntry[];
-	/** Structured rel (`agent/config.yml`) → excluded field paths. */
 	readonly fields: ReadonlyMap<string, readonly Path[]>;
 }
 
-/** Glob characters Bun.Glob treats as magic; a pattern without any matches literally and covers its subtree. */
 const GLOB_MAGIC = /[*?[\]{}!\\]/;
 
-/**
- * Validated exclude entries; `origin` names where they came from in errors.
- * Entries normalize `agent/` prefixes and reject absolute paths, `..` and
- * empty segments; `file:path` entries require a managed structured file or
- * the omomp file. Anything invalid throws: an ambiguous option applies nothing.
- */
 function parseExclusions(raw: readonly string[], origin: string): Exclusions {
-	/** One exclude operand as an agent-dir relative path: `agent/` dropped, root, `..` and empty segments refused. */
 	const normalize = (entry: string): string => {
 		const trimmed = entry.trim();
 		const parts = (trimmed.startsWith("agent/") ? trimmed.slice("agent/".length) : trimmed).split("/");
@@ -579,18 +277,15 @@ function parseExclusions(raw: readonly string[], origin: string): Exclusions {
 	return { entries, fields };
 }
 
-/** Managed `rel` is excluded by a plain entry on its agent-dir path: a literal pattern covers itself and its whole subtree. */
 function plainRelExcluded(rel: string, exclusions: Exclusions): boolean {
 	const leaf = agentPathOf(rel);
 	return exclusions.entries.some((entry) => entry.kind === "plain" && entry.match(leaf));
 }
 
-/** `path` inside the structured file `item` lies at or under an excluded field. */
 function fieldExcluded(item: string, path: Path, exclusions: Exclusions): boolean {
 	return (exclusions.fields.get(item) ?? []).some((field) => coversPath(field, path));
 }
 
-/** Report `rel` as excluded and return true; call sites drop the operation. */
 function skipExcluded(ctx: PlanContext, rel: string): boolean {
 	if (!plainRelExcluded(rel, ctx.exclusions)) return false;
 	ctx.report.skipped.push({ path: targetOf(rel, ctx.opts.agentDir), reason: EXCLUDED_REASON });
@@ -600,8 +295,7 @@ function skipExcluded(ctx: PlanContext, rel: string): boolean {
 const EXCLUDED_REASON = "excluded by the machine (omp-config-autoupdate.exclude)";
 
 /**
- * Invariant over the finished plan: no op may write, create, move or delete an
- * excluded path. A violation is a planner bug, so this throws and aborts the
+ * A violation is a planner bug, so this throws and aborts the
  * apply rather than filtering: filtering a `move` after its write side dropped
  * would still delete the source.
  */
@@ -621,22 +315,14 @@ function assertNoExcludedOps(ctx: PlanContext, ops: readonly Op[]): void {
 	}
 }
 
-// --- report -----------------------------------------------------------------
-
 export interface ApplyOptions {
 	readonly source: string;
 	readonly agentDir: string;
-	/** Commit last applied to agentDir; lets items dropped before this machine had a base be deleted. */
 	readonly previousCommit: string | undefined;
 	readonly check: boolean;
 	readonly plugins: boolean;
 }
 
-/**
- * One managed item (file) or structured path (key) where host and repo both
- * moved away from the base, or the base is unknown. `id` names it for
- * `resolve` and changes when the repo value changes, so a stale id is refused.
- */
 export type Conflict =
 	| { readonly kind: "file"; readonly id: string; readonly rel: string; readonly target: string; readonly reason: ConflictReason }
 	| {
@@ -650,7 +336,6 @@ export type Conflict =
 
 export interface ApplyReport {
 	readonly written: string[];
-	/** RELOCATIONS: host files moved or split into their new paths. */
 	readonly moved: { from: string; to: string }[];
 	readonly deleted: string[];
 	readonly skipped: { path: string; reason: string }[];
@@ -659,16 +344,12 @@ export interface ApplyReport {
 	readonly pluginsInstalled: string[];
 	readonly pluginsUpgraded: string[];
 	readonly pluginsMissing: string[];
-	/** Versions behind pluginsInstalled/pluginsUpgraded, for display; added later, so readers default it to []. */
 	readonly pluginChanges: PluginChange[];
-	/** Customizations kept against an upstream change; added later, so readers default it to []. */
 	readonly conflicts: Conflict[];
-	/** Customized code files the repo replaced (code is repo-wins); added later, so readers default it to []. */
 	readonly overwritten: string[];
 	restartNeeded: boolean;
 }
 
-/** One plugin `omp install` installed or moved: versions from omp-plugins.lock.json, `from` null when newly installed. */
 export interface PluginChange {
 	readonly spec: string;
 	readonly name: string;
@@ -676,7 +357,6 @@ export interface PluginChange {
 	readonly to: string | null;
 }
 
-/** Outcome of one `omp install` pass over a list of plugin specs. */
 export interface PluginRefresh {
 	readonly installed: string[];
 	readonly upgraded: string[];
@@ -684,7 +364,6 @@ export interface PluginRefresh {
 	readonly changes: PluginChange[];
 }
 
-/** A read-only conflict scan: what is pending, or why it could not be told. */
 export type ConflictScan =
 	| { readonly kind: "scanned"; readonly conflicts: Conflict[] }
 	| { readonly kind: "failed"; readonly error: string };
@@ -695,8 +374,6 @@ export type AutoResult =
 	| { readonly kind: "up-to-date"; readonly commit: string; readonly plugins: PluginRefresh; readonly scan: ConflictScan }
 	| { readonly kind: "applied"; readonly commit: string; readonly previous: string | undefined; readonly report: ApplyReport }
 	| { readonly kind: "failed"; readonly error: string };
-
-// --- small helpers ----------------------------------------------------------
 
 function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -716,18 +393,12 @@ function parseStructured(text: string, format: Format): Mapping {
 }
 
 function serialize(value: Mapping, format: Format): string {
-	// Bun.YAML.stringify leaves "key: " before nested blocks; drop that space. The
-	// round-trip check below rejects the result if this ever changes a value.
 	const text = format === "json" ? `${JSON.stringify(value, null, 2)}\n` : Bun.YAML.stringify(value, null, 2).replace(/:[ ]+$/gm, ":");
 	const back = parseStructured(text, format);
 	if (!Bun.deepEquals(back, value)) throw new Error("serialized form does not round-trip");
 	return text.endsWith("\n") ? text : `${text}\n`;
 }
 
-/**
- * Agent-dir relative path of a managed rel: `agent/X` lands at `X`; the
- * repo-root changelog lands beside the plugin manifest that declares it.
- */
 function agentPathOf(rel: string): string {
 	if (rel === ROOT_CHANGELOG_REL) return `${PLUGIN_DIR}/CHANGELOG.md`;
 	if (rel.startsWith("agent/")) return rel.slice("agent/".length);
@@ -738,10 +409,6 @@ function targetOf(rel: string, agentDir: string): string {
 	return join(agentDir, agentPathOf(rel));
 }
 
-/**
- * Otty's "marker" + ": _otty" tag, assembled so the literal never appears in
- * this file: the check matches anywhere, and this file is itself managed.
- */
 const OTTY_MARKER = ["marker:", "_otty"].join(" ");
 
 function isAppManaged(path: string, strict = false): boolean {
@@ -755,17 +422,11 @@ function isAppManaged(path: string, strict = false): boolean {
 	return text.split("\n", 1)[0]?.trim() === "// @orca-managed-pi-extension" || text.includes(OTTY_MARKER);
 }
 
-/**
- * Resolve a symlinked target to the file it points at, so the link survives.
- * A dangling link resolves through readlink, so writing recreates its target.
- */
 function writePath(target: string): string {
 	let link = false;
 	try {
 		link = lstatSync(target).isSymbolicLink();
-	} catch {
-		// Missing target: write it in place.
-	}
+	} catch {}
 	if (!link) return target;
 	try {
 		return realpathSync(target);
@@ -789,9 +450,6 @@ function atomicWrite(target: string, content: string | Uint8Array, mode?: number
 	}
 }
 
-// --- plan -------------------------------------------------------------------
-
-/** A host operation; `base` is recorded once it succeeded. A `base` op only records. */
 type Op =
 	| {
 			readonly kind: "write";
@@ -825,10 +483,8 @@ interface PlanContext {
 	readonly history: RepoHistory;
 	readonly todoRequired: boolean;
 	readonly forkRequired: boolean;
-	/** No repo content ever reached this agent dir; see freshMachine. */
 	readonly freshMachine: boolean;
 	readonly replacementMigration: ReplacementMigration;
-	/** The machine's `omp-config-autoupdate.exclude` entries; read before planning (see the exclusions block). */
 	readonly exclusions: Exclusions;
 }
 
@@ -846,7 +502,6 @@ type ReplacementMigration =
 			readonly rules: string | undefined;
 			readonly omomp: string | undefined;
 			readonly legacy: readonly string[];
-			/** The omomp base record without the moved section, so a later copy of it is never mistaken for accepted repo content. */
 			readonly omompBase: BaseChange | undefined;
 	  };
 
@@ -901,9 +556,6 @@ function planReplacementMigration(
 		return blocked(`unsupported or ambiguous omomp files: ${files.map((rel) => join(opts.agentDir, rel)).join(", ")}`);
 	const hasSection = root !== undefined && Object.hasOwn(root, "system-prompt-replace");
 	if (!hasSection && legacy.length === 0) return { kind: "none" };
-	// The migration is one operation (destination write, section removal,
-	// legacy deletion); an excluded path or the removed field leaves all of it
-	// in place, reported like any other excluded item.
 	const migrationExcluded =
 		plainRelExcluded(REPLACEMENT_RULES_REL, exclusions) ||
 		plainRelExcluded(OMOMP_REL, exclusions) ||
@@ -921,8 +573,6 @@ function planReplacementMigration(
 	if (files.some((rel) => isAppManaged(join(opts.agentDir, rel)))) return blocked(`${targetOf(OMOMP_REL, opts.agentDir)} is app-managed`);
 	const managedLegacy = legacy.find((rel) => isAppManaged(targetOf(rel, opts.agentDir)));
 	if (managedLegacy !== undefined) return blocked(`${targetOf(managedLegacy, opts.agentDir)} is app-managed`);
-	// A section and legacy JSON are two authorities whose merge order is
-	// undefined, so both stay in place with a note naming every file.
 	if (hasSection && legacy.length > 0)
 		return blocked(`the section and legacy JSON coexist: ${[OMOMP_REL, ...legacy].map((rel) => targetOf(rel, opts.agentDir)).join(", ")}`);
 	let value: unknown = root?.["system-prompt-replace"];
@@ -963,7 +613,6 @@ function planReplacementMigration(
 	return { kind: "ready", rules, omomp, legacy, omompBase };
 }
 
-/** One destination write, followed by section/legacy cleanup, with bases accepted only after all succeed. */
 function groupReplacementMigration(opts: ApplyOptions, migration: ReplacementMigration, planned: readonly Op[]): Op[] {
 	if (migration.kind !== "ready") return [...planned];
 	const writes: Extract<Op, { kind: "write" }>[] = [];
@@ -977,7 +626,6 @@ function groupReplacementMigration(opts: ApplyOptions, migration: ReplacementMig
 	if (migration.omomp !== undefined)
 		writes.push({ kind: "write", rel: OMOMP_REL, target: targetOf(OMOMP_REL, opts.agentDir), content: migration.omomp });
 	if (migration.omompBase !== undefined) changes.push(migration.omompBase);
-	// planPlain always emits the final destination write before the structured cleanup.
 	return [
 		{
 			kind: "migrate-replacements",
@@ -991,12 +639,6 @@ function groupReplacementMigration(opts: ApplyOptions, migration: ReplacementMig
 	];
 }
 
-/**
- * The updater never ran on this agent dir: no base record and no updater at
- * its current or legacy path. Every apply, auto run or plain copy of `agent/`
- * installs the updater, so without both traces the structured files present
- * come from OMP's first-run setup or the user, never from the repo.
- */
 function freshMachine(agentDir: string, base: BaseRecord): boolean {
 	return !base.exists && !lexists(join(agentDir, UPDATER_REL)) && !lexists(join(agentDir, LEGACY_UPDATER_REL));
 }
@@ -1019,7 +661,6 @@ function newReport(): ApplyReport {
 	};
 }
 
-/** Short content digest for conflict ids: it changes whenever the repo side changes. */
 function digest(content: string | Uint8Array): string {
 	const hasher = new Bun.CryptoHasher("sha1");
 	hasher.update(content);
@@ -1045,7 +686,6 @@ function listSourceFiles(source: string): string[] {
 
 type TextMerge = { readonly kind: "clean"; readonly content: Buffer } | { readonly kind: "conflict" };
 
-/** `git merge-file` of host and repo against the base; overlapping or binary changes conflict. */
 function mergeText(host: Uint8Array, base: Uint8Array, repo: Uint8Array): TextMerge {
 	const dir = mkdtempSync(join(tmpdir(), "omp-config-merge-"));
 	try {
@@ -1062,11 +702,6 @@ function mergeText(host: Uint8Array, base: Uint8Array, repo: Uint8Array): TextMe
 	}
 }
 
-/**
- * One managed plain file (see CUSTOMIZATIONS). `repo` undefined: the source
- * dropped it. `dropped`: its content at the previous commit, standing in for a
- * base this machine never recorded.
- */
 function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, dropped?: Buffer, projectedHost?: Buffer): Op[] {
 	const { opts, report } = ctx;
 	const target = targetOf(rel, opts.agentDir);
@@ -1081,15 +716,10 @@ function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, 
 	const accept: BaseChange = repo === undefined ? { kind: "plain-drop", rel } : { kind: "plain-known", rel, content: repo };
 	const conflict = (reason: ConflictReason): Op[] => {
 		report.conflicts.push({ kind: "file", id: `${rel}@${repo === undefined ? "absent" : digest(repo)}`, rel, target, reason });
-		// Record what the conflict was found against, so it is found again on the next run.
 		if (recorded.kind !== "none") return [];
 		const change: BaseChange = dropped !== undefined ? { kind: "plain-known", rel, content: dropped } : { kind: "plain-unknown", rel };
 		return [{ kind: "base", rel, change }];
 	};
-	// Machine-owned agent definitions (see OWNERSHIP): seeded while the rel has
-	// no record; an unmodified copy follows the repo, a machine-modified copy
-	// always wins without merge or conflict, and a recorded rel the machine
-	// removed or renamed is never re-created.
 	if (MACHINE_OWNED_PLAIN.test(rel)) {
 		if (host === undefined)
 			return repo !== undefined && recorded.kind === "none" ? [{ kind: "write", rel, target, content: repo, base: accept }] : [];
@@ -1100,8 +730,6 @@ function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, 
 			return repo === undefined
 				? [{ kind: "delete", rel, target, base: accept }]
 				: [{ kind: "write", rel, target, content: repo, base: accept }];
-		// First sight of a rel the machine (or an earlier apply) left behind:
-		// record its presence so a later local removal stays removed.
 		return recorded.kind === "none" ? [{ kind: "base", rel, change: { kind: "plain-unknown", rel } }] : [];
 	}
 	if (repo === undefined) {
@@ -1128,7 +756,6 @@ function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, 
 	return merged.kind === "clean" ? [{ kind: "write", rel, target, content: merged.content, base: accept }] : conflict("both-changed");
 }
 
-/** Todo/ctx/fork leaves have their own retirement planner (see DELETIONS). */
 function retiring(ctx: PlanContext, rel: string): boolean {
 	const leaf = agentPathOf(rel);
 	return (
@@ -1159,7 +786,6 @@ function planPlain(ctx: PlanContext): Op[] {
 			ops.push({ kind: "write", rel, target: targetOf(rel, opts.agentDir), content: projected, base: base?.change });
 		} else ops.push(...planned);
 	}
-	// A working snapshot can omit the shipped template; conversion still preserves host rules.
 	if (ctx.replacementMigration.kind === "ready" && ctx.replacementMigration.rules !== undefined && !shipped.includes(REPLACEMENT_RULES_REL))
 		ops.push({
 			kind: "write",
@@ -1173,14 +799,11 @@ function planPlain(ctx: PlanContext): Op[] {
 		if (rel === REPLACEMENT_RULES_REL && ctx.replacementMigration.kind === "blocked") continue;
 		known.add(rel);
 		if (skipExcluded(ctx, rel)) continue;
-		// A rel no longer managed stays the host's, and retired leaves have their own planner: only the record goes.
 		if (!managedPlain(rel) || retiring(ctx, rel)) ops.push({ kind: "base", rel, change: { kind: "plain-drop", rel } });
 		else ops.push(...planPlainItem(ctx, rel, undefined));
 	}
 	for (const [rel, content] of droppedBeforeBase(ctx))
 		if (!known.has(rel) && !skipExcluded(ctx, rel)) ops.push(...planPlainItem(ctx, rel, undefined, content));
-	// Machine-authored agent definitions the repo never shipped: record their
-	// presence too, so removing one stays removed if the repo ever ships the name.
 	try {
 		for (const entry of readdirSync(join(opts.agentDir, "agents"), { withFileTypes: true })) {
 			const rel = `agent/agents/${entry.name}`;
@@ -1190,15 +813,12 @@ function planPlain(ctx: PlanContext): Op[] {
 			if (isAppManaged(target) || ctx.base.plain(rel).kind !== "none") continue;
 			ops.push({ kind: "base", rel, change: { kind: "plain-unknown", rel } });
 		}
-	} catch {
-		// No agents directory (or unreadable): nothing to record.
-	}
+	} catch {}
 	return ops;
 }
 
 type StructuredSource = { readonly item: StructuredItem; readonly text: string; readonly repo: Mapping };
 
-/** Parse every structured source before anything is written: one invalid source aborts the whole apply. */
 function parseSources(opts: ApplyOptions, report: ApplyReport): StructuredSource[] {
 	const sources: StructuredSource[] = [];
 	for (const item of STRUCTURED) {
@@ -1225,20 +845,12 @@ function parseSources(opts: ApplyOptions, report: ApplyReport): StructuredSource
 	return sources;
 }
 
-/**
- * Every committed version of a structured file that still parses: the history
- * a missing base is matched against. Blobs stream through the batch output
- * cursor one at a time and only the parsed mappings are kept — the decoded
- * texts are never all resident together.
- */
 function structuredHistory(history: RepoHistory, item: Pick<StructuredItem, "rel" | "format">): Mapping[] {
 	const versions: Mapping[] = [];
 	history.eachVersion(item.rel, (text) => {
 		try {
 			versions.push(parseStructured(text, item.format));
-		} catch {
-			// A version that never parsed was never applied: it cannot be a base.
-		}
+		} catch {}
 	});
 	return versions;
 }
@@ -1274,9 +886,6 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 		const rules =
 			fields.length === 0 ? item.rules : { ...item.rules, local: [...item.rules.local, ...fields.map((field) => field.join("."))] };
 		const merged = mergeStructured(host, repo, source, rules);
-		// An excluded field merges like a `local` one (machine-owned, never
-		// written); its recorded base and unknown marks are restored afterward so
-		// removing the entry later resumes from the old base, not a new conflict.
 		if (recorded !== undefined) {
 			for (const field of fields) {
 				setAt(merged.base, field, valueAt(recorded.value, field));
@@ -1302,7 +911,6 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 			if (change !== undefined) ops.push({ kind: "base", rel: item.rel, change });
 			continue;
 		}
-		// Keep the repo's own formatting whenever the result is exactly the repo file.
 		const content = Bun.deepEquals(merged.host, repo, true) ? text : serialize(merged.host, item.format);
 		ops.push({ kind: "write", rel: item.rel, target, content, base: change });
 	}
@@ -1323,7 +931,6 @@ type RetirementInspection =
 	| { readonly kind: "candidate" }
 	| { readonly kind: "blocked"; readonly message: string };
 
-/** Reused immediately before unlink: a long owner installation cannot authorize a changed filesystem object. */
 function inspectRetirement(agentDir: string, rel: string): RetirementInspection {
 	const root = resolve(agentDir);
 	const target = join(root, rel);
@@ -1349,7 +956,6 @@ function planRetirements(ctx: PlanContext, leaves: readonly string[]): Op[] {
 	const { opts, report } = ctx;
 	const ops: Op[] = [];
 	for (const rel of leaves) {
-		// Only an existing leaf is reported; absent ones have nothing to keep.
 		if (!lexists(join(opts.agentDir, rel)) || skipExcluded(ctx, `agent/${rel}`)) continue;
 		const inspected = inspectRetirement(opts.agentDir, rel);
 		switch (inspected.kind) {
@@ -1370,7 +976,6 @@ function planRetirements(ctx: PlanContext, leaves: readonly string[]): Op[] {
 	return ops;
 }
 
-/** True when the previous applied commit had `rel`; always false in manual apply. */
 function previouslyShipped(opts: ApplyOptions, rel: string): boolean {
 	return opts.previousCommit !== undefined && git(opts.source, ["cat-file", "-e", `${opts.previousCommit}:${rel}`]).ok;
 }
@@ -1428,7 +1033,6 @@ function planLegacyModelSplits(ctx: PlanContext, from: readonly string[], toDir:
 			report.notes.push(`${candidate.target} left in place: ${shipped.target} is a managed source file`);
 			continue;
 		}
-		// The split is one operation: an excluded source or fragment target keeps everything in place.
 		if (
 			candidate.fragments.some((fragment) => plainRelExcluded(`agent/${fragment.target.slice(opts.agentDir.length + 1)}`, ctx.exclusions))
 		) {
@@ -1440,7 +1044,6 @@ function planLegacyModelSplits(ctx: PlanContext, from: readonly string[], toDir:
 	return ops;
 }
 
-/** SUPERSEDED and DATA_MOVES as ops (see RELOCATIONS in the header). */
 function planRelocations(ctx: PlanContext): Op[] {
 	const { opts, report } = ctx;
 	const ops: Op[] = [];
@@ -1464,7 +1067,6 @@ function planRelocations(ctx: PlanContext): Op[] {
 				try {
 					names = readdirSync(opts.agentDir);
 				} catch {
-					// No agent dir yet: nothing to move.
 					continue;
 				}
 				for (const name of names.sort()) {
@@ -1491,7 +1093,6 @@ function planRelocations(ctx: PlanContext): Op[] {
 		if (repoOwned && !shippedTemplateCopy(ctx, from, to, readFileSync(source))) {
 			report.notes.push(`${source} left in place: it differs from every shipped version; port its changes into ${target}, then delete it`);
 		} else if (repoOwned) {
-			// An unmodified old copy: the source writes the new copy, or dropped the template, so it has no owner left.
 			ops.push({ kind: "delete", rel: `agent/${from}`, target: source });
 		} else if (lstatSync(source).isSymbolicLink()) {
 			report.notes.push(`${source} is a symlink and was not moved; point it at ${target} yourself`);
@@ -1504,7 +1105,6 @@ function planRelocations(ctx: PlanContext): Op[] {
 	return ops;
 }
 
-/** The old-layout template equals a version the repo shipped or this machine accepted, at either its old or its new path. */
 function shippedTemplateCopy(ctx: PlanContext, from: string, to: string, content: Buffer): boolean {
 	return [`agent/${from}`, `agent/${to}`].some((rel) => {
 		const recorded = ctx.base.plain(rel);
@@ -1515,16 +1115,10 @@ function shippedTemplateCopy(ctx: PlanContext, from: string, to: string, content
 	});
 }
 
-/**
- * Managed files the source dropped between the previous commit and HEAD, with
- * their content at the previous commit: the base of items deleted before this
- * machine recorded one. Empty without a previous commit.
- */
 function droppedBeforeBase(ctx: PlanContext): Map<string, Buffer> {
 	const { opts, report } = ctx;
 	const dropped = new Map<string, Buffer>();
 	if (opts.previousCommit === undefined) return dropped;
-	// -z: NUL-separated, unquoted paths (non-ASCII names are C-quoted otherwise).
 	const diff = git(opts.source, [
 		"diff",
 		"-z",
@@ -1549,8 +1143,6 @@ function droppedBeforeBase(ctx: PlanContext): Map<string, Buffer> {
 	return dropped;
 }
 
-// --- light launcher -----------------------------------------------------------
-
 function installLauncher(opts: ApplyOptions, report: ApplyReport): void {
 	const sourcePath = join(opts.source, "agent/omp-light.ts");
 	if (!existsSync(sourcePath)) return;
@@ -1571,7 +1163,6 @@ function installLauncher(opts: ApplyOptions, report: ApplyReport): void {
 	}
 }
 
-/** The script itself, executable, as `omp-light`; returns the launcher's path. */
 function installPosixLauncher(opts: ApplyOptions, report: ApplyReport, binDir: string, script: Buffer): string {
 	const path = join(binDir, "omp-light");
 	const same = existsSync(path) && Buffer.from(readFileSync(path)).equals(script) && (statSync(path).mode & 0o777) === 0o755;
@@ -1589,12 +1180,6 @@ function installPosixLauncher(opts: ApplyOptions, report: ApplyReport, binDir: s
 	return path;
 }
 
-/**
- * Windows starts only executables from PATH, so the script is compiled with `bun build --compile` into
- * `omp-light.exe`. The copy of the script beside it records what the executable was built from: the
- * executable is rebuilt when the script changed or the executable is missing, and the copy is written only
- * after a build succeeded. An `omp-light.cmd` left by an earlier version is removed. Returns the launcher's path.
- */
 function installWindowsLauncher(opts: ApplyOptions, report: ApplyReport, binDir: string, sourcePath: string, script: Buffer): string {
 	const source = join(binDir, "omp-light.ts");
 	const executable = join(binDir, "omp-light.exe");
@@ -1635,9 +1220,6 @@ function installWindowsLauncher(opts: ApplyOptions, report: ApplyReport, binDir:
 	return executable;
 }
 
-// --- plugins ------------------------------------------------------------------
-
-/** install-plugins.sh `plugins=( … )`: quoted uncommented lines are required; a comment line holding only a source is optional. */
 interface DeclaredPlugins {
 	readonly required: string[];
 	readonly optional: string[];
@@ -1661,24 +1243,20 @@ function declaredPlugins(source: string): DeclaredPlugins {
 			required.push(entry[1]!);
 			continue;
 		}
-		// Same rule as plugin-audit.sh: explanatory comments contain spaces and do not match.
 		const commented = /^\s*#\s*'?([^'\s]+)'?\s*$/.exec(line);
 		if (commented) optional.push(commented[1]!);
 	}
 	return { required, optional };
 }
 
-/** The moving channel of omomp plugins: each plugin's daily release moves its `release` branch. */
 const PLUGIN_CHANNEL = "release";
 
-/** A GitHub spec whose source moves without a config commit: no `#ref`, or the `#release` channel. */
 function movesOnItsOwn(spec: string): boolean {
 	if (!spec.includes("://")) return false;
 	const hash = spec.indexOf("#");
 	return hash === -1 || spec.slice(hash + 1) === PLUGIN_CHANNEL;
 }
 
-/** Plugin name → dependency value (`#ref` stripped) recorded in ~/.omp/plugins/package.json. */
 type InstalledPlugins = ReadonlyMap<string, string>;
 
 function installedPlugins(): InstalledPlugins {
@@ -1687,12 +1265,9 @@ function installedPlugins(): InstalledPlugins {
 		const parsed: unknown = JSON.parse(readFileSync(join(homedir(), ".omp", "plugins", "package.json"), "utf8"));
 		const deps = isMapping(parsed) && isMapping(parsed.dependencies) ? parsed.dependencies : {};
 		for (const [name, value] of Object.entries(deps)) {
-			// Strip `#ref`: a host install pinned to a branch or commit still counts as installed.
 			if (typeof value === "string") installed.set(name, value.split("#", 1)[0]!);
 		}
-	} catch {
-		// No plugins installed yet.
-	}
+	} catch {}
 	return installed;
 }
 
@@ -1705,13 +1280,11 @@ function npmName(spec: string): string {
 	return at === -1 ? spec : spec.slice(0, at);
 }
 
-/** `owner/repo` of a GitHub source in any form `omp install` records (`github:`, https or git URL, optional `.git`), else undefined. */
 function githubRepo(source: string): string | undefined {
 	const match = /^(?:github:|(?:git\+)?https:\/\/github\.com\/|git@github\.com:)([^/\s]+)\/([^/\s#]+?)(?:\.git)?\/?$/i.exec(source);
 	return match === null ? undefined : `${match[1]}/${match[2]}`.toLowerCase();
 }
 
-/** The package name a declared spec is installed under, or undefined when it is not installed. */
 function installedName(spec: string, installed: InstalledPlugins): string | undefined {
 	if (!spec.includes("://")) {
 		const name = npmName(spec);
@@ -1725,7 +1298,6 @@ function installedName(spec: string, installed: InstalledPlugins): string | unde
 	return undefined;
 }
 
-/** Plugin name → version recorded in ~/.omp/plugins/omp-plugins.lock.json. */
 function pluginVersions(): ReadonlyMap<string, string> {
 	const versions = new Map<string, string>();
 	try {
@@ -1734,9 +1306,7 @@ function pluginVersions(): ReadonlyMap<string, string> {
 		for (const [name, entry] of Object.entries(plugins)) {
 			if (isMapping(entry) && typeof entry.version === "string") versions.set(name, entry.version);
 		}
-	} catch {
-		// No plugin installed yet, or a lock file omp is rewriting: versions are display-only.
-	}
+	} catch {}
 	return versions;
 }
 
@@ -1751,10 +1321,8 @@ function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((entry: unknown) => typeof entry === "string");
 }
 
-/** The npm section of the OMP owner catalog, queried once per readiness phase. */
 type PluginCatalog = { readonly kind: "ok"; readonly entries: readonly unknown[] } | { readonly kind: "invalid"; readonly message: string };
 
-/** Owner query, not dependency presence: no private imports, upgrades, enablement or Tern inspection. */
 function pluginCatalog(): PluginCatalog {
 	const omp = Bun.which("omp");
 	if (omp === null) return { kind: "invalid", message: "Plugin readiness unavailable: omp is not on PATH" };
@@ -1773,7 +1341,6 @@ function pluginCatalog(): PluginCatalog {
 	}
 }
 
-/** The unique enabled npm entry `name` in a catalog, or why it does not count as present. */
 type NpmPluginEntry =
 	| { readonly kind: "found"; readonly plugin: Mapping }
 	| { readonly kind: "missing" }
@@ -1831,7 +1398,6 @@ function forkPluginReadiness(catalog: PluginCatalog): PluginReadiness {
 	return { kind: "ready" };
 }
 
-/** Resolution state `omp install` writes; unchanged bytes mean no plugin was installed or re-resolved. */
 function pluginResolutionState(): string {
 	const dir = join(homedir(), ".omp", "plugins");
 	return ["bun.lock", "omp-plugins.lock.json"]
@@ -1839,7 +1405,6 @@ function pluginResolutionState(): string {
 			try {
 				return readFileSync(join(dir, name), "utf8");
 			} catch {
-				// Expected before the first install: no lock file yet.
 				return "";
 			}
 		})
@@ -1847,9 +1412,7 @@ function pluginResolutionState(): string {
 }
 
 /**
- * `omp install` for each spec: a missing one is installed, an installed one is
- * re-resolved to npm's latest or the head of a GitHub URL's `#ref` (its default
- * branch without one). `omp plugin
+ * `omp plugin
  * upgrade` is not used: for GitHub-sourced plugins it reports "up to date" while
  * the locked commit is stale.
  */
@@ -1872,7 +1435,6 @@ function installPlugins(omp: string, specs: readonly string[]): PluginRefresh {
 	return refresh;
 }
 
-/** The apply's plugin step: every required plugin and every installed optional one, before managed file operations. */
 function syncPlugins(opts: ApplyOptions, report: ApplyReport, plugins: DeclaredPlugins): void {
 	const installed = installedPlugins();
 	const declared = [...plugins.required, ...plugins.optional.filter((spec) => installedName(spec, installed) !== undefined)];
@@ -1900,12 +1462,6 @@ function syncPlugins(opts: ApplyOptions, report: ApplyReport, plugins: DeclaredP
 	if (refresh.changes.length > 0) report.restartNeeded = true;
 }
 
-/**
- * Plugins whose source moves without a config commit: GitHub URLs without a
- * `#ref` or on the `#release` channel, among the required entries and the
- * installed optional ones. Run by `auto` when the config commit is unchanged;
- * npm entries and other `#ref` pins wait for the next commit.
- */
 function refreshMovingPlugins(source: string): PluginRefresh {
 	const { required, optional } = declaredPlugins(source);
 	const installed = installedPlugins();
@@ -1916,14 +1472,9 @@ function refreshMovingPlugins(source: string): PluginRefresh {
 	return installPlugins(omp, specs);
 }
 
-// --- settings ---------------------------------------------------------------
-
-/** What the settings step knows before any write: the plugin's registration, the manifest and the pending omomp move. */
 interface SettingsPreflight {
-	/** omp on PATH, when plugin steps run; null otherwise. */
 	readonly omp: string | null;
 	readonly plugin: PluginState;
-	/** The source's manifest; undefined when the source ships none (an older commit). */
 	readonly manifest: Manifest | undefined;
 	readonly plan: OmompPlan;
 }
@@ -1937,22 +1488,15 @@ function readManifest(source: string): Manifest | undefined {
 	return existsSync(path) ? parseManifest(readFileSync(path, "utf8"), path) : undefined;
 }
 
-/** The repo shipped `value` for omomp `section`: equal to this machine's recorded base, or to a committed version without one. */
 function shippedSection(base: BaseRecord, history: RepoHistory): (section: string, value: unknown) => boolean {
 	return (section, value) => unmodifiedReplacementSection(base, history, { rel: OMOMP_REL, format: "yaml" }, [section], value);
 }
 
-/**
- * Read-only: registration and stored settings through `omp plugin`, and the
- * omomp move. Without plugin steps (`--no-plugins`) OMP is not asked and
- * the plugin counts as unregistered.
- */
 function settingsPreflight(opts: ApplyOptions, base: BaseRecord, history: RepoHistory): SettingsPreflight {
 	const manifest = readManifest(opts.source);
 	const omp = opts.plugins ? Bun.which("omp") : null;
 	const plugin: PluginState = omp === null ? { kind: "unregistered" } : queryPluginState(omp, pluginDirOf(opts.agentDir));
 	if (plugin.kind === "failed") throw new Error(`plugin ${PLUGIN_NAME}: ${plugin.error}; nothing applied`);
-	// Planned even when the source ships no manifest: the exclude list still in the omomp file is the machine's option.
 	const plan = planOmompMigration({
 		agentDir: opts.agentDir,
 		manifest: manifest ?? new Map(),
@@ -1962,7 +1506,6 @@ function settingsPreflight(opts: ApplyOptions, base: BaseRecord, history: RepoHi
 	return { omp, plugin, manifest, plan };
 }
 
-/** The machine's exclude option: the stored plugin setting, else the list still waiting in the omomp file. */
 function exclusionsOf(preflight: SettingsPreflight, agentDir: string): Exclusions {
 	const stored =
 		preflight.plugin.kind === "unregistered" || preflight.plugin.kind === "failed" ? undefined : preflight.plugin.settings[EXCLUDE_KEY];
@@ -1992,7 +1535,6 @@ function describeMove(move: SectionMove): string {
 
 const CONFIG_REL = "agent/config.yml";
 
-/** The machine's `modelRoles` in config.yml; a missing file or block has none. */
 function machineRoles(agentDir: string): Mapping {
 	const target = targetOf(CONFIG_REL, agentDir);
 	if (!existsSync(target)) return {};
@@ -2002,7 +1544,6 @@ function machineRoles(agentDir: string): Mapping {
 	return roles;
 }
 
-/** `--check` and `--no-plugins`: say what the settings step would do. */
 function reportPendingSettings(opts: ApplyOptions, preflight: SettingsPreflight): string[] {
 	const notes: string[] = [];
 	if (preflight.manifest === undefined) return notes;
@@ -2027,7 +1568,6 @@ function reportPendingSettings(opts: ApplyOptions, preflight: SettingsPreflight)
 	}
 }
 
-/** Register `<agentDir>/extensions/_shared` as plugin `omp-config` unless OMP already knows the plugin. Returns its stored settings, or null on failure. */
 function ensurePlugin(opts: ApplyOptions, report: ApplyReport, omp: string, before: PluginState): Mapping | null {
 	const dir = pluginDirOf(opts.agentDir);
 	switch (before.kind) {
@@ -2062,13 +1602,11 @@ function ensurePlugin(opts: ApplyOptions, report: ApplyReport, omp: string, befo
 	}
 }
 
-/** `moved` carries the role bindings this run wrote, which the read-back must find with their values. */
 type MoveOutcome =
 	| { readonly kind: "moved"; readonly bindings: readonly RoleBinding[] }
 	| { readonly kind: "kept"; readonly reason: string }
 	| { readonly kind: "skipped" };
 
-/** One section: settings the machine has not set yet, then its files and agent flags. Writes nothing before every check passed. */
 function moveSection(
 	opts: ApplyOptions,
 	report: ApplyReport,
@@ -2160,14 +1698,6 @@ function moveSection(
 	return { kind: "moved", bindings };
 }
 
-/**
- * SETTINGS step, after every file operation: link the plugin, then move the
- * omomp sections (planned again from disk, since this apply may have rewritten
- * the file). A section leaves the file only after OMP lists each of its values
- * and `config.yml` reads back each role binding it wrote with the written value;
- * anything that cannot move stays with a note. The file goes once nothing is
- * left in it; the omomp base record goes once no omp-config section is.
- */
 function settleSettings(
 	opts: ApplyOptions,
 	report: ApplyReport,
@@ -2264,22 +1794,13 @@ function settleSettings(
 	if (!holdsOwnedSection(rest) && base.structuredOf(OMOMP_REL) !== undefined) base.commit([{ kind: "structured-drop", rel: OMOMP_REL }]);
 }
 
-// --- apply ------------------------------------------------------------------
-
-/**
- * Mutable apply state produced by `planApply` and carried through the plugin
- * gate and the op execution: the planning fields are the `PlanContext` it is
- * built from. The gate may set `ctxReady`, which merges `ctxRetirements`.
- */
 interface ApplyState extends PlanContext {
 	readonly settings: SettingsPreflight;
-	/** Planned with the rest so blocked ownership stops the apply before plugins install; used only once the plugin carries src/ctx. */
 	readonly ctxRetirements: readonly Op[];
 	readonly ops: readonly Op[];
 	ctxReady: boolean;
 }
 
-/** Preflight and op plan; a throw becomes a report error and aborts the apply before anything runs. */
 function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 	try {
 		const base = BaseRecord.load(opts.agentDir);
@@ -2312,7 +1833,6 @@ function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 		const ctxRetirements = todoRequired ? planRetirements(ctx, CTX_RETIREMENTS) : [];
 		report.notes.push(...history.notes);
 		if (opts.check || !opts.plugins) report.notes.push(...reportPendingSettings(opts, settings));
-		// Moves first, managed writes next, deletions after them, base records last; plugin retirements require all preceding operations to succeed.
 		const rank: Record<Op["kind"], number> = { move: 0, split: 0, "migrate-replacements": 0, write: 1, delete: 2, base: 3 };
 		const ops = groupReplacementMigration(opts, replacementMigration, planned).toSorted((a, b) => rank[a.kind] - rank[b.kind]);
 		assertNoExcludedOps(ctx, ops);
@@ -2323,13 +1843,6 @@ function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 	}
 }
 
-/**
- * The plugin gates: owner-catalog readiness before plugin sync, `syncPlugins`,
- * then the confirmation switch that sets `ctxReady` and clears both retirement
- * handoffs. Every required plugin's before-query runs before anything
- * installs; a failed gate stops a real apply before any op runs, so no managed
- * file switches. Returns "stop" when a real apply must end before running ops.
- */
 function applyPluginGates(state: ApplyState): "stop" | undefined {
 	const { opts, report } = state;
 	const before = state.todoRequired || state.forkRequired ? pluginCatalog() : undefined;
@@ -2398,17 +1911,13 @@ function applyPluginGates(state: ApplyState): "stop" | undefined {
 	return undefined;
 }
 
-/** The do-not-restart warning appended when a real apply leaves work half done. */
 function cutoverNote(state: ApplyState): void {
 	if (state.report.restartNeeded) state.report.notes.push("Cutover incomplete; do not restart OMP. Resolve errors and rerun apply.");
 }
 
-/** Execute the planned ops in order; returns the base changes of the ops that succeeded. */
 function runApplyOps(state: ApplyState): BaseChange[] {
 	const { opts, report } = state;
-	// Ctx retirements only run once the installed plugin carries src/ctx.
 	const ops = state.ctxReady ? [...state.ops, ...state.ctxRetirements] : state.ops;
-	// Base changes of the host operations that succeeded, recorded after all of them.
 	const accepted: BaseChange[] = [];
 	for (const op of ops) {
 		if (!opts.check && op.kind === "delete" && report.errors.length > 0) break;
@@ -2432,10 +1941,6 @@ function runApplyOps(state: ApplyState): BaseChange[] {
 	return accepted;
 }
 
-/**
- * Run one host op: its retirement probe, the write itself and the report and
- * base bookkeeping. A missing retirement target returns without recording.
- */
 function applyOp(state: ApplyState, op: Exclude<Op, { kind: "base" }>, leaf: string, retirement: boolean, accepted: BaseChange[]): void {
 	const { opts, report } = state;
 	if (!opts.check && retirement) {
@@ -2477,7 +1982,6 @@ function applyOp(state: ApplyState, op: Exclude<Op, { kind: "base" }>, leaf: str
 			if (op.base !== undefined) accepted.push(op.base);
 			break;
 		case "delete":
-			// Remove the managed entry itself; a symlink's backing file is not ours.
 			if (!opts.check) unlinkSync(op.target);
 			report.deleted.push(op.target);
 			if (op.base !== undefined) accepted.push(op.base);
@@ -2490,7 +1994,6 @@ function applyOp(state: ApplyState, op: Exclude<Op, { kind: "base" }>, leaf: str
 	if (!opts.check && RESTART_SCOPED.test(op.rel) && op.rel !== `agent/${UPDATER_REL}`) report.restartNeeded = true;
 }
 
-/** Record the base of the successful ops, run the settings and launcher steps and append the cutover note. */
 function settleApply(state: ApplyState, accepted: readonly BaseChange[]): void {
 	const { opts, report } = state;
 	if (!opts.check) {
@@ -2523,14 +2026,12 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 	return report;
 }
 
-/** Plan read-only against `source` and return the conflicts: no plugin installs, no writes, no history fetch. */
 export function scanConflicts(source: string, agentDir: string): ConflictScan {
 	const opts: ApplyOptions = { source, agentDir, previousCommit: undefined, check: true, plugins: false };
 	const report = newReport();
 	try {
 		const base = BaseRecord.load(agentDir);
 		const history = new RepoHistory(source, false);
-		// The exclude option lives in plugin settings: asking OMP is read-only.
 		const exclusions = exclusionsOf(settingsPreflight({ ...opts, plugins: true }, base, history), agentDir);
 		const sources = parseSources(opts, report);
 		const required = declaredPlugins(source).required;
@@ -2554,14 +2055,10 @@ export function scanConflicts(source: string, agentDir: string): ConflictScan {
 	return { kind: "scanned", conflicts: report.conflicts };
 }
 
-// --- lock -------------------------------------------------------------------
-
 const LOCK_DIR = join(homedir(), ".omp", "omp-config-update.lock");
 const LOCK_OWNER = join(LOCK_DIR, "pid");
-/** A lock dir without a pid file is a holder that died between mkdir and write. */
 const LOCK_ORPHAN_MS = 60 * 1000;
 
-/** The lock belongs to a running process; a dead holder's lock is stale. */
 function lockHolderAlive(): boolean {
 	let pid: number;
 	try {
@@ -2578,7 +2075,6 @@ function lockHolderAlive(): boolean {
 }
 
 function acquireLock(): boolean {
-	// ~/.omp may not exist yet (agent dir elsewhere); a missing parent is not a held lock.
 	mkdirSync(dirname(LOCK_DIR), { recursive: true });
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
@@ -2589,15 +2085,12 @@ function acquireLock(): boolean {
 			try {
 				if (lockHolderAlive()) return false;
 				rmSync(LOCK_DIR, { recursive: true, force: true });
-			} catch {
-				// Lock vanished between attempts; retry.
-			}
+			} catch {}
 		}
 	}
 	return false;
 }
 
-/** Release only a lock this process holds, never one taken over after it. */
 function releaseLock(): void {
 	try {
 		if (Number(readFileSync(LOCK_OWNER, "utf8")) !== process.pid) return;
@@ -2607,11 +2100,8 @@ function releaseLock(): void {
 	rmSync(LOCK_DIR, { recursive: true, force: true });
 }
 
-// --- auto -------------------------------------------------------------------
-
 const CLONE_DIR = join(homedir(), ".omp", "omp-config-src");
 
-/** Fetch `branch` into the updater-owned clone; returns the clone or fetch error, if any. */
 function refreshClone(branch: string): string | undefined {
 	if (!existsSync(CLONE_DIR)) {
 		const tmp = `${CLONE_DIR}.tmp-${process.pid}`;
@@ -2652,8 +2142,6 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 		if (applied === commit)
 			return { kind: "up-to-date", commit, plugins: refreshMovingPlugins(CLONE_DIR), scan: scanConflicts(CLONE_DIR, agentDir) };
 		const previousCommit = applied && git(CLONE_DIR, ["cat-file", "-e", `${applied}^{commit}`]).ok ? applied : undefined;
-		// Apply with the fetched commit's own rules. Dynamic import is required:
-		// the module is the just-fetched clone's copy, chosen at runtime, not this file.
 		const fetchedUpdater = join(CLONE_DIR, "agent", UPDATER_REL);
 		if (!existsSync(fetchedUpdater))
 			return { kind: "failed", error: `${branch} at ${commit.slice(0, 7)} has no agent/${UPDATER_REL}; nothing applied` };
@@ -2672,14 +2160,10 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 	}
 }
 
-// --- conflicts and resolve ----------------------------------------------------
-
-/** A JSON value as a fenced block, `(absent)` for a missing one. */
 function fenced(value: unknown): string {
 	return value === undefined ? "  (absent)" : `  \`\`\`json\n${JSON.stringify(value, null, 2).replace(/^/gm, "  ")}\n  \`\`\``;
 }
 
-/** What one conflict looks like on each side, for the person and agent adapting it. */
 function conflictDetail(conflict: Conflict, source: string, base: BaseRecord): string[] {
 	const incoming = join(source, conflict.rel);
 	switch (conflict.kind) {
@@ -2723,7 +2207,6 @@ function conflictDetail(conflict: Conflict, source: string, base: BaseRecord): s
 	}
 }
 
-/** The `conflicts` listing: the adaptation procedure, then every conflict. */
 function conflictsText(conflicts: readonly Conflict[], source: string, agentDir: string): string {
 	if (conflicts.length === 0) return `omp-config: no conflicts between local customizations and ${source}.`;
 	const resolveCommand = `bun "${import.meta.path}" resolve --source "${source}" --agent-dir "${agentDir}" <id>…`;
@@ -2747,14 +2230,11 @@ function conflictsText(conflicts: readonly Conflict[], source: string, agentDir:
 
 export interface ResolveOutcome {
 	readonly resolved: string[];
-	/** The conflict is still there, but upstream changed since the id was listed. */
 	readonly stale: string[];
-	/** No such conflict: already resolved, or a wrong id. */
 	readonly unknown: string[];
 	readonly errors: string[];
 }
 
-/** Move the base of each listed conflict to the source's current value. The caller holds the lock. */
 function resolveConflicts(source: string, agentDir: string, ids: readonly string[]): ResolveOutcome {
 	const outcome: ResolveOutcome = { resolved: [], stale: [], unknown: [], errors: [] };
 	const scan = scanConflicts(source, agentDir);
@@ -2809,8 +2289,6 @@ function resolveConflicts(source: string, agentDir: string, ids: readonly string
 	base.commit(changes);
 	return outcome;
 }
-
-// --- CLI ----------------------------------------------------------------------
 
 function pluginChangeLine(change: PluginChange): string {
 	return change.from === null
@@ -2901,7 +2379,6 @@ async function main(argv: readonly string[]): Promise<number> {
 	}
 	if (mode === "apply") {
 		if (source === undefined) usage();
-		// --check only reads, so it neither takes nor waits for the lock.
 		if (!check && !acquireLock()) {
 			process.stderr.write(`another update holds ${LOCK_DIR}; retry later\n`);
 			return 1;

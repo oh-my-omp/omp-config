@@ -1,46 +1,3 @@
-// ============================================================================
-// omomp-changelog — one merged What's New for the omomp members installed on
-// this machine, and `/omomp-changelog` to read their history.
-//
-// MEMBERS. An installed plugin (enabled or not) whose package.json has a
-// top-level `omomp` object with a string `changelog` (a path relative to the
-// package root; `omp-config` itself is such a plugin through its link). They
-// are read from the host's plugin list and each package's own package.json
-// at every start; nothing is cached. The version of a member is the one in its
-// package.json. Packages without the declaration never show up here.
-//
-// MARKER. `<agentDir>/omomp-changelog/seen.json` maps each member's package
-// name to the version whose changelog was last shown. It is machine state:
-// the updater does not manage it and `/sync-omp-config` does not carry it.
-// Each member falls into exactly one case at a start:
-//   no marker          write the current version, show nothing;
-//   equal              nothing (the changelog is not read);
-//   current is newer   take the sections in (marker, current], then advance
-//                      the marker to the current version;
-//   current is older   nothing, marker kept;
-//   changelog unreadable, no section for the current version, a section in
-//   range without a date, or a version that is not X.Y.Z: the member shows
-//   nothing, its marker is kept and a warning names it.
-// A marker entry of a package that is no longer a member is deleted.
-//
-// START. In the main session with a UI, `session_start` shows the sections
-// as one widget above the editor and the first message the user sends (not a
-// slash command) removes it. `startup.changelogMode` `summary` (default) shows
-// the figures, the category counts and one row per component; `expanded` shows
-// the sections as Markdown, `## <date>` newest first and `### <package> vX.Y.Z`
-// within a day. `hidden` advances the marker without showing; `startup.quiet`
-// shows nothing and keeps the marker (hidden wins when both are set). Sessions
-// without a UI and subagents neither show nor touch the marker.
-//
-// COMMAND. `/omomp-changelog [full|last [N]]` prints the latest 3 release days
-// (`last`: 1, `last N`: N, `full`: all) of every member's changelog as one
-// Markdown message; it reads no marker and writes none.
-//
-// Language of the widget and command text: `_shared/i18n.ts`; changelog
-// entries are shown as written. Failure policy: nothing here throws into omp;
-// a failed start logs a warning and shows nothing.
-// ============================================================================
-
 import { readFileSync } from "node:fs";
 import {
 	type ExtensionAPI,
@@ -84,7 +41,6 @@ function loadChangelog(member: Member): ChangelogLoad {
 	return { kind: "ok", releases: parseReleases(content) };
 }
 
-/** The widget: the figures, then the rows or the Markdown. A component, so no line cap applies. */
 function showWidget(ctx: ExtensionContext, layout: "summary" | "expanded", upgrades: readonly Upgrade[]): void {
 	const digest = digestOf(upgrades);
 	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
@@ -108,7 +64,6 @@ function showWidget(ctx: ExtensionContext, layout: "summary" | "expanded", upgra
 	});
 }
 
-/** Settle every member against the marker, write the marker, and return what to show. */
 async function settleStart(
 	pi: ExtensionAPI,
 ): Promise<{ readonly layout: "summary" | "expanded"; readonly upgrades: readonly Upgrade[] } | undefined> {
@@ -129,7 +84,6 @@ async function settleStart(
 	return policy.kind === "show" && upgrades.length > 0 ? { layout: policy.layout, upgrades } : undefined;
 }
 
-/** `/omomp-changelog`: the latest release days of every member's whole changelog as one Markdown message. */
 async function showHistory(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: string): Promise<void> {
 	const view = parseView(args);
 	if (view.kind === "usage") {
@@ -197,7 +151,6 @@ export default function omompChangelog(pi: ExtensionAPI): void {
 		},
 	});
 
-	/** True while this session's widget is on screen. */
 	let shown = false;
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -214,7 +167,6 @@ export default function omompChangelog(pi: ExtensionAPI): void {
 
 	pi.on("input", (event, ctx) => {
 		try {
-			// A slash command and a message an extension sent are not the user's first message.
 			if (!shown || event.source === "extension" || event.text.startsWith("/")) return;
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
 			shown = false;

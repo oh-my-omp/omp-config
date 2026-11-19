@@ -1,28 +1,3 @@
-// Model-request recorder (#146), run inside the sandbox:
-//   bun /sandbox/recorder.ts setup MODELS_YML     (once, before any omp session)
-//   bun /sandbox/recorder.ts serve                (long-running; one listener per provider)
-//
-// `setup` gives every provider that declares a `baseUrl` a loopback URL (`http://127.0.0.1:<9400+i>`)
-// followed by the provider's baseUrl path (`/v1` and the like), so clients send the same request
-// paths as to the upstream, and writes the mapping to /sandbox/recorder-targets.json. Nothing else
-// changes: the rewritten document is re-parsed and
-// every provider must equal its original in all fields except `baseUrl`, so `apiKey` and the rest
-// keep their values. Comments are not kept (the file exists only inside the container).
-//
-// `serve` listens on each target port. For every request it appends one line to the evidence file
-// named by /sandbox/.requests-sink (falling back to /evidence/interactive.requests.jsonl):
-//   {"seq","provider","tools","body"}
-// `tools` lists each body `tools[]` entry's `name`, else `function.name`; `[]` when absent.
-// Credentials are never recorded, only the body. The request is then forwarded to the recorded
-// upstream with method, path, query, headers and body unchanged (`host` and `content-length` are
-// left to fetch), and the response is streamed back.
-//
-// /sandbox/recorder.ready is written after every listener is bound; sandbox.ts waits for it.
-//
-// `prune-credentials AGENT_DB` removes, from the container's copy of agent.db, every auth_credentials
-// row whose provider has no recorder target: such a provider's requests would bypass the recorder.
-// It then checks that every remaining row's provider has a target, and prints counts and provider
-// names only.
 import { Database } from "bun:sqlite";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -47,18 +22,12 @@ function providersOf(root: Mapping): Mapping {
 	return root.providers;
 }
 
-/** A provider mapping without its `baseUrl`, to compare everything else. */
 function withoutBaseUrl(value: unknown): unknown {
 	if (!isMapping(value)) return value;
 	const { baseUrl: _baseUrl, ...rest } = value;
 	return rest;
 }
 
-/**
- * Pure part of `rewriteBaseUrls`. The rewritten `baseUrl` keeps the original path (`/v1` and the
- * like), because the client appends its request paths to it. The target keeps only the upstream
- * origin, because `serve` appends the request path, which already carries that prefix.
- */
 export function rewriteProviders(original: Mapping): { readonly targets: Target[]; readonly providers: Record<string, unknown> } {
 	const targets: Target[] = [];
 	const providers: Record<string, unknown> = {};
@@ -76,16 +45,10 @@ export function rewriteProviders(original: Mapping): { readonly targets: Target[
 	return { targets, providers };
 }
 
-/** The URL `serve` forwards a request to: the upstream origin plus the request's path and query. */
 export function forwardUrl(target: Target, request: URL): string {
 	return `${target.upstream}${request.pathname}${request.search}`;
 }
 
-/**
- * Rewrites each provider's `baseUrl` in `path` to its recorder port and writes the targets file.
- * Throws, leaving `path` untouched, unless the re-parsed result matches the original everywhere
- * except `baseUrl`.
- */
 export function rewriteBaseUrls(path: string): Target[] {
 	const root = Bun.YAML.parse(readFileSync(path, "utf8"));
 	if (!isMapping(root)) throw new Error("models.yml root is not a mapping");
@@ -113,10 +76,6 @@ function readTargets(): Target[] {
 	return parsed as Target[];
 }
 
-/**
- * Deletes the auth_credentials rows whose provider is not in `providers` (the recorded ones) from
- * the database at `path`, then throws unless every remaining row's provider is in `providers`.
- */
 export function pruneCredentials(path: string, providers: readonly string[]): { readonly removed: number; readonly kept: string[] } {
 	const db = new Database(path, { create: false });
 	try {
@@ -139,13 +98,10 @@ function sinkPath(): string {
 	try {
 		const named = readFileSync(SINK_POINTER, "utf8").trim();
 		if (named !== "") return named;
-	} catch {
-		// No driver has named a sink: the fallback applies.
-	}
+	} catch {}
 	return FALLBACK_SINK;
 }
 
-/** `tools` of a request body: each entry's `name`, else `function.name`. */
 export function toolNamesOf(body: unknown): string[] {
 	if (!isMapping(body) || !Array.isArray(body.tools)) return [];
 	const names: string[] = [];
@@ -171,9 +127,7 @@ function serve(targets: readonly Target[]): void {
 				if (text !== "") {
 					try {
 						body = JSON.parse(text);
-					} catch {
-						// Not JSON: recorded as sent.
-					}
+					} catch {}
 				}
 				const record = { seq: ++seq, provider: target.provider, tools: toolNamesOf(body), body };
 				try {

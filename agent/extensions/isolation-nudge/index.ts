@@ -1,56 +1,10 @@
-/**
- * Worktree reminder for parallel writers, given once per assignment prompt.
- * When a `task` call would leave two or more write-capable agents sharing the
- * session's working directory without isolation, and some undecided item's
- * prompt has not been reminded before, the call is blocked and the reason tells
- * the model to re-dispatch writers with `isolated: true`. The block is the
- * reminder: the same prompt re-dispatched as it was runs untouched, while a new
- * prompt gets its own reminder. Prompts are keyed by a hash of the item's task
- * text: its `task`, or all its `steps` in order when the host's `task.steps`
- * shape is on — one run, one key, never one key per step. The extension never
- * sets `isolated` itself.
- *
- * "Shared" means spawned without `isolated: true`. Only items that leave
- * `isolated` out count as undecided; an explicit `isolated: false` is a
- * deliberate choice (research-only, still messageable) and never triggers the
- * block. Shared writers dispatched by earlier `task` calls of the same
- * assistant message count too: the host prepares every call of a message
- * before executing any, so those writers have no running job yet. The
- * per-message set resets on `assistant_message`, which the host fires once
- * per finalized message before that message's `tool_call` hooks. Earlier
- * shared writers also count while their background job is running, found
- * through the caller-owned async job snapshot. Eval `agent()` and
- * `workpool()` spawns are not seen. When the `task` schema has no `isolated`
- * field (isolation disabled, or plan mode) the model cannot follow the
- * reminder, so nothing is blocked.
- *
- * Registers `assistant_message`, `tool_call` and `tool_result` hooks for main
- * and subagent sessions. Reads/writes no files; session state stays in
- * memory. Hook failures warn and fail open, so dispatch continues without a
- * reminder.
- */
 import { createHash } from "node:crypto";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 
 import { errorText } from "../_shared/errors.ts";
 
-/**
- * `task:*` workers and user-tagged model agents (`m1`, `m2`, … — the bundled
- * task template) hold write tools. An omitted `agent` is counted as a writer
- * conservatively, without resolving the caller's actual default (for
- * `task:mid`/`low`/`free` it is the read-only mentor). `discuss:*` and
- * `mentor:*` are read-only by definition.
- */
 const isWriter = (agent: string | undefined): boolean => agent === undefined || /^task(?::|$)/.test(agent) || /^m\d+$/.test(agent);
 
-/**
- * One spawn as the model wrote it, reduced to what this reminder keys. With
- * `task.steps` on, items carry `steps` instead of `task`; both are the text of
- * one subagent run, so a steps item's text is all its steps joined in their
- * order. An item the host would reject — both fields, neither, or steps that
- * are not a non-empty list of non-empty instructions — does not parse, so the
- * call is left to the host's own validation and nothing is reminded.
- */
 type TaskItem = {
 	readonly text: string;
 	readonly name: string | undefined;
@@ -85,7 +39,6 @@ const taskItemSchema = z
 	);
 const batchSchema = z.object({ tasks: z.array(taskItemSchema) }).passthrough();
 
-/** Batch calls carry `tasks[]`; the runtime still accepts a flat single item. */
 const parseTaskItems = (input: unknown): readonly TaskItem[] | null => {
 	const batch = batchSchema.safeParse(input);
 	if (batch.success) return batch.data.tasks;
@@ -93,7 +46,6 @@ const parseTaskItems = (input: unknown): readonly TaskItem[] | null => {
 	return flat.success ? [flat.data] : null;
 };
 
-/** `TaskToolDetails.progress`: one entry per spawn, `index` matching the call's item order. */
 const taskDetailsSchema = z.object({ progress: z.array(z.object({ index: z.number(), id: z.string() }).passthrough()) }).passthrough();
 
 const spawnProgress = (details: unknown): readonly { readonly index: number; readonly id: string }[] => {
@@ -119,18 +71,9 @@ const renderReminder = (unreminded: readonly string[], sameMessageIds: readonly 
 };
 
 type SessionState = {
-	/** Shared writers this session spawned; pruned once their job stops running. */
 	readonly sharedAgentIds: Set<string>;
-	/**
-	 * Labels of shared writers whose `task` calls passed in the current
-	 * assistant message, in call order; reset on `assistant_message`. They
-	 * share the checkout with the message's other calls once it executes, so
-	 * later calls of the same message count them like running jobs.
-	 */
 	readonly sameMessageShared: string[];
-	/** Shared item indexes per dispatched call, recorded as agent ids on its result. */
 	readonly pending: Map<string, ReadonlySet<number>>;
-	/** Hashes of prompts whose dispatch was already blocked once. */
 	readonly remindedPrompts: Set<string>;
 };
 
@@ -157,15 +100,9 @@ export default function isolationNudge(pi: ExtensionAPI): void {
 		return [...sharedAgentIds];
 	};
 
-	/**
-	 * The task description documents `isolated` exactly when the field is in the
-	 * schema: isolation enabled and plan mode off. (`parameters` is an arktype
-	 * function, not serializable JSON.)
-	 */
 	const isolationAvailable = (): boolean =>
 		pi.getAllTools().some((tool) => tool.name === "task" && tool.description.includes("`isolated`"));
 
-	/** Returns the block reason, or null to let the call run as written. */
 	const onTaskCall = (toolCallId: string, input: unknown, ctx: ExtensionContext): string | null => {
 		const items = parseTaskItems(input);
 		if (items === null) return null;
@@ -199,9 +136,6 @@ export default function isolationNudge(pi: ExtensionAPI): void {
 		return null;
 	};
 
-	// The host fires `assistant_message` once per finalized message before that
-	// message's `tool_call` hooks run; it resets the same-message set. A throwing
-	// handler skips the event's rewrites, so a failure only loses the reset.
 	pi.on("assistant_message", (_event, ctx) => {
 		try {
 			stateOf(ctx).sameMessageShared.length = 0;

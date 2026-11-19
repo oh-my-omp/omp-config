@@ -8,7 +8,6 @@ function bytes(value: unknown): number {
 const cjk = "中".repeat(10_000);
 const escapes = 'a"b\\c\nd'.repeat(2_000);
 const emoji = "😀".repeat(10_000);
-/** A lone surrogate half anywhere in the text: the sign of a split code point. */
 const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 describe("turn-judge maxBytes limit", () => {
@@ -125,12 +124,6 @@ describe("turn-judge fitState", () => {
 		expect(state.时间线[state.时间线.length - 1]?.内容.endsWith("…")).toBe(true);
 	});
 
-	// The cut position comes from a code-unit width table rather than native
-	// escaping, so this pins each table entry to what `JSON.stringify` spends on
-	// that code unit: for a run of one code point the kept length must be the
-	// budget's quotient by the native width. A width counted in code units
-	// instead of UTF-8 bytes (`JSON.stringify(char).length`) fails here for
-	// every non-ASCII sample.
 	test("the head cut follows the escaped width of each code unit", () => {
 		const samples = [
 			...Array.from({ length: 0x20 }, (_, code) => String.fromCharCode(code)),
@@ -152,8 +145,6 @@ describe("turn-judge fitState", () => {
 			"\udc00",
 		];
 		for (const maxBytes of [120, 121, 160, 199, 240, 300, 400]) {
-			// Width-1 text reads the reply's byte budget for this maxBytes: one kept
-			// character per byte, so the length before … is the budget the cut sees.
 			const calibration = fitState([], "a".repeat(400), maxBytes).本轮回复;
 			expect(calibration.endsWith("…")).toBe(true);
 			const cap = calibration.length - 1;

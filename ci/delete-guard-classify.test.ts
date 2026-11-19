@@ -1,7 +1,3 @@
-// delete-guard posix classifier and tool_call hook: deletion commands in any
-// executed position block, non-literal commands block, argument-only mentions
-// and ordinary shell pass; the reason follows delete availability; a hook error
-// blocks.
 import { describe, expect, test } from "bun:test";
 import deleteGuard from "../agent/extensions/delete-guard/index.ts";
 import { classifyPosix } from "../agent/extensions/delete-guard/posix.ts";
@@ -171,7 +167,6 @@ function loadHook(activeTools: readonly string[]): { readonly handler: Handler; 
 		getActiveTools: () => [...activeTools],
 		logger: { warn: (...args: unknown[]) => warnings.push(args) },
 	};
-	// The extension takes the host ExtensionAPI; this test supplies only the members it calls.
 	deleteGuard(pi as unknown as Parameters<typeof deleteGuard>[0]);
 	if (handler === undefined) throw new Error("no tool_call handler registered");
 	return { handler, warnings };

@@ -8,13 +8,11 @@ import { WATCHDOG_FILE_PATTERN, WATCHDOG_FILTER_KEYS, type WatchdogSpec } from "
 type Toggle = "on" | "off";
 export type ToggleScope = "session" | "global";
 
-/** `/watchdog` arguments after parsing. */
 export type WatchdogCommand =
 	| { readonly kind: "list" }
 	| { readonly kind: "toggle"; readonly toggle: Toggle; readonly name: string; readonly scope: ToggleScope }
 	| { readonly kind: "add"; readonly requirement: string }
 	| { readonly kind: "rm"; readonly name: string }
-	/** `rest` is `<name> [change]`; the name may contain spaces, so it is split against the roster. */
 	| { readonly kind: "edit"; readonly rest: string }
 	| { readonly kind: "invalid"; readonly reason: string };
 
@@ -64,7 +62,6 @@ export function parseWatchdogCommand(args: string): WatchdogCommand {
 	}
 }
 
-/** Project root for new project-level watchdogs: the nearest git root above cwd (not past home), else cwd. */
 export function projectRoot(cwd: string): string {
 	const home = homedir();
 	let dir = resolve(cwd);
@@ -76,13 +73,10 @@ export function projectRoot(cwd: string): string {
 	}
 }
 
-/** Hashline `edit` file headers (`[path#TAG]`) and `MV` destinations; other edit modes carry `path`. */
 const EDIT_PATH_PATTERN = /^\[([^\]\n]+?)#[0-9A-Fa-f]{4}\]|^MV\s+"?([^"\n]+?)"?\s*$/gm;
 
-/** Cheap necessary condition for an edit input to name a watchdog file, before scanning its headers. */
 const WATCHDOG_MENTION = /watchdog-/i;
 
-/** Absolute `WATCHDOG-*.md` paths a successful `write` or `edit` call touched. */
 export function touchedWatchdogFiles(toolName: string, input: Record<string, unknown>, cwd: string): string[] {
 	const raw: string[] = [];
 	if ((toolName === "write" || toolName === "edit") && typeof input.path === "string") raw.push(input.path);
@@ -94,7 +88,6 @@ export function touchedWatchdogFiles(toolName: string, input: Record<string, unk
 	}
 	const files = new Set<string>();
 	for (const path of raw) {
-		// Virtual resource writes (out://, local://, etc.) are not local spec-file writes.
 		if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) continue;
 		const expanded = path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
 		const absolute = resolve(cwd, expanded);
@@ -103,13 +96,10 @@ export function touchedWatchdogFiles(toolName: string, input: Record<string, unk
 	return [...files];
 }
 
-/** Facts every `/watchdog add|edit` draft depends on. */
 export type DraftContext = {
 	readonly projectDir: string;
 	readonly globalDir: string;
-	/** Every discovered watchdog; names in use. */
 	readonly existing: readonly WatchdogSpec[];
-	/** `provider/id` the chat reviewer resolves to without `model`, or null when nothing resolves. */
 	readonly defaultModel: string | null;
 };
 
@@ -125,7 +115,6 @@ const NO_ASK =
 const WRITE_STATUS =
 	"The `write`/`edit` result then carries this watchdog's status line from the watchdog extension; if it says the file is not recognised or not searched, fix that and write again.";
 
-/** Settings, defaults, JUDGE rules and names in use, shared by add and edit. */
 function settingsReference(draft: DraftContext, exclude: string | null): string {
 	const others = draft.existing.filter((spec) => spec.filePath !== exclude);
 	const existing =

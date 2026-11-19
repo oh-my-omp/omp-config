@@ -1,8 +1,3 @@
-// Authored tool topics and surfaces beside this extension: `TOPIC-*.md` and `SURFACE-*.md`,
-// each a `---`-fenced YAML header (strict keys) followed by a non-empty markdown body.
-// A TOPIC header may list `inject` entries — `{id, tool, parameter, pattern}` rules that
-// deliver the file's own `tool://<tool>/<name>` after a matching tool call; ids are unique
-// across the whole catalog.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "@oh-my-pi/pi-coding-agent";
@@ -10,7 +5,6 @@ import { errorText } from "../_shared/errors.ts";
 
 export interface InjectRule {
 	readonly id: string;
-	/** The tool whose call triggers the rule — not necessarily the topic's own tool. */
 	readonly tool: string;
 	readonly parameter: string;
 	readonly pattern: RegExp;
@@ -24,7 +18,6 @@ export interface Topic {
 	readonly inject: readonly InjectRule[];
 }
 
-/** Everything authored for one tool: an optional surface replacing its description, and its topics. */
 export interface ToolDocs {
 	readonly tool: string;
 	readonly surface: string | undefined;
@@ -33,7 +26,6 @@ export interface ToolDocs {
 
 export interface Catalog {
 	readonly tools: ReadonlyMap<string, ToolDocs>;
-	/** Files skipped, one line each (file: reason). */
 	readonly problems: readonly string[];
 }
 
@@ -52,7 +44,6 @@ const injectEntry = z
 					new RegExp(value);
 					return true;
 				} catch {
-					// An invalid configured regex is the failure being reported.
 					return false;
 				}
 			}, "Invalid regular expression")
@@ -101,7 +92,6 @@ function parseEntry(file: string, text: string): Entry {
 	return { kind: "surface", tool: parsed.data.tool, body };
 }
 
-/** Read every authored file in `dir`; a bad file, duplicate topic, duplicate inject id or second surface is skipped and reported. */
 export function loadCatalog(dir: string): Catalog {
 	const problems: string[] = [];
 	const surfaces = new Map<string, string>();

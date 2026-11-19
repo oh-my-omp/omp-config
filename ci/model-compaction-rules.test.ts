@@ -8,7 +8,6 @@ describe("model-compaction rule layers", () => {
 		const m1 = join(machine, "COMPACTION-rule-01.md");
 		const m2 = join(machine, "COMPACTION-rule-02.md");
 		const p1 = "/work/proj/.omp/COMPACTION-rule-01.md";
-		// discoverSpecFiles lists the extension's own directory first.
 		expect(layerRuleFiles([m1, m2, p1], machine)).toEqual([p1, m1, m2]);
 	});
 });

@@ -1,42 +1,3 @@
-/**
- * pty lane of tool-policy-nag: decides, before anything runs, whether a `bash`
- * command line or an eval cell starts a program that belongs in an
- * `exec_command` PTY session, and names the rule that says so.
- *
- * CATEGORIES. `passthrough`: the command is handed to another machine,
- * container, user or shell to interpret (`ssh`, `docker exec`, `zsh -c`).
- * `terminal`: the program needs a terminal or stops at an interactive prompt
- * (a bare REPL, a TUI, `git rebase -i`, `sudo` without `-n`). `open-ended`:
- * the command does not end on its own or waits on an outside condition
- * (`tail -f`, `watch`, a `sleep` inside a loop body, `nohup`, a trailing `&`).
- *
- * RULES. `RULES` is the closed registry: one entry per rule id, each with its
- * category; every entry has a hit and a miss fixture in CI. A line is a hit
- * when any of its simple commands — every pipeline stage, `$(…)` or `${ …; }`
- * body, `;`/
- * `&&`/`||` link, the command behind `env`/`timeout`/`nice`/`nohup`/`stdbuf`/
- * `time`/`command`/`exec`, and the command after a non-interactive
- * `sudo -n`/`sudo -S`/`doas -n`/`run0 --no-ask-password` — matches a rule;
- * the first match in source order names the rule. A literal `sh -c` body is
- * itself a passthrough hit, so its contents never decide anything.
- *
- * FAIL OPEN. An unterminated line, a program word from `$…` or a substitution,
- * a program fed by `xargs` (or run by `find -exec`/`parallel`, which are not
- * command positions), an eval cell that does not tokenize or parse, a launch
- * through a renamed import or a name bound to a launcher, and any non-literal
- * launch argument all pass: a missed refusal is preferred over a wrong one.
- *
- * EVAL. Only these launches, spelled under their own names with literal
- * arguments, are judged: py `subprocess.run|call|check_call|check_output|Popen`
- * (argv; shell text with `shell=True`), `os.system`, `os.popen`, `!cmd` lines,
- * `%%bash` bodies and the `sh` helper's command; js `Bun.$` templates without
- * `${}`, `Bun.spawn|spawnSync` array literals, the `sh` helper (`sh("…")`,
- * `globalThis.sh`, a tagged template), child_process `exec|execSync` (shell text) and
- * `spawn|spawnSync|execFile|execFileSync` (argv). A py cell that uses
- * `pexpect` or `pty.spawn`/`pty.fork` is a terminal hit. The `tool.bash`
- * bridge is not read here: it reaches the lane as a real `bash` call.
- */
-
 import { jsLaunchOf, parseJs, walk } from "../_shared/eval-js-launches.ts";
 import { type LaunchWord, type PyScan, pyLaunchAt, scanPy } from "../_shared/eval-py-launches.ts";
 import { optionName, resolveCommand } from "./shell-command.ts";
@@ -44,18 +5,14 @@ import { type CommandToken, type ShellScan, scanShell } from "./shell-parser.ts"
 
 type PtyCategory = "passthrough" | "terminal" | "open-ended";
 
-/** One simple command, resolved through wrappers to the program it runs, in its shell context. */
 type Command = {
 	readonly program: string;
 	readonly args: readonly string[];
 	readonly wrappers: readonly string[];
-	/** stdin is a pipe, a `<` file or a here-document/here-string, not the terminal. */
 	readonly stdinFed: boolean;
 	readonly background: boolean;
 	readonly loopBody: boolean;
-	/** Reads of `args` shared by every rule, keyed by the option spec that shaped them. */
 	readonly options: Map<OptionSpec, Options>;
-	/** Views derived from `args` for every rule; `undefined` until a rule asks for one. */
 	container?: Verb | null;
 	compose?: Verb | null;
 	kubectl?: Verb | null;
@@ -63,21 +20,15 @@ type Command = {
 	firstOperand?: string;
 };
 
-/** A subcommand verb after global options, and the arguments after it. */
 type Verb = { readonly verb: string; readonly rest: readonly string[] };
 
 type Rule =
 	| { readonly on: "command"; readonly category: PtyCategory; readonly matches: (command: Command) => boolean }
 	| { readonly on: "python"; readonly category: PtyCategory; readonly program: string; readonly matches: (scan: PyScan) => boolean };
 
-// ── option reading ────────────────────────────────────────────────────────
-
 type OptionSpec = {
-	/** Short letters that take a value: the rest of the cluster, or the next word. */
 	readonly valueLetters: string;
-	/** `--long` options that take the next word as their value (`--long=v` never does). */
 	readonly valueLongs: readonly string[];
-	/** Options end at the first operand (`ssh host cmd -G`, `docker exec …`). */
 	readonly stopAtOperand: boolean;
 };
 
@@ -85,10 +36,8 @@ type Options = { readonly short: ReadonlySet<string>; readonly long: ReadonlySet
 
 const PLAIN: OptionSpec = { valueLetters: "", valueLongs: [], stopAtOperand: false };
 
-/** `PLAIN` through the first operand, for a subcommand verb or a first operand. */
 const PLAIN_STOP: OptionSpec = { valueLetters: "", valueLongs: [], stopAtOperand: true };
 
-/** `args` under `spec`, read once per command; every rule that asks the same question reuses it. */
 function optionsIn(command: Command, spec: OptionSpec): Options {
 	const cached = command.options.get(spec);
 	if (cached !== undefined) return cached;
@@ -97,7 +46,6 @@ function optionsIn(command: Command, spec: OptionSpec): Options {
 	return parsed;
 }
 
-/** Splits arguments into short letters (`-fn` → f, n), long names (`--follow=x` → `--follow`) and operands. */
 function optionsOf(args: readonly string[], spec: OptionSpec): Options {
 	const short = new Set<string>();
 	const long = new Set<string>();
@@ -135,13 +83,11 @@ function optionsOf(args: readonly string[], spec: OptionSpec): Options {
 const hasAny = (options: Options, letters: string, longs: readonly string[] = []): boolean =>
 	[...letters].some((letter) => options.short.has(letter)) || longs.some((name) => options.long.has(name));
 
-/** A subcommand verb after global options, and the arguments after it; `spec` must stop at the first operand. */
 function verbOf(args: readonly string[], spec: OptionSpec): Verb {
 	const [verb = "", ...rest] = optionsOf(args, spec).operands;
 	return { verb, rest };
 }
 
-/** The command's own verb, read through this command's shared options. */
 function commandVerb(command: Command, spec: OptionSpec): Verb {
 	const [verb = "", ...rest] = optionsIn(command, spec).operands;
 	return { verb, rest };
@@ -220,7 +166,6 @@ const INCUS_OPTIONS: OptionSpec = { valueLetters: "", valueLongs: ["--project"],
 const CONTAINER_ENGINES: ReadonlySet<string> = new Set(["docker", "podman", "nerdctl"]);
 const COMPOSE_PROGRAMS: ReadonlySet<string> = new Set(["docker-compose", "podman-compose"]);
 
-/** `docker [global] [container] <verb> …`, or null for another program; each command answers once. */
 function containerVerb(command: Command): Verb | null {
 	const cached = command.container;
 	if (cached !== undefined) return cached;
@@ -233,7 +178,6 @@ function containerVerb(command: Command): Verb | null {
 	return value;
 }
 
-/** `docker compose [global] <verb> …` or `docker-compose [global] <verb> …`, or null; each command answers once. */
 function composeVerb(command: Command): Verb | null {
 	const cached = command.compose;
 	if (cached !== undefined) return cached;
@@ -274,7 +218,6 @@ function firstOperand(command: Command): string {
 
 const startsWith = (args: readonly string[], words: readonly string[]): boolean => words.every((word, index) => args[index] === word);
 
-/** `bash -c`, `zsh -lc`, `fish --command`: the options before the script carry a `c`. */
 function runsShellString(command: Command): boolean {
 	for (let i = 0; i < command.args.length; i++) {
 		const arg = command.args[i] ?? "";
@@ -284,7 +227,6 @@ function runsShellString(command: Command): boolean {
 		if (name === "--command") return true;
 		if (name === "--rcfile" || name === "--init-file") i++;
 		else if (arg.startsWith("-") && !arg.startsWith("--") && arg.slice(1).includes("c")) return true;
-		// `-o opt` / `+O opt`: the option word ends the bundle and takes the next word.
 		if (!arg.startsWith("--") && /[oO]$/.test(arg)) i++;
 	}
 	return false;
@@ -293,10 +235,8 @@ function runsShellString(command: Command): boolean {
 const POSIX_SHELLS: ReadonlySet<string> = new Set(["bash", "zsh", "sh", "dash", "ksh", "fish"]);
 const POWERSHELLS: ReadonlySet<string> = new Set(["pwsh", "powershell", "pwsh.exe", "powershell.exe"]);
 const REPLS: ReadonlySet<string> = new Set(["bash", "zsh", "sh", "fish", "python", "python3", "node", "irb", "ghci"]);
-/** Flags that keep a REPL interactive: no script, no `-c`/`-e`/`-m`, no version or help. */
 const REPL_FLAGS: ReadonlySet<string> = new Set(["-i", "-l", "--login", "--interactive", "-q", "--norc", "--noprofile", "--no-rc"]);
 
-/** sqlite3's single-dash options that take a value. */
 const SQLITE_VALUES: ReadonlySet<string> = new Set(["-cmd", "-separator", "-nullvalue", "-newline", "-init", "-mmap", "-vfs", "-maxsize"]);
 
 function sqliteOperands(args: readonly string[]): readonly string[] | null {
@@ -310,7 +250,6 @@ function sqliteOperands(args: readonly string[]): readonly string[] | null {
 	return operands;
 }
 
-/** `sudo`/`doas`/`run0` that may prompt for a password; its own options only. */
 function elevationPrompts(command: Command): boolean {
 	switch (command.program) {
 		case "sudo":
@@ -324,7 +263,6 @@ function elevationPrompts(command: Command): boolean {
 	}
 }
 
-/** The command a non-interactive `sudo -n`/`doas -n`/`run0 --no-ask-password` runs, as words. */
 function elevatedCommand(command: Command): readonly string[] | null {
 	switch (command.program) {
 		case "sudo":
@@ -337,8 +275,6 @@ function elevatedCommand(command: Command): readonly string[] | null {
 			return null;
 	}
 }
-
-// ── the registry ─────────────────────────────────────────────────────────
 
 const command = (category: PtyCategory, matches: (command: Command) => boolean): Rule => ({ on: "command", category, matches });
 
@@ -368,9 +304,7 @@ const KUBECTL_GET_OPTIONS: OptionSpec = {
 	stopAtOperand: false,
 };
 
-/** The closed rule registry, in precedence order; adding or removing an entry needs a hit and a miss fixture. */
 const RULES = {
-	// passthrough
 	ssh: command("passthrough", (c) => c.program === "ssh" && !hasAny(optionsIn(c, SSH_OPTIONS), "GVO")),
 	mosh: command("passthrough", (c) => c.program === "mosh"),
 	vagrantSsh: command("passthrough", (c) => c.program === "vagrant" && firstOperand(c) === "ssh"),
@@ -415,7 +349,6 @@ const RULES = {
 		"passthrough",
 		(c) => POWERSHELLS.has(c.program.toLowerCase()) && c.args.some((arg) => /^-(c|command|commandwithargs|cwa)$/i.test(arg)),
 	),
-	// terminal
 	repl: command("terminal", (c) => REPLS.has(c.program) && !c.stdinFed && c.args.every((arg) => REPL_FLAGS.has(arg))),
 	psql: command(
 		"terminal",
@@ -501,7 +434,6 @@ const RULES = {
 				);
 			}),
 	},
-	// open-ended
 	tailFollow: command("open-ended", (c) => c.program === "tail" && hasAny(optionsIn(c, TAIL_OPTIONS), "fF", ["--follow"])),
 	journalFollow: command("open-ended", (c) => c.program === "journalctl" && hasAny(optionsIn(c, JOURNAL_OPTIONS), "f", ["--follow"])),
 	containerLogsFollow: command("open-ended", (c) => {
@@ -539,14 +471,10 @@ type PtyHit = { readonly rule: PtyRuleId; readonly category: PtyCategory; readon
 const isRuleId = (key: string): key is PtyRuleId => Object.hasOwn(RULES, key);
 const RULE_IDS: readonly PtyRuleId[] = Object.keys(RULES).filter(isRuleId);
 
-// ── shell lines ──────────────────────────────────────────────────────────
-
 type ShellContext = { readonly piped: boolean; readonly background: boolean; readonly loopBody: boolean };
 
-/** The commands a simple command runs: its program after wrappers, then what a non-interactive `sudo -n` runs. */
 function commandsOf(tokens: readonly CommandToken[], context: ShellContext): Command[] {
 	const invocation = resolveCommand(tokens, context.piped, "none");
-	// A program from an expansion is unknown; one xargs feeds is not at a command position the shell starts.
 	if (invocation === null || invocation.programDynamic || invocation.feed.kind === "xargs") return [];
 	const found: Command = {
 		program: invocation.program,
@@ -573,7 +501,6 @@ function commandHit(found: Command): PtyHit | null {
 	return null;
 }
 
-/** The first rule a scanned shell line hits, or null; an unterminated line passes. */
 export function ptyLineHit(scan: ShellScan): PtyHit | null {
 	if (!scan.complete) return null;
 	for (const simple of scan.commands) {
@@ -585,12 +512,10 @@ export function ptyLineHit(scan: ShellScan): PtyHit | null {
 	return null;
 }
 
-/** The first rule a shell line hits, or null; a caller that already scanned the line passes that scan instead. */
 export function ptyShellHit(line: string): PtyHit | null {
 	return ptyLineHit(scanShell(line));
 }
 
-/** An argv run without a shell; a word that is not literal leaves it unknown. */
 function argvHit(words: readonly LaunchWord[] | null): PtyHit | null {
 	if (words === null || words.length === 0 || words.some((word) => !word.literal)) return null;
 	for (const found of commandsOf(literalTokens(words.map((word) => word.text)), { piped: false, background: false, loopBody: false })) {
@@ -601,8 +526,6 @@ function argvHit(words: readonly LaunchWord[] | null): PtyHit | null {
 }
 
 const scriptHit = (text: string | null): PtyHit | null => (text === null ? null : ptyShellHit(text));
-
-// ── eval cells ───────────────────────────────────────────────────────────
 
 const PY_LAUNCHES: ReadonlySet<string> = new Set([
 	"subprocess.run",
@@ -630,18 +553,15 @@ function pythonHit(code: string): PtyHit | null {
 				continue;
 			}
 			case "shellHelper": {
-				// Only the helper's own name: a name bound to it is a renamed launch, which this lane lets pass.
 				if (launch.via !== "direct") continue;
 				const hit = scriptHit(launch.text);
 				if (hit !== null) return hit;
 				continue;
 			}
 			case "bridge":
-				// The bridged command reaches the lane as its own `bash` call.
 				continue;
 			case "execEval":
 			case "opaque":
-				// This lane does not judge code run through `exec`/`eval` or unknown loaded modules; delete-guard does.
 				continue;
 			default: {
 				const unreachable: never = launch;
@@ -660,16 +580,6 @@ function pythonHit(code: string): PtyHit | null {
 	return null;
 }
 
-/**
- * Every name the js lane's reader can match, in any casing: `Bun` (`Bun.$`,
- * `Bun.spawn*`), a launcher member or alias (`spawn*`, `exec*`), the
- * `child_process` and `bun` modules, the eval `sh` helper, and the
- * `tool.bash`/`tool.write` bridges.
- * A cell spelling none of them starts no process here, so the parse is skipped;
- * a cell spelling one is parsed and judged as before. The hint reads the source
- * text, where a name may be written with `\u` or `\x` escapes that only the
- * parse decodes, so a cell containing a backslash is always parsed.
- */
 const JS_LAUNCH_HINT = /bun|spawn|exec|child_process|tool|\bsh\b|\\/i;
 
 async function javascriptHit(code: string): Promise<PtyHit | null> {
@@ -678,7 +588,6 @@ async function javascriptHit(code: string): Promise<PtyHit | null> {
 	try {
 		cell = parseJs(code);
 	} catch {
-		// A cell Babel cannot parse does not run: nothing to route.
 		return null;
 	}
 	let hit: PtyHit | null = null;
@@ -704,10 +613,8 @@ async function javascriptHit(code: string): Promise<PtyHit | null> {
 				else if (launch.words?.every((word) => word.literal)) hit = ptyShellHit(launch.words.map((word) => word.text).join(" "));
 				return hit !== null;
 			case "bridge":
-				// The bridged command reaches the lane as its own `bash` call.
 				return false;
 			case "indeterminate":
-				// The command cannot be read from the source; the pty lane fails open, as it does for unreadable launches.
 				return false;
 			default: {
 				const unreachable: never = launch;
@@ -718,14 +625,11 @@ async function javascriptHit(code: string): Promise<PtyHit | null> {
 	return hit;
 }
 
-/** The first rule an eval cell hits, or null; other languages and unreadable cells pass. */
 export async function ptyEvalHit(language: string, code: string): Promise<PtyHit | null> {
 	if (language === "py") return pythonHit(code);
 	if (language === "js") return javascriptHit(code);
 	return null;
 }
-
-// ── refusal ──────────────────────────────────────────────────────────────
 
 const CATEGORY_TEXT: Record<PtyCategory, string> = {
 	passthrough: "把命令交给另一台机器、另一个容器、另一个用户或另一个 shell 去解释",
@@ -733,7 +637,6 @@ const CATEGORY_TEXT: Record<PtyCategory, string> = {
 	"open-ended": "不会自己结束，或在等外部条件",
 };
 
-/** The host-tool refusal the model reads: a short reason and the owner's entry point. */
 export function ptyRefusal(hit: PtyHit, tool: string): string {
 	return [
 		`pty 路由：这次 \`${tool}\` 调用没有执行：\`${hit.program}\` ${CATEGORY_TEXT[hit.category]}（${hit.category}，规则 \`${hit.rule}\`）。`,

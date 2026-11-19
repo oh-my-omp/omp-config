@@ -1,26 +1,3 @@
-/**
- * Warns the interactive omp process's main UI and agent when an owned descendant OS
- * child process's macOS phys_footprint exceeds the configured threshold. Only OS
- * child processes are in scope: subagents running in-process (on the main thread,
- * or in a worker thread when more than 8 subagents run concurrently and
- * `task.workerThreads` is greater than 0) share the omp process's memory and are
- * not tracked here. Main session_start starts one process-shared monitor;
- * session_switch refreshes delivery, and its owning main's session_shutdown clears
- * the managed timer before closing libproc; a scan suspended in the settings read
- * returns on resume without touching libproc or delivering. Child factories never
- * own it. Native 2 s stable scans retain PID+birth ownership after reparenting;
- * observed descendant-led process groups can discover surviving members.
- * A process born and orphaned between observations without a known surviving group
- * anchor cannot be attributed retroactively from the process table.
- * Reads the `child-memory-warning.thresholdGiB` plugin setting (omp-config;
- * `/settings → Plugins → omp-config` or `omp plugin config`; the project's
- * `.omp/plugin-overrides.json` wins over the machine value) every scan; an
- * unreadable or invalid value pauses alerts while tracking continues, and each
- * new config problem warns once.
- * No model calls, sampling subprocesses, signals, or automatic kills.
- * Unsupported platforms log once and never import the Darwin binding. Native/hook
- * failures warn without escaping into omp; delivery is attempted once per identity.
- */
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -51,7 +28,6 @@ interface Monitor {
 	readonly timer: Timer;
 	problem: string | null;
 	configProblem: string | null;
-	/** A sample is suspended in its settings read or FFI loop; ticks skip rather than pile up. */
 	inFlight: boolean;
 }
 
@@ -61,7 +37,6 @@ type Lifetime =
 	| { kind: "active"; monitor: Monitor }
 	| { kind: "stopped" };
 
-// The loader reuses this module but invokes its factory separately for each child.
 let lifetime: Lifetime = { kind: "not-started" };
 
 function warn(pi: ExtensionAPI, message: string, error: unknown): void {
@@ -94,7 +69,6 @@ async function loadThreshold(cwd: string): Promise<ThresholdLoad> {
 	}
 }
 
-/** Config problems are user-actionable: report each new one to the log and the main UI, once. */
 function reportConfigProblem(monitor: Monitor, problem: string | null): void {
 	if (problem === monitor.configProblem) return;
 	monitor.configProblem = problem;
@@ -149,8 +123,6 @@ async function sample(monitor: Monitor): Promise<void> {
 		const owned = monitor.tracker.observe(result.snapshot);
 		// owned aliases the tracker's reused result buffer; consume it synchronously here.
 		const config = await loadThreshold(monitor.ctx.cwd);
-		// The session may have shut down while the settings read was suspended:
-		// a stopped lifetime means libproc is already closed and delivery is over.
 		switch (lifetime.kind) {
 			case "active": {
 				if (lifetime.monitor !== monitor) return;
@@ -174,7 +146,7 @@ async function sample(monitor: Monitor): Promise<void> {
 			const bytes = monitor.source.footprint(pid);
 			if (bytes === null || bytes <= config.threshold.bytes) continue;
 			const command = monitor.source.command(pid);
-			// A PID can exit/recycle while memory and argv are read. Also use the latest PPID.
+			// A PID can exit/recycle while memory and argv are read.
 			const current = monitor.source.process(pid);
 			if (current === null || current.startedAt !== startedAt) continue;
 			tracked.alerted = true;
@@ -185,8 +157,6 @@ async function sample(monitor: Monitor): Promise<void> {
 		if (monitor.problem !== problem) warn(monitor.pi, "sampling failed", error);
 		monitor.problem = problem;
 	} finally {
-		// Single-flight release: every sample path (tick or the first one from start())
-		// clears the flag it set, so one thrown sample never stops monitoring.
 		monitor.inFlight = false;
 	}
 }
@@ -212,13 +182,11 @@ async function start(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 			return;
 		}
 		const tracker = new ProcessTracker(root);
-		// Declared before the timer so the tick closure can claim single-flight on it;
-		// assigned exactly once below before the first sample runs.
 		let monitor: Monitor | undefined;
 		const timer = ctx.setInterval(() => {
 			if (lifetime.kind !== "active" || lifetime.monitor.pi !== pi || monitor === undefined) return;
 			// Single-flight: a still-running sample owns the FFI buffers; skip this tick instead
-			// of holding a second full-table snapshot beside it. sample() clears the flag itself.
+			// of holding a second full-table snapshot beside it.
 			if (lifetime.monitor.inFlight) return;
 			monitor.inFlight = true;
 			void sample(monitor);

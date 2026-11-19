@@ -1,14 +1,3 @@
-// Three-way merge of structured files for omp-config-update.ts. Pure: no IO.
-//
-// Every path of a structured file has one owner rule (PathRules): `local`
-// paths belong to the machine and are never read from the repo, `seed` paths
-// are written only while the host lacks them, `machineLists` keep the host's
-// own entries ahead of the repo's subsequence, and every other path the repo
-// has (or had, per the base) is managed: host H, base B (the repo value the
-// machine last accepted) and repo R decide it. H==R or H==B takes R; R==B keeps
-// H; anything else is a conflict that keeps H and the old B, so it is found
-// again on every run until H converges to R or `resolve` moves B to R.
-
 export type Mapping = Record<string, unknown>;
 export type Path = readonly string[];
 
@@ -22,17 +11,12 @@ export interface PathRules {
 	readonly local: readonly string[];
 	readonly seed: readonly string[];
 	readonly machineLists: readonly string[];
-	/** Entries dropped from a machine list on every apply, host-only or not. */
 	readonly retired: Readonly<Record<string, readonly string[]>>;
 }
 
-/** Where the base of one structured file comes from. */
 export type StructuredBaseSource =
-	/** No host file, or a machine the updater never ran on: every repo path is new. */
 	| { readonly kind: "empty" }
-	/** The record the updater keeps; `unknown` paths have no trustworthy base. */
 	| { readonly kind: "recorded"; readonly value: Mapping; readonly unknown: readonly Path[] }
-	/** No record yet: a host value equal to any historical repo value at its path is unmodified. */
 	| { readonly kind: "history"; readonly versions: readonly Mapping[] };
 
 interface KeyConflict {
@@ -41,9 +25,7 @@ interface KeyConflict {
 }
 
 interface StructuredMerge {
-	/** The host file after the merge; undefined only when it had nothing and gets nothing. */
 	readonly host: Mapping;
-	/** The new base record: repo values where accepted, old base values at conflicts. */
 	readonly base: Mapping;
 	readonly unknown: Path[];
 	readonly conflicts: KeyConflict[];
@@ -51,19 +33,16 @@ interface StructuredMerge {
 
 type BaseValue = { readonly kind: "known"; readonly value: unknown } | { readonly kind: "unknown" };
 
-/** `field` names `path` or one of its ancestors. */
 function covers(field: string, path: Path): boolean {
 	const parts = field.split(".");
 	return parts.length <= path.length && parts.every((part, i) => part === path[i]);
 }
 
-/** `field` lies strictly below `path`. */
 function under(field: string, path: Path): boolean {
 	const parts = field.split(".");
 	return parts.length > path.length && path.every((part, i) => part === parts[i]);
 }
 
-/** One path is a prefix of the other (either way). */
 export function related(a: Path, b: Path): boolean {
 	const n = Math.min(a.length, b.length);
 	for (let i = 0; i < n; i++) if (a[i] !== b[i]) return false;
@@ -79,7 +58,6 @@ export function valueAt(root: unknown, path: Path): unknown {
 	return node;
 }
 
-/** Deep equality where `undefined` means absent and differs from `null`. */
 export function same(a: unknown, b: unknown): boolean {
 	if (a === undefined || b === undefined) return a === b;
 	return Bun.deepEquals(a, b, true);
@@ -106,7 +84,6 @@ class StructuredMerger {
 		return [...this.rules.local, ...this.rules.seed, ...this.rules.machineLists].some((field) => under(field, path));
 	}
 
-	/** Every base value the source holds at `path`: one for a record, one per version for history. */
 	private baseNodes(path: Path): unknown[] {
 		switch (this.source.kind) {
 			case "empty":
@@ -130,7 +107,6 @@ class StructuredMerger {
 				if (this.source.unknown.some((unknownPath) => related(unknownPath, path))) return { kind: "unknown" };
 				return { kind: "known", value: project(valueAt(this.source.value, path)) };
 			case "history":
-				// Only an exact historical match proves the host value is the repo's.
 				return this.source.versions.some((version) => same(project(valueAt(version, path)), host))
 					? { kind: "known", value: host }
 					: { kind: "unknown" };
@@ -167,7 +143,6 @@ class StructuredMerger {
 		const outHost: Mapping = h ? { ...h } : {};
 		const outBase: Mapping = {};
 		for (const key of repoSide) {
-			// Keys only the host has are the host's: they stay as they are.
 			const merged = this.merge([...path, key], h?.[key], r?.[key]);
 			if (merged.host === undefined) delete outHost[key];
 			else outHost[key] = merged.host;
@@ -203,16 +178,6 @@ class StructuredMerger {
 		if (base.kind === "unknown") this.unknown.push(path);
 	}
 
-	/**
-	 * A machine list holds host-only entries (kept, ahead) and the repo's
-	 * subsequence: the entries the repo lists, or its recorded base listed.
-	 * Only that subsequence is merged three-way, as one value. Without a record,
-	 * entries the repo dropped in the past count as the host's: history only
-	 * tells whether the host's subsequence is a version the repo once had.
-	 * A known-absent base means the repo never delivered this list to the
-	 * machine (a list that was seeded or host-only before): the host's entries
-	 * are all its own, so the repo's list is added after them.
-	 */
 	private machineList(path: Path, host: unknown, repo: unknown): { host: unknown; base: unknown } {
 		const repoList = Array.isArray(repo) ? repo : [];
 		const known: unknown[] = [...repoList];
@@ -243,7 +208,6 @@ class StructuredMerger {
 	}
 }
 
-/** Merge one structured file. `host` undefined means the host has no such file. */
 export function mergeStructured(host: Mapping | undefined, repo: Mapping, source: StructuredBaseSource, rules: PathRules): StructuredMerge {
 	const merger = new StructuredMerger(rules, source);
 	const merged = merger.merge([], host ?? {}, repo);
@@ -255,7 +219,6 @@ export function mergeStructured(host: Mapping | undefined, repo: Mapping, source
 	};
 }
 
-/** Set (or, for undefined, remove) the value at `path`, creating maps on the way. */
 export function setAt(root: Mapping, path: Path, value: unknown): void {
 	const last = path[path.length - 1];
 	if (last === undefined) throw new Error("cannot set the root");
@@ -274,12 +237,10 @@ export function setAt(root: Mapping, path: Path, value: unknown): void {
 	else node[last] = structuredClone(value);
 }
 
-/** JSON Pointer (RFC 6901) for a path, used in conflict ids. */
 export function pointer(path: Path): string {
 	return path.map((key) => `/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`).join("");
 }
 
-/** Stable JSON: sorted keys, so equal values digest equally. */
 export function canonical(value: unknown): string {
 	if (value === undefined) return "\u0000absent";
 	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;

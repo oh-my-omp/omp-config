@@ -1,15 +1,3 @@
-// omp test sandbox (#71): a throwaway Linux container on the local OrbStack with the latest omp,
-// a copy of this machine's ~/.omp configuration and credentials, and the omp-config working tree
-// under test. Every model request of the container's omp sessions goes through a recorder inside
-// the container (#146); the provider baseUrl values in the container's copy of models.yml point at
-// it. Commands (`bun sandbox/sandbox.ts …`):
-//   hold [--target] [--repo DIR]                          build a sandbox, keep it until SIGINT/SIGTERM, then remove it
-//   run  [--target] [--repo DIR] SCENARIO_JSON MODEL...   build, run the scenario for each model, remove
-//   matrix RUN SCENARIO_JSON MODEL...                     run a scenario inside a held sandbox
-//   cache RUN                                             export the prompt-cache report of a held sandbox now
-//   down RUN                                              remove a run whose holder was killed without cleanup
-// hold and run also export the prompt-cache report before teardown. Behavior, contracts and
-// failure policy: sandbox/README.md.
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -101,10 +89,6 @@ function parseCommand(argv: readonly string[]): Command {
 	}
 }
 
-/**
- * Rewrites the container's models.yml to the recorder's loopback URLs and starts the recorder
- * detached in the container; returns once every listener is bound. Container removal stops it.
- */
 async function startRecorder(container: string, home: string): Promise<void> {
 	await must(["docker", "exec", container, "bun", "/sandbox/recorder.ts", "setup", join(home, ".omp", "agent", "models.yml")]);
 	await must(["docker", "exec", "-d", container, "sh", "-c", "exec bun /sandbox/recorder.ts serve >/evidence/recorder.log 2>&1"]);
@@ -116,7 +100,6 @@ async function startRecorder(container: string, home: string): Promise<void> {
 	}
 }
 
-/** Creates network, sandbox and optional target, checking `signal` between steps. */
 async function build(names: Names, options: BuildOptions, signal: AbortSignal): Promise<void> {
 	const step = async <T>(title: string, action: () => Promise<T>): Promise<T> => {
 		if (signal.aborted) throw new Interrupted("interrupted");
@@ -192,10 +175,6 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 		await step(`ssh target ${names.target}`, () => setUpTarget(names.container, HOME, names.target, labels, names.network));
 }
 
-/**
- * Drops the container's copy of the credentials of providers the recorder does not cover, after the
- * snapshot comparison (which checks the copy as copied). The host database is never touched.
- */
 async function pruneCredentials(container: string, home: string): Promise<void> {
 	const out = await must([
 		"docker",
@@ -209,7 +188,6 @@ async function pruneCredentials(container: string, home: string): Promise<void> 
 	console.log(`  ${out.trim()}`);
 }
 
-/** Removes labelled resources and confirms empty listings; command failures return unconfirmed cleanup evidence. */
 async function teardown(names: Names): Promise<{ readonly clean: boolean; readonly evidence: string }> {
 	const removed: string[] = [];
 	try {
@@ -246,7 +224,6 @@ interface ModelResult {
 	readonly kind: string;
 }
 
-/** Runs the scenario for each model and copies only the driver's three evidence files per model to the host. */
 async function matrix(names: Names, scenarioPath: string, models: readonly string[]): Promise<number> {
 	const scenario = parseScenario(JSON.parse(readFileSync(scenarioPath, "utf8")));
 	const inContainer = `/scenarios/${basename(scenarioPath)}`;
@@ -281,15 +258,10 @@ function resultKind(driverJson: string): string {
 		}
 		return "harness-error";
 	} catch {
-		// No driver.json: the driver crashed before writing it.
 		return "harness-error";
 	}
 }
 
-/**
- * Runs `cache.ts` over every session the sandbox ran and copies its report to the host as
- * `<out>/cache.json`. False after printing why the export failed.
- */
 async function exportCache(names: Names): Promise<boolean> {
 	const inContainer = "/evidence/cache.json";
 	const exported = await exec([
@@ -312,7 +284,6 @@ async function exportCache(names: Names): Promise<boolean> {
 	return true;
 }
 
-/** hold and run: ledger row, build, the middle step, the cache export, and teardown in `finally`. */
 async function withSandbox(
 	options: BuildOptions,
 	purpose: string,

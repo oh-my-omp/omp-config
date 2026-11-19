@@ -1,37 +1,3 @@
-// ============================================================================
-// harness-restart — expose the human's /restart to the agent as `harness_restart`.
-//
-// The tool queues the human's own `/restart` (TUI `InteractiveMode.restart()`:
-// same launch flags, session resumed from disk) instead of reimplementing it.
-// `/restart` refuses while streaming, and a tool call always runs while
-// streaming, so the call only queues the request; an `agent_end` that hands
-// control back (terminal, or `willContinue` with `awaitingAsyncWork`: only a
-// background job's result can resume the session, which stays open to the
-// human's commands meanwhile) starts an idle poll and runs it once the session
-// is idle with no queued messages. A continuation the session schedules itself
-// (reminder, retry, compaction) keeps it queued. `agent_start` disarms the poll
-// back to queued; an end interrupted by the user (Esc) cancels; session switch
-// and shutdown drop the request. This mirrors `wt-tool`'s queue/arm shape.
-//
-// The tool returns a queued acknowledgement before the harness restarts; the
-// completion arrives after restart, not as the tool result. Just before
-// restarting, the request (reason, timestamp) is appended as a durable `custom`
-// session entry. On `session_start` or `session_switch`, activation scans the
-// branch for a pending request and sends an attributed restart-completed user
-// message; only once OMP accepts that message (the send settles when the turn it
-// starts ends) does it re-read the branch and append a consumed marker for the
-// same request, so later activation does not replay it. A refused send is logged
-// and leaves the request pending, so the next activation sends it again. Every
-// notice goes through one send helper that logs each refusal as `harness-restart:`.
-// If the process does not relaunch (`restart()` throws, or returns after a host
-// teardown failure), the failure is sent and a consumed marker is appended in
-// its place, so a later activation never reports the request as completed.
-//
-// TUI-main-only. Hook failures are logged without escaping into omp.
-// ============================================================================
-// TUI-main-only tool harness_restart; hooks: session_start/switch/shutdown, agent_start/end.
-// Reads the live InteractiveMode; writes durable custom request and consumed session entries.
-// No extension config files. Failures are returned to the agent; hook failures are logged.
 import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { errorText } from "../_shared/errors.ts";
@@ -114,12 +80,6 @@ type SendSite =
 	| "queued restart failed before marker notice"
 	| "queued restart cancelled notice";
 
-/**
- * Sends one extension notice and handles the send's outcome. The promise settles
- * only after the turn the notice starts ends, so nothing here is awaited; a
- * rejection is logged and never counts as delivery, while `onDelivered` runs only
- * after OMP accepted the notice.
- */
 function sendNotice(pi: ExtensionAPI, site: SendSite, text: string, onDelivered?: () => void): void {
 	void pi.sendUserMessage(text, { attribution: "agent" }).then(
 		() => {
@@ -159,15 +119,11 @@ async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request
 		try {
 			if (ctx.hasUI) ctx.ui.notify(tr("Restarting omp…", "正在重启 omp…"), "info");
 			await live.mode.restart();
-			// restart() returns without relaunching only when it gave up: a successful
-			// relaunch execs this process instead of returning.
 			fail("InteractiveMode.restart() returned without relaunching omp.");
 		} catch (error) {
 			fail(errorText(error));
 		}
 	} catch (error) {
-		// Before the marker exists there is nothing to consume: report and stop.
-		// After it exists, fail() owns the outcome; here we only log, so nothing escapes the hook.
 		if (marked) {
 			runtime.pi.logger.warn("harness-restart: failed after marker", { error: errorText(error) });
 		} else {
@@ -258,7 +214,6 @@ function disarm(runtime: Runtime, ctx: ExtensionContext): void {
 
 function onAgentEnd(runtime: Runtime, event: AgentEndEvent, ctx: ExtensionContext): void {
 	if (runtime.state.kind !== "queued") return;
-	// Same arming rule as wt-tool: self-scheduled continuations keep the request queued; a wait on background jobs does not.
 	if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
 	const request = runtime.state.request;
 	const last = event.messages.findLast((message) => message.role === "assistant");

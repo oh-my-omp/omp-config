@@ -11,8 +11,8 @@ Behavior is described where it lives; read the matching one before changing it:
 |What|Where|
 |---|---|
 |Design, prompts, subagents, extensions, plugins, sync and maintenance|`README.md`, `docs/*.md`|
-|One extension's events, tools, files and failure policy|header comment of its `index.ts`|
-|What repo → machine writes, deletes and never touches|header of `agent/extensions/omp-config-autoupdate/omp-config-update.ts`|
+|One extension's events, tools, files and failure policy|its code under `agent/extensions/<name>/`|
+|What repo → machine writes, deletes and never touches|`agent/extensions/omp-config-autoupdate/omp-config-update.ts`|
 |Slash-command contracts (`/onboard-omp`, `/update-omp`, `/sync-omp-config`, `/migrate-omp-keys`)|`.omp/commands/*.md`|
 |Subagent authoring traps|`agent/agents/README.txt`|
 |Extension load order|`agent/extensions-last/README.md`|
@@ -66,7 +66,7 @@ Behavior is described where it lives; read the matching one before changing it:
   the release workflow does both.
 - **Docs.** `README.md` and each `docs/<topic>.md` have a `*.zh-CN.md` twin
   with aligned sections, tables and anchors; change both. A behavior change
-  updates the page or header that describes it. Docs and commands never state
+  updates the page that describes it. Docs and commands never state
   how many items a set has (extensions, plugins, subagents, files, options,
   categories); name the items or point to the file that lists them. This file
   carries rules only, never a description of what the code does.
@@ -79,9 +79,7 @@ last-loaded one). `bun run check` enforces format, lint and types; the rest is
 review.
 
 - **Layout:** one kebab-case directory per extension, named after its id.
-  `index.ts` starts with a header comment (behavior; events, tools and commands
-  registered; files read and written; main or sub scope; failure policy) and
-  default-exports a camelCase factory named after the directory. Other `*.ts`
+  `index.ts` default-exports a camelCase factory named after the directory. Other `*.ts`
   files are its private modules, one level deep; no `.ts` sits directly under
   `extensions/` or `extensions-last/`. Export only the default unless a sibling
   imports a name; no test seams. The updater script is the exception: its
@@ -113,14 +111,12 @@ review.
 - **Types:** strict, `noUncheckedIndexedAccess`, no `any`. Parse external input
   (files, tool parameters, session entries, `unknown` payloads, child output)
   once at the boundary with `z` from `@oh-my-pi/pi-coding-agent` or a type
-  guard. `as` only for host types no runtime check can verify, with a one-line
-  reason.
+  guard. `as` only for host types no runtime check can verify.
 - **State:** variants are a discriminated union on `kind` with an exhaustive
   `switch` and a `never` arm; booleans never encode exclusive states.
 - **Errors:** expected failures are result unions. Hooks and tools never throw
   into omp: catch at the boundary and
-  `pi.logger.warn(message, { error: errorText(error) })`. An empty `catch {}`
-  names the expected failure in a comment.
+  `pi.logger.warn(message, { error: errorText(error) })`.
 - **Session facts:** main vs sub is `ctx.agent.kind`. Every
   `pi.sendUserMessage` an extension sends on its own behalf passes
   `attribution: "agent"`. Only `context` fires on every model call (IRC wakes
@@ -138,9 +134,9 @@ review.
   package of a host dependency (`@babel/types` for omp's Babel parser): it is
   erased before omp loads the module. Native bindings load only after a
   platform guard.
-- **Code copied from OMP** is wrapped in
-  `// @upstream <verbatim|adapted> <package>@<version> <src path>#<symbol>` …
-  `// @upstream-end` and re-compared after OMP upgrades.
+- **Comments** are warnings only: what must not be done and what breaks if it
+  is. No descriptions of behavior, design rationale, upstream provenance or
+  `@upstream` markers.
 - **Size and format:** a function over ~150 lines is split into named
   module-level functions. Format with `bun run format` only.
 

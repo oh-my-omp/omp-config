@@ -1,20 +1,4 @@
 #!/usr/bin/env bun
-// windows-accept, runner side (omp-config #311). Runs in the `windows-accept`
-// workflow on a throwaway `windows-latest` runner: installs the latest omp,
-// binds every model role (windows-env.ts), checks each requested repository out
-// under `%RUNNER_TEMP%\src\<repo>` at its commit (with `bun install` where it
-// has a package.json), then runs the given Bun script with cwd and `SRC` set to
-// that directory and a PATH reduced to what a default Windows install has: of
-// Git for Windows only `Git\cmd`. Design: ci/README.md.
-//
-// Input (environment): WA_CHECKOUTS, newline-separated `owner/repo@<full sha>`;
-// WA_SCRIPT, the script text (empty: only set up and report the environment,
-// the pull_request self-check). OPENCODE_API_KEY reaches the script unchanged.
-//
-// Output: setup readings, then the script's own stdout/stderr between
-// SCRIPT_BEGIN and the `windows-accept: script exit <n>` line that the local
-// side (windows-accept.ts) parses. Exit: the script's exit code; 1 when setup
-// fails before the script runs (no exit line is printed then).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -47,10 +31,6 @@ function parseCheckouts(text: string): Checkout[] | string {
 	return checkouts;
 }
 
-/**
- * The PATH a default Git for Windows install leaves: every entry inside the Git install root is dropped except
- * `<root>\cmd`, so `git.exe` stays and `sh`, `env`, `ps` and the rest of its POSIX userland go.
- */
 function defaultUserPath(path: string): string | undefined {
 	const entries = path.split(";").filter((entry) => entry !== "");
 	const gitCmd = entries.find((entry) => /[\\/]Git[\\/]cmd[\\/]?$/i.test(entry));
@@ -90,7 +70,6 @@ function setup(src: string, checkouts: readonly Checkout[]): Setup {
 	return { kind: "ready", path };
 }
 
-/** The process environment with PATH replaced; Windows environment names are case-insensitive. */
 function envWith(path: string, src: string): Record<string, string> {
 	const env: Record<string, string> = {};
 	for (const [name, value] of Object.entries(process.env)) if (value !== undefined && name.toUpperCase() !== "PATH") env[name] = value;

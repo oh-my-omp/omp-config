@@ -1,65 +1,5 @@
-// ============================================================================
-// argon-long-output — let gemini-4-argon finish long tool calls, and teach it to
-// avoid them.
-//
-// WHY. Cloud Code Assist sends a `functionCall` as one finished part, so while
-// argon generates a long `write(content=…)` the stream is silent after the
-// thinking summary. omp's watchdogs read that silence as a stall: after 300 s
-// the wrapper's idle watchdog aborts with "Provider stream stalled while
-// waiting for the next event", the provider's first-event and pre-response
-// watchdogs do the same before the first event, and every retry regenerates
-// the same call and hits the same limit.
-//
-// MATCH. A model whose `api` is `google-gemini-cli` and whose id matches
-// `^gemini-4-argon`, whatever its provider.
-//
-// TIMEOUTS. The three watchdogs resolve their budget as caller option >
-// settings `providers.stream*TimeoutSeconds` (merged into the option) > env
-// `PI_STREAM_IDLE_TIMEOUT_MS` / `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` >
-// `model.compat.stream{Idle,FirstEvent}TimeoutMs` > 300000, and 0 disables a
-// watchdog. This extension fills the compat layer of matching model objects:
-// a value the host already resolved stays; else the sparse `compatConfig`
-// value from models.yml (which the host's Google compat resolution drops);
-// else 0. Options, settings and env therefore still win. It replaces
-// `model.compat` with a copy instead of writing into it, because the catalog
-// shares one compat object across rows. The model rows are shared process-wide,
-// so the default applies to every session, subagent and compaction that uses
-// the patched row. Abort (Esc, dispose) still cancels the request at once: the
-// abort path does not depend on the watchdogs.
-//
-// WHERE. The session model is patched on `context` (before every model call:
-// turns, subagent turns, auto-retry continuations, IRC wakes), the one hook
-// that always precedes a request. The full sweep over every available
-// registry row runs only on session boundaries — `session_start`,
-// `before_agent_start` and `session.compacting` — not per call. OMP emits
-// `session.compacting` on every LLM compaction path (manual `/compact`,
-// automatic, speculative) before the summary request, and picks the
-// compaction model from the session model and the registry rows, so rows
-// rebuilt by a models.yml reload since the last boundary are patched before
-// they stream. The handler returns nothing, so the compaction itself is
-// unchanged. A context-window refit would build a row no sweep sees; OMP
-// gives the argon rows no window tiers, so it does not refit them.
-//
-// PROMPT. In the main session and in every subagent, each matched against its
-// own model, `ARGON_PROMPT.md` (beside this module, re-read at every delivery
-// point) reaches an argon session as one delta of `_shared/omomp-shared/context-delta.ts`
-// with source `omp-config/argon-long-output`: keep every `write`/`edit`
-// payload and final reply within 8,000 characters by writing a skeleton first
-// and filling it one section per `edit`. The system prompt stays as OMP built
-// it. Delivery points are `before_agent_start` (after the prompt) and
-// `tool_result` (after the tool batch); the delta is sent only when it differs
-// from the source's effective delta in the current context, so a session holds
-// one copy until compaction drops it or the file changes. A session whose model
-// stops matching gets a delta saying the earlier one no longer applies. A
-// revive's `before_agent_start` delivers nothing, because OMP discards its result.
-//
-// Registers session_start, before_agent_start, context, session.compacting,
-// turn_start (to clear the delta stream's same-turn batch) and tool_result; no tools or commands; writes
-// no files. Failure policy: a missing or unreadable ARGON_PROMPT.md warns once
-// per reason and delivers nothing, leaving any delta already in the context in
-// effect; any other error is logged and the prompt or request proceeds
-// unchanged. Nothing throws into omp.
-// ============================================================================
+// It replaces `model.compat` with a copy instead of writing into it, because the catalog
+// shares one compat object across rows.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -79,7 +19,6 @@ function isArgon(model: Model<Api>): model is ArgonModel {
 	return model.api === API && ARGON_ID.test(model.id);
 }
 
-/** Fill the compat timeout layer of one argon row; see TIMEOUTS above. */
 function applyTimeoutDefault(model: ArgonModel): void {
 	let next: ArgonModel["compat"] | undefined;
 	for (const field of TIMEOUT_FIELDS) {
@@ -94,7 +33,6 @@ function patchModel(model: Model<Api> | undefined): void {
 	if (model !== undefined && isArgon(model)) applyTimeoutDefault(model);
 }
 
-/** Patch the session model and every available registry row; see WHERE above. */
 function sweep(ctx: ExtensionContext): void {
 	patchModel(ctx.model);
 	for (const model of ctx.modelRegistry.getAvailable("all")) patchModel(model);
@@ -112,10 +50,8 @@ function readPrompt(): PromptRead {
 }
 
 export default function argonLongOutput(pi: ExtensionAPI): void {
-	/** Last prompt-file failure already logged, so a broken file warns once per reason. */
 	let warnedReason: string | null = null;
 
-	/** The delta this session should hold, or undefined when ARGON_PROMPT.md cannot be read. */
 	const promptDelta = (ctx: ExtensionContext): Delta | undefined => {
 		const model = ctx.model;
 		if (model === undefined || !isArgon(model)) return { kind: "none" };
@@ -146,8 +82,6 @@ export default function argonLongOutput(pi: ExtensionAPI): void {
 	};
 	pi.on("session_start", sweepHook);
 	pi.on("session.compacting", sweepHook);
-	// Per call only the session model is patched; the row sweep stays on the
-	// boundary events above (see WHERE).
 	pi.on("context", (_event, ctx) => {
 		try {
 			patchModel(ctx.model);
@@ -162,7 +96,6 @@ export default function argonLongOutput(pi: ExtensionAPI): void {
 	});
 	pi.on("before_agent_start", (event, ctx) => {
 		sweepHook(event, ctx);
-		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;
 		try {
 			const delta = promptDelta(ctx);

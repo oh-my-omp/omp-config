@@ -1,6 +1,3 @@
-// delete-guard `delete` tool: the refusal set holds for literal and resolved
-// paths and refuses the whole batch; trash follows the freedesktop layout on
-// Linux; permanent removes non-empty directories.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -156,7 +153,6 @@ describe("runDeletion", () => {
 			expect(readFileSync(path.join(trash, "files", "a.txt.2"), "utf8")).toBe("second");
 			expect(existsSync(path.join(trash, "info", "a.txt.2.trashinfo"))).toBe(true);
 
-			// A payload left in files/ without its info file is never overwritten.
 			writeFileSync(path.join(trash, "files", "b.txt"), "old");
 			const b = path.join(root, "b.txt");
 			writeFileSync(b, "new");

@@ -16,10 +16,8 @@ import * as path from "node:path";
 import { errorText } from "../_shared/errors.ts";
 import type { Target } from "./targets.ts";
 
-/** `S_ISVTX`: the spec only trusts a shared `$topdir/.Trash` with the sticky bit set. */
 const STICKY_BIT = 0o1000;
 
-/** The platforms `delete` is registered on; any other platform registers no tool. */
 export type Platform = "darwin" | "linux" | "win32";
 
 export const supportedPlatform = (platform: NodeJS.Platform): Platform | null =>
@@ -42,8 +40,7 @@ function windowsPowershell(): string | null {
 }
 
 /**
- * Sends `$env:OMP_DELETE_TARGET` (a file or a directory, per `$env:OMP_DELETE_KIND`) to the Recycle Bin. The
- * path is never part of the script text. UNC paths and non-fixed drives have no Recycle Bin, where
+ * UNC paths and non-fixed drives have no Recycle Bin, where
  * `SendToRecycleBin` would delete permanently, so the script refuses them.
  */
 const RECYCLE_SCRIPT = [
@@ -57,10 +54,8 @@ const RECYCLE_SCRIPT = [
 	"if ($env:OMP_DELETE_KIND -eq 'directory') { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($target, $ui, $recycle) } else { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($target, $ui, $recycle) }",
 ].join("; ");
 
-/** Appended where trash cannot run: the agent must not upgrade a plain delete request to permanent. */
 const PERMANENT_ONLY_ON_REQUEST = 'mode "permanent" deletes for good: use it only if the user explicitly asks for unrecoverable deletion';
 
-/** Why the trash backend cannot run at all on this machine, checked before any path is touched. */
 export function trashUnavailable(platform: Platform): string | null {
 	switch (platform) {
 		case "darwin":
@@ -98,7 +93,6 @@ async function windowsTrash(target: Target): Promise<Outcome> {
 	return { kind: "done", given: target.given, note: "moved to the Recycle Bin" };
 }
 
-/** `/usr/bin/trash -v` reports `Moved "<src>" to "<dest>"`; the path is passed as argv, never through a shell. */
 async function macTrash(target: Target): Promise<Outcome> {
 	const child = Bun.spawn([MAC_TRASH, "-v", target.operand], { stdout: "pipe", stderr: "pipe" });
 	const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -110,13 +104,11 @@ async function macTrash(target: Target): Promise<Outcome> {
 	return { kind: "done", given: target.given, note: `moved to ${destination}` };
 }
 
-/** freedesktop.org Trash spec: `$XDG_DATA_HOME/Trash`, or `~/.local/share/Trash`. */
 function homeTrashDir(): string {
 	const dataHome = process.env.XDG_DATA_HOME;
 	return path.join(dataHome !== undefined && path.isAbsolute(dataHome) ? dataHome : path.join(homedir(), ".local", "share"), "Trash");
 }
 
-/** The nearest existing directory at or above `dir`, for device comparison. */
 function existingAncestor(dir: string): string {
 	let current = dir;
 	while (!existsSync(current)) {
@@ -127,7 +119,6 @@ function existingAncestor(dir: string): string {
 	return current;
 }
 
-/** The mount point holding `located` (a real path): the highest ancestor on the same device. */
 function mountPoint(located: string): string {
 	const device = lstatSync(located).dev;
 	let current = path.dirname(located);
@@ -138,13 +129,8 @@ function mountPoint(located: string): string {
 	}
 }
 
-/** A trash directory; `topdir` is null for the home trash, which records absolute paths. */
 type TrashDir = { readonly dir: string; readonly topdir: string | null };
 
-/**
- * The spec's top-directory trashes in order: `$topdir/.Trash/$uid` when `$topdir/.Trash` is a real sticky
- * directory, then `$topdir/.Trash-$uid`, which the spec requires as the fallback when the first cannot be used.
- */
 function topdirTrashes(topdir: string): readonly TrashDir[] {
 	const uid = process.getuid?.() ?? 0;
 	const shared = path.join(topdir, ".Trash");
@@ -152,23 +138,16 @@ function topdirTrashes(topdir: string): readonly TrashDir[] {
 	try {
 		const info = lstatSync(shared);
 		if (info.isDirectory() && (info.mode & STICKY_BIT) !== 0) return [{ dir: path.join(shared, String(uid)), topdir }, own];
-	} catch {
-		// No shared .Trash on this mount: use the per-user directory.
-	}
+	} catch {}
 	return [own];
 }
 
-/**
- * Candidate trashes for `located`, the operand with its parent directory's links resolved (the entry itself is not
- * followed), so the mount and the recorded relative path describe where the entry really is.
- */
 function trashesFor(located: string): readonly TrashDir[] {
 	const home = homeTrashDir();
 	if (statSync(existingAncestor(home)).dev === lstatSync(located).dev) return [{ dir: home, topdir: null }];
 	return topdirTrashes(mountPoint(located));
 }
 
-/** RFC 2396 escaping per path segment, `/` kept, as the spec's `Path=` key requires. */
 const encodeTrashPath = (value: string): string => value.split("/").map(encodeURIComponent).join("/");
 
 const pad = (value: number): string => String(value).padStart(2, "0");
@@ -176,21 +155,15 @@ const pad = (value: number): string => String(value).padStart(2, "0");
 const deletionDate = (now: Date): string =>
 	`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
 
-/** Whether anything, a dangling link included, already sits at `file`. */
 function occupied(file: string): boolean {
 	try {
 		lstatSync(file);
 		return true;
 	} catch {
-		// Nothing there.
 		return false;
 	}
 }
 
-/**
- * Claims a free name: `files/<name>` must be empty (a payload whose info file was lost is never overwritten) and
- * `info/<name>.trashinfo` is created exclusively; a taken name becomes `<name>.2`, `<name>.3`, …
- */
 function claimInfo(trashDir: string, base: string, body: string): { readonly name: string; readonly infoPath: string } {
 	for (let attempt = 1; ; attempt++) {
 		const name = attempt === 1 ? base : `${base}.${attempt}`;
@@ -212,10 +185,6 @@ function claimInfo(trashDir: string, base: string, body: string): { readonly nam
 	}
 }
 
-/**
- * Moves `target` into one trash: creates `files/` and `info/`, claims a name, renames. Any failure removes the
- * claimed info file and throws, so the caller can try the next trash; the entry is never half moved.
- */
 function moveInto(trash: TrashDir, target: Target, located: string): string {
 	mkdirSync(path.join(trash.dir, "files"), { recursive: true, mode: 0o700 });
 	mkdirSync(path.join(trash.dir, "info"), { recursive: true, mode: 0o700 });
@@ -232,7 +201,6 @@ function moveInto(trash: TrashDir, target: Target, located: string): string {
 	return destination;
 }
 
-/** The spec's fallback applies when a trash "fails at any point": each candidate is tried until one takes the entry. */
 function linuxTrash(target: Target): Outcome {
 	let failure: unknown = new Error("no trash directory");
 	try {
@@ -274,10 +242,6 @@ function trashOne(platform: Platform, target: Target): Promise<Outcome> | Outcom
 	}
 }
 
-/**
- * Runs validated targets in order; a failure on one path, a backend that throws included, becomes that path's
- * `failed` outcome and leaves the others' results as they are.
- */
 export async function runDeletion(platform: Platform, mode: Mode, targets: readonly Target[]): Promise<Outcome[]> {
 	const outcomes: Outcome[] = [];
 	for (const target of targets) {

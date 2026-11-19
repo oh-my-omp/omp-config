@@ -1,41 +1,9 @@
-// ============================================================================
-// ast-top-level — keep OMP's built-in `ast_grep` and `ast_edit` as top-level
-// function tools instead of `xd://` devices.
-//
-// WHY. With `tools.xdev` on, OMP mounts every enabled tool whose `loadMode` is
-// "discoverable" (both AST tools are) under `xd://`, reached by writing JSON
-// to `xd://<tool>`, unless its name is in the host's process-wide
-// `XDEV_KEEP_TOP_LEVEL` table. Every partition (session build,
-// `setActiveTools`, settings reconcile, MCP refresh, plan mode, late tool
-// registration, subagent sessions) asks `isMountableUnderXdev`, which reads
-// that table on each call. No setting pins a single tool.
-//
-// HOW. At load the extension adds both names to the table and checks that
-// `isMountableUnderXdev` now keeps them top-level. The host still owns the
-// tool instances, their settings gates (`astGrep.enabled`, `astEdit.enabled`)
-// and `ast_edit`'s preview; applying a preview still goes through
-// `xd://resolve`.
-//
-// LATE BINDING. OMP may bind an extension that registers nothing needed
-// before the first frame after the session already partitioned its tools
-// (startup deferral), and a table change alone does not re-partition. So on
-// `session_start`, which OMP replays to late-bound extensions, a session that
-// has either tool re-applies its own active set once in canonical order (`applyActiveTools`),
-// re-partitioning it against the table. New and resumed sessions then list
-// the tools in the same order, whenever the table took effect.
-//
 // LIFETIME. The table is process-wide and outlives the extension: disabling
 // the extension takes effect after a restart.
 //
 // Relies on OMP internals (`@oh-my-pi/pi-coding-agent` package root:
 // `XDEV_KEEP_TOP_LEVEL`, `isMountableUnderXdev`); re-verify after every OMP
 // upgrade.
-// ============================================================================
-// Hook: session_start (main and sub, full and light). No tools, commands or files.
-// FAILURE. A renamed export fails the load. A table that rejects the names or
-// is no longer consulted is logged at load and shown on each main session
-// start; the tools then stay devices. Hook failures are logged without
-// escaping into omp.
 import { type ExtensionAPI, isMountableUnderXdev, XDEV_KEEP_TOP_LEVEL } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -45,7 +13,6 @@ const TOOLS = ["ast_grep", "ast_edit"] as const;
 
 type Pin = { readonly kind: "pinned" } | { readonly kind: "failed"; readonly reason: string };
 
-/** Adds the AST tools to the host's keep-top-level table and checks the host now honors it. */
 function pinTopLevel(): Pin {
 	try {
 		for (const name of TOOLS) XDEV_KEEP_TOP_LEVEL[name] = true;

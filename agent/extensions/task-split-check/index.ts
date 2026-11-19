@@ -1,40 +1,4 @@
 /**
- * Registers `tool_call`; takes its model from the OMP model role `@task-split-check`, then the
- * `default` role chain, and writes no files. Split checks are main-only;
- * report-limit checks apply to main and sub sessions. Unexpected hook errors
- * are logged as warnings and let the call run.
- *
- * Dispatch checks for `task` calls. Each check is one yes/no
- * question about an item (shared context + the item's task text: its `task`,
- * or all its `steps` in order — both are one subagent run, never judged step by
- * step; an item the host would reject is left to the host's validation). Per item, every check
- * that covers it and still needs a verdict goes into ONE fast-model request
- * — prompt only, no tools, nothing read — that answers each question on its
- * own line. All items are judged concurrently under one deadline; when any
- * item is flagged by any check the whole call is blocked with the reasons of
- * every flagging check. Checks differ only in their definition:
- *
- * - `split`: main session `task` calls, items whose `agent` definition file
- *   declares `splitCheck: true` in its frontmatter (resolved with the same
- *   lookup the task tool's spawn preflight uses); does the item cover more
- *   than one topic. Items without `agent` are not split-checked. A prompt that
- *   got a verdict passes unchanged the second time, so the main agent can
- *   force an item it judges to be one topic.
- * - `report-limit`: every session, `task`, every task-series
- *   item (`task:*`, or `agent` omitted); does the dispatch cap the length of
- *   the worker's report. No re-dispatch bypass — the cap must go and long
- *   reports go to a file; only `false` prompts are remembered, to skip asking
- *   again.
- *
- * Memory is per process, keyed by check id + sha256 over the item prompt's
- * normalized fragments. Hashing is incremental into the key (`Bun.CryptoHasher`),
- * so recall never materializes the rendered prompt; only the judge path renders it.
- * The model is the OMP model role `@task-split-check` (assign it in `/model`), then the `default`
- * role chain, both resolved at every request; the chain's models are tried in order, each attempt
- * limited to the remaining budget divided over the models not yet tried, so a provider failure or
- * a hanging model costs only its own share and the chain moves to the next model.
- * Every failure (no model in either role, provider errors, attempt timeouts, aborted, a reply cut off
- * by `length` or ending in `toolUse`, unparseable answer) is a warning-level note that lets the call run; only `flagged` verdicts block.
  * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise
  * block the call.
  */
@@ -47,11 +11,8 @@ import { errorText } from "../_shared/errors.ts";
 import { type AttemptBudget, completeRoleChain } from "../_shared/role-chain.ts";
 import { modelLabel } from "../_shared/roles.ts";
 
-/** The OMP model role this extension's model comes from: the extension's own name. */
 const ROLE = basename(import.meta.dir);
-/** Frontmatter key an agent definition sets to opt into split checking. */
 const SPLIT_CHECK_KEY = "splitcheck";
-/** Effort when the role entry has no `:level` suffix. */
 const EFFORT =
 	THINKING_EFFORTS.find((effort) => effort === "medium") ??
 	(() => {
@@ -59,14 +20,6 @@ const EFFORT =
 	})();
 const DEADLINE_MS = 25_000;
 
-/**
- * One spawn as the model wrote it, reduced to what the checks read. With
- * `task.steps` on, items carry `steps` instead of `task`; both are the text of
- * one subagent run, so a steps item's text is all its steps joined in their
- * order. An item the host would reject — both fields, neither, or steps that
- * are not a non-empty list of non-empty instructions — does not parse, so the
- * call is left to the host's own validation and the checks stand aside.
- */
 type TaskItem = {
 	readonly text: string;
 	readonly name: string | undefined;
@@ -99,7 +52,6 @@ const taskItemSchema = z
 const batchSchema = z.object({ context: z.string().optional(), tasks: z.array(taskItemSchema) }).passthrough();
 type TaskCall = { readonly context: string | undefined; readonly items: readonly TaskItem[] };
 
-/** Batch calls carry `context` + `tasks[]`; the runtime still accepts a flat single item. */
 const parseTaskCall = (input: unknown): TaskCall | null => {
 	const batch = batchSchema.safeParse(input);
 	if (batch.success) return { context: batch.data.context, items: batch.data.tasks };
@@ -113,11 +65,6 @@ type Verdict =
 	| { readonly kind: "repeat" }
 	| { readonly kind: "unknown"; readonly why: string };
 
-/**
- * What a check remembers of a prompt it judged, and what that memory returns:
- * `pass-repeats` records every verdict and lets the same prompt through as
- * `repeat`; `skip-clear` records only `clear` verdicts and returns `clear`.
- */
 type Memory = "pass-repeats" | "skip-clear";
 
 type Check = {
@@ -125,7 +72,6 @@ type Check = {
 	readonly tools: Readonly<Record<string, true>>;
 	readonly mainSessionOnly: boolean;
 	readonly covers: (ctx: ExtensionContext, agent: string | undefined) => Promise<boolean>;
-	/** The question put to the model; `true` means the item is flagged. */
 	readonly question: string;
 	readonly memory: Memory;
 	readonly reason: (labels: string) => string;
@@ -186,16 +132,6 @@ const parseAnswer = (text: string, check: Check): Verdict => {
 const renderPrompt = (context: string | undefined, item: TaskItem): string =>
 	["<shared-context>", context?.trim() || "(none)", "</shared-context>", "<assignment>", item.text.trim(), "</assignment>"].join("\n");
 
-/**
- * Digest of one item prompt, without materializing the prompt: the same
- * normalized `context?.trim() || "(none)"` / `item.text.trim()` fragments
- * `renderPrompt` joins, length-framed (`<context UTF-16 code units>:<task UTF-16 code units>`
- * plus NUL separators) so fragment boundaries cannot collide, hashed
- * incrementally into a fixed-length sha256. Framing only distinguishes inputs
- * the old rendered-string key conflated, so recall can only miss where the old
- * key hit — never wrongly hit — and verdicts stay identical to hashing the
- * rendered prompt.
- */
 const memoryDigest = (context: string | undefined, item: TaskItem): string => {
 	const contextText = context?.trim() || "(none)";
 	const taskText = item.text.trim();
@@ -211,10 +147,8 @@ const memoryKey = (digest: string, check: Check): string => `${check.id}:${diges
 
 const itemLabel = (item: TaskItem, index: number): string => `\`${item.name ?? `item ${index + 1}`}\``;
 
-/** `<check id>:<sha256 over the item prompt's normalized fragments>` for every prompt the check's memory keeps. */
 const remembered = new Set<string>();
 
-/** The verdict memory already holds for this check, or null when the model must be asked. */
 const recall = (check: Check, key: string): Verdict | null => {
 	if (!remembered.has(key)) return null;
 	switch (check.memory) {
@@ -256,7 +190,6 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		signal: AbortSignal,
 		budget: AttemptBudget,
 	): Promise<Reply> => {
-		// A reply cut off by `length` or ending in `toolUse` is not a verdict: the attempt fails and the chain moves on.
 		const reply = await completeRoleChain(
 			ctx,
 			[ROLE, "default"],
@@ -288,7 +221,6 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		}
 	};
 
-	/** One model request for every check of this item that memory cannot answer. */
 	const judgeItem = async (
 		ctx: ExtensionContext,
 		checks: readonly Check[],
@@ -322,7 +254,6 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		return verdicts;
 	};
 
-	/** Returns the joined block reasons, or null to let the call run as written. */
 	const inspect = async (toolName: string, input: unknown, ctx: ExtensionContext): Promise<string | null> => {
 		const main = ctx.agent.kind === "main";
 		const checks = CHECKS.filter((check) => Object.hasOwn(check.tools, toolName) && (main || !check.mainSessionOnly));

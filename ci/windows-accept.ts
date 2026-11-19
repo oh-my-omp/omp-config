@@ -1,19 +1,4 @@
 #!/usr/bin/env bun
-// windows-accept, local side (omp-config #311):
-//
-//   bun ci/windows-accept.ts --checkout <owner/repo>@<ref> [--checkout …] --script <file.ts>
-//
-// Runs the given Bun script on a throwaway `windows-latest` runner whose PATH
-// has no POSIX userland (windows-accept-remote.ts) beside the requested
-// checkouts and the latest omp. Every argument is validated before anything is
-// dispatched: the script must exist and each ref must resolve on GitHub. The
-// workflow runs from the branch whose tip is this checkout's HEAD, so a pull
-// request branch tests its own runner side. Prints the job's log to stdout and
-// exits with the remote script's exit code. Design: ci/README.md.
-//
-// Exit: the remote script's code; 2 for invalid arguments (nothing dispatched);
-// 1 when the run could not be dispatched, found or finished, or setup failed
-// before the script ran.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -70,7 +55,6 @@ function parseArgs(argv: readonly string[]): Outcome<Args> {
 	return ok({ checkouts, script });
 }
 
-/** `owner/repo@ref` → the full commit SHA GitHub resolves the ref to (branch, tag or SHA prefix). */
 function resolveCheckout(spec: string): Outcome<Checkout> {
 	const match = /^([\w.-]+\/[\w.-]+)@(.+)$/.exec(spec);
 	if (match === null) return error(`--checkout ${spec}: expected <owner/repo>@<ref>`);
@@ -81,7 +65,6 @@ function resolveCheckout(spec: string): Outcome<Checkout> {
 	return ok({ slug, sha });
 }
 
-/** The omp-config branch to run the workflow from: the one whose tip is this checkout's HEAD (main preferred). */
 function workflowBranch(): Outcome<string> {
 	const head = spawnSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout?.trim() ?? "";
 	const current = spawnSync("git", ["-C", REPO, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).stdout?.trim() ?? "";
@@ -137,7 +120,6 @@ async function awaitRun(run: number): Promise<Outcome<Mapping>> {
 	return error(`run ${run} did not finish within ${RUN_TIMEOUT_MS / 60_000} minutes`);
 }
 
-/** The job log without GitHub's per-line timestamp prefix. */
 function jobLog(run: number): Outcome<string> {
 	const jobs = ghJson(["api", `repos/${SLUG}/actions/runs/${run}/jobs`]);
 	if (jobs.kind === "error") return jobs;

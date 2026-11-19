@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# plugin-audit.sh — 对比 install-plugins.sh 的历史插件名与本机已装插件。
-#
-# 扫描范围：仅 install-plugins.sh 这一个脚本，提交范围 BASE..HEAD（含 BASE）。
-# BASE 固定为版本号/git-ref 被清理成裸包名之后的第一个提交，早于它的带
-# `@version` / `#sha` 的历史不参与，避免把同一插件的旧钉版当成不同插件。
-# 归一后直接与 `omp plugin list --json` 对比并给出分类结论，无需再人工跑一遍。
-#
-# plugins=( … ) 内的未注释条目是必装插件；只含一个源的注释行（如
-# `# https://github.com/oh-my-omp/omp-remote-build#release`）是 HEAD 的可选插件，不算缺失、
-# 不进卸载候选，本机已装时归入 [保留]。
 set -euo pipefail
 
 BASE="5974c4fa2f237b951befa935d45d8cd8efd5d30e"
@@ -25,8 +15,6 @@ git cat-file -e "${BASE}^{commit}" 2>/dev/null || {
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
-# 本机依赖表：`omp install` 在 ~/.omp/plugins/package.json 的 dependencies 里记下
-# 包名 -> 源。输出 "去 #ref 与 .git 的源<TAB>包名"，供 Git/URL 条目查真实包名。
 PKG="$PLUGINS_PKG" bun -e '
   const file = Bun.file(Bun.env.PKG ?? "");
   if (await file.exists()) {
@@ -37,35 +25,30 @@ PKG="$PLUGINS_PKG" bun -e '
   }
 ' > "$tmp/deps"
 
-# 脚本条目 -> 插件包名 key（与 omp plugin list 的 name 对齐）。
-# Git/URL 条目按本机依赖表取已装包名；本机未装时回退为 URL 末段 basename。
 normalize() {
   local e="$1" name
-  e="${e%%#*}"                        # 去 git ref (#sha / #branch)
+  e="${e%%#*}"
   case "$e" in
-    *://*|git@*|*.git)                # URL / git 源 -> 已装包名，否则 basename
+    *://*|git@*|*.git)
       e="${e%.git}"
       name="$(awk -F '\t' -v src="$e" '$1 == src { print $2; exit }' "$tmp/deps")"
       if [ -n "$name" ]; then e="$name"; else e="${e##*/}"; fi ;;
-    @*)                               # scoped 包 @scope/name[@ver]
+    @*)
       local rest="${e#@}"
       case "$rest" in
-        */*@*) e="@${rest%@*}" ;;     # @scope/name@ver -> @scope/name
+        */*@*) e="@${rest%@*}" ;;
         *)     e="@$rest" ;;
       esac ;;
-    *@*) e="${e%@*}" ;;               # name@ver -> name
+    *@*) e="${e%@*}" ;;
   esac
   [ -n "$e" ] && printf '%s\n' "$e"
 }
 
-# 某个版本脚本的 plugins=( ... ) 块。
 block_at() {
   git show "${1}:${SCRIPT}" 2>/dev/null \
     | awk '/plugins=\(/{f=1;next} f&&/^[[:space:]]*\)/{f=0} f{print}' || true
 }
-# 未注释行里的单引号条目（必装）。
 entries_at() { block_at "$1" | grep -v '^[[:space:]]*#' | grep -oE "'[^']+'" | tr -d "'" || true; }
-# 只含一个源的注释行（可选），引号可有可无；说明性注释含空格，不匹配。
 optional_at() {
   block_at "$1" | sed -nE "s/^[[:space:]]*#[[:space:]]*'?([^'[:space:]]+)'?[[:space:]]*$/\\1/p"
 }
@@ -81,21 +64,20 @@ hist_keys() {
 head_keys() { entries_at HEAD | norm_stream | sort -u; }
 optional_keys() { optional_at HEAD | norm_stream | sort -u; }
 installed_keys() {
-  # grep 的 1 表示空列表；仅忽略这个状态，保留命令或管道的实际错误。
   omp plugin list --json \
     | { grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' || test "$?" -eq 1; } \
     | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/' | sort -u
 }
 
 optional_keys  > "$tmp/optional"
-hist_keys | comm -23 - "$tmp/optional" > "$tmp/hist"   # 历史必装项，扣除当前可选
+hist_keys | comm -23 - "$tmp/optional" > "$tmp/hist"
 head_keys      > "$tmp/head"
 installed_keys > "$tmp/inst"
-comm -23 "$tmp/hist" "$tmp/head" > "$tmp/removed"      # 历史有、当前脚本已移除
-comm -23 "$tmp/head" "$tmp/inst" > "$tmp/missing"      # 脚本要、本机缺
-comm -12 "$tmp/removed" "$tmp/inst" > "$tmp/uninst"    # 已移除且本机仍装（卸载候选）
-comm -23 "$tmp/inst" "$tmp/hist" > "$tmp/unmanaged"    # 本机装、非脚本必装（自装或可选）
-comm -12 "$tmp/head" "$tmp/inst" > "$tmp/synced"       # 已同步
+comm -23 "$tmp/hist" "$tmp/head" > "$tmp/removed"
+comm -23 "$tmp/head" "$tmp/inst" > "$tmp/missing"
+comm -12 "$tmp/removed" "$tmp/inst" > "$tmp/uninst"
+comm -23 "$tmp/inst" "$tmp/hist" > "$tmp/unmanaged"
+comm -12 "$tmp/head" "$tmp/inst" > "$tmp/synced"
 
 section() { printf '\n== %s ==\n' "$1"; if [ -s "$2" ]; then cat "$2"; else printf '(无)\n'; fi; }
 

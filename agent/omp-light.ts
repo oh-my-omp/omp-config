@@ -23,13 +23,6 @@ function readableFile(path: string): boolean {
 	}
 }
 
-/**
- * config-light.yml replaces `extensions` with its own list (the entries under
- * `extensions-last/` that stay last in light mode). Every other config.yml entry (the machine's own,
- * such as ~/.claude) is passed back with `-e`, a load lane the override does
- * not reach, so light mode keeps it. An unreadable config.yml adds nothing;
- * omp reports it on its own.
- */
 function machineExtensionArgs(agentDir: string): string[] {
 	let config: unknown;
 	try {

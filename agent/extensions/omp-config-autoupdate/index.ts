@@ -1,53 +1,3 @@
-// ============================================================================
-// omp-config-autoupdate — apply the omp-config repo at OMP start, when enabled,
-// or on demand.
-//
-// SWITCH. Off by default. `/omp-config-autoupdate on|off` writes the
-// `omp-config-autoupdate.enabled` plugin setting and
-// `/omp-config-autoupdate conflicts notify|agent` writes
-// `omp-config-autoupdate.conflicts` (`omp-config`; `/settings → Plugins →
-// omp-config` or `omp plugin config`); `/omp-config-autoupdate` or
-// `… status` shows them. An invalid value means off. The settings are
-// machine-wide: the updater does not manage them and /sync-omp-config does
-// not carry them. Read at each start, so a change applies from the next
-// OMP start. The updater reads the `omp-config-autoupdate.exclude` setting
-// (whitespace-separated agent-dir paths/globs or structured `file:path`
-// entries it never writes, creates or deletes) at each run (apply and auto);
-// see EXCLUSIONS in omp-config-update.ts.
-//
-// CONFLICTS. The updater keeps a local customization that conflicts with an
-// upstream change and reports it (see CUSTOMIZATIONS in omp-config-update.ts).
-// `conflicts: notify` (the default) only notifies at start and points at
-// `/omp-config-autoupdate adapt`. `conflicts: agent` also starts the
-// adaptation in the main session by itself, but only right after a run that
-// applied a new commit, with a UI, and before the session has a user message;
-// otherwise it notifies. `/omp-config-autoupdate adapt` sends the adaptation
-// prompt on demand: the agent runs the updater's `conflicts` listing and
-// adapts each one with the user. `/omp-config-autoupdate conflicts
-// notify|agent` sets the preference.
-//
-// per-spawn files (APPEND-SYSTEM-*.md, REPLACE-SYSTEM-*.yml, ARGON_PROMPT.md,
-// TURN-JUDGE-*.md, PROMPT-INJECT-*.md, agents/) and live-reloaded config.yml apply at once;
-// APPEND_SYSTEM.md, extensions (this one included) and plugins apply on the
-// next start, which the update widget says.
-//
-// VISIBILITY. Only a run that changed something shows anything: a widget above
-// the editor shows the omp-config commit move (when files changed) and the
-// restart hint, and disappears after 5 s. Plugin version changes are only
-// logged; what changed in them is shown by the omomp-changelog extension at the
-// next start. Up to date, a busy lock and an offline fetch only log; failures
-// warn. None of them affect the session.
-//
-// PROJECT SECTIONS. OMP once read omp-config sections from a project's
-// `.omp/omomp.*` before the machine's. When a main session starts in such a
-// project, its sections move into that project (see project-migration.ts):
-// scalars into `.omp/plugin-overrides.json`, model-compaction rules into
-// `.omp/COMPACTION-rule-NN.md`. The files belong to the project's repository,
-// so a notice names them before and after the move and asks the user to commit
-// them; nothing is committed here. Sections that cannot move are named once per
-// process and stay.
-// ============================================================================
-
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -72,7 +22,6 @@ type Switch =
 const switchSchema = z.object({ enabled: z.boolean(), conflicts: z.enum(["notify", "agent"]), exclude: z.string() }).strict();
 const switchSection = defineSettings(import.meta.dir, switchSchema);
 
-/** Where the switch lives, for messages. */
 const switchLocation = (): string => `/settings → Plugins → omp-config (${switchSection.id}.*)`;
 
 async function readSwitch(): Promise<Switch> {
@@ -89,24 +38,20 @@ async function readSwitch(): Promise<Switch> {
 	}
 }
 
-/** Mirrors PluginChange in omp-config-update.ts. */
 const pluginChangeSchema = z.object({ spec: z.string(), name: z.string(), from: z.string().nullable(), to: z.string().nullable() });
 type PluginChange = z.infer<typeof pluginChangeSchema>;
 
-/** Mirrors Conflict in omp-config-update.ts. */
 const conflictSchema = z.union([
 	z.object({ kind: z.literal("file"), id: z.string(), rel: z.string(), target: z.string(), reason: z.string() }),
 	z.object({ kind: z.literal("key"), id: z.string(), rel: z.string(), target: z.string(), path: z.array(z.string()), reason: z.string() }),
 ]);
 type Conflict = z.infer<typeof conflictSchema>;
 
-/** Mirrors ConflictScan in omp-config-update.ts. */
 const conflictScanSchema = z.union([
 	z.object({ kind: z.literal("scanned"), conflicts: z.array(conflictSchema) }),
 	z.object({ kind: z.literal("failed"), error: z.string() }),
 ]);
 
-/** Mirrors ApplyReport in omp-config-update.ts. */
 const applyReportSchema = z.object({
 	written: z.array(z.string()),
 	moved: z.array(z.object({ from: z.string(), to: z.string() })),
@@ -123,7 +68,6 @@ const applyReportSchema = z.object({
 	restartNeeded: z.boolean(),
 });
 
-/** Mirrors PluginRefresh in omp-config-update.ts. */
 const pluginRefreshSchema = z.object({
 	installed: z.array(z.string()),
 	upgraded: z.array(z.string()),
@@ -131,7 +75,6 @@ const pluginRefreshSchema = z.object({
 	changes: z.array(pluginChangeSchema).default(() => []),
 });
 
-/** Mirrors AutoResult in omp-config-update.ts; JSON drops an undefined `previous`. */
 const autoResultSchema = z.union([
 	z.object({ kind: z.literal("busy") }),
 	z.object({ kind: z.literal("offline"), error: z.string() }),
@@ -146,7 +89,6 @@ const autoResultSchema = z.union([
 ]);
 type AutoResult = z.infer<typeof autoResultSchema>;
 
-/** Everything one updater run can end in, including not getting to run it. */
 type RunOutcome<T> =
 	| { readonly kind: "no-script"; readonly script: string }
 	| { readonly kind: "no-bun" }
@@ -156,7 +98,6 @@ type RunOutcome<T> =
 /** One automatic run per process: child sessions share this module and must not re-run it. */
 let started = false;
 
-/** Anything with zod's `safeParse`: the schema of one updater command's JSON. */
 type Parser<T> = { safeParse(value: unknown): { success: true; data: T } | { success: false } };
 
 function parseResult<T>(stdout: string, schema: Parser<T>): T | undefined {
@@ -167,7 +108,6 @@ function parseResult<T>(stdout: string, schema: Parser<T>): T | undefined {
 		const parsed = schema.safeParse(value);
 		return parsed.success ? parsed.data : undefined;
 	} catch {
-		// Malformed child JSON is an expected no-result outcome.
 		return undefined;
 	}
 }
@@ -186,7 +126,6 @@ function runChild(bun: string, args: readonly string[]): Promise<ChildRun> {
 	return promise;
 }
 
-/** Run one updater command with `--json` against `agentDir` and parse its last line. */
 async function runUpdater<T>(command: "auto" | "conflicts", agentDir: string, schema: Parser<T>): Promise<RunOutcome<T>> {
 	const script = join(import.meta.dir, SCRIPT);
 	if (!existsSync(script)) return { kind: "no-script", script };
@@ -203,7 +142,6 @@ function section(title: string, items: readonly string[]): string[] {
 	return items.length === 0 ? [] : ["", `## ${title} (${items.length})`, ...items.map((item) => `- \`${item}\``)];
 }
 
-/** "0.1.10 → 0.1.12", "new 0.1.9", or "0.1.12 (new commit)" when omp install moved the commit but not the version. */
 function pluginVersionChange(change: PluginChange): string {
 	const to = change.to ?? "?";
 	if (change.from === null) return tr(`new ${to}`, `新增 ${to}`);
@@ -213,7 +151,6 @@ function pluginVersionChange(change: PluginChange): string {
 const pluginLines = (changes: readonly PluginChange[]): string[] =>
 	changes.map((change) => `${change.name} ${pluginVersionChange(change)}`);
 
-/** The conflicts section of a report, with how to adapt them. */
 function conflictSection(conflicts: readonly Conflict[]): string[] {
 	if (conflicts.length === 0) return [];
 	return [
@@ -226,7 +163,6 @@ function conflictSection(conflicts: readonly Conflict[]): string[] {
 	];
 }
 
-/** Markdown report of one manual run: every path and message the updater returned. */
 function detailedReport(outcome: RunOutcome<AutoResult>, agentDir: string): string {
 	const head = [tr("# omp-config update", "# omp-config 更新"), "", `- **${tr("Agent dir", "Agent 目录")}:** \`${agentDir}\``];
 	switch (outcome.kind) {
@@ -362,7 +298,6 @@ function detailedReport(outcome: RunOutcome<AutoResult>, agentDir: string): stri
 	}
 }
 
-/** Why an updater command produced no result, for a notification. */
 function notRun(outcome: Exclude<RunOutcome<unknown>, { readonly kind: "result" }>): { readonly en: string; readonly zh: string } {
 	switch (outcome.kind) {
 		case "no-script":
@@ -384,7 +319,6 @@ function notRun(outcome: Exclude<RunOutcome<unknown>, { readonly kind: "result" 
 	}
 }
 
-/** The message that starts adapting conflicts in the main session: the updater's listing carries the procedure. */
 function adaptPrompt(agentDir: string, count: number): string {
 	return [
 		`omp-config kept ${count} local customization(s) in ${agentDir} that conflict with upstream changes.`,
@@ -392,7 +326,6 @@ function adaptPrompt(agentDir: string, count: number): string {
 	].join("\n");
 }
 
-/** `/omp-config-autoupdate adapt`: list the conflicts and, when there are any, start adapting them. */
 async function adaptNow(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
 	const agentDir = getAgentDir();
 	const outcome = await runUpdater("conflicts", agentDir, conflictScanSchema);
@@ -421,7 +354,6 @@ async function adaptNow(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise
 	}
 }
 
-/** `/omp-config-autoupdate on|off|conflicts …`: write one switch setting, then say when it applies. */
 async function setSwitch(
 	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext,
@@ -567,16 +499,11 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 	});
 }
 
-/** How the omp-config commit moved: `change` as the widget shows it, `logChange` in English for the log. */
 interface ConfigMove {
 	readonly change: string;
 	readonly logChange: string;
 }
 
-/**
- * What a startup run shows: nothing (only a log line), the updates, or a failure.
- * Plugin version changes are only logged here; the omomp-changelog extension shows what changed in them.
- */
 type StartupOutcome =
 	| { readonly kind: "quiet"; readonly log: string }
 	| { readonly kind: "updated"; readonly config: ConfigMove | null; readonly plugins: readonly string[]; readonly restart: boolean }
@@ -648,7 +575,6 @@ function startupOutcome(outcome: RunOutcome<AutoResult>): StartupOutcome {
 	}
 }
 
-/** The conflicts a startup run reports: freshly found by an apply, re-scanned at an unchanged commit, or none. */
 type ConflictState =
 	| { readonly kind: "none" }
 	| { readonly kind: "pending"; readonly conflicts: readonly Conflict[]; readonly fresh: boolean }
@@ -674,15 +600,10 @@ function conflictState(outcome: RunOutcome<AutoResult>): ConflictState {
 	}
 }
 
-/** The session already has a user message on its branch: an adaptation turn would barge into the user's work. */
 function hasUserMessage(ctx: ExtensionContext): boolean {
 	return ctx.sessionManager.getBranch().some((entry) => entry.type === "message" && entry.message.role === "user");
 }
 
-/**
- * Start the adaptation (mode `agent`, a run that just applied, an idle UI
- * session without a user message yet), or notify that conflicts are pending.
- */
 function handleConflicts(pi: ExtensionAPI, ctx: ExtensionContext, state: ConflictState, mode: ConflictMode): void {
 	switch (state.kind) {
 		case "none":
@@ -717,7 +638,6 @@ function handleConflicts(pi: ExtensionAPI, ctx: ExtensionContext, state: Conflic
 const WIDGET_KEY = "omp-config-update";
 const WIDGET_MS = 5_000;
 
-/** Show the update above the editor for WIDGET_MS: a header, then the omp-config row "name  old → new" when its commit moved. */
 function showUpdates(ctx: ExtensionContext, config: ConfigMove | null, restart: boolean): void {
 	const { theme } = ctx.ui;
 	ctx.ui.setWidget(WIDGET_KEY, [
@@ -728,16 +648,10 @@ function showUpdates(ctx: ExtensionContext, config: ConfigMove | null, restart: 
 }
 
 const MANIFEST = join(import.meta.dir, "../_shared/package.json");
-/** Projects whose leftover or blocked sections were already named in this process. */
 const namedProjects = new Set<string>();
 
 const keptText = (kept: readonly Kept[]): string => kept.map(({ section, reason }) => `${section} (${reason})`).join("; ");
 
-/**
- * Move the omp-config sections of `ctx.cwd`'s `.omp/omomp.*` into that project.
- * A notice names the files before and after a move that writes; sections that
- * cannot move are named once per process with the reason, and nothing is announced.
- */
 function settleProject(pi: ExtensionAPI, ctx: ExtensionContext, warn: (ctx: ExtensionContext, en: string, zh: string) => void): void {
 	const work = planProject(ctx.cwd, parseManifest(readFileSync(MANIFEST, "utf8"), MANIFEST));
 	const nameOnce = (en: string, zh: string): void => {

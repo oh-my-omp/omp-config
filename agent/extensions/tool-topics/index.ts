@@ -1,49 +1,3 @@
-// tool-topics — progressive instructions for tools omp-config does not own (OMP's built-in tools):
-// a short surface plus a topic index per tool, written into OMP's system prompt in place of the
-// native descriptions, with the detailed call instructions served on demand as
-// tool://<tool>/<topic>. Tools a plugin or another extension registers serve their own
-// topics as xd://<tool>/<topic> through `docTopics()` and list them in their own description;
-// this extension neither indexes nor describes them, including a plugin tool that replaces a
-// built-in under the same name (OMP reports a filesystem source path for it).
-//
-// FILES. Authored beside this module (repo-managed): `TOPIC-*.md` (header: tool, name, title,
-// when, upstream, optional inject) and `SURFACE-*.md` (header: tool, upstream). Loaded once at factory time;
-// edits apply on the next omp start. `upstream` names the OMP version and sources the text was
-// checked against; after an OMP upgrade, re-check each tool against them.
-//
-// INJECTION. A TOPIC header may list `inject` entries `{id, tool, parameter, pattern}`: after a
-// `tool_result` whose named string argument (dotted paths allowed) matches the pattern, the file's
-// own `tool://<tool>/<name>` is delivered once per actual context as trusted additionalContext
-// (main and sub sessions, failed results included). Delivery identity is
-// `omp-config/tool-topic-injection` + entry id; ids are unique across the catalog and stay stable
-// while a rule is the same rule, so a session's already-delivered markers still dedup. Installed
-// only when this extension holds `tool://`: another handler's topics must not be injected under
-// its marker.
-//
-// ROUTING. registry.ts puts the topics on OMP's URL router as the `tool://` scheme, replacing the
-// handler of an earlier load (subagents, isolated children). Afterwards all non-builtin schemes
-// in the router are in canonical order (builtins first, others by name), independent of when
-// this extension bound. When OMP or another handler holds `tool://`, no tool gets an index and
-// injection is off, so nothing points at or injects topics this extension does not serve.
-//
-// PROMPT. At every prompt (`before_agent_start`), main and sub, full and light: when the session
-// has `read`, every OMP-owned tool with authored docs whose description the handed system prompt
-// renders gets its description rewritten in place — replaced by its surface when it has one, then
-// its index appended. `{{native:<Heading>}}` in a surface becomes that `# Heading` section of the
-// rendered description, for content OMP generates per session (task's agent list). prompt.ts
-// finds each tool by name in OMP's rendered layout, not by wording. The rewritten prompt is the
-// result's `systemPrompt`; the rewrite is a pure function of the handed prompt and the files
-// loaded at start, so every prompt of a session sends the same bytes and the cached prefix holds.
-// OMP keeps the agent's prompt through the run's continuations, compaction and the
-// agent-initiated runs that follow (which skip `before_agent_start`), until it rebuilds its base
-// prompt; nothing is delivered as a message. A session without `read` keeps the native
-// descriptions, since it could not read the topics. A revive's `before_agent_start` is skipped,
-// because OMP discards its result.
-//
-// FAILURE. A malformed or unreadable file — including a bad `inject` entry or a duplicate id — is
-// skipped with one warning each; the rest still load. An active tool whose description cannot be
-// found, or whose `{{native:…}}` section is missing, keeps its native description, with a log warning
-// and one main-session notice per tool and reason. Hooks never throw into omp.
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -52,7 +6,6 @@ import { installToolTopicInjection } from "./injection.ts";
 import { indexPrompt, type Rewrite, toolLines } from "./prompt.ts";
 import { publishTopics } from "./registry.ts";
 
-/** Drift already reported, per tool and reason, for the life of the process. */
 const reported = new Set<string>();
 
 function report(pi: ExtensionAPI, ctx: ExtensionContext, tool: string, reason: string): void {
@@ -69,7 +22,6 @@ function report(pi: ExtensionAPI, ctx: ExtensionContext, tool: string, reason: s
 	else process.stderr.write(`${notice}\n`);
 }
 
-/** Publish every tool's topics as `tool://`; true when the index may be shown. */
 function publish(pi: ExtensionAPI, catalog: Catalog): boolean {
 	const topics = new Map([...catalog.tools.values()].filter((docs) => docs.topics.length > 0).map((docs) => [docs.tool, docs.topics]));
 	const result = publishTopics(topics);
@@ -87,21 +39,12 @@ function publish(pi: ExtensionAPI, catalog: Catalog): boolean {
 	}
 }
 
-/**
- * The catalog's tools as the rewrite sees them: each tool's docs, the names the prompt index answers
- * for, and the same names for membership while scanning the registry.
- */
 interface Covered {
 	readonly docs: readonly ToolDocs[];
 	readonly names: readonly string[];
 	readonly known: ReadonlySet<string>;
 }
 
-/**
- * Tools among `covered.known` that an extension or plugin file registered: OMP reports a filesystem
- * source path for them, `<origin:name>` otherwise. OMP offers no signal for a registry change, so
- * this is built per call in one pass over the registry, holding only the covered matches.
- */
 function fileRegistered(pi: ExtensionAPI, known: ReadonlySet<string>): ReadonlySet<string> {
 	const foreign = new Set<string>();
 	for (const tool of pi.getAllTools()) {
@@ -110,7 +53,6 @@ function fileRegistered(pi: ExtensionAPI, known: ReadonlySet<string>): ReadonlyS
 	return foreign;
 }
 
-/** `systemPrompt` with every covered tool it renders rewritten, or undefined when nothing changes. */
 function rewritePrompt(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
@@ -174,7 +116,6 @@ export default function toolTopics(pi: ExtensionAPI): void {
 	}
 
 	pi.on("before_agent_start", (event, ctx) => {
-		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;
 		try {
 			const systemPrompt = rewritePrompt(pi, ctx, event.systemPrompt, covered, indexed);

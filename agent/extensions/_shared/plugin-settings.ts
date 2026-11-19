@@ -5,25 +5,6 @@ import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugi
 import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
 import { errorText } from "./errors.ts";
 
-/**
- * The settings of the omp-config extensions: OMP plugin settings of the local
- * plugin `omp-config`, whose manifest is `package.json` beside this module
- * (`omp.settings`; the updater links this directory with `omp plugin link`).
- * The manifest is the only list of keys, types and defaults; operators edit
- * the values in `/settings → Plugins → omp-config` or `omp plugin config`.
- *
- * Keys are `<extension>.<key>`, nested keys dotted (`tool-policy-nag.form.afterHits`).
- * `readSettings` takes every manifest key under the extension's prefix, uses the
- * stored value or else the manifest default, rebuilds the dotted remainder into
- * an object and parses it with the extension's schema. Stored keys the manifest
- * does not declare are ignored. Values are read through the host on every call.
- *
- * Scopes: `project` merges the project's `.omp/plugin-overrides.json` over the
- * machine values (the host's own rule); `machine` reads with cwd `/`, so only
- * the machine-admin `/.omp/plugin-overrides.json` can override, for settings a
- * project must not change (consent, the language of the process).
- */
-
 export const PLUGIN = "omp-config";
 
 export type SettingsScope = { readonly kind: "project"; readonly cwd: string } | { readonly kind: "machine" };
@@ -48,7 +29,6 @@ type ManifestRead =
 	| { readonly kind: "ok"; readonly defaults: ReadonlyMap<string, Scalar | undefined> }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-/** Manifest key → default (undefined without one); read once per process, the file ships with this module. */
 let declared: ManifestRead | undefined;
 
 function readManifest(): ManifestRead {
@@ -73,15 +53,12 @@ function manifestDefaults(): ManifestRead {
 	return declared;
 }
 
-/** Bind an extension's settings type to its key prefix. `extensionDir` is `import.meta.dir`. */
 export function defineSettings<T>(extensionDir: string, schema: zod.ZodLikeSchema<T>): SettingsSection<T> {
 	return { id: basename(extensionDir), schema };
 }
 
-/** Settings rebuilt from dotted keys: `form.afterHits` → `{ form: { afterHits } }`. */
 type Tree = { [key: string]: Scalar | Tree };
 
-/** Set `value` at the dotted `path` of `target`, creating the objects on the way. */
 function place(target: Tree, path: readonly string[], value: Scalar): void {
 	const [head, ...rest] = path;
 	if (head === undefined) return;
@@ -95,7 +72,6 @@ function place(target: Tree, path: readonly string[], value: Scalar): void {
 	place(child, rest, value);
 }
 
-/** The section's settings: stored values over manifest defaults, parsed with its schema. */
 export async function readSettings<T>(section: SettingsSection<T>, scope: SettingsScope): Promise<SettingsRead<T>> {
 	let stored: Record<string, unknown>;
 	try {
@@ -122,7 +98,6 @@ export async function readSettings<T>(section: SettingsSection<T>, scope: Settin
 	};
 }
 
-/** Store one machine value (`<extension>.<key>`), as `omp plugin config set` would. */
 export async function writeSetting(key: string, value: Scalar): Promise<void> {
 	const manifest = manifestDefaults();
 	if (manifest.kind === "invalid") throw new Error(`${PLUGIN}: ${manifest.reason}`);

@@ -1,24 +1,3 @@
-/**
- * omomp-lang — exports the UI language chosen in the `omomp-lang.language`
- * plugin setting (`omp-config`; `/settings → Plugins → omp-config` or
- * `omp plugin config`) as `OMOMP_LANG`, the environment variable every omp
- * plugin and local extension reads for its person-facing text
- * (`_shared/i18n.ts` documents the whole discovery chain). A project override
- * is not read: the language belongs to the process.
- *
- * At module load (once per process, before this extension's factory and before
- * the factories of every extension imported in the same batch) it sets
- * `process.env.OMOMP_LANG` to the configured language, unless the launch
- * environment already names one (`OMOMP_LANG=en|zh omp`, or a Tern pane started
- * with the parent's language): an explicit launch value wins, so the
- * environment and the setting never disagree within one process. An
- * unreadable or invalid setting leaves the environment alone and consumers
- * fall back to the locale. Child processes inherit the exported value. A
- * change applies from the next OMP start.
- *
- * Registers `session_start`: the first main session reports an invalid
- * setting once (log + UI warning). Writes no files; never throws into omp.
- */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { LANGUAGE_ENV, omompLangSetting, tr } from "../_shared/i18n.ts";
@@ -50,7 +29,6 @@ function exportConfigured(): Export {
 
 const startup = exportConfigured();
 
-/** Whether the first main session still has to report an invalid setting. */
 let unreported = startup.kind === "invalid";
 
 function reportInvalid(pi: ExtensionAPI, ctx: ExtensionContext, reason: string): void {

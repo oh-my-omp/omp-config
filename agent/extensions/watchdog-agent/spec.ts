@@ -11,10 +11,8 @@ import {
 } from "../_shared/session-filter.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 export const WATCHDOG_FILE_PATTERN = /^WATCHDOG-.+\.md$/i;
-/** `model` is the chat reviewer's own model, so the watched session's model is matched by `watchModel` / `watchProvider`. */
 export const WATCHDOG_FILTER_KEYS: FilterKeys = { target: "target", cwd: "cwd", model: "watchModel", provider: "watchProvider" };
 const DEFAULT_TOOLS: readonly string[] = ["read", "grep", "glob"];
-/** Reviewer tools we are willing to grant from frontmatter (superset stays read-only by default). */
 const GRANTABLE_TOOLS: Record<string, true> = {
 	read: true,
 	grep: true,
@@ -30,18 +28,14 @@ const GRANTABLE_TOOLS: Record<string, true> = {
 const DEFAULT_MAX_PER_CONTEXT = Number.POSITIVE_INFINITY; // advisories per watchdog per context; unlimited unless configured.
 const DEFAULT_EVERY = 30; // watched actions (tool calls + text replies) between runs.
 
-/** Which messages a run reviews: the whole branch, or only those after the watchdog's previous run. */
 export type Scope = "full" | "window";
 
 export type DeliverAs = "aside" | "steer" | "nextTurn" | "followUp";
 
 type WatchdogBase = {
 	readonly name: string;
-	/** Which sessions and which producing models the watchdog watches. */
 	readonly filter: SessionFilter;
-	/** How findings reach the watched model. */
 	readonly inject: InjectMode;
-	/** File-level (global) switch: frontmatter `enabled`, default true. A session override may shadow it. */
 	readonly enabled: boolean;
 	readonly delivery: DeliverAs;
 	readonly maxPerContext: number;
@@ -57,12 +51,10 @@ export type ChatWatchdog = WatchdogBase & {
 	readonly tools: readonly string[];
 };
 
-/** What happens when Jev picks an option: stay quiet, or inject the author's prompt. */
 type JevOutcome = { readonly kind: "silent" } | { readonly kind: "inject"; readonly prompt: string; readonly delivery: DeliverAs };
 
 type JevOption = {
 	readonly label: string;
-	/** Rubric handed to Jev; null when the label alone is self-explanatory. */
 	readonly criteria: string | null;
 	readonly outcome: JevOutcome;
 };
@@ -83,19 +75,14 @@ const DEFAULT_JEV_INSTRUCTIONS =
 	"Judge only the latest work in the supplied transcript against the configured guidance. Do not infer facts outside the supplied transcript.";
 const JEV_OPTION_KEY = /^option\.([a-z0-9_-]+)(?:\.(prompt|delivery))?$/;
 
-/** Checked keyed access without an unchecked cast. */
 export function hasKey<K extends string>(value: unknown, key: K): value is Record<K, unknown> {
 	return typeof value === "object" && value !== null && key in value;
 }
 
-// --- discovery + parsing ----------------------------------------------------
-
-/** Extension-level files precede the repository's watchdogs. */
 export function discoverWatchdogFiles(cwd: string): string[] {
 	return discoverSpecFiles(WATCHDOG_FILE_PATTERN, import.meta.dir, cwd);
 }
 
-/** Split a scalar/CSV/`[a, b]` frontmatter value into trimmed, unquoted items. */
 function toList(value: string): string[] {
 	let s = value.trim();
 	if (s.startsWith("[") && s.endsWith("]")) s = s.slice(1, -1);
@@ -112,11 +99,6 @@ function toList(value: string): string[] {
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-/**
- * The file text with frontmatter `enabled` set, replacing an existing `enabled:` line or
- * appending one as the last frontmatter line; everything else is kept byte for byte.
- * Null when the file has no frontmatter (it could not be a valid watchdog).
- */
 export function setFrontmatterEnabled(raw: string, enabled: boolean): string | null {
 	const m = raw.match(FRONTMATTER_PATTERN);
 	if (!m || m[1] === undefined) return null;
@@ -130,7 +112,6 @@ export function setFrontmatterEnabled(raw: string, enabled: boolean): string | n
 
 type WatchdogParse = { readonly kind: "ok"; readonly spec: WatchdogSpec } | { readonly kind: "invalid"; readonly reason: string };
 
-/** Model-facing (English) wording of a frontmatter problem; it reaches `write`/`edit` tool results. */
 function describeProblem(problem: FilterProblem): string {
 	switch (problem.kind) {
 		case "missing":
@@ -150,7 +131,6 @@ function describeProblem(problem: FilterProblem): string {
 	}
 }
 
-/** Parse one `WATCHDOG-*.md` (enabled or not); invalid when unreadable, targetless, or declaring malformed filter, inject or Jev settings. */
 export function parseWatchdogFile(path: string): WatchdogParse {
 	let raw: string;
 	try {
@@ -220,7 +200,6 @@ type JevOptionsParse =
 	| { readonly kind: "ok"; readonly options: readonly JevOption[] }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-/** Collect flat `option.<label>[.prompt|.delivery]` keys into Jev options. */
 function parseJevOptions(fields: Record<string, string>, defaultDelivery: DeliverAs): JevOptionsParse {
 	const criteria = new Map<string, string | null>();
 	const prompts = new Map<string, string>();

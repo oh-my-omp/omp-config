@@ -1,24 +1,3 @@
-// Base record and repo history for omp-config-update.ts.
-//
-// BASE. `<agent dir>/.omp-config-base/` is the updater's own record of the
-// repo content each managed item last had when this machine accepted it:
-//   - files/<rel>     the accepted bytes of a plain file;
-//   - state.json      { version, unknownPlain: [rel], structured: { rel: {
-//                     value, unknown: [path] } } } — plain files whose base
-//                     could not be established, and per structured file the
-//                     accepted repo projection (machine-owned and seed paths
-//                     excluded) plus the paths with no trustworthy base.
-// A plain file with neither entry has no base yet. Only the updater writes
-// here: apply after the host write succeeded, `resolve` on request. Nothing
-// here is copied into the repo.
-//
-// HISTORY. An item with no base is matched against the repo's history: a host
-// file (or structured value) equal to any committed version is unmodified, so
-// its base is that version. The updater clone is shallow; outside --check it
-// is deepened once on the first lookup. Without history the base is unknown.
-// A machine the updater never ran on skips history for structured files: the
-// updater merges them against an empty base (omp-config-update.ts, freshMachine).
-
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -36,7 +15,6 @@ export interface StructuredRecord {
 	readonly unknown: readonly Path[];
 }
 
-/** One change to the record, applied after the host write it belongs to. */
 export type BaseChange =
 	| { readonly kind: "plain-known"; readonly rel: string; readonly content: Uint8Array }
 	| { readonly kind: "plain-unknown"; readonly rel: string }
@@ -46,7 +24,6 @@ export type BaseChange =
 
 const isPath = (value: unknown): value is string[] => Array.isArray(value) && value.every((part) => typeof part === "string");
 
-/** A rel the record may name: relative, `/`-separated, no `.`/`..` parts. */
 function cleanRel(rel: string): boolean {
 	return (
 		rel.length > 0 &&
@@ -61,11 +38,9 @@ export class BaseRecord {
 		private readonly dir: string,
 		private readonly unknownPlain: Set<string>,
 		private readonly structured: Map<string, StructuredRecord>,
-		/** True when the record exists on disk. */
 		readonly exists: boolean,
 	) {}
 
-	/** Read the record; a missing one is empty, an unreadable one is an error. */
 	static load(agentDir: string): BaseRecord {
 		const dir = join(agentDir, BASE_DIR);
 		const statePath = join(dir, STATE_FILE);
@@ -97,13 +72,11 @@ export class BaseRecord {
 		try {
 			if (!lstatSync(path).isFile()) return { kind: "none" };
 		} catch {
-			// No recorded copy: no base.
 			return { kind: "none" };
 		}
 		return { kind: "known", content: readFileSync(path) };
 	}
 
-	/** Path of the recorded copy of a plain file, for people and agents to read. */
 	plainPath(rel: string): string {
 		return join(this.dir, FILES_DIR, rel);
 	}
@@ -112,7 +85,6 @@ export class BaseRecord {
 		return this.structured.get(rel);
 	}
 
-	/** Every plain rel the record has a base for (known or unknown). */
 	plainRels(): string[] {
 		const rels = new Set(this.unknownPlain);
 		const root = join(this.dir, FILES_DIR);
@@ -129,7 +101,6 @@ export class BaseRecord {
 		return [...rels].sort();
 	}
 
-	/** Apply changes and persist: copies first, then state.json, each by temp file + rename. */
 	commit(changes: readonly BaseChange[]): void {
 		if (changes.length === 0) return;
 		for (const change of changes) {
@@ -167,7 +138,6 @@ export class BaseRecord {
 	}
 }
 
-/** Temp file + rename in the record's own tree; the record never follows links out. */
 function writeAtomic(path: string, content: string | Uint8Array): void {
 	mkdirSync(dirname(path), { recursive: true });
 	const tmp = `${path}.tmp-${process.pid}`;
@@ -180,7 +150,6 @@ function writeAtomic(path: string, content: string | Uint8Array): void {
 	}
 }
 
-/** Git's blob id of `content`, to compare a host file with committed versions without reading them. */
 function blobId(content: Uint8Array): string {
 	const hasher = new Bun.CryptoHasher("sha1");
 	hasher.update(`blob ${content.byteLength}\0`);
@@ -192,7 +161,6 @@ export class RepoHistory {
 	private deepened = false;
 	readonly notes: string[] = [];
 
-	/** `fetch`: whether the source may be deepened from its origin (never in --check). */
 	constructor(
 		private readonly source: string,
 		private readonly fetch: boolean,
@@ -215,7 +183,6 @@ export class RepoHistory {
 			this.notes.push("history: could not deepen the shallow source; unmatched files get an unknown base");
 	}
 
-	/** Blob ids `rel` has had in the source's history. */
 	private blobs(rel: string): Set<string> {
 		this.deepen();
 		const out = this.git(["log", "--format=", "--raw", "--no-abbrev", "--no-renames", "HEAD", "--", rel]);
@@ -227,20 +194,10 @@ export class RepoHistory {
 		return ids;
 	}
 
-	/** The host file equals some committed version of `rel`. */
 	hasVersion(rel: string, content: Uint8Array): boolean {
 		return this.blobs(rel).has(blobId(content));
 	}
 
-	/**
-	 * Every committed version of `rel`, as raw text, in `cat-file` input
-	 * order. The batch output stays one Buffer; each blob is sliced out of it
-	 * with a cursor and decoded only while visited — no second copy of every
-	 * blob is kept as decoded strings. `spawnSync` must return before the
-	 * walk starts, so its stdout holding every blob's bytes is the lower
-	 * bound here; `structuredHistory` needs each parsable version, so one
-	 * decoded text at a time is the least that path can hold.
-	 */
 	eachVersion(rel: string, onVersion: (text: string) => void): void {
 		const ids = [...this.blobs(rel)];
 		if (ids.length === 0) return;
@@ -263,7 +220,6 @@ export class RepoHistory {
 		}
 	}
 
-	/** The content of `rel` at `commit`, when the source has it. */
 	show(commit: string, rel: string): Buffer | undefined {
 		const result = spawnSync("git", ["-C", this.source, "show", `${commit}:${rel}`]);
 		return result.status === 0 && !result.error ? result.stdout : undefined;

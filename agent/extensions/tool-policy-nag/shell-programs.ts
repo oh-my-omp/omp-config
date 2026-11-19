@@ -18,26 +18,17 @@ import {
 export type ViolationCategory = "list" | "read" | "search" | "edit" | "write" | "eval";
 export type NonEmptyReadonlyArray<T> = readonly [T, ...T[]];
 
-/** One operation a built-in tool owns, and the path or text it acts on. */
 export type Finding = { readonly category: ViolationCategory; readonly target: string };
 
-/**
- * What a command's stdout carries for the next pipeline stage:
- * `filter` reshapes stdin only, `counter` reduces stdin to counts, `paths`
- * prints file paths, `authored` prints bytes written in the command itself
- * (`echo`, a here-document), `other` anything else.
- */
 export type StreamRole = "filter" | "counter" | "paths" | "authored" | "other";
 
 export type Analysis = {
 	readonly findings: readonly Finding[];
-	/** Violations of commands this one runs: `bash -c '…'`, `eval '…'`, `find -exec … ;`. */
 	readonly nested: readonly ShellViolation[];
 	readonly role: StreamRole;
 };
 
 export type AnalysisContext = {
-	/** Role of the nearest upstream stage that is not a filter; null when stdin is not piped. */
 	readonly provenance: StreamRole | null;
 	readonly shell: (command: string) => readonly ShellViolation[];
 	readonly command: (words: readonly ShellWord[]) => readonly ShellViolation[];
@@ -51,12 +42,9 @@ const analysis = (role: StreamRole, findings: readonly Finding[] = [], nested: r
 	role,
 });
 
-/** A command that reads stdin when it names no file: a filter in a pipeline, nothing otherwise. */
 const stdinRole = (invocation: Invocation): StreamRole => (invocation.piped ? "filter" : "other");
 
 const lastOf = (items: readonly string[]): string | undefined => items[items.length - 1];
-
-// ── list ──────────────────────────────────────────────────────────────────
 
 const LS_VALUES = valueOptions({
 	"-I": 1,
@@ -92,7 +80,6 @@ const TREE_VALUES = valueOptions({
 	"--sort": 1,
 });
 
-/** `tree` output a listing cannot give: JSON/XML, sizes, dates, owners, permissions, input paths, an output file. */
 const treeShowsMetadata = (parsed: ParsedArguments): boolean =>
 	["J", "X", "s", "h", "D", "p", "u", "g", "o"].some((letter) => hasShortLetter(parsed.flags, letter)) ||
 	hasOption(parsed.flags, "--du", "--fromfile", "--inodes", "--device");
@@ -148,7 +135,6 @@ const FIND_VALUES: Readonly<Record<string, number>> = {
 
 const findArity = (word: string): number => FIND_VALUES[word] ?? (/^-newer[amcBt]{2}$/.test(word) ? 1 : 0);
 
-/** Primaries a glob or grep scope can express: names, paths, types and depth, joined by operators. */
 const FIND_SELECTION: ReadonlySet<string> = new Set([
 	"-name",
 	"-iname",
@@ -200,9 +186,7 @@ const FIND_LEADING_OPTIONS: ReadonlySet<string> = new Set(["-H", "-L", "-P"]);
 type FindExpression = {
 	readonly paths: readonly string[];
 	readonly actions: readonly string[];
-	/** Every primary is a name/path/type/depth selection a built-in tool scope can express. */
 	readonly simpleSelection: boolean;
-	/** `-exec` / `-execdir` command words, `{}` kept as an operand. */
 	readonly execBodies: readonly (readonly ShellWord[])[];
 };
 
@@ -240,12 +224,6 @@ function parseFindExpression(words: readonly ShellWord[]): FindExpression {
 	return { paths, actions, simpleSelection, execBodies };
 }
 
-/**
- * A `find` with no action is a listing. With actions it is not: `glob` cannot
- * delete or run anything. Its `-exec` commands are analyzed in its place, but
- * only when the selection is one a built-in tool scope can express; otherwise
- * the find chooses files no tool could, and the whole command stays shell work.
- */
 const analyzeFind: Analyzer = (invocation, context) => {
 	const expression = parseFindExpression(invocation.words);
 	if (expression.actions.length === 0) {
@@ -300,8 +278,6 @@ const analyzeFd: Analyzer = (invocation) => {
 	const target = parsed.operands[1] ?? parsed.values.get("--search-path") ?? ".";
 	return analysis("paths", [{ category: "list", target }]);
 };
-
-// ── read ──────────────────────────────────────────────────────────────────
 
 const HEAD_VALUES = valueOptions({ "-n": 1, "-c": 1, "--lines": 1, "--bytes": 1 });
 const TAIL_VALUES = valueOptions({
@@ -359,11 +335,9 @@ const BAT_VALUES = valueOptions({
 	"--file-name": 1,
 });
 
-/** `tail -f` / `-F` / `--follow` watches a file grow; `read` takes a snapshot, so the shell keeps it. */
 const tailFollows = (flags: readonly string[]): boolean =>
 	hasOption(flags, "--follow") || hasShortLetter(flags, "f") || hasShortLetter(flags, "F");
 
-/** Pager and printer commands: the first named file (or `<` input) is a read; with neither they filter stdin. */
 const readsFiles =
 	(arity: ValueArity): Analyzer =>
 	(invocation) => {
@@ -374,7 +348,6 @@ const readsFiles =
 		return analysis("other", [{ category: "read", target }]);
 	};
 
-/** `cat` reads named files and, redirected, writes; a here-document `cat` prints authored bytes. */
 const analyzeCat: Analyzer = (invocation) => {
 	const files = fileOperands(parseArguments(invocation.args, noValues).operands);
 	const findings: Finding[] = [];
@@ -417,11 +390,6 @@ const JQ_VALUES = valueOptions({
 
 const JSON_FILE = /\.(?:json|jsonl|ndjson)$/i;
 
-/**
- * `jq FILTER file.json` is `read file.json?q=FILTER`. Not: generating input
- * (`-n`), an exit-status assertion (`-e`), slurping, extra file arguments,
- * several inputs, or a filter over piped stdin.
- */
 const analyzeJq: Analyzer = (invocation) => {
 	const parsed = parseArguments(invocation.args, JQ_VALUES);
 	const fromFile = hasOption(parsed.flags, "-f", "--from-file");
@@ -460,7 +428,6 @@ const SQLITE_VALUES = valueOptions({
 	"-pagecache": 2,
 });
 
-/** One read-only statement the `read` SQLite protocol answers: a lone SELECT, `PRAGMA table_info`, or `.tables`/`.schema`. */
 function isReadOnlySqlite(sql: string): boolean {
 	const text = sql
 		.trim()
@@ -485,7 +452,6 @@ const analyzeSqlite: Analyzer = (invocation) => {
 
 type TarMode = { list: boolean; extract: boolean; toStdout: boolean; archive: string | undefined };
 
-/** Applies one bundle of tar mode letters; returns how many following words its `f` consumed. */
 function applyTarLetters(mode: TarMode, letters: string, next: string | undefined): number {
 	for (let index = 0; index < letters.length; index++) {
 		const letter = letters[index];
@@ -501,7 +467,6 @@ function applyTarLetters(mode: TarMode, letters: string, next: string | undefine
 	return 0;
 }
 
-/** `tar -t` lists an archive and `tar -xO` prints a member: both are `read archive[:member]`. */
 const analyzeTar: Analyzer = (invocation) => {
 	const args = invocation.args;
 	const mode: TarMode = { list: false, extract: false, toStdout: false, archive: undefined };
@@ -530,7 +495,6 @@ const analyzeTar: Analyzer = (invocation) => {
 
 const UNZIP_VALUES = valueOptions({ "-d": 1, "-P": 1 });
 
-/** `unzip -l` lists and `unzip -p` prints members; an encrypted archive (`-P`) stays shell. */
 const analyzeUnzip: Analyzer = (invocation) => {
 	const parsed = parseArguments(invocation.args, UNZIP_VALUES);
 	const archive = parsed.operands[0];
@@ -539,17 +503,11 @@ const analyzeUnzip: Analyzer = (invocation) => {
 	return analysis("other", [{ category: "read", target: archive }]);
 };
 
-// ── search ────────────────────────────────────────────────────────────────
-
 type SearchFamily = {
 	readonly arity: ValueArity;
-	/** Options carrying the pattern, so every operand is a path. */
 	readonly patternOptions: readonly string[];
-	/** With no path and no piped stdin the program searches the working directory (`rg`, `ag`, `ack`). */
 	readonly searchesCwd: boolean;
-	/** `-r`/`-R` make a pathless `grep` search the working directory. */
 	readonly recursiveFlags: boolean;
-	/** Options that turn the command into a file listing (`rg --files`, `ag -g`). */
 	readonly listOptions: readonly string[];
 };
 
@@ -706,7 +664,6 @@ const searches =
 		}
 		const patternInOption = hasOption(parsed.flags, ...family.patternOptions);
 		if (!patternInOption && parsed.operands.length === 0) return analysis("other");
-		// `if grep -q …; then` / a polling `while` loop: the shell branches on the exit status; no output reaches the agent.
 		const quiet = hasShortLetter(parsed.flags, "q") || hasOption(parsed.flags, "--quiet", "--silent");
 		if (quiet && invocation.condition) return analysis("other");
 		const files = fileOperands(parsed.operands.slice(patternInOption ? 0 : 1));
@@ -740,24 +697,12 @@ const AWK_VALUES = valueOptions({
 
 const AWK_REGEX = String.raw`\/(?:[^/\\\n]|\\.)+\/`;
 const AWK_PRINT_ALL = String.raw`\{\s*print(?:\s+\$0)?\s*;?\s*\}`;
-/** `/re/` or `!/re/`, optionally `{ print }`: grep in awk syntax. */
 const AWK_SEARCH = new RegExp(String.raw`^!?${AWK_REGEX}(?:\s*${AWK_PRINT_ALL})?$`);
 const AWK_LINE_RANGE = String.raw`NR\s*(?:==|>=?|<=?)\s*\d+(?:\s*&&\s*NR\s*(?:==|>=?|<=?)\s*\d+)?`;
 const AWK_SECTION = String.raw`${AWK_REGEX}\s*,\s*${AWK_REGEX}`;
-/** An action that only prints the selected lines, numbered or not: `{ printf "%d: %s\n", NR, $0 }`. */
 const AWK_PRINT_ACTION = String.raw`\{\s*printf?\b[^{};]*;?\s*\}`;
-/**
- * Read in awk syntax: a line range (`NR>=10 && NR<=20`) or a marker-delimited
- * section (`/start/,/end/`) printed as is or numbered, or the whole file (`1`,
- * `{ print }`).
- */
 const AWK_READ = new RegExp(String.raw`^(?:(?:${AWK_LINE_RANGE}|${AWK_SECTION})(?:\s*${AWK_PRINT_ACTION})?|1|${AWK_PRINT_ALL})$`);
 
-/**
- * awk is its own language: only the forms equivalent to a built-in tool count —
- * `-i inplace` (edit), a lone regex rule (search), a line range, section or
- * whole-file print (read). Sums, projections and reformatting stay shell work.
- */
 const analyzeAwk: Analyzer = (invocation) => {
 	const parsed = parseArguments(invocation.args, AWK_VALUES);
 	const inPlace = parsed.values.get("-i") === "inplace" || parsed.values.get("--include") === "inplace";
@@ -802,12 +747,6 @@ const GIT_GREP_VALUES = valueOptions({
 	"--context": 1,
 });
 
-/**
- * `git grep` over the working tree is `grep`. Not: the index (`--cached`),
- * outside the repository (`--no-index`), a pager (`-O`), or a revision — and
- * since a word after the pattern may name a revision, only a pathless search or
- * paths after `--` count.
- */
 function analyzeGitGrep(args: readonly string[]): Analysis {
 	const separator = args.indexOf("--");
 	const before = separator === -1 ? args : args.slice(0, separator);
@@ -822,12 +761,10 @@ function analyzeGitGrep(args: readonly string[]): Analysis {
 	const patterns = hasOption(parsed.flags, "-e", "-f") ? 0 : 1;
 	if (parsed.operands.length !== patterns) return analysis("other");
 	const role = listsMatchingFiles(parsed.flags) ? "paths" : "other";
-	// `:!lockfile` / `:(exclude)…` pathspecs exclude; name the first included path.
 	const target = fileOperands(pathspecs).find((pathspec) => !pathspec.startsWith(":")) ?? ".";
 	return analysis(role, [{ category: "search", target }]);
 }
 
-/** `git ls-files` lists Git's index, which the shell owns, but its output is a path stream for `xargs`. */
 const analyzeGit: Analyzer = (invocation) => {
 	const args = invocation.args;
 	let index = 0;
@@ -841,8 +778,6 @@ const analyzeGit: Analyzer = (invocation) => {
 			return analysis("other");
 	}
 };
-
-// ── edit ──────────────────────────────────────────────────────────────────
 
 const PERL_VALUES = valueOptions({ "-e": 1, "-E": 1, "-f": 1, "--eval": 1, "--file": 1 });
 
@@ -878,24 +813,17 @@ const analyzeMv: Analyzer = (invocation) => {
 	return analysis("other", target === undefined ? [] : [{ category: "edit", target }]);
 };
 
-// ── write ─────────────────────────────────────────────────────────────────
-
-/** `echo`/`printf` print authored bytes; redirected to a file they are `write`. */
 const analyzeEcho: Analyzer = (invocation) => {
 	const redirect = invocation.outputs[0];
 	return analysis("authored", redirect === undefined ? [] : [{ category: "write", target: redirect.target }]);
 };
 
-/** `tee` writes authored bytes (a here-document, or an upstream `echo`/`printf`/here-document `cat`); a program's own output is not. */
 const analyzeTee: Analyzer = (invocation, context) => {
 	const target = fileOperands(parseArguments(invocation.args, noValues).operands).find((operand) => !isDeviceTarget(operand));
 	const authored = invocation.hereInput || context.provenance === "authored";
 	return analysis("filter", authored && target !== undefined ? [{ category: "write", target }] : []);
 };
 
-// ── eval ──────────────────────────────────────────────────────────────────
-
-/** The script operand: the first word that is not an option, `-` meaning stdin. */
 function firstScriptOperand(args: readonly string[]): string | undefined {
 	let options = true;
 	for (const arg of args) {
@@ -909,7 +837,6 @@ function firstScriptOperand(args: readonly string[]): string | undefined {
 	return undefined;
 }
 
-/** Interpreter options that take the next word: Python `-W`/`-X`, Node/Bun/Ruby `-r`, Node `--require`/`--import`, Bun `--preload`/`--cwd`. */
 const INTERPRETER_VALUES = valueOptions({
 	"-W": 1,
 	"-X": 1,
@@ -923,11 +850,9 @@ const INTERPRETER_VALUES = valueOptions({
 	"--env-file": 1,
 });
 
-/** Inline code (`-e`/`-c`/`-p`/`--eval`) or a script read from stdin (`-`), found among the options before the script operand. */
 function inlineEvalTarget(invocation: Invocation): string | null {
 	const args = invocation.args;
 	if (invocation.program === "deno" && args[0] === "eval") return firstScriptOperand(args.slice(1)) ?? "<inline>";
-	// Interpreter options precede the script; words after it (`bun cli.ts -p …`) belong to the script.
 	let index = 0;
 	for (; index < args.length && isFlag(args[index] ?? "") && args[index] !== "--"; index++) {
 		const arg = args[index] ?? "";
@@ -945,7 +870,6 @@ const analyzeInterpreter: Analyzer = (invocation) => {
 	return analysis("other", target === null ? [] : [{ category: "eval", target }]);
 };
 
-/** `bash -c 'cmd'` runs a literal command line: analyze it. A dynamic string (`"$cmd"`) is unknown and skipped. */
 const analyzeShellString: Analyzer = (invocation, context) => {
 	const words = invocation.words;
 	let index = 0;
@@ -960,7 +884,6 @@ const analyzeShellString: Analyzer = (invocation, context) => {
 		const name = optionName(text);
 		if (name === "--rcfile" || name === "--init-file") index++;
 		else if (!text.startsWith("--") && text.slice(1).includes("c")) runsString = true;
-		// `-o opt` / `+O opt`: the option word ends the bundle and takes the next word.
 		if (!text.startsWith("--") && /[oO]$/.test(text)) index++;
 		index++;
 	}
@@ -973,8 +896,6 @@ const analyzeEvalBuiltin: Analyzer = (invocation, context) => {
 	if (invocation.words.length === 0 || invocation.words.some((word) => word.dynamic)) return analysis("other");
 	return analysis("other", [], context.shell(invocation.args.join(" ")));
 };
-
-// ── stream reshapers and counters (no findings; pipeline roles only) ──────
 
 const WC_VALUES = valueOptions({ "--files0-from": 1 });
 const SORT_VALUES = valueOptions({
@@ -1014,7 +935,6 @@ const CUT_VALUES = valueOptions({
 });
 const COLUMN_VALUES = valueOptions({ "-s": 1, "-c": 1, "-o": 1, "-N": 1, "-R": 1, "-W": 1, "-H": 1, "-O": 1, "-E": 1, "-d": 1 });
 
-/** Reads stdin when it names no file; `counts` marks stdin reductions to counts. */
 const reshapes =
 	(arity: ValueArity, counts: (parsed: ParsedArguments) => boolean): Analyzer =>
 	(invocation) => {
@@ -1026,10 +946,6 @@ const reshapes =
 
 const noCount = (_parsed: ParsedArguments): boolean => false;
 
-/**
- * Every program the detector knows, keyed by the name it runs as. A program
- * that is absent runs as `other` with no findings.
- */
 const ANALYZERS = {
 	ls: analyzeLs,
 	tree: analyzeTree,
@@ -1084,7 +1000,6 @@ const ANALYZERS = {
 
 export type ShellProgram = keyof typeof ANALYZERS;
 
-/** One command matched by one or more policy categories. */
 export type ShellViolation = {
 	readonly categories: NonEmptyReadonlyArray<ViolationCategory>;
 	readonly program: ShellProgram;

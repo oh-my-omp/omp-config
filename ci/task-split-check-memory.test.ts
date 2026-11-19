@@ -1,7 +1,3 @@
-// #244 recall semantics, through the extension's real tool_call path: a stub pi
-// captures the registered handler; a mocked role chain answers verdicts.
-// Covers: miss calls judge, identical repeat hits memory, same-boundary
-// different content misses. No seam added to the extension.
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import type { RoleModel } from "../agent/extensions/_shared/roles.ts";
 
@@ -16,10 +12,6 @@ const answers = new Map<string, string>();
 let judgeCalls = 0;
 const prompts: string[] = [];
 
-// The extension judges through `completeRoleChain` in `_shared/role-chain.ts`;
-// stubbing it answers verdicts without touching the provider SDK.
-// `completeSimple` stays real but is never reached: the stubbed chain resolves
-// one canned model and answers from `answers` by matching the prompt fragment.
 mock.module("../agent/extensions/_shared/role-chain.ts", () => ({
 	completeRoleChain: async (
 		_ctx: unknown,
@@ -60,8 +52,6 @@ mock.module("../agent/extensions/_shared/roles.ts", () => ({
 	modelLabel: (m: { provider: string; id: string }) => `${m.provider}/${m.id}`,
 }));
 
-// `declaresFlag` gates `split` coverage on agent frontmatter; the harness drives
-// `task`, whose report-limit check covers every `task:*` item without flags.
 mock.module("../agent/extensions/_shared/agent-definition.ts", () => ({
 	declaresFlag: () => Promise.resolve(false),
 }));
@@ -95,7 +85,6 @@ const loadExtension = async (): Promise<{ handler: ToolCallHandler; pi: { logger
 
 const mainCtx = {
 	agent: { kind: "main", id: "Main", name: "main", depth: 0 },
-	// split's covers resolves the caller session; no registry session matches the stub.
 	sessionManager: { getCwd: () => "/repo", getSessionFile: () => undefined },
 	modelRegistry: { resolver: () => undefined },
 } as never;
@@ -127,8 +116,6 @@ describe("task-split-check recall through tool_call", () => {
 		expect(repeat).toBeUndefined();
 		expect(judgeCalls).toBe(1);
 
-		// Length framing keeps the boundary-split keys apart, so this judges again;
-		// the two judge prompts carry the exact rendered bytes for their inputs.
 		const shifted = await handler({ toolName: "task", input: dispatch("evidence-contex", "trun the probe command") }, mainCtx);
 		expect(shifted).toBeUndefined();
 		expect(judgeCalls).toBe(2);

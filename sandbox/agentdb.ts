@@ -1,8 +1,3 @@
-// Host side of the agent.db copy (S2/S3). The snapshot is SQLite's serialization of a read-only
-// connection: it is taken inside one read transaction, so it includes WAL frames not yet
-// checkpointed into the main file, and it never touches the host disk. The comparison reads both
-// images in memory and compares every field of every row; it reports counts and equality, never
-// values or digests.
 import { Database } from "bun:sqlite";
 
 type Value = string | number | bigint | boolean | Uint8Array | null;
@@ -11,7 +6,6 @@ export type TableCheck =
 	| { readonly kind: "equal"; readonly table: string; readonly rows: number }
 	| { readonly kind: "differ"; readonly table: string; readonly detail: string };
 
-/** A consistent image of `path`, marked as a rollback-journal database so `deserialize` accepts it. */
 export function snapshot(path: string): Uint8Array {
 	const db = new Database(path, { readonly: true });
 	try {
@@ -21,7 +15,6 @@ export function snapshot(path: string): Uint8Array {
 	}
 }
 
-/** Header bytes 18 and 19 are the read/write format versions: 2 for WAL, 1 for a rollback journal. */
 export function asRollbackJournal(image: Uint8Array): Uint8Array {
 	const copy = new Uint8Array(image);
 	copy[18] = 1;
@@ -51,7 +44,6 @@ function sameValue(a: Value | undefined, b: Value | undefined): boolean {
 	return a === b;
 }
 
-/** Compares every table of two images field by field. */
 export function compareImages(host: Uint8Array, container: Uint8Array): TableCheck[] {
 	const left = Database.deserialize(asRollbackJournal(host), true);
 	const right = Database.deserialize(asRollbackJournal(container), true);

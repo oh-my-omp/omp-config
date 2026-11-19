@@ -1,10 +1,3 @@
-// delete-guard eval entry: py and js deletion APIs block (aliases and cross-cell
-// distinctive names included), commands handed to a shell or spawned are
-// classified by the posix classifier, non-literal commands block, and ordinary
-// cells pass. A launch whose command shape the source does not fix (spread,
-// duplicate, computed or accessor key, spread argument) blocks as non-literal.
-// Launcher aliases bound in one js cell, or in an earlier cell of the session
-// until a reset cell, judge as their launcher.
 import { describe, expect, test } from "bun:test";
 import { EMPTY_CARRY } from "../agent/extensions/_shared/eval-js-launches.ts";
 import { classifyJs } from "../agent/extensions/delete-guard/eval-js.ts";
@@ -119,7 +112,6 @@ describe("js cells", () => {
 		'const { promises: fsp } = require("fs"); await fsp.rm("/tmp/omp-dg-c3/d/f")',
 		'const cp = require("child_process"); cp.spawn("echo ok; rm /tmp/omp-dg-c3/d/f", [], { shell: "/bin/sh" })',
 		'const cp = require("child_process"); cp.spawn("echo ok; rm /tmp/omp-dg-c3/d/f", [], { shell: flag })',
-		// Launcher aliases, same cell (the issue's 结果 4).
 		"const $ = Bun.$; await $`rm -rf x`",
 		"const a = Bun.$; const b = a; await b`rm -rf x`",
 		"const sh = Bun.$; await sh`rm -rf x`",
@@ -141,7 +133,6 @@ describe("js cells", () => {
 		"Bun.spawn([prog, 'x'])",
 		"Bun.spawn(argv)",
 		"await tool.bash({ command: cmd })",
-		// Shapes the source does not fix (issue 结果 1–3).
 		"await tool.bash({ command: 'ls', command: 'rm -rf x' })",
 		"await tool.bash({ command: 'ls', command() { return 'rm -rf x' } })",
 		"const k = 'command'; await tool.bash({ command: 'ls', [k]: 'rm -rf x' })",
@@ -171,7 +162,6 @@ describe("js cells", () => {
 		"console.log((123).toString())",
 		'const o = { a: 1 }; o.hasOwnProperty("a")',
 		'const cp = require("child_process"); cp.spawn("ls", ["-l"], { cwd: "/tmp" })',
-		// Literal forms whose verdict is unchanged (issue 结果 6).
 		"require('child_process').execSync('echo ok')",
 		"const { execSync } = require('child_process'); execSync('echo ok')",
 		"const e = require('child_process').execSync; e('echo ok')",
@@ -255,10 +245,8 @@ describe("launcher names carried between js cells", () => {
 		const session = newEvalSession();
 		expect(await jsEval("const s = Bun.spawn", session)).toBeUndefined();
 		expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toMatchObject({ block: true });
-		// A python reset wipes python's kernel only; the js alias still binds.
 		expect(await guardToolCall("eval", { language: "py", code: "1", reset: true }, () => true, session)).toBeUndefined();
 		expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toMatchObject({ block: true });
-		// A js reset cell runs in a fresh kernel: the alias is gone, the call is not a launch.
 		expect(await jsEval("1 + 1", session, true)).toBeUndefined();
 		expect(await jsEval("s(['rm', '-rf', 'x'])", session)).toBeUndefined();
 	});

@@ -1,43 +1,7 @@
-/**
- * Python eval cells, read the way the eval kernel runs them: a tokenizer that
- * knows strings, f-strings, comments and the kernel's rewrites (`!cmd`,
- * `x = !cmd`, `%sx`, `%system`, `%%bash`, `%time`), the cell's import bindings,
- * and the process launch a call at a given token starts. Mechanics only: what
- * to do with an untokenizable cell, a non-literal command or an alias is the
- * caller's decision. Used by delete-guard (fail closed) and tool-policy-nag's
- * pty lane (fail open).
- */
-
-/** One argv word; `literal` is false when its runtime text cannot be read from the source. */
 export type LaunchWord = { readonly text: string; readonly literal: boolean };
 
-/**
- * How a launch call was recognized: `direct` spells the API under its own name
- * (`subprocess.run`; `import os` then `os.system`; `from subprocess import run`
- * then `run`); `alias` reaches it through a binding of this cell that renames
- * it (`import subprocess as sp`, `from os import system as sh`); `distinctive`
- * matched a launch-only name without a binding (`Popen(…)` imported in an
- * earlier cell), or a callee given a `shell=` that may start a shell.
- */
 export type LaunchVia = "direct" | "alias" | "distinctive";
 
-/**
- * What a call at a given token does at run time, as far as the cell spells it
- * out. A `null` command, words or code means the value is not a literal the
- * source shows: a non-literal argument, or a `**` splat that may carry the
- * `shell=` or the command itself.
- *
- * - `bridge`: the `tool.bash` harness bridge, or `tool.write` to `xd://bash`;
- *   its command runs as a real `bash` tool call.
- * - `script`: text handed to the system shell (`os.system`, `shell=True`,
- *   `getoutput`).
- * - `shellHelper`: the eval `sh` helper, which runs its command on omp's
- *   embedded bash engine (posix on every platform).
- * - `argv`: an argument list run without a shell.
- * - `execEval`: builtin `exec` or `eval`; `code` is the Python the cell runs.
- * - `opaque`: `__import__` or `importlib.import_module` whose module name is not
- *   a literal, so the module, and any launch made through it, is unknown.
- */
 export type PyLaunch =
 	| { readonly kind: "bridge"; readonly command: string | null }
 	| { readonly kind: "script"; readonly api: string; readonly via: LaunchVia; readonly text: string | null }
@@ -48,16 +12,13 @@ export type PyLaunch =
 
 export type PyScan = {
 	readonly tokens: readonly Token[];
-	/** `!cmd`, `x = !cmd`, `%sx`/`%system` and `%%bash` bodies: shell text the kernel runs. */
 	readonly shellScripts: readonly string[];
-	/** f-string placeholder code, `%time`/`%timeit` arguments, `%%capture`/`%%timeit` bodies: Python the cell also runs. */
 	readonly pythonSnippets: readonly string[];
 	readonly bindings: Bindings;
 };
 
 type PyScanResult = { readonly kind: "scanned"; readonly scan: PyScan } | { readonly kind: "unlexable"; readonly reason: string };
 
-/** Tokenizes a cell; an unterminated string or bracket cannot run and is `unlexable`. */
 export function scanPy(code: string): PyScanResult {
 	let lexed: Lexed;
 	try {
@@ -69,18 +30,12 @@ export function scanPy(code: string): PyScanResult {
 	return { kind: "scanned", scan: { ...lexed, bindings: collectBindings(lexed.tokens) } };
 }
 
-/** The launch the call at name token `k` starts, or null when `k` is not a call or the call starts no process. */
 export function pyLaunchAt(scan: PyScan, k: number): PyLaunch | null {
 	const { tokens, bindings } = scan;
 	const nameToken = tokens[k];
 	if (nameToken?.kind !== "name" || !isOp(tokens[k + 1], "(")) return null;
 	const previous = tokens[k - 1];
-	// `def exec(…)` and `class run(…)` declare a name; they call nothing.
 	if (previous?.kind === "name" && (previous.value === "def" || previous.value === "class")) return null;
-	// The callee is checked before the arguments are read: a call that cannot
-	// launch never pays for an argument walk. An unrecognized callee still needs
-	// one look at the argument list: a `shell=` it spells would make it a script
-	// launch (`launchOf` keeps that rule), so the scan looks for the keyword only.
 	const callee = qualifiedCallee(tokens, k, bindings);
 	const qualified = callee.names.join(".");
 	const known: LaunchKind | null = SCRIPT_CALLS.has(qualified) ? "script" : ARGV_CALLS.has(qualified) ? "argv" : null;
@@ -105,10 +60,8 @@ export function pyLaunchAt(scan: PyScan, k: number): PyLaunch | null {
 	return args.keywordSplat ? withUnknownPayload(launch) : launch;
 }
 
-/** Position of `shell` among the positional arguments of the subprocess calls, which forward them to `Popen`. */
 const SHELL_POSITION = 8;
 
-/** `tool.bash` and `tool.write` bridges, builtin `exec`/`eval`, and process launches; null for any other call. */
 function launchOf(name: string, qualified: string, renamed: boolean, args: CallArgs): PyLaunch | null {
 	if (qualified === "tool.bash") {
 		const device = args.positional[0];
@@ -116,7 +69,6 @@ function launchOf(name: string, qualified: string, renamed: boolean, args: CallA
 		return { kind: "bridge", command: literalSource(command) };
 	}
 	if (EXEC_EVAL.has(qualified)) return { kind: "execEval", api: qualified, code: literalSource(args.positional[0]) };
-	// The eval prelude's `sh(command, cwd, timeout)`, which runs on the embedded bash engine; a name the cell binds to it reaches here too.
 	if (qualified === "sh")
 		return {
 			kind: "shellHelper",
@@ -124,7 +76,6 @@ function launchOf(name: string, qualified: string, renamed: boolean, args: CallA
 			via: renamed ? "alias" : "direct",
 			text: literalSource(args.positional[0] ?? args.keywords.get("command")),
 		};
-	// `shell=` that is not a literal `False`/`None` may start a shell (`shell=flag`), so the command is a script.
 	const known: LaunchKind | null = SCRIPT_CALLS.has(qualified) ? "script" : ARGV_CALLS.has(qualified) ? "argv" : null;
 	const kind = known ?? DISTINCTIVE_LAUNCH.get(name) ?? null;
 	const shellArg = args.keywords.get("shell") ?? (kind === "argv" ? args.positional[SHELL_POSITION] : undefined);
@@ -142,12 +93,6 @@ function launchOf(name: string, qualified: string, renamed: boolean, args: CallA
 	return { kind: "argv", api: qualified, via, words: first === undefined ? null : argvWords(first) };
 }
 
-/**
- * `tool.write({'path': 'xd://bash', 'content': …})`: the device bridge, whose
- * command is the `command` of a literal JSON payload or of a `json.dumps({…})`
- * with a literal command. A `**` splat may carry the path, so it is a bridge
- * whose command is unknown. Any other path is not a bridge.
- */
 function toolWriteLaunch(args: CallArgs): PyLaunch | null {
 	if (args.keywordSplat) return { kind: "bridge", command: null };
 	const device = args.positional[0];
@@ -157,26 +102,21 @@ function toolWriteLaunch(args: CallArgs): PyLaunch | null {
 	return { kind: "bridge", command: bridgeCommandOf(fields.get("content")) };
 }
 
-/** The command of an `xd://bash` payload: literal JSON text, or `json.dumps` of a dict with a literal `command`. */
 function bridgeCommandOf(content: Arg | undefined): string | null {
 	if (content?.kind === "string") return content.literal ? bridgeCommand(content.value) : null;
 	if (content?.kind === "dumps") return content.payload.kind === "dict" ? literalSource(content.payload.entries.get("command")) : null;
 	return null;
 }
 
-/** The `command` of a JSON payload with a string `command`, or null when the text is not one. */
 function bridgeCommand(content: string): string | null {
 	try {
 		const payload: unknown = JSON.parse(content);
 		if (typeof payload === "object" && payload !== null && "command" in payload && typeof payload.command === "string")
 			return payload.command;
-	} catch {
-		// Malformed payload: the device would reject it too; treat it as non-literal.
-	}
+	} catch {}
 	return null;
 }
 
-/** The same launch with its payload unknown: a `**` splat may carry the `shell=` or the command itself. */
 function withUnknownPayload(launch: PyLaunch): PyLaunch {
 	switch (launch.kind) {
 		case "bridge":
@@ -197,13 +137,8 @@ function withUnknownPayload(launch: PyLaunch): PyLaunch {
 	}
 }
 
-/** A module name a call loads: `__import__('a.b')` loads `a` unless a fromlist names the submodule. */
 type ImportCall = { readonly kind: "module"; readonly name: string } | { readonly kind: "opaque" };
 
-/**
- * `__import__(name, …)` and `importlib.import_module(name, …)`: the module a
- * literal name loads, or opaque when the name is not literal. Null for any other call.
- */
 function importCall(callee: string, args: CallArgs): ImportCall | null {
 	if (callee !== "__import__" && callee !== "importlib.import_module") return null;
 	const name = args.positional[0] ?? args.keywords.get("name");
@@ -217,7 +152,6 @@ function importCall(callee: string, args: CallArgs): ImportCall | null {
 	return { kind: "opaque" };
 }
 
-/** Shell handoffs whose first argument is a shell script. */
 const SCRIPT_CALLS: ReadonlySet<string> = new Set([
 	"os.system",
 	"os.popen",
@@ -226,7 +160,6 @@ const SCRIPT_CALLS: ReadonlySet<string> = new Set([
 	"asyncio.create_subprocess_shell",
 ]);
 
-/** Process launches taking an argv list (a script when `shell` is anything but a literal false). */
 const ARGV_CALLS: ReadonlySet<string> = new Set([
 	"subprocess.run",
 	"subprocess.call",
@@ -235,12 +168,10 @@ const ARGV_CALLS: ReadonlySet<string> = new Set([
 	"subprocess.Popen",
 ]);
 
-/** Builtin code runners, whose first argument is Python the cell runs. */
 const EXEC_EVAL: ReadonlySet<string> = new Set(["exec", "eval", "builtins.exec", "builtins.eval"]);
 
 type LaunchKind = "script" | "argv" | "execArgs";
 
-/** Launch names only subprocess/asyncio use, matched whatever the receiver. */
 const DISTINCTIVE_LAUNCH: ReadonlyMap<string, LaunchKind> = new Map([
 	["Popen", "argv"],
 	["check_output", "argv"],
@@ -257,7 +188,6 @@ type Token =
 	| { readonly kind: "number"; readonly start: number }
 	| { readonly kind: "string"; readonly value: string; readonly literal: boolean; readonly start: number };
 
-/** What the kernel rewrites before Python sees it (`!cmd`, `%%bash`, `%time`, …), plus f-string placeholder code. */
 type Lexed = {
 	readonly tokens: readonly Token[];
 	readonly shellScripts: readonly string[];
@@ -281,13 +211,10 @@ const NAME_START = /[A-Za-z_]/;
 const NAME_CHAR = /[A-Za-z0-9_]/;
 const ASSIGN_MAGIC = /^[A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*\s*=\s*([!%])(?![=%])/;
 
-/** Line magics whose argument is Python; `%%capture`/`%%timeit` bodies are Python too. `%run`/`%load` run script files (K5). */
 const PYTHON_LINE_MAGICS: ReadonlySet<string> = new Set(["time", "timeit"]);
-/** Line magics whose argument the kernel runs as a shell command. */
 const SHELL_LINE_MAGICS: ReadonlySet<string> = new Set(["sx", "system"]);
 const PYTHON_CELL_MAGICS: ReadonlySet<string> = new Set(["capture", "timeit"]);
 
-/** The contents of each top-level `{…}` in an f-string format spec: expressions Python evaluates. */
 function bracedParts(spec: string): string[] {
 	const parts: string[] = [];
 	let depth = 0;
@@ -305,7 +232,6 @@ function bracedParts(spec: string): string[] {
 	return parts;
 }
 
-/** What the line at a logical line start was: the cell's end, a line the magics consumed (the cursor is on the next line), or ordinary code. */
 type LineStart = "stop" | "consumed" | "plain";
 
 class Lexer {
@@ -321,7 +247,6 @@ class Lexer {
 		throw new LexFailure(detail);
 	}
 
-	/** The rest of the line from `from`, joining `\`-continued lines; the cursor moves past it. */
 	private takeLine(from: number): string {
 		let text = "";
 		let j = from;
@@ -340,7 +265,6 @@ class Lexer {
 		return text;
 	}
 
-	/** At the start of a logical line: kernel magics. */
 	private lineStart(): LineStart {
 		let j = this.i;
 		while (this.src.charAt(j) === " " || this.src.charAt(j) === "\t") j++;
@@ -390,8 +314,6 @@ class Lexer {
 		const raw = /r/i.test(prefix);
 		const formatted = /f/i.test(prefix);
 		this.i += delimiter.length;
-		// The value is the run of source characters between decodes: one slice per run
-		// instead of one append per character. `last` starts each run.
 		let last = this.i;
 		let value = "";
 		let literal = true;
@@ -407,7 +329,6 @@ class Lexer {
 			if (ch === "\\") {
 				const next = this.src.charAt(this.i + 1);
 				if (raw) {
-					// Raw strings keep both characters; they stay inside the current run.
 					this.i += 2;
 					continue;
 				}
@@ -445,10 +366,6 @@ class Lexer {
 		this.fail("unterminated string");
 	}
 
-	/**
-	 * An f-string placeholder `{…}` (cursor on `{`): its code, without a `!r` conversion or `:spec` at nesting zero,
-	 * followed by the expressions nested in the spec (`{x:{width}}`), which Python evaluates too.
-	 */
 	private readPlaceholder(): readonly string[] {
 		this.i++;
 		const start = this.i;
@@ -485,7 +402,6 @@ class Lexer {
 			if (atLineStart && this.depth === 0) {
 				const at = this.lineStart();
 				if (at === "stop") break;
-				// A consumed magic line leaves the cursor at the next line start, which is again a line start.
 				if (at === "consumed") continue;
 			}
 			atLineStart = false;
@@ -544,31 +460,25 @@ class Lexer {
 	}
 }
 
-/** A call argument, reduced to what launch recognition needs. */
 type Arg =
 	| { readonly kind: "string"; readonly value: string; readonly literal: boolean }
 	| { readonly kind: "seq"; readonly items: readonly Arg[] }
 	| { readonly kind: "dict"; readonly entries: ReadonlyMap<string, Arg> }
-	/** `json.dumps(payload)`: the payload is what gets serialized. */
 	| { readonly kind: "dumps"; readonly payload: Arg }
 	| { readonly kind: "true" }
-	/** `False` or `None`: a `shell=` that certainly does not start a shell. */
 	| { readonly kind: "false" }
 	| { readonly kind: "expr" };
 
 type CallArgs = {
 	readonly positional: readonly Arg[];
 	readonly keywords: ReadonlyMap<string, Arg>;
-	/** A `**` expansion among the arguments: keywords it carries are unknown. */
 	readonly keywordSplat: boolean;
 };
 
 export const isOp = (token: Token | undefined, value: string): boolean => token?.kind === "op" && token.value === value;
 
-/** One top-level comma-separated argument as a token range: `[start, end)` inside `tokens`. */
 type Part = readonly [start: number, end: number];
 
-/** The `[start, end)` ranges `tokens[from, to)` splits into at top-level commas, without copying the tokens. */
 function partRanges(tokens: readonly Token[], from: number, to: number): Part[] {
 	const parts: Part[] = [];
 	let start = from;
@@ -587,7 +497,6 @@ function partRanges(tokens: readonly Token[], from: number, to: number): Part[] 
 	return parts;
 }
 
-/** Index of the bracket closing the one at `open`. */
 function closing(tokens: readonly Token[], open: number): number {
 	let depth = 0;
 	for (let k = open; k < tokens.length; k++) {
@@ -601,7 +510,6 @@ function closing(tokens: readonly Token[], open: number): number {
 	return tokens.length;
 }
 
-/** Index of the bracket opening the one at `close`, or null when it has no opener. */
 function openingOf(tokens: readonly Token[], close: number): number | null {
 	let depth = 0;
 	for (let k = close; k >= 0; k--) {
@@ -615,11 +523,6 @@ function openingOf(tokens: readonly Token[], close: number): number | null {
 	return null;
 }
 
-/**
- * The value range of the `name` keyword among the top-level arguments of the
- * call whose `(` is at `open`, or null when the call does not spell it: the
- * same boundaries `callArgs` reads, without building the arguments.
- */
 function keywordArg(tokens: readonly Token[], open: number, name: string): Part | null {
 	let depth = 0;
 	let start = open + 1;
@@ -642,11 +545,9 @@ function keywordArg(tokens: readonly Token[], open: number, name: string): Part 
 }
 
 function argOf(tokens: readonly Token[], from: number, to: number): Arg {
-	// An empty range (`json.dumps()`, an empty part) is an expression, never the token after it.
 	if (from >= to) return { kind: "expr" };
 	const first = tokens[from];
 	if (first === undefined) return { kind: "expr" };
-	// Implicit concatenation (`'a' 'b'`) joins every string in the range.
 	let strings = first.kind === "string";
 	let joined = "";
 	let literal = true;
@@ -689,11 +590,6 @@ function argOf(tokens: readonly Token[], from: number, to: number): Arg {
 	return { kind: "expr" };
 }
 
-/**
- * The arguments of the call whose `(` is at `open`, read in one pass: the call's
- * closing bracket and the top-level commas are found while classifying each
- * part, so nested calls re-read only their own argument spans.
- */
 function callArgs(tokens: readonly Token[], open: number): CallArgs {
 	const positional: Arg[] = [];
 	const keywords = new Map<string, Arg>();
@@ -725,13 +621,11 @@ function callArgs(tokens: readonly Token[], open: number): CallArgs {
 
 type Bindings = { readonly modules: ReadonlyMap<string, string>; readonly members: ReadonlyMap<string, string> };
 
-/** The name at `tokens[k]`, or null when that token is not a name. */
 function nameAt(tokens: readonly Token[], k: number): string | null {
 	const token = tokens[k];
 	return token?.kind === "name" ? token.value : null;
 }
 
-/** A dotted module name starting at `k` (`os.path`), and the index after it. */
 function dottedName(tokens: readonly Token[], k: number): { readonly name: string; readonly next: number } {
 	const parts: string[] = [];
 	let j = k;
@@ -746,10 +640,6 @@ function dottedName(tokens: readonly Token[], k: number): { readonly name: strin
 	return { name: parts.join("."), next: j };
 }
 
-/**
- * `import a.b as c`, `from m import x as y`, and `name = __import__('m')` /
- * `name = importlib.import_module('m')`: local name → module, or → `module.name`.
- */
 function collectBindings(tokens: readonly Token[]): Bindings {
 	const modules = new Map<string, string>();
 	const members = new Map<string, string>();
@@ -789,12 +679,10 @@ function collectBindings(tokens: readonly Token[]): Bindings {
 			k = j - 1;
 		}
 	}
-	// Runs after the imports, so a loader named through an import of this cell (`importlib.import_module`) resolves.
 	for (let k = 0; k < tokens.length; k++) {
 		const name = nameAt(tokens, k);
 		if (name === null || !isOp(tokens[k + 1], "=") || isOp(tokens[k - 1], ".")) continue;
 		const callee = dottedName(tokens, k + 2);
-		// `s = sh`: the helper under another name for the rest of the cell.
 		if (callee.name === "sh" && !isOp(tokens[callee.next], "(") && !isOp(tokens[callee.next], ".")) members.set(name, "sh");
 		if (!isOp(tokens[callee.next], "(")) continue;
 		const loaded = importCall(
@@ -806,12 +694,6 @@ function collectBindings(tokens: readonly Token[]): Bindings {
 	return { modules, members };
 }
 
-/**
- * The dotted callee ending at the name `tokens[k]`, resolved through this cell's
- * imports (`sp.run` → `subprocess.run`); `renamed` when a binding gives it
- * another local name. A receiver that is a literal-name module load
- * (`__import__('subprocess').run`) resolves to that module.
- */
 function qualifiedCallee(
 	tokens: readonly Token[],
 	k: number,
@@ -838,7 +720,6 @@ function qualifiedCallee(
 	return { names: [...resolved.split("."), ...rest], renamed };
 }
 
-/** The module the call whose closing bracket is at `close` loads, when it is a literal-name `__import__`/`import_module`. */
 function importedReceiver(tokens: readonly Token[], close: number, bindings: Bindings): readonly string[] | null {
 	const open = openingOf(tokens, close);
 	if (open === null || nameAt(tokens, open - 1) === null) return null;
@@ -876,7 +757,6 @@ function scriptOf(arg: Arg | undefined): string | null {
 	return null;
 }
 
-/** The text of a literal string argument, or null. */
 function literalSource(arg: Arg | undefined): string | null {
 	return arg?.kind === "string" && arg.literal ? arg.value : null;
 }

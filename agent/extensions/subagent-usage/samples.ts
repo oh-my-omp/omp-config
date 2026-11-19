@@ -1,32 +1,23 @@
-// Which scanned dispatches count, shared by the machine-wide averages (calibrate.ts) and the per-project
-// estimate (index.ts): both read the scan worker's records, so one rule decides eligibility.
 import * as path from "node:path";
 import type { ScannedDispatch } from "./records.ts";
 
-/** One agent's first model: the only model whose dispatches count. */
 export type Target = {
 	readonly agent: string;
 	readonly provider: string;
 	readonly modelId: string;
-	/** Thinking level the binding or definition fixes; undefined matches any. */
 	readonly thinking: string | undefined;
 };
 
-/** The per-project estimate uses every eligible dispatch whose transcript changed within this many days. */
 export const OBSERVED_WINDOW_DAYS = 21;
 const OBSERVED_WINDOW_MS = OBSERVED_WINDOW_DAYS * 24 * 3_600_000;
-/** A transcript without `session_exit` counts as settled once untouched this long. */
 const SETTLED_MS = 30 * 60 * 1000;
 const THINKING = /:(off|minimal|low|medium|high|xhigh|max)(?=@|$)/;
 
-/** A dispatch that ran wholly on the model its `session_init` resolved, with no fallback, and has ended. */
 type Eligible = { readonly model: string; readonly provider: string; readonly thinking: string; readonly usd: number };
 
-/** Splits `openai-codex/gpt-5.6-sol:high@route` into `openai-codex/gpt-5.6-sol` and `high`. */
 function parseResolved(resolvedModel: string): { readonly model: string; readonly thinking: string } {
 	const matched = THINKING.exec(resolvedModel);
 	const thinking = matched?.[1] ?? "";
-	// One pass: drop the thinking suffix, then cut at the route marker instead of splitting the string.
 	const named = matched === null ? resolvedModel : resolvedModel.replace(THINKING, "");
 	const at = named.indexOf("@");
 	return { model: at === -1 ? named : named.slice(0, at), thinking };
@@ -41,10 +32,6 @@ export function eligible(dispatch: ScannedDispatch, now: number): Eligible | und
 	return { model, provider, thinking, usd: dispatch.costByProvider[provider] ?? 0 };
 }
 
-/**
- * USD of every eligible dispatch per target agent, from transcripts under the pooled session directories
- * that changed within OBSERVED_WINDOW_DAYS.
- */
 export function observedCosts(
 	dispatches: readonly ScannedDispatch[],
 	dirs: readonly string[],

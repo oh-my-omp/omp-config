@@ -5,22 +5,8 @@ import { errorText } from "./errors.ts";
 import { textOf } from "./messages.ts";
 import { modelLabel, type RoleModel, roleModels } from "./roles.ts";
 
-/**
- * The provider stop reasons a caller may accept as an answer. `error` and
- * `aborted` never reach the caller: they are handled here (a failure line, or
- * the pass ends under `whole`).
- */
 export type AnswerStopReason = "stop" | "length" | "toolUse";
 
-/**
- * Outcome of one pass over a role chain. `deadline` means the time of the pass
- * ran out: the caller's signal aborted, or under `split` the last model's attempt
- * budget (which is the time left to `deadlineAt`) ran out; `aborted` means the provider replied with `stopReason: "aborted"`
- * under the `whole` budget. The caller maps each variant to its own wording and
- * verdict. `text` carries the provider's stop reason so the caller can see how
- * the answer ended. `failures` holds one `provider/id: reason` line per model
- * that failed before the answer (or, for `all-failed`, every model tried).
- */
 export type RoleChainReply =
 	| {
 			readonly kind: "text";
@@ -35,29 +21,8 @@ export type RoleChainReply =
 	| { readonly kind: "all-failed"; readonly failures: readonly string[] }
 	| { readonly kind: "error"; readonly error: unknown };
 
-/**
- * How the time of one pass is spent. `whole`: every attempt runs under the
- * caller's signal alone, and a provider `stopReason: "aborted"` ends the pass.
- * `split`: each attempt also gets a timeout of the remaining time to `deadlineAt`
- * divided over the models not yet tried (this one included), so a hanging model
- * costs only its own share; an attempt that times out records a failure line and
- * the chain moves on. The last model's share is the whole remaining time, so its
- * timeout is the deadline itself: the pass ends as `deadline`, not as a model failure.
- */
 export type AttemptBudget = { readonly kind: "whole" } | { readonly kind: "split"; readonly deadlineAt: number };
 
-/**
- * Ask the chat models of `roles` (resolved via {@link roleModels} at call time)
- * one system prompt and one user prompt, in chain order, and return the first
- * answer `accepts` takes. A provider `stopReason: "error"` or a thrown error that
- * is not the caller's deadline records a failure line and moves to the next model.
- * A provider reply whose stop reason `accepts` rejects records a failure line
- * `<model>: <stopReason>` and moves to the next model; the caller alone decides
- * which stop reasons are answers. The signal aborting ends the pass at once; so
- * does a provider `stopReason: "aborted"` under `whole`. `effort` is the reasoning
- * level for chain entries without a `:level` suffix; an entry at level `off` runs
- * with `disableReasoning`.
- */
 export async function completeRoleChain(
 	ctx: ExtensionContext,
 	roles: readonly string[],
@@ -127,7 +92,6 @@ export async function completeRoleChain(
 	}
 }
 
-/** The signal one attempt runs under; `remaining` is the number of models not yet tried, this one included. */
 const attemptSignal = (signal: AbortSignal, budget: AttemptBudget, remaining: number): AbortSignal => {
 	switch (budget.kind) {
 		case "whole":

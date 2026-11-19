@@ -1,36 +1,9 @@
-/**
- * JavaScript eval cells, parsed with omp's own Babel parser and the kernel's
- * options: the cell's module bindings (`import`, `require`, destructuring,
- * `Bun.file(…)` results), the launcher aliases it binds (`const $ = Bun.$`,
- * `const e = require("child_process").execSync`, …) and the process launch a
- * node starts. Mechanics only: what to do with a parse error, a non-literal
- * command or an alias is the caller's decision. Used by delete-guard (fail
- * closed) and tool-policy-nag's pty lane (fail open).
- */
 import type { ArrayExpression, Expression, Node, ObjectExpression, ObjectProperty, Program } from "@babel/types";
 import { loadBabelParser } from "@oh-my-pi/pi-coding-agent/eval/js/shared/rewrite-imports";
 import type { LaunchVia, LaunchWord } from "./eval-py-launches.ts";
 
-// Loaded once when this module loads, so the parser is synchronous for every caller (delete-guard classifies bash
-// calls on the hook path, which cannot await).
 const { parse: babelParse } = await loadBabelParser();
 
-/**
- * A process launch at one node. `childScript`: child_process `exec`/`execSync`
- * text for the system shell; `childSpawn`: `spawn`/`spawnSync`/`execFile`/
- * `execFileSync` argv (`words` null when the argument list is not an array),
- * `shell` when the options may start a shell; `bunSpawn`: `Bun.spawn` argv
- * (null when not an array or `{ cmd: [...] }`); `shellHelper`: the eval `sh`
- * helper, which runs its command on omp's embedded bash engine (posix on every
- * platform); `bunShell`: a `Bun.$` template
- * (null text when it interpolates); `bridge`: `tool.bash({ command })` and
- * `tool.write` to `xd://bash`, which run as real `bash` tool calls. A `null`
- * command or word text is not a literal the code spells out.
- * `indeterminate`: a launch whose command the source does not determine — a
- * spread argument, a spread element in an argv array, or an argument object
- * with a spread, method or accessor, computed non-literal key or duplicate key.
- * `what` names the unreadable part.
- */
 export type JsLaunch =
 	| { readonly kind: "childScript"; readonly api: string; readonly via: LaunchVia; readonly text: string | null }
 	| {
@@ -48,20 +21,13 @@ export type JsLaunch =
 
 export type JsCell = { readonly program: Program; readonly bindings: Bindings; readonly carry: JsCarry };
 
-/**
- * Module and launcher names a session's earlier cells bound and ran. Only the
- * names that can reach a launcher are carried: `child_process` and `bun` module
- * aliases, and launcher members.
- */
 export type JsCarry = {
 	readonly modules: ReadonlyMap<string, Module>;
 	readonly members: ReadonlyMap<string, string>;
 };
 
-/** The carry of a session with no earlier cells. */
 export const EMPTY_CARRY: JsCarry = { modules: new Map(), members: new Map() };
 
-/** Parses a cell the way the kernel does; a syntax error Babel cannot recover from throws. `prior` seeds the names earlier cells of the session carried. */
 export function parseJs(code: string, prior: JsCarry = EMPTY_CARRY): JsCell {
 	const file = babelParse(code, {
 		sourceType: "module",
@@ -77,7 +43,6 @@ export function parseJs(code: string, prior: JsCarry = EMPTY_CARRY): JsCell {
 	return collectBindings(file.program, prior);
 }
 
-/** The launch a node starts — a child_process, Bun or harness-bridge call, or a `Bun.$` template — or null. */
 export function jsLaunchOf(node: Node, bindings: Bindings): JsLaunch | null {
 	if (node.type === "TaggedTemplateExpression") {
 		const helper = calleeApi(node.tag, bindings);
@@ -91,8 +56,6 @@ export function jsLaunchOf(node: Node, bindings: Bindings): JsLaunch | null {
 	if (target === null) return null;
 	const { api, via } = target;
 	const args = node.arguments.filter((arg): arg is Expression => arg.type !== "SpreadElement" && arg.type !== "ArgumentPlaceholder");
-	// A spread argument reorders or widens every positional slot at runtime, so the
-	// command the call hands its launcher cannot be read from the source.
 	const opaque = args.length !== node.arguments.length;
 	switch (api) {
 		case "tool.bash":
@@ -123,7 +86,6 @@ export function jsLaunchOf(node: Node, bindings: Bindings): JsLaunch | null {
 	}
 }
 
-/** The API a callee names, with how the cell reached it: a bound launcher name, `tool.*`, `Bun.spawn*`, or a module member. */
 function calleeApi(callee: Node, bindings: Bindings): { readonly api: string; readonly via: LaunchVia } | null {
 	if (callee.type === "Identifier") {
 		const member = memberName(bindings, callee.name);
@@ -148,7 +110,6 @@ function calleeApi(callee: Node, bindings: Bindings): { readonly api: string; re
 
 const unknownLaunch = (what: string): JsLaunch => ({ kind: "indeterminate", what });
 
-/** `tool.bash({ command })`; any other argument is a bridge with an unknown command. */
 function bashBridge(arg: Node | undefined): JsLaunch {
 	if (arg?.type !== "ObjectExpression") return { kind: "bridge", source: "bash", command: null };
 	const props = propsOf(arg);
@@ -156,7 +117,6 @@ function bashBridge(arg: Node | undefined): JsLaunch {
 	return { kind: "bridge", source: "bash", command: literalString(props.value.get("command")) };
 }
 
-/** `tool.write` to `xd://bash`; other paths start no shell. */
 function deviceWriteBridge(arg: Node | undefined): JsLaunch | null {
 	if (arg?.type !== "ObjectExpression") return null;
 	const props = propsOf(arg);
@@ -167,7 +127,6 @@ function deviceWriteBridge(arg: Node | undefined): JsLaunch | null {
 	return { kind: "bridge", source: "deviceWrite", command: command.value };
 }
 
-/** child_process spawn arguments: `(command, [args], options)` or `(command, options)`; an argument list that is not an array is unknown. */
 function spawnArguments(args: readonly Expression[]): Read<{ readonly shell: boolean; readonly words: readonly LaunchWord[] | null }> {
 	const [command, second, third] = args;
 	if (second !== undefined && second.type !== "ArrayExpression" && second.type !== "ObjectExpression") {
@@ -181,7 +140,6 @@ function spawnArguments(args: readonly Expression[]): Read<{ readonly shell: boo
 	return read({ shell: shell.value, words: words.value });
 }
 
-/** `Bun.spawn([...])` or `Bun.spawn({ cmd: [...] })`; anything else is unknown. */
 function bunSpawnWords(arg: Node | undefined): Read<readonly LaunchWord[] | null> {
 	if (arg?.type === "ArrayExpression") return argvOf([], arg);
 	if (arg?.type !== "ObjectExpression") return read(null);
@@ -191,10 +149,8 @@ function bunSpawnWords(arg: Node | undefined): Read<readonly LaunchWord[] | null
 	return cmd?.type === "ArrayExpression" ? argvOf([], cmd) : read(null);
 }
 
-/** child_process launch names only it uses: matched as bare calls too, so imports from earlier cells are caught. */
 const DISTINCTIVE_LAUNCH: ReadonlySet<string> = new Set(["execSync", "spawnSync", "execFileSync"]);
 
-/** Launcher members a binding may hold: a name bound to one of them is a launcher wherever it is called. */
 const LAUNCHER_MEMBERS: ReadonlySet<string> = new Set([
 	"sh",
 	"bun.$",
@@ -209,17 +165,10 @@ const LAUNCHER_MEMBERS: ReadonlySet<string> = new Set([
 	"child_process.execFileSync",
 ]);
 
-/** Modules whose functions can start a process; their aliases are carried between cells. */
 const LAUNCHER_MODULES: ReadonlySet<Module> = new Set<Module>(["child_process", "bun"]);
 
 export type Module = "fs" | "fs/promises" | "child_process" | "bun";
 
-/**
- * Names bound in this cell only: whole-module bindings, imported or destructured
- * members (`module.export`), launcher aliases, and `Bun.file(…)` results, plus
- * `prior`, the names earlier cells carried. Reads fall through to `prior`, so a
- * fresh cell does not copy the names it was seeded with.
- */
 export type Bindings = {
 	readonly modules: Map<string, Module>;
 	readonly members: Map<string, string>;
@@ -227,13 +176,10 @@ export type Bindings = {
 	readonly prior: JsCarry;
 };
 
-/** The module `name` resolves to: this cell's binding, else the carried one. */
 const moduleName = (bindings: Bindings, name: string): Module | undefined => bindings.modules.get(name) ?? bindings.prior.modules.get(name);
 
-/** The member `name` resolves to: this cell's binding, else the carried one. */
 const memberName = (bindings: Bindings, name: string): string | undefined => bindings.members.get(name) ?? bindings.prior.members.get(name);
 
-/** A value the source determines, or a shape the runtime may change (spread, method, accessor, computed or duplicate key, spread array element). */
 type Read<T> = { readonly kind: "read"; readonly value: T } | { readonly kind: "indeterminate" };
 const read = <T>(value: T): Read<T> => ({ kind: "read", value });
 const UNKNOWN: { readonly kind: "indeterminate" } = { kind: "indeterminate" };
@@ -247,7 +193,6 @@ function moduleOf(source: string): Module | null {
 	return name === "fs" || name === "fs/promises" || name === "child_process" || name === "bun" ? name : null;
 }
 
-/** `require("m")`, `await import("m")`, `require("fs").promises`: the module the expression yields. */
 function moduleExpression(node: Node | null | undefined): Module | null {
 	if (!node) return null;
 	if (node.type === "AwaitExpression") return moduleExpression(node.argument);
@@ -262,7 +207,6 @@ function moduleExpression(node: Node | null | undefined): Module | null {
 	return null;
 }
 
-/** The property a member access names: `a.b`, `a?.b`, `a["b"]`. */
 export function propertyName(node: Node): string | null {
 	if (node.type !== "MemberExpression" && node.type !== "OptionalMemberExpression") return null;
 	if (!node.computed && node.property.type === "Identifier") return node.property.name;
@@ -270,7 +214,6 @@ export function propertyName(node: Node): string | null {
 	return null;
 }
 
-/** The module an object expression stands for: a bound name, `<fs>.promises`, or a module expression. */
 export function receiverModule(node: Node, bindings: Bindings): Module | null {
 	if (node.type === "Identifier") return moduleName(bindings, node.name) ?? null;
 	if (node.type === "AwaitExpression") return receiverModule(node.argument, bindings);
@@ -279,13 +222,11 @@ export function receiverModule(node: Node, bindings: Bindings): Module | null {
 	return moduleExpression(node);
 }
 
-/** Binds `local` to `module.imported`; `promises` of fs binds a whole `fs/promises` module. */
 function bindMember(bindings: Bindings, local: string, module: Module, imported: string): void {
 	if (module === "fs" && imported === "promises") bindings.modules.set(local, "fs/promises");
 	else bindings.members.set(local, `${module}.${imported}`);
 }
 
-/** `object.name` on a global such as `Bun` or `JSON`. */
 const isMember = (node: Node, object: string, name: string): boolean =>
 	(node.type === "MemberExpression" || node.type === "OptionalMemberExpression") &&
 	node.object.type === "Identifier" &&
@@ -300,7 +241,6 @@ export function isBunFile(node: Node, bindings: Bindings): boolean {
 	return node.type === "CallExpression" && isBunMember(node.callee, "file");
 }
 
-/** The launcher member a value names: `Bun.$`, `Bun.spawn`, `tool.bash`, a child_process function, or a launcher name already bound. */
 function launcherMemberOf(node: Node, bindings: Bindings): string | null {
 	let member: string | null = null;
 	if (node.type === "Identifier") member = memberName(bindings, node.name) ?? (node.name === "sh" ? "sh" : null);
@@ -316,7 +256,6 @@ function launcherMemberOf(node: Node, bindings: Bindings): string | null {
 	return member !== null && LAUNCHER_MEMBERS.has(member) ? member : null;
 }
 
-/** Binds a declared or assigned name to the module, Bun file or launcher its value is. */
 function bindName(bindings: Bindings, name: string, init: Node, { launchersOnly }: { readonly launchersOnly: boolean }): void {
 	if (!launchersOnly) {
 		const module = receiverModule(init, bindings);
@@ -327,11 +266,6 @@ function bindName(bindings: Bindings, name: string, init: Node, { launchersOnly 
 	if (launcher !== null) bindings.members.set(name, launcher);
 }
 
-/**
- * The cell's own bindings and the carry it leaves later cells. `bindings`
- * records only what this cell binds; `carry` is `prior` itself when the cell
- * binds nothing launcher-reaching, so a session of plain cells copies nothing.
- */
 function collectBindings(root: Program, prior: JsCarry): JsCell {
 	const bindings: Bindings = { modules: new Map(), members: new Map(), bunFiles: new Set(), prior };
 	walk(root, null, (node) => {
@@ -346,7 +280,6 @@ function collectBindings(root: Program, prior: JsCarry): JsCell {
 			}
 			return;
 		}
-		// Assignments to a name carry launcher aliases only: `s = Bun.spawn`.
 		if (node.type === "AssignmentExpression" && node.operator === "=" && node.left.type === "Identifier") {
 			bindName(bindings, node.left.name, node.right, { launchersOnly: true });
 			return;
@@ -357,7 +290,6 @@ function collectBindings(root: Program, prior: JsCarry): JsCell {
 			return;
 		}
 		if (node.id.type !== "ObjectPattern") return;
-		// `const { spawn, $ } = Bun` destructures the global Bun object.
 		const module = node.init.type === "Identifier" && node.init.name === "Bun" ? "bun" : receiverModule(node.init, bindings);
 		if (module === null) return;
 		for (const property of node.id.properties) {
@@ -368,15 +300,6 @@ function collectBindings(root: Program, prior: JsCarry): JsCell {
 	return { program: root, bindings, carry: carryOf(bindings) };
 }
 
-/**
- * The launcher-reaching names `bindings` leaves for later cells: `prior`
- * unchanged when the cell binds nothing, else `prior` with this cell's names
- * applied — a name the cell binds to a launcher is kept, a name it rebinds to a
- * non-launcher module (or member) is dropped from the same kind of entry, the
- * rest of `prior` survives. A name rebound to a plain value, or to the other
- * kind (a module for a member name, a member for a module name), keeps its
- * `prior` entry, as it did before the carry was incremental.
- */
 function carryOf(bindings: Bindings): JsCarry {
 	const { modules, members, prior } = bindings;
 	if (modules.size === 0 && members.size === 0) return prior;
@@ -393,14 +316,6 @@ function carryOf(bindings: Bindings): JsCarry {
 	return { modules: carryModules, members: carryMembers };
 }
 
-/**
- * Visits every node depth first with its parent, returning `true` once a visit
- * ended the walk: a visit returning `true` visits no sibling or descendant
- * after it, and the stop propagates to the caller. Children come from the
- * node's own fields in declaration order — the same order `Object.values`
- * enumerated, without the per-node array; `Object.hasOwn` drops inherited
- * helpers such as Babel's `__clone`.
- */
 export function walk(node: Node, parent: Node | null, visit: (node: Node, parent: Node | null) => boolean | undefined): boolean {
 	if (visit(node, parent) === true) return true;
 	for (const key in node as Node & Record<string, unknown>) {
@@ -413,7 +328,6 @@ export function walk(node: Node, parent: Node | null, visit: (node: Node, parent
 	return false;
 }
 
-/** A string the code spells out completely: a string literal or a template without `${}`. */
 function literalString(node: Node | null | undefined): string | null {
 	if (!node) return null;
 	if (node.type === "StringLiteral") return node.value;
@@ -421,7 +335,6 @@ function literalString(node: Node | null | undefined): string | null {
 	return null;
 }
 
-/** The static key of an object property, or null when the runtime key is not fixed by the source. */
 function keyOf(property: ObjectProperty): string | null {
 	const key = property.key;
 	if (key.type === "Identifier") return property.computed ? null : key.name;
@@ -429,7 +342,6 @@ function keyOf(property: ObjectProperty): string | null {
 	return literalString(key);
 }
 
-/** An object literal's properties, or indeterminate when a spread, method, accessor, computed non-literal key or duplicate key makes the runtime value differ from the source. */
 function propsOf(node: ObjectExpression): Read<ReadonlyMap<string, Node>> {
 	const props = new Map<string, Node>();
 	for (const property of node.properties) {
@@ -441,11 +353,6 @@ function propsOf(node: ObjectExpression): Read<ReadonlyMap<string, Node>> {
 	return read(props);
 }
 
-/**
- * Whether child_process options may start a shell: a `shell` that is not literally `false`, `null` or `undefined`
- * (`shell: "/bin/sh"`, `shell: flag`), or options the code does not spell out (a variable); indeterminate when the
- * options object's shape is not fixed by the source.
- */
 function mayUseShell(options: Node | undefined): Read<boolean> {
 	if (options === undefined) return read(false);
 	if (options.type !== "ObjectExpression") return read(true);
@@ -462,14 +369,12 @@ const wordOf = (node: Node | null | undefined): LaunchWord => {
 	return text === null ? { text: "", literal: false } : { text, literal: true };
 };
 
-/** The argv words: `head` then `array`'s elements; a spread element makes the list indeterminate. */
 function argvOf(head: readonly (Node | null | undefined)[], array: ArrayExpression | null): Read<readonly LaunchWord[]> {
 	const elements = array?.elements ?? [];
 	if (elements.some((item) => item?.type === "SpreadElement")) return UNKNOWN;
 	return read([...head, ...elements].map(wordOf));
 }
 
-/** The command of an `xd://bash` payload written as a JSON string or as `JSON.stringify({ command: … })`. */
 function payloadCommand(content: Node | null | undefined): Read<string | null> {
 	if (content?.type === "CallExpression" && isMember(content.callee, "JSON", "stringify")) {
 		const [object] = content.arguments;
@@ -481,14 +386,11 @@ function payloadCommand(content: Node | null | undefined): Read<string | null> {
 	return read(text === null ? null : bridgeCommand(text));
 }
 
-/** The `command` of an `xd://bash` JSON payload, or null when it is not literal JSON with a string command. */
 function bridgeCommand(content: string): string | null {
 	try {
 		const payload: unknown = JSON.parse(content);
 		if (typeof payload === "object" && payload !== null && "command" in payload && typeof payload.command === "string")
 			return payload.command;
-	} catch {
-		// Malformed payload: the device would reject it too; treat it as non-literal.
-	}
+	} catch {}
 	return null;
 }

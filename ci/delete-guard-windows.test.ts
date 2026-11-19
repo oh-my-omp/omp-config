@@ -1,7 +1,3 @@
-// delete-guard Windows dialects: PowerShell and cmd reached from brush as
-// nested shells (any platform), and the cmd/PowerShell classifiers on their own
-// (eval's system shell on Windows). Deletions and non-literal scripts block;
-// ordinary commands and argument-only mentions pass.
 import { describe, expect, test } from "bun:test";
 import { classify } from "../agent/extensions/delete-guard/classify.ts";
 import { classifyPosix } from "../agent/extensions/delete-guard/posix.ts";

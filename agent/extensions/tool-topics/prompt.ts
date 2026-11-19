@@ -1,29 +1,14 @@
-// The tool-topics rewrite of OMP's rendered system prompt: each covered tool's description is found
-// by tool name, not wording, and replaced in place by its surface, its topic index appended. A tool
-// counts as rendered when its description sits in one of two layouts:
-//   inline tools  — `// `-prefixed description lines right above `type <tool> = …` inside
-//                   `namespace functions { … }` (pi-ai dialect/inventory.ts renderToolInventory);
-//                   the tool's `@example` lines, after a lone `//`, are not part of the description
-//                   and stay as rendered;
-//   xd:// devices — `## <tool>[ — <label>]`, blank, description, blank, `### Schema`
-//                   (pi-coding-agent tools/xdev.ts renderDocs with the "##" heading).
-// Each block is split once and scanned once per layout; a tool's section is taken from the first
-// block that renders it, inline before device. A block without a rewritten tool is returned as the
-// same string.
 import type { ToolDocs } from "./catalog.ts";
 
-/** One tool's new description lines, or why it cannot be written against the rendered description. */
 export type Entry = { readonly kind: "ok"; readonly lines: readonly string[] } | { readonly kind: "drift"; readonly reason: string };
 
 type Layout = "inline" | "device";
 
-/** A rendered description: where it sits in the prompt, and its lines without the layout prefix. */
 export class Description {
 	readonly block: number;
 	readonly start: number;
 	readonly length: number;
 	readonly layout: Layout;
-	/** Inline only: the tool's `@example` lines follow, so a non-empty description needs the `//` separator. */
 	readonly examples: boolean;
 	readonly #lines: readonly string[];
 
@@ -36,7 +21,6 @@ export class Description {
 		this.examples = examples;
 	}
 
-	/** Line `index`, with the `//` comment prefix removed on an inline description. */
 	line(index: number): string {
 		const raw = this.#lines[this.start + index] ?? "";
 		if (this.layout === "device") return raw;
@@ -44,23 +28,18 @@ export class Description {
 	}
 }
 
-/** A tool's description in the rendered prompt. */
 export type Rendered =
 	| { readonly kind: "found"; readonly description: Description }
 	| { readonly kind: "absent" }
 	| { readonly kind: "drift"; readonly reason: string };
 
-/** A rewritten description: the section it replaces and its new lines without the layout prefix. */
 export interface Rewrite {
 	readonly description: Description;
 	readonly lines: readonly string[];
 }
 
-/** The rendered prompt, with each covered tool's section located once. */
 export interface PromptIndex {
-	/** `tool`'s description in the first prompt block that renders it. */
 	description(tool: string): Rendered;
-	/** The prompt's blocks with every rewrite applied; untouched blocks keep their original strings. */
 	rewrite(rewrites: readonly Rewrite[]): string[];
 }
 
@@ -70,7 +49,6 @@ const NAMESPACE_OPEN = "namespace functions {";
 const NAMESPACE_CLOSE = "} // namespace functions";
 const DEVICE_DRIFT = "xd:// device section no longer has the heading/blank/description/blank/### Schema layout";
 
-/** The inline-layout descriptions of `tools` in one block, the first signature of each winning. */
 function inlineDescriptions(block: number, lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
 	const found = new Map<string, Rendered>();
 	const open = lines.indexOf(NAMESPACE_OPEN);
@@ -98,7 +76,6 @@ function inlineDescriptions(block: number, lines: readonly string[], tools: read
 	return found;
 }
 
-/** The description a `## <tool>` heading opens, or the reason its section no longer fits the layout. */
 function deviceSection(block: number, lines: readonly string[], heading: number): Rendered {
 	let schema = -1;
 	for (let index = heading + 1; index < lines.length; index++) {
@@ -113,7 +90,6 @@ function deviceSection(block: number, lines: readonly string[], heading: number)
 	return { kind: "found", description: new Description(block, lines, heading + 2, Math.max(0, schema - heading - 3), "device", false) };
 }
 
-/** The xd:// device descriptions of `tools` in one block, the first heading of each winning. */
 function deviceDescriptions(block: number, lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
 	const found = new Map<string, Rendered>();
 	for (let index = 0; index < lines.length; index++) {
@@ -129,7 +105,6 @@ function deviceDescriptions(block: number, lines: readonly string[], tools: read
 	return found;
 }
 
-/** `line` as the layout renders a description line. */
 function prefixed(layout: Layout, line: string): string {
 	switch (layout) {
 		case "inline":
@@ -143,10 +118,6 @@ function prefixed(layout: Layout, line: string): string {
 	}
 }
 
-/**
- * Index `blocks` for `tools`: each block is split once and scanned once per layout, and a tool's
- * section is taken from the first block that renders it, inline before device.
- */
 export function indexPrompt(blocks: readonly string[], tools: readonly string[]): PromptIndex {
 	const found = new Map<string, Rendered>();
 	const split = new Map<number, string[]>();
@@ -179,7 +150,6 @@ export function indexPrompt(blocks: readonly string[], tools: readonly string[])
 				const original = split.get(block);
 				if (list === undefined || original === undefined) return text;
 				const lines = [...original];
-				// Splice from the bottom up so earlier sections keep their offsets.
 				list.sort((a, b) => b.description.start - a.description.start);
 				for (const { description, lines: replacement } of list) {
 					const rendered = replacement.map((line) => prefixed(description.layout, line));
@@ -192,7 +162,6 @@ export function indexPrompt(blocks: readonly string[], tools: readonly string[])
 	};
 }
 
-/** The `#` section of `description` opened by the one heading line titled `heading`, through the line before the next heading of its level or above. */
 function nativeSection(description: Description, heading: string): string | undefined {
 	let start = -1;
 	let level = 0;
@@ -215,13 +184,7 @@ function nativeSection(description: Description, heading: string): string | unde
 	return lines.join("\n");
 }
 
-/**
- * The new description of one tool: its surface, where `{{native:<Heading>}}` becomes that section of
- * the rendered description, or the rendered description itself when it has no surface; then its
- * index when `indexed`. Undefined when the tool has neither a surface nor topics to show.
- */
 export function toolLines(description: Description, docs: ToolDocs, indexed: boolean): Entry | undefined {
-	// Index lines: one line per topic with its full URL and when to read it.
 	const index =
 		indexed && docs.topics.length > 0
 			? [

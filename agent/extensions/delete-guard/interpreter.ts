@@ -5,7 +5,6 @@ import { classifyPy } from "./eval-py.ts";
 import { heredocText, STDIN_SCRIPT, type StdinSource, stdinLabel } from "./posix-parse.ts";
 import { ALLOW, BRUSH, type Fragment, fragmentText, MAX_DEPTH, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
 
-/** Interpreters whose inline code (`-c`, `-e`, `eval`, …) runs with the filesystem of the bash call. */
 export type InterpreterKind = "python" | "node" | "bun" | "deno" | "perl" | "ruby";
 
 const PATTERNS: ReadonlyArray<readonly [RegExp, InterpreterKind]> = [
@@ -17,15 +16,12 @@ const PATTERNS: ReadonlyArray<readonly [RegExp, InterpreterKind]> = [
 	[/^ruby(\d+(\.\d+)*)?$/, "ruby"],
 ];
 
-/** The interpreter a program name (basename, lowercased, without `.exe`) runs as, or null. */
 export function interpreterKind(program: string): InterpreterKind | null {
 	return PATTERNS.find(([pattern]) => pattern.test(program))?.[1] ?? null;
 }
 
-/** Unknown options are read both ways (takes a value or not) at most this many times per command. */
 const AMBIGUITY_BUDGET = 4;
 
-/** What one option word does to the walk over the interpreter's arguments. */
 type Step =
 	| { readonly kind: "flag" }
 	| { readonly kind: "value"; readonly attached: string | null }
@@ -33,10 +29,6 @@ type Step =
 	| { readonly kind: "module" }
 	| { readonly kind: "unknown" };
 
-/**
- * An interpreter's option table. `operand` is what its first positional word is: a script file, or the code itself
- * (`deno eval CODE`). `option` gets one option word that starts with `-` and is not `-` or `--`.
- */
 type Spec = {
 	readonly operand: "file" | "code";
 	readonly option: (word: string) => Step;
@@ -56,13 +48,10 @@ const block = (rule: Rule, fragment: Fragment, detail: string): Verdict => ({
 	detail,
 });
 
-/** A URL-scheme specifier names code fetched or decoded at run time, so it cannot be judged here. `file:` is a file. */
 const REMOTE_SPECIFIER = /^(?:data|https?|ftp|blob):/i;
 
-/** The bundled letters of an option word after its `-`: the rest of the word is the value of a letter that takes one. */
 const attachedRest = (word: string, index: number): string | null => (word.length > index + 1 ? word.slice(index + 1) : null);
 
-/** Parses `--name` or `--name=value`: the name and the attached value, if any. */
 function longOption(word: string): { readonly name: string; readonly attached: string | null } {
 	const eq = word.indexOf("=");
 	return eq === -1 ? { name: word, attached: null } : { name: word.slice(0, eq), attached: word.slice(eq + 1) };
@@ -82,7 +71,6 @@ const PYTHON: Spec = {
 	},
 };
 
-/** Node options that take a module specifier, a condition or a title as their value. */
 const NODE_VALUE_LONG: Readonly<Record<string, true>> = {
 	"--require": true,
 	"--import": true,
@@ -93,7 +81,6 @@ const NODE_VALUE_LONG: Readonly<Record<string, true>> = {
 	"--title": true,
 };
 
-/** Shared by `node` and `bun`, which both take inline code as `-e`/`--eval` and `-p`/`--print`. */
 const NODE: Spec = {
 	operand: "file",
 	option(word) {
@@ -125,7 +112,6 @@ const DENO_VALUE_LONG: Readonly<Record<string, true>> = {
 	"--eval-file": true,
 };
 
-/** Deno options: `--eval` is inline code in `repl`; `-p`/`--print` are plain flags of `eval`. */
 const DENO: Spec = {
 	operand: "file",
 	option(word) {
@@ -145,7 +131,6 @@ const DENO: Spec = {
 
 const DENO_EVAL: Spec = { ...DENO, operand: "code" };
 
-/** Perl switches: `-e`/`-E` and `-M` take code; `-m` and `-I` take a value; `-i`, `-x`, `-F`, `-D`, `-C` take the rest of the word. */
 const PERL: Spec = {
 	operand: "file",
 	option(word) {
@@ -163,7 +148,6 @@ const PERL: Spec = {
 	},
 };
 
-/** Ruby switches: `-e` takes code; `-r`, `-I`, `-C`, `-E` take a value; `-K`, `-F`, `-W`, `-x` take the rest of the word. */
 const RUBY: Spec = {
 	operand: "file",
 	option(word) {
@@ -181,7 +165,6 @@ const RUBY: Spec = {
 	},
 };
 
-/** Perl and Ruby have no judged language: their inline code is scanned for the filesystem deletion names. */
 const NAMED_DELETE = /\b(?:unlink|rmtree|remove_tree)\b|\b(?:File|FileUtils)(?:\.|::)(?:delete|rm\w*|remove_entry\w*)\b/;
 
 function scanNamedDeletes(code: string, fragment: Fragment): Verdict {
@@ -189,7 +172,6 @@ function scanNamedDeletes(code: string, fragment: Fragment): Verdict {
 	return match === null ? ALLOW : block("delete", fragment, `\`${match[0]}\` deletes files`);
 }
 
-/** Classifies one inline code word (`-c`, `-e`, `eval`, a quoted here-document body) as the interpreter's language. */
 function classifyInline(env: Env, code: ArgvWord): Verdict {
 	if (!code.literal) return block("nonLiteral", env.fragment, `the ${env.kind} code comes from an expansion`);
 	switch (env.kind) {
@@ -198,7 +180,6 @@ function classifyInline(env: Env, code: ArgvWord): Verdict {
 		case "node":
 		case "bun":
 		case "deno":
-			// A nested interpreter runs in a fresh process, so no launcher name from the outer session reaches it.
 			return classifyJs(code.text, SYSTEM_SHELL, BRUSH, EMPTY_CARRY, env.depth + 1).verdict;
 		case "perl":
 		case "ruby":
@@ -210,10 +191,6 @@ function classifyInline(env: Env, code: ArgvWord): Verdict {
 	}
 }
 
-/**
- * Stdin is the script when no code or script file was named: a file redirect is allowed, a quoted here-document's
- * body is judged as code, and anything else (pipe, here-string, unquoted here-document, inherited stdin) is blocked.
- */
 function classifyStdin(env: Env): Verdict {
 	const stdin = env.stdin;
 	if (stdin?.kind === "file") return ALLOW;
@@ -225,7 +202,6 @@ function classifyStdin(env: Env): Verdict {
 	);
 }
 
-/** Classifies the walk's outcome: the inline codes it collected, else the script operand. */
 function finish(env: Env, spec: Spec, codes: readonly ArgvWord[], operand: ArgvWord | "-" | null): Verdict {
 	for (const code of codes) {
 		const verdict = classifyInline(env, code);
@@ -243,11 +219,6 @@ function finish(env: Env, spec: Spec, codes: readonly ArgvWord[], operand: ArgvW
 	return ALLOW;
 }
 
-/**
- * Walks the interpreter's arguments from `start` the way the interpreter parses them: options until the first
- * positional word, `--`, `-` or an option that ends option parsing. A word from an expansion before that point
- * could be an option or the script, so it blocks. An unknown option is read both ways, each must allow.
- */
 function walk(env: Env, spec: Spec, args: readonly ArgvWord[], start: number, codes: readonly ArgvWord[], budget: number): Verdict {
 	let i = start;
 	let inline = codes;
@@ -269,7 +240,6 @@ function walk(env: Env, spec: Spec, args: readonly ArgvWord[], start: number, co
 				i += 1;
 				continue;
 			case "module":
-				// `python -m name`: runs a named module, not inline code.
 				return ALLOW;
 			case "value": {
 				const value = step.attached !== null ? { text: step.attached, literal: word.literal } : args[i + 1];
@@ -305,7 +275,6 @@ function walk(env: Env, spec: Spec, args: readonly ArgvWord[], start: number, co
 	}
 }
 
-/** Deno's subcommands that never run inline code or a script the call names; their own tools judge them. */
 const DENO_SUBCOMMANDS: Readonly<Record<string, true>> = {
 	add: true,
 	bench: true,
@@ -332,7 +301,6 @@ const DENO_SUBCOMMANDS: Readonly<Record<string, true>> = {
 	x: true,
 };
 
-/** `deno eval CODE` and `deno repl --eval CODE` run inline code; `deno run FILE` and bare `deno FILE` run a script. */
 function classifyDeno(env: Env, args: readonly ArgvWord[]): Verdict {
 	const first = args[0];
 	if (first !== undefined && !first.literal) return block("nonLiteral", env.fragment, "the deno subcommand comes from an expansion");
@@ -342,10 +310,6 @@ function classifyDeno(env: Env, args: readonly ArgvWord[]): Verdict {
 	return walk(env, DENO, args, 0, [], AMBIGUITY_BUDGET);
 }
 
-/**
- * Classifies an interpreter invoked with `args` (the words after its name): the inline code it runs, the script
- * file it reads, or its stdin. `depth` counts enclosing nested scripts and is shared with the code it runs.
- */
 export function classifyInterpreter(
 	kind: InterpreterKind,
 	args: readonly ArgvWord[],

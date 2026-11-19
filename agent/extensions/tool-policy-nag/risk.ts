@@ -1,44 +1,13 @@
-/**
- * Risk lane of tool-policy-nag: flags a shell call whose outcome the agent
- * cannot read off the result it got back. A call can be a tool violation, a
- * risk, both or neither; which built-in tool should have done the work is the
- * intent lane's question.
- *
- * DETECTION is deterministic, never judged, and depends on what the run left:
- *
- * - A foreground `bash` run with its whole execution trace (`trace.ts`) is
- *   judged on what ran: it is a risk when at least two steps ran and one of
- *   them failed silently — a non-zero exit status that nothing tested (not an
- *   `if`/`elif`/`while`/`until` test, not negated by `!`, not a non-final
- *   `&&`/`||` operand, not inside a substitution, not read as `$?` by the
- *   next command), that is not a pipeline stage's SIGPIPE (141) before a
- *   later stage, and that wrote no output of its own. Function calls, `eval`,
- *   `source` and `.` stand for their bodies,
- *   whose steps are judged instead. Length, breadth and writes do not matter.
- * - A call that went to the background before it ended has no complete trace
- *   and is judged from its text, as before the trace existed:
- *   size — at least `minCommands` simple commands, or `minChars` characters;
- *   breadth — at least `minPrograms` distinct programs that are not shell
- *   plumbing; effect — at least one step that writes (a redirect or `tee`, an
- *   in-place edit, a program that writes by its own job, or a subcommand that
- *   writes). The same text rule covers any other call without a usable trace.
- * - A run cut short (timed out, cancelled) is not judged.
- *
- * REMINDER. One attributed message naming what was found, then the call.
- * Nothing is blocked, nothing counts, and the same call is reported once.
- */
 import { detectCommandViolations } from "./heuristic.ts";
 import type { SimpleCommand } from "./shell-parser.ts";
 import type { ExecutedTrace, TraceStep } from "./trace.ts";
 
-/** Limits a call must exceed to be worth a risk reminder. */
 export type RiskConfig = {
 	readonly minCommands: number;
 	readonly minChars: number;
 	readonly minPrograms: number;
 };
 
-/** Shell plumbing: steps that organize the line instead of touching other software. */
 const SHELL_PLUMBING: Record<string, true> = {
 	cd: true,
 	echo: true,
@@ -60,10 +29,6 @@ const SHELL_PLUMBING: Record<string, true> = {
 	mkdir: true,
 };
 
-/**
- * Programs that write as their own job, whatever they are asked to do with the
- * files they touch (`/bin/rm`, `/bin/cp`, package installers, remote copies).
- */
 const WRITING_PROGRAMS: Record<string, true> = {
 	rm: true,
 	rmdir: true,
@@ -89,11 +54,6 @@ const WRITING_PROGRAMS: Record<string, true> = {
 	patch: true,
 };
 
-/**
- * Programs that write only for some subcommands; only the first two non-flag
- * words are looked at, so a writing word inside a quoted argument (`gh api … --jq
- * '… fork= …'`) or a title does not count.
- */
 const WRITING_SUBCOMMANDS: Record<string, Readonly<Record<string, true>>> = {
 	git: {
 		add: true,
@@ -188,7 +148,6 @@ const WRITING_SUBCOMMANDS: Record<string, Readonly<Record<string, true>>> = {
 	terraform: { apply: true, destroy: true, import: true, state: true, init: true, workspace: true },
 };
 
-/** Programs that write only behind a flag: `curl -o`, `wget -O`, `tar -czf`. */
 const WRITING_FLAGS: Record<string, RegExp> = {
 	curl: /(^|\s)(-o|-O|-T|-d|--data[a-z-]*|--upload-file|-X\s*(POST|PUT|PATCH|DELETE))/,
 	wget: /(^|\s)(-o|-O|--post-data|--post-file|--method)/,
@@ -202,7 +161,6 @@ const basename = (path: string): string => {
 
 const isEnvAssignment = (text: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(text);
 
-/** One step of the line: the program it runs and the arguments it was given. */
 type Step = { readonly program: string; readonly args: string };
 
 function stepsOf(commands: readonly SimpleCommand[]): Step[] {
@@ -220,7 +178,6 @@ function stepsOf(commands: readonly SimpleCommand[]): Step[] {
 
 const writesByJob = (step: Step): boolean => WRITING_PROGRAMS[step.program] === true;
 
-/** The subcommand words of a step: the first two non-flag words of its arguments. */
 const subcommands = (args: string): string[] =>
 	args
 		.split(/\s+/)
@@ -242,7 +199,6 @@ export type RiskFinding = {
 	readonly writes: readonly string[];
 };
 
-/** The finding when the call's outcome is unpredictable from the call, else null. */
 export function inspectRisk(commands: readonly SimpleCommand[], text: string, limits: RiskConfig): RiskFinding | null {
 	const steps = stepsOf(commands);
 	const simple = commands.length;
@@ -262,7 +218,6 @@ export function inspectRisk(commands: readonly SimpleCommand[], text: string, li
 	return { commands: simple, chars, programs: foreign, writes: [...writes].sort() };
 }
 
-/** The risk, why it is one, and the call itself, naming the tool that ran it. */
 export function riskReminder(tool: string, command: string, finding: RiskFinding): string {
 	return [
 		`你这次 \`${tool}\` 调用有 ${finding.commands} 段命令、${finding.chars} 字符，牵涉 ${finding.programs.length} 个外部程序（${finding.programs
@@ -278,24 +233,20 @@ export function riskReminder(tool: string, command: string, finding: RiskFinding
 	].join("\n");
 }
 
-/** SIGPIPE: a stage stops writing because a later stage closed the pipe. */
 const SIGPIPE_STATUS = 141;
 
-/** The steps that failed where nothing in the call or its output shows it. */
 export function inspectMaskedFailure(trace: ExecutedTrace): readonly TraceStep[] | null {
 	const steps = trace.steps.filter((step) => step.resolved !== "none" && !step.wrapsBody);
 	if (steps.length < 2) return null;
 	const masked = steps.filter((step, index) => {
 		if (step.status === 0 || step.statusUsed || step.output) return false;
 		if (step.status === SIGPIPE_STATUS && !step.lastStage) return false;
-		// `cmd; echo "$?"`: the next command reads the status, so the failure is shown.
 		const next = steps[index + 1]?.source ?? "";
 		return !/\$\{?\?/.test(next);
 	});
 	return masked.length === 0 ? null : masked;
 }
 
-/** The silent failures, why they matter, and the call itself. */
 export function maskedFailureReminder(tool: string, command: string, masked: readonly TraceStep[]): string {
 	const shown = (step: TraceStep): string => {
 		const text = step.argv.join(" ");

@@ -1,7 +1,3 @@
-// tool-policy-nag pty lane: every registry rule has one command (or cell) it
-// refuses and its closest one it lets through; the structural cases pin what
-// the lane reads (pipelines, wrappers, loops, `&`, eval launches) and where it
-// fails open.
 import { describe, expect, test } from "bun:test";
 import { type PtyRuleId, ptyEvalHit, ptyRefusal, ptyShellHit } from "../agent/extensions/tool-policy-nag/pty.ts";
 

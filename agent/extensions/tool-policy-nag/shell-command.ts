@@ -1,45 +1,25 @@
 import type { CommandToken } from "./shell-parser.ts";
 
-/** One argument word; `dynamic` words hold `$…` or a substitution, so their runtime text is unknown. */
 export type ShellWord = { readonly text: string; readonly dynamic: boolean };
 
 type OutputRedirect = { readonly operator: "write" | "append"; readonly target: string };
 
-/**
- * Where the resolved program gets operands beyond its own words: `argv` only,
- * or `xargs`, which appends words read from stdin (unless `-I`/`--replace`
- * places them at explicit `{}` positions already among the words).
- */
 type ArgumentFeed = { readonly kind: "argv" } | { readonly kind: "xargs"; readonly replace: boolean };
 
-/** The program a simple command actually runs, after wrappers, with what it reads and writes. */
 export type Invocation = {
 	readonly program: string;
-	/** The program word holds `$…` or a substitution, so `program` is not what runs. */
 	readonly programDynamic: boolean;
-	/** Wrappers passed on the way to the program, outermost first (`timeout`, `nohup`, `env`, …). */
 	readonly wrappers: readonly string[];
 	readonly words: readonly ShellWord[];
 	readonly args: readonly string[];
-	/** Targets of `<` on stdin. */
 	readonly readInputs: readonly string[];
-	/** stdin is a here-document or here-string: bytes written in the command itself. */
 	readonly hereInput: boolean;
-	/** stdout redirected to a file (never a `/dev/*` stream or an fd duplication). */
 	readonly outputs: readonly OutputRedirect[];
-	/** stdin is the previous pipeline stage's stdout. */
 	readonly piped: boolean;
-	/** The command is the test of `if`/`elif`/`while`/`until`/`!`: only its exit status is used. */
 	readonly condition: boolean;
 	readonly feed: ArgumentFeed;
 };
 
-/**
- * Which programs resolve to nothing: `elevatedAndRemote` stops at `sudo`,
- * `doas`, `su` and `ssh`, whose command runs where the built-in tools cannot
- * reach (the tool-routing lanes); `none` resolves them like any program (the
- * pty lane, which judges the entry point, not the work).
- */
 type Exemption = "elevatedAndRemote" | "none";
 
 export const basename = (path: string): string => {
@@ -51,7 +31,6 @@ export const isEnvAssignment = (text: string): boolean => /^[A-Za-z_][A-Za-z0-9_
 
 export const isFlag = (text: string): boolean => text.length > 1 && text.startsWith("-");
 
-/** `/dev/*` is a kernel stream, not file bytes any tool can fetch. */
 export const isDeviceTarget = (target: string): boolean => target.startsWith("/dev/");
 
 export const optionName = (flag: string): string => {
@@ -59,7 +38,6 @@ export const optionName = (flag: string): string => {
 	return equals === -1 ? flag : flag.slice(0, equals);
 };
 
-/** How many following words an option takes as its value; `--name=value` takes none. */
 export type ValueArity = (flag: string) => number;
 
 export const noValues: ValueArity = () => 0;
@@ -74,7 +52,6 @@ export const valueOptions =
 export type ParsedArguments = {
 	readonly flags: readonly string[];
 	readonly operands: readonly string[];
-	/** Option name → its value, separate or after `=`; the last occurrence wins. */
 	readonly values: ReadonlyMap<string, string>;
 };
 
@@ -108,7 +85,6 @@ export const parseArguments = (args: readonly string[], arity: ValueArity): Pars
 	return { flags, operands, values };
 };
 
-/** A bundled short-option word such as `-rn` (never `--long`). */
 const isShortCluster = (flag: string): boolean => flag.length > 1 && flag.startsWith("-") && !flag.startsWith("--");
 
 export const hasShortLetter = (flags: readonly string[], letter: string): boolean =>
@@ -119,26 +95,17 @@ export const hasOption = (flags: readonly string[], ...names: readonly string[])
 
 export const fileOperands = (operands: readonly string[]): string[] => operands.filter((operand) => operand !== "-" && operand.length > 0);
 
-/** Privilege elevation and remote execution: the command runs where the built-in tools cannot reach. */
 const EXEMPT_PROGRAMS: Readonly<Record<string, true>> = { sudo: true, doas: true, su: true, ssh: true };
 
-/**
- * Reserved words that may open a command position; only consumed before any
- * wrapper. A Set because a `then` object key reads as a thenable to Biome.
- */
 const RESERVED_WORDS: ReadonlySet<string> = new Set(["!", "{", "if", "then", "elif", "else", "do", "while", "until"]);
 
-/** Reserved words whose following command is a test. */
 const CONDITION_WORDS: ReadonlySet<string> = new Set(["!", "if", "elif", "while", "until"]);
 
-/** `stop`: the wrapper runs no command the detector can name (`command -v`, `env -S`). */
 type WrapperSkip = { readonly kind: "skip"; readonly count: number } | { readonly kind: "stop" };
 
 type WrapperSpec = {
 	readonly arity: ValueArity;
-	/** Options after which no command runs, or runs from a string the detector does not parse. */
 	readonly stops: (flag: string) => boolean;
-	/** Positional words the wrapper itself consumes after its options (`timeout DURATION`). */
 	readonly positional: number;
 };
 
@@ -191,7 +158,6 @@ function skipWrapper(spec: WrapperSpec, rest: readonly string[]): WrapperSkip {
 			index++;
 			break;
 		}
-		// `env -` empties the environment like `-i`.
 		if (word !== "-" && !isFlag(word)) break;
 		if (spec.stops(word)) return { kind: "stop" };
 		index += 1 + spec.arity(word);
@@ -239,13 +205,6 @@ function splitRedirections(tokens: readonly CommandToken[]): Redirections {
 	return { words, readInputs, hereInput, outputs };
 }
 
-/**
- * Finds the program a simple command runs: skips leading redirections and
- * `NAME=value` assignments, reserved words at the start, and wrappers with
- * their own options (`timeout 5`, `nice -n 10`, `xargs -0 -n 1`). Returns null
- * for an empty command, an exempt program under `elevatedAndRemote` (`sudo`,
- * `ssh`, …), or a wrapper that runs nothing nameable (`command -v`, `env -S`).
- */
 export function resolveCommand(tokens: readonly CommandToken[], piped: boolean, exemption: Exemption): Invocation | null {
 	const { words, readInputs, hereInput, outputs } = splitRedirections(tokens);
 	let index = 0;
@@ -279,7 +238,6 @@ export function resolveCommand(tokens: readonly CommandToken[], piped: boolean, 
 				readInputs,
 				hereInput,
 				outputs,
-				// Under xargs the program's stdin is not the pipe; xargs consumed it.
 				piped: feed.kind === "argv" && piped,
 				condition,
 				feed,

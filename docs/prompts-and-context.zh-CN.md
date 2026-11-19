@@ -24,7 +24,7 @@ OMP 自带的 `systemPromptTemplates` 设置（`config.yml`，18.19.0 起）把�
 
 ### system-prompt-replace
 
-源码：`agent/extensions-last/system-prompt-replace/`，登记在 `agent/config.yml` 与 `agent/config-light.yml` 的 `extensions` 列表最后一项。键与匹配规则以其文件头注释为准。
+源码：`agent/extensions-last/system-prompt-replace/`，登记在 `agent/config.yml` 与 `agent/config-light.yml` 的 `extensions` 列表最后一项。
 
 `before_agent_start` 处理器按扩展加载顺序串行执行：native 发现（`~/.omp/agent/extensions/` 与 `settings.json` 模块）→ hooks → 插件扩展 → `-e` 路径 → `config.yml` `extensions` → OMP 内置 inline 扩展。把该扩展放在 `extensions/` 之外的 `extensions-last/` 并排在 `extensions` 列表末项，可使它在两种模式下都在所有按路径加载的扩展之后运行，它的增量在一条 prompt 的消息中排在这些扩展的增量之后（详见 [`agent/extensions-last/README.zh-CN.md`](../agent/extensions-last/README.zh-CN.md)）。
 
@@ -65,7 +65,7 @@ OMP 重建基础提示后，不经过 `before_agent_start` 的运行会发出 OM
 
 ### append-system-model
 
-源码：`agent/extensions/append-system-model/`，键与匹配规则以其文件头注释为准。
+源码：`agent/extensions/append-system-model/`。
 
 每条 prompt 开始时与每次工具调用之后（主会话与每个子代理各按自身匹配），扩展读取同目录下的全部 `APPEND-SYSTEM-<label>.md`（仓库自带与本机自建文件放在同一目录），以及从会话 cwd 向上至 git 根或家目录先到者（含）每层目录及其 `.omp/` 中的同名模式文件（向上未遇边界即达文件系统根时只扫 `cwd`）。所有命中的片段都会采用，不按名称覆盖；命中的正文按发现顺序拼成一条来源为 `omp-config/append-system-model` 的[增量消息](#提示词文件)，system prompt 保持不变。文件每次都重读，新增或修改片段、`/model` 切换都从下一条 prompt 或下一个工具批次起生效，无需重启，以取代先前增量的新增量送达；子代理被 IRC 唤醒的轮次沿用其对话中已有的增量。
 

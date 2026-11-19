@@ -1,8 +1,3 @@
-# windows-accept (#311): run a given Bun script on windows-latest beside the
-# requested checkouts and the latest omp, with a PATH that has only Git\cmd of
-# Git for Windows. Dispatched by `bun ci/windows-accept.ts`; a pull request that
-# touches the entry runs it without a script, as a setup self-check. Design:
-# ci/README.md.
 name: windows-accept
 run-name: windows-accept ${{ inputs.nonce }}
 
@@ -43,10 +38,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: latest
       - name: Run the acceptance script

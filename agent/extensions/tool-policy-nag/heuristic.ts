@@ -14,7 +14,6 @@ import {
 } from "./shell-programs.ts";
 import type { ExecutedTrace } from "./trace.ts";
 
-/** Library entry points the eval tool's `code` uses to reimplement `read`/`glob`. */
 type EvalApi =
 	| "open"
 	| "Path.read_text"
@@ -38,10 +37,8 @@ type EvalViolation = {
 	readonly target: string;
 };
 
-/** Stands for the operands `xargs` appends when its stdin is a path stream. */
 const XARGS_OPERAND = "<xargs>";
 
-/** `xargs`: the program runs on arguments xargs built from stdin, so it consumes the upstream output. */
 type Stage = { readonly program: ShellProgram | null; readonly analysis: Analysis; readonly xargs: boolean };
 
 const UNKNOWN_STAGE: Stage = { program: null, analysis: { findings: [], nested: [], role: "other" }, xargs: false };
@@ -50,7 +47,6 @@ function analyzeTokens(tokens: readonly CommandToken[], piped: boolean, provenan
 	const invocation = resolveCommand(tokens, piped, "elevatedAndRemote");
 	if (invocation === null) return UNKNOWN_STAGE;
 	if (!isShellProgram(invocation.program)) return { ...UNKNOWN_STAGE, xargs: invocation.feed.kind === "xargs" };
-	// `find … | xargs grep foo`: xargs appends the paths, so the program gets file operands.
 	const fed =
 		invocation.feed.kind === "xargs" && !invocation.feed.replace && provenance === "paths"
 			? {
@@ -67,16 +63,13 @@ function analyzeTokens(tokens: readonly CommandToken[], piped: boolean, provenan
 	};
 }
 
-/** A command built from words (a `find -exec` body): no redirections, no pipe. */
 function analyzeWords(words: readonly ShellWord[]): ShellViolation[] {
 	const tokens: CommandToken[] = words.map((word) => ({ kind: "word", text: word.text, dynamic: word.dynamic }));
 	const stage = analyzeTokens(tokens, false, null);
 	return [...stageViolation(stage, stage.analysis.findings), ...stage.analysis.nested];
 }
 
-/** One violation per command: its categories in first-seen order, named by the first target. */
 function stageViolation(stage: Stage, findings: readonly Finding[]): ShellViolation[] {
-	// `/dev/*` is a stream, not file bytes; listing `/dev` and inline scripts still count.
 	const counted = findings.filter(
 		(finding) => finding.category === "list" || finding.category === "eval" || !isDeviceTarget(finding.target),
 	);
@@ -87,7 +80,6 @@ function stageViolation(stage: Stage, findings: readonly Finding[]): ShellViolat
 	return [{ categories, program: stage.program, target: first.target }];
 }
 
-/** Indices of the commands in `index`'s pipeline that come before it, nearest first. */
 function upstreamOf(commands: readonly SimpleCommand[], index: number): number[] {
 	const pipelineId = commands[index]?.pipelineId;
 	const upstream: number[] = [];
@@ -95,7 +87,6 @@ function upstreamOf(commands: readonly SimpleCommand[], index: number): number[]
 	return upstream;
 }
 
-/** What reaches a piped stage: the role of the nearest upstream stage that is not a pure filter. */
 function provenanceOf(commands: readonly SimpleCommand[], stages: readonly Stage[], index: number): StreamRole | null {
 	if (commands[index]?.piped !== true) return null;
 	for (const earlier of upstreamOf(commands, index)) {
@@ -105,13 +96,6 @@ function provenanceOf(commands: readonly SimpleCommand[], stages: readonly Stage
 	return "other";
 }
 
-/**
- * Whether a stage's output goes to another program rather than to the agent,
- * so a listing, read or search there is not what a built-in tool would give:
- * it passes only through stdin filters into a counter (`wc`, `uniq -c`), or
- * becomes the arguments of an `xargs` program. `ls -dt … | head` reaches the
- * agent.
- */
 function outputConsumed(commands: readonly SimpleCommand[], stages: readonly Stage[], index: number): boolean {
 	const pipelineId = commands[index]?.pipelineId;
 	let counts = false;
@@ -128,18 +112,6 @@ function outputConsumed(commands: readonly SimpleCommand[], stages: readonly Sta
 
 const COUNTABLE: ReadonlySet<ViolationCategory> = new Set(["list", "read", "search"]);
 
-/**
- * Every shell command whose work a built-in tool owns, over a line already
- * split by `shell-parser.ts`. Commands are resolved through wrappers
- * (`timeout`, `xargs`, `env`, …) and reserved words; nested command lines
- * (`bash -c '…'`, `eval '…'`, `find -exec … ;`) are analyzed in place. A
- * stage's stdin source decides pathless forms (`rg foo` searches the working
- * directory unless piped) and authored writes (`printf … | tee f`). Listing,
- * reading and searching whose output feeds the shell — a `$(…)` capture, a
- * count, `xargs` arguments — is not counted. A call that scans its line once
- * hands the same `commands` to every lane; `reached` says whether a simple
- * command's output reaches the result.
- */
 export function detectCommandViolations(commands: readonly SimpleCommand[], reached: (index: number) => boolean): ShellViolation[] {
 	const stages: Stage[] = [];
 	for (const [index, simple] of commands.entries()) {
@@ -165,18 +137,10 @@ export function detectCommandViolations(commands: readonly SimpleCommand[], reac
 	return violations;
 }
 
-/** Every shell command whose work a built-in tool owns, over a line's text. */
 export function detectShellViolations(command: string): ShellViolation[] {
 	return detectCommandViolations(splitSimpleCommands(command), () => true);
 }
 
-/**
- * The same judgment over what a traced run actually executed: each step's
- * expanded argv (with the redirections of its own source, which the trace
- * does not record), its real pipeline, its test position, and whether any
- * output of its pipeline reached the result. Steps that did not run are not
- * there; function, `eval` and `source` calls are judged through their bodies.
- */
 export function detectTraceViolations(trace: ExecutedTrace): ShellViolation[] {
 	const steps = trace.steps.filter((step) => !step.wrapsBody);
 	const pipelines = new Map<string, number>();
@@ -186,7 +150,6 @@ export function detectTraceViolations(trace: ExecutedTrace): ShellViolation[] {
 			pipelineId = pipelines.get(step.pipeline) ?? index;
 			pipelines.set(step.pipeline, pipelineId);
 		}
-		// A test position becomes a leading `!`, which the resolver reads as a condition word.
 		const tokens: CommandToken[] = step.test ? [{ kind: "word", text: "!", dynamic: false }] : [];
 		for (const text of step.argv) tokens.push({ kind: "word", text, dynamic: false });
 		const source = splitSimpleCommands(step.source)[0]?.tokens ?? [];
@@ -202,8 +165,6 @@ export function detectTraceViolations(trace: ExecutedTrace): ShellViolation[] {
 		}
 		return { tokens, pipelineId, piped: step.stage > 0, captured: step.captured, background: false, loopBody: false };
 	});
-	// A pipeline's bytes reach the result through its last stage; nothing attributed anywhere in it means they did not.
-	// The last index with attributed output answers every stage of its pipeline in one pass.
 	const outputThrough = new Map<string, number>();
 	for (const [index, step] of steps.entries()) {
 		if (!step.output || step.pipeline === null) continue;
@@ -220,19 +181,12 @@ export function detectTraceViolations(trace: ExecutedTrace): ShellViolation[] {
 }
 
 type EvalLanguage = "py" | "js";
-/** One library call the eval tool's `code` uses where a built-in tool exists. */
 type EvalPattern = {
 	readonly category: "read" | "list";
 	readonly program: EvalApi;
 	readonly test: RegExp;
 };
 
-/**
- * The eval tool's `code` is Python or JavaScript, not a shell line, so it needs
- * its own matchers. Only file reads (the `read` tool) and path/directory listing
- * (the `glob` tool) are flagged; writes, subprocesses, and in-memory work are
- * left alone. Patterns run in order and the first match per category names it.
- */
 const EVAL_PATTERNS: Record<EvalLanguage, readonly EvalPattern[]> = {
 	py: [
 		{ category: "read", program: "Path.read_text", test: /\.read_text\s*\(/ },
@@ -264,11 +218,6 @@ const EVAL_PATTERNS: Record<EvalLanguage, readonly EvalPattern[]> = {
 
 const isEvalLanguage = (language: string): language is EvalLanguage => language === "py" || language === "js";
 
-/**
- * Flags eval-tool code that reimplements `read` (file bytes) or `glob`
- * (directory/path listing), at most one violation per category. Write,
- * subprocess, and pure in-memory work are intentionally ignored.
- */
 export function detectEvalViolations(language: string, code: string): EvalViolation[] {
 	if (!isEvalLanguage(language)) return [];
 	const seen: Record<"read" | "list", boolean> = { read: false, list: false };

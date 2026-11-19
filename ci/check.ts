@@ -1,13 +1,4 @@
 #!/usr/bin/env bun
-// omp-config check: install the latest omp in a throwaway HOME, apply this
-// repository with its own updater, run one real session per mode (full and
-// omp-light) on a free model, and report every fault or warning omp and the
-// extensions emit. Design, criteria and coverage: ci/README.md.
-//
-// Run from anywhere: `bun ci/check.ts`. It writes only under a fresh temp
-// directory, which it deletes at the end (CI_KEEP_ROOT=1 keeps it).
-// Exit 0: no diagnostics. 1: configuration or environment diagnostics.
-// 2: only the free model provider failed, so the configuration is unverified.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -45,11 +36,6 @@ const THINKING_LEVELS: Record<string, true> = {
 	inherit: true,
 };
 
-/**
- * Log warnings caused by the CI host or the CI's own model setup, not by the
- * configuration. Each entry names the fact behind it; a warning that matches
- * none is a diagnostic.
- */
 const HOST_LOG_WARNINGS: readonly { readonly match: (record: LogRecord) => boolean; readonly reason: string }[] = [
 	{
 		match: (r) => /model discovery failed/i.test(r.message) && /\/\/(127\.0\.0\.1|localhost)[:/]/.test(String(r.url ?? "")),
@@ -63,10 +49,8 @@ const HOST_LOG_WARNINGS: readonly { readonly match: (record: LogRecord) => boole
 
 type Phase = "install" | "apply" | "full session" | "light session" | "omp log" | "shadow proxy";
 
-/** environment: the CI host or omp install broke; config: the configuration; provider: the free model service. */
 type Diagnostic = { readonly kind: "environment" | "config" | "provider"; readonly phase: Phase; readonly text: string };
 
-/** One distinct fault: every diagnostic whose normalized text and kind are the same, with where it showed up. */
 type Finding = { readonly hash: string; readonly kind: Diagnostic["kind"]; readonly text: string; readonly phases: Map<Phase, number> };
 
 type ModelRef = { readonly provider: string; readonly id: string };
@@ -110,9 +94,6 @@ function run(command: readonly string[], env: Record<string, string>, cwd: strin
 	return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "", failure };
 }
 
-// --- environment -------------------------------------------------------------
-
-/** The child environment; HOME and PI_CODING_AGENT_DIR are always set. */
 type IsolatedEnv = { readonly HOME: string; readonly PI_CODING_AGENT_DIR: string; readonly [name: string]: string };
 
 function isolatedEnv(root: string): IsolatedEnv {
@@ -135,8 +116,6 @@ function isolatedEnv(root: string): IsolatedEnv {
 	};
 }
 
-// --- model routing -------------------------------------------------------------
-
 function parseSelector(raw: string): ModelRef | undefined {
 	const selector = raw.trim();
 	const colon = selector.lastIndexOf(":");
@@ -145,7 +124,6 @@ function parseSelector(raw: string): ModelRef | undefined {
 	return slash > 0 ? { provider: bare.slice(0, slash), id: bare.slice(slash + 1) } : undefined;
 }
 
-/** Every provider-qualified model the managed configuration names. */
 function configuredModels(): ModelRef[] {
 	const selectors: string[] = [];
 	const config: unknown = Bun.YAML.parse(readFileSync(join(REPO, "agent/config.yml"), "utf8"));
@@ -174,12 +152,6 @@ function modelEntry(id: string): Mapping {
 	};
 }
 
-/**
- * models.yml for the throwaway agent dir: the free model as `ci-free`, and
- * every configured model shadowed onto the local proxy, which forwards the
- * request to the free model. CI holds no paid credentials, so without the
- * shadow a configured helper model would report itself unavailable.
- */
 function modelsYaml(shadows: readonly ModelRef[], proxyPort: number): string {
 	const providers: Mapping = {
 		[FREE_PROVIDER]: {
@@ -228,8 +200,6 @@ function startShadowProxy(requests: ShadowRequest[]) {
 	});
 }
 
-// --- phases --------------------------------------------------------------------
-
 function installOmp(env: Record<string, string>, cwd: string, out: Diagnostic[]): string | undefined {
 	const install = run(["bun", "install", "-g", `@oh-my-pi/pi-coding-agent@${OMP_VERSION}`], env, cwd, INSTALL_TIMEOUT_MS);
 	if (install.code !== 0) {
@@ -274,7 +244,6 @@ function applyConfig(env: IsolatedEnv, cwd: string, out: Diagnostic[]): ApplyRep
 	try {
 		parsed = last === undefined ? undefined : JSON.parse(last);
 	} catch {
-		// Not JSON: reported below as a missing report.
 		parsed = undefined;
 	}
 	const report = isApplyReport(parsed) ? parsed : undefined;
@@ -296,7 +265,6 @@ function isStringArray(value: unknown): value is readonly string[] {
 	return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-/** The fields of the updater's `--json` report this check reads. */
 function isApplyReport(value: unknown): value is ApplyReport {
 	return (
 		isMapping(value) &&
@@ -307,7 +275,6 @@ function isApplyReport(value: unknown): value is ApplyReport {
 	);
 }
 
-/** Text of a free-model service failure: transport errors, timeouts, rate limits, 5xx. */
 const PROVIDER_FAILURE =
 	/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|socket hang up|network|rate limit|\b(?:408|429|5\d\d)\b/i;
 
@@ -317,7 +284,6 @@ function isProviderFailure(message: Mapping): boolean {
 	return PROVIDER_FAILURE.test(String(message.errorMessage ?? ""));
 }
 
-/** One RPC session: wait for ready, send one prompt, keep stdin open until prompt_result, then drain. */
 async function runSession(
 	phase: Phase,
 	command: readonly string[],
@@ -378,7 +344,6 @@ async function runSession(
 		event.type === "message_end" && isMapping(event.message) && event.message.role === "assistant" ? [event.message] : [],
 	);
 	const failedReplies = replies.filter((reply) => reply.stopReason === "error" || reply.stopReason === "aborted");
-	// A prompt that ended badly because the free model failed says nothing about the configuration.
 	const fallout = failedReplies.length > 0 && failedReplies.every(isProviderFailure) ? "provider" : "config";
 	for (const event of events) {
 		if (event.type === "extension_error")
@@ -417,7 +382,6 @@ function readLogs(home: string, out: Diagnostic[], ignored: string[]): void {
 			if (!isMapping(record) || typeof record.message !== "string" || (record.level !== "warn" && record.level !== "error")) continue;
 			const entry = record as LogRecord;
 			const { timestamp: _t, pid: _p, level, message, ...context } = entry;
-			// A `{path, error}` record is rendered the way omp prints the same fault on stderr, so both dedupe to one finding.
 			const keys = Object.keys(context);
 			const text =
 				keys.length === 2 && typeof context.path === "string" && typeof context.error === "string"
@@ -425,7 +389,6 @@ function readLogs(home: string, out: Diagnostic[], ignored: string[]): void {
 					: `${message}${keys.length ? ` ${JSON.stringify(context)}` : ""}`;
 			const host = level === "warn" ? HOST_LOG_WARNINGS.find((rule) => rule.match(entry)) : undefined;
 			if (host) ignored.push(`${text} — ${host.reason}`);
-			// A record whose own error is a free-model service failure is the provider's, not the configuration's.
 			else
 				out.push({
 					kind: PROVIDER_FAILURE.test(`${entry.error ?? ""} ${entry.errorMessage ?? ""}`) ? "provider" : "config",
@@ -436,9 +399,6 @@ function readLogs(home: string, out: Diagnostic[], ignored: string[]): void {
 	}
 }
 
-// --- report --------------------------------------------------------------------
-
-/** Rewrites run-specific parts (temp dirs, module cache-busters) so one fault reads, and hashes, the same in every source and run. */
 function normalizer(root: string, home: string): (text: string) => string {
 	// Real paths first: on macOS /private/var/… contains /var/… and must be replaced before it.
 	const prefixes: [string, string][] = [
@@ -459,8 +419,6 @@ function findings(diagnostics: readonly Diagnostic[], normalize: (text: string) 
 		finding.phases.set(d.phase, (finding.phases.get(d.phase) ?? 0) + 1);
 		byHash.set(hash, finding);
 	}
-	// omp cuts long stderr lines with "…"; a cut line is the same fault as the one full text it is a prefix of.
-	// A cut inside an absolute path leaves a fragment normalization cannot rewrite, so compare up to where that path began.
 	for (const cut of [...byHash.values()].filter((f) => f.text.endsWith("…"))) {
 		const prefix = cut.text.slice(0, -1).replace(/\/[^\s'"]*$/, "");
 		const candidates = [...byHash.values()].filter((f) => f !== cut && f.kind === cut.kind && f.text.startsWith(prefix));
@@ -538,18 +496,11 @@ async function main(): Promise<number> {
 		if (version === undefined) return report(facts, diagnostics, ignored, normalize);
 		facts.push(`installed: ${version}`);
 		const applied = applyConfig(env, work, diagnostics);
-		// A failed apply wrote nothing (the updater installs plugins before any write), so
-		// there is no applied config to run a session on: report the apply diagnostics.
 		if (applied === undefined || applied.errors.length > 0) return report(facts, diagnostics, ignored, normalize);
 		facts.push(`updater wrote ${applied.written.length} entries; plugins installed: ${applied.pluginsInstalled.join(", ") || "none"}`);
 		const shadows = configuredModels();
 		facts.push(`configured models shadowed onto the free model: ${shadows.map((ref) => `${ref.provider}/${ref.id}`).join(", ")}`);
 		writeFileSync(join(env.PI_CODING_AGENT_DIR, "models.yml"), modelsYaml(shadows, proxy.port ?? 0));
-		// modelRoles and skills are machine-local fields the updater never writes. A
-		// machine sets them; CI binds every role to the free model, so role-driven
-		// background work (titles, advisor) stays on it, and turns skills off: the
-		// installed plugins' skills would otherwise be compressed in the background by
-		// that free model on every run, since the throwaway HOME has no compression cache.
 		const model = `${FREE_PROVIDER}/${FREE_MODEL}`;
 		const configPath = join(env.PI_CODING_AGENT_DIR, "config.yml");
 		const config: unknown = Bun.YAML.parse(readFileSync(configPath, "utf8"));

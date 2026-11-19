@@ -3,33 +3,12 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { unquote } from "./spec-files.ts";
 
-/**
- * Which sessions a spec file (`WATCHDOG-*.md`, `TURN-JUDGE-*.md`) applies to,
- * and how it injects. Values inside one key are alternatives (OR); keys
- * combine with AND.
- *
- * - target: comma list (`[a, b]` brackets and quotes accepted, case-insensitive)
- *   of `main`, `subagents` (`subagent`, `sub`, `subs`), `*` (`all`, `any`) or a
- *   subagent's definition name (`task:mid`) or registry id.
- * - cwd: comma list of `Bun.Glob` patterns, each absolute or `~/`-prefixed,
- *   matched against the normalized session cwd. `/a/repo` matches that
- *   directory only, `/a/repo/**` its subdirectories only, `/a/repo{,/**}`
- *   both. Absent = any directory.
- * - model / provider: one JavaScript regex each (alternatives with `|`),
- *   unanchored `RegExp.test` against the model and provider that produced an
- *   assistant message. In frontmatter one pair of surrounding quotes is
- *   syntax; a YAML string is the regex source as decoded.
- * - inject: `system` (default) or `user`.
- *
- * Parse problems are returned as data; the caller words them.
- */
 type Target =
 	| { readonly kind: "all" }
 	| { readonly kind: "main" }
 	| { readonly kind: "subagents" }
 	| { readonly kind: "agent"; readonly name: string };
 
-/** A file without the target key: invalid, or these targets. */
 export type TargetDefault = { readonly kind: "required" } | { readonly kind: "default"; readonly targets: readonly Target[] };
 
 type CwdPattern = { readonly source: string; readonly glob: Bun.Glob };
@@ -40,22 +19,14 @@ type ModelConstraint = { readonly field: ModelField; readonly source: string; re
 
 export type SessionFilter = {
 	readonly targets: readonly Target[];
-	/** Empty: any directory. */
 	readonly cwds: readonly CwdPattern[];
 	readonly models: readonly ModelConstraint[];
 };
 
-/** Frontmatter keys that carry each dimension, as documented (`watchModel`); looked up lowercased, as the frontmatter parser stores them. */
 export type FilterKeys = { readonly target: string; readonly cwd: string; readonly model: string; readonly provider: string };
 
-/**
- * How a note reaches the watched model: `system` as an extension custom message
- * (the LLM `developer` role; provider-specific wire role), `user` as a user-role
- * message.
- */
 export type InjectMode = "system" | "user";
 
-/** What made a frontmatter value unusable; `key` is the frontmatter key as written in the file. */
 export type FilterProblem =
 	| { readonly kind: "missing"; readonly key: string }
 	| { readonly kind: "empty"; readonly key: string }
@@ -65,10 +36,8 @@ export type FilterProblem =
 
 type Parsed<T> = { readonly kind: "ok"; readonly value: T } | { readonly kind: "invalid"; readonly problem: FilterProblem };
 
-/** The producer of an assistant message, as `model` / `provider` constraints see it. */
 export type Producer = { readonly model: string; readonly provider: string };
 
-/** Comma-separated items, without `[ ]` brackets, quotes and empty items; a comma inside a glob's `{a,b}` braces stays in its item. */
 function listItems(raw: string): string[] {
 	let value = raw.trim();
 	if (value.startsWith("[") && value.endsWith("]")) value = value.slice(1, -1);
@@ -138,7 +107,6 @@ function parseCwds(raw: string | undefined, key: string): Parsed<readonly CwdPat
 	return { kind: "ok", value: patterns };
 }
 
-/** How field values were written: frontmatter text, where surrounding quotes are syntax, or YAML strings already decoded. */
 export type ValueSyntax = "frontmatter" | "yaml";
 
 function parseModels(fields: Readonly<Record<string, string>>, keys: FilterKeys, syntax: ValueSyntax): Parsed<readonly ModelConstraint[]> {
@@ -173,7 +141,6 @@ export function parseSessionFilter(
 	return { kind: "ok", value: { targets: targets.value, cwds: cwds.value, models: models.value } };
 }
 
-/** The frontmatter `inject` value; absent means `system`. */
 export function parseInjectMode(raw: string | undefined): Parsed<InjectMode> {
 	if (raw === undefined) return { kind: "ok", value: "system" };
 	const value = unquote(raw).toLowerCase();
@@ -186,7 +153,6 @@ export function parseInjectMode(raw: string | undefined): Parsed<InjectMode> {
 	}
 }
 
-/** Whether the session's identity and cwd are watched. */
 export function targetsSession(filter: SessionFilter, agent: ExtensionContext["agent"], cwd: string): boolean {
 	const identityMatches = filter.targets.some((target) => {
 		switch (target.kind) {
@@ -210,7 +176,6 @@ export function targetsSession(filter: SessionFilter, agent: ExtensionContext["a
 	return filter.cwds.some((pattern) => pattern.glob.match(normalized));
 }
 
-/** Whether every model/provider constraint matches the message's producer. */
 export function producerMatches(filter: SessionFilter, producer: Producer): boolean {
 	return filter.models.every((constraint) => constraint.pattern.test(producer[constraint.field]));
 }
@@ -232,7 +197,6 @@ function targetLabel(target: Target): string {
 	}
 }
 
-/** The filter as `target … · cwd … · <model key> /…/ · <provider key> /…/`; `anyCwd` stands for no cwd restriction. */
 export function describeFilter(filter: SessionFilter, keys: FilterKeys, anyCwd: string): string {
 	const parts = [`target ${filter.targets.map(targetLabel).join(",")}`, `cwd ${filter.cwds.map((c) => c.source).join(",") || anyCwd}`];
 	for (const constraint of filter.models) parts.push(`${keys[constraint.field]} /${constraint.source}/`);

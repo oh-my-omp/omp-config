@@ -1,16 +1,3 @@
-/**
- * The executed facts of one `bash` tool run, read from the result's
- * `details.trace` (pi-shell's `ShellTrace`, omp ≥ 18.17.0) once the run is
- * over. Only the fields the reminder lanes use are parsed; everything else in
- * the trace is ignored. Offsets in the trace are UTF-8 byte offsets into each
- * unit's source.
- *
- * A step is one simple command that actually ran (`runs > 0`), in source
- * order. Callout units (the operands `timeout`/`xargs`/`git` ran) are left
- * out: their calling command stands for them, and the static analysis already
- * resolves through those wrappers. Function and `eval` bodies are traced as
- * steps of their own; the calling command is marked `wrapsBody`.
- */
 import { z } from "@oh-my-pi/pi-coding-agent";
 
 const resolvedSchema = z.enum(["function", "intrinsic", "tool", "native", "device", "self_shell", "external", "not_found", "none"]);
@@ -42,7 +29,6 @@ const traceSchema = z.object({
 	status: z.number().optional(),
 	historyTruncated: z.boolean().optional(),
 	units: z.array(unitSchema),
-	/** The replay journal: read by type guard below, so its records are never objectified. */
 	history: z.array(z.unknown()).optional(),
 });
 
@@ -55,49 +41,29 @@ const detailsSchema = z.object({
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** The `u:n` attribution of a bounding `Output` record, else null; `u`/`n` are read directly. */
 function outputRef(entry: Readonly<Record<string, unknown>>): string | null {
 	if (entry.kind !== "Output") return null;
 	const { u, n } = entry;
-	// `z.number()` rejects NaN and accepts Infinity, as the reader always has.
 	return typeof u === "number" && !Number.isNaN(u) && typeof n === "number" && !Number.isNaN(n) ? `${u}:${n}` : null;
 }
 
-/** One simple command that ran. */
 export type TraceStep = {
 	readonly argv: readonly string[];
 	readonly resolved: Resolved;
-	/** Exit status of its last run. */
 	readonly status: number;
-	/** The command's own source text (redirections included, expansions not). */
 	readonly source: string;
-	/** Identity of its pipeline when the pipeline has more than one stage, else null. */
 	readonly pipeline: string | null;
-	/** Zero-based stage in its pipeline; 0 outside a multi-stage pipeline. */
 	readonly stage: number;
 	readonly lastStage: boolean;
-	/** It runs inside a `$(…)`/backtick substitution or an assignment value. */
 	readonly captured: boolean;
-	/** Its status is the test of `if`/`elif`/`while`/`until`, or negated by `!`. */
 	readonly test: boolean;
-	/** Something used its exit status: a test, a non-final `&&`/`||` operand, or a substitution. */
 	readonly statusUsed: boolean;
-	/** At least one chunk of the visible output is attributed to it. */
 	readonly output: boolean;
-	/** A function call, `eval`, `source` or `.`: the body's own steps carry what ran. */
 	readonly wrapsBody: boolean;
 };
 
 export type ExecutedTrace = { readonly script: string; readonly steps: readonly TraceStep[] };
 
-/**
- * What a shell tool result tells about the run:
- * `traced` — a foreground run that ended, with its whole trace;
- * `timedOut` — the deadline cut it short; the trace (if any) is partial;
- * `interrupted` — cancelled or aborted before a result existed;
- * `background` — the call returned while the job keeps running;
- * `untraced` — no usable trace (another backend, a truncated journal, an older omp).
- */
 export type ShellOutcome =
 	| { readonly kind: "traced"; readonly trace: ExecutedTrace }
 	| { readonly kind: "timedOut"; readonly trace: ExecutedTrace | null }
@@ -110,10 +76,6 @@ const NOT_STATEMENTS: Readonly<Record<string, true>> = { word: true, assign: tru
 
 const NO_CHILDREN: readonly number[] = [];
 
-/**
- * One unit's statement children by parent id, in source order: every lookup a
- * unit's steps make reads this index instead of rescanning its node table.
- */
 function childIndex(nodes: readonly TraceNode[]): ReadonlyMap<number, readonly number[]> {
 	const index = new Map<number, number[]>();
 	for (const [id, node] of nodes.entries()) {
@@ -126,7 +88,6 @@ function childIndex(nodes: readonly TraceNode[]): ReadonlyMap<number, readonly n
 	return index;
 }
 
-/** Statement children of `parent` in one unit, in source order. */
 const childrenOf = (index: ReadonlyMap<number, readonly number[]>, parent: number): readonly number[] => index.get(parent) ?? NO_CHILDREN;
 
 function isCaptured(nodes: readonly TraceNode[], id: number): boolean {
@@ -136,7 +97,6 @@ function isCaptured(nodes: readonly TraceNode[], id: number): boolean {
 	return false;
 }
 
-/** Whether the and_or list `list` is a condition of the compound command holding it. */
 function isCondition(nodes: readonly TraceNode[], children: ReadonlyMap<number, readonly number[]>, list: number): boolean {
 	const holder = nodes[list]?.p;
 	if (holder === undefined) return false;
@@ -145,7 +105,6 @@ function isCondition(nodes: readonly TraceNode[], children: ReadonlyMap<number, 
 	const index = parts.indexOf(list);
 	if (kind === "while" || kind === "until") return index === 0;
 	if (kind !== "if") return false;
-	// if C1; then B1; elif C2; then B2; else E; fi → C1 B1 C2 B2 E: even positions, minus a trailing else.
 	const conditions = parts.length % 2 === 1 ? parts.length - 1 : parts.length;
 	return index % 2 === 0 && index < conditions;
 }
@@ -197,12 +156,10 @@ function executedTrace(raw: unknown): { readonly trace: ExecutedTrace; readonly 
 	const { script, units, history, status, historyTruncated } = parsed.data;
 	const outputs = new Set<string>();
 	for (const entry of history ?? []) {
-		// A journal record is an object with a string `kind`; anything else is not a trace.
 		if (!isRecord(entry) || typeof entry.kind !== "string") return null;
 		const ref = outputRef(entry);
 		if (ref !== null) outputs.add(ref);
 	}
-	// The script's bytes are only needed by a unit that does not carry its own source.
 	let scriptBytes: Buffer | null = null;
 	const bytesOf = (unit: TraceUnit): Buffer => {
 		if (unit.source !== undefined) return Buffer.from(unit.source);
@@ -214,7 +171,6 @@ function executedTrace(raw: unknown): { readonly trace: ExecutedTrace; readonly 
 	return { trace: { script, steps }, complete: status !== undefined && historyTruncated !== true };
 }
 
-/** Reads a `bash` tool result; `isError` with no details is a run cancelled before it produced a result. */
 export function shellOutcome(details: unknown, isError: boolean): ShellOutcome {
 	if (details === undefined || details === null) return isError ? { kind: "interrupted" } : { kind: "untraced" };
 	const parsed = detailsSchema.safeParse(details);

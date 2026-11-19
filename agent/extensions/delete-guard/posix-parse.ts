@@ -1,19 +1,7 @@
-/**
- * Fail-closed shell parser for delete-guard (POSIX plus the Bash syntax the
- * bash tool's pi-shell engine runs): splits command text into simple commands
- * with quote-removed words, the effective stdin source and every nested script
- * (`$(…)`, backticks, `<(…)`/`>(…)`, Bash 5.3 `${ …; }` / `${| …; }`,
- * substitutions inside unquoted here-document bodies, `${…}` and `$((…))`).
- * Malformed or unterminated text is `invalid`, never a best guess.
- */
-
-/** `literal`: no expansion, substitution, glob or brace pattern, so the runtime text is `text`. */
 export type Word = { readonly text: string; readonly raw: string; readonly literal: boolean };
 
-/** Paths that name the process's own standard input, not a file: reading them reads the stdin source. */
 export const STDIN_SCRIPT = /^\/dev\/(?:stdin|fd\/\d+)$|^\/proc\/self\/fd\/\d+$/;
 
-/** Names a command's stdin source in block reasons; `null` means no source was given. */
 export function stdinLabel(stdin: StdinSource | null): string {
 	if (stdin === null) return "no script given";
 	switch (stdin.kind) {
@@ -34,19 +22,15 @@ export function stdinLabel(stdin: StdinSource | null): string {
 	}
 }
 
-/** One here-document body as a source range: its text is copied only when a consumer reads it. */
 export type HeredocBody = {
 	readonly src: string;
 	readonly start: number;
 	readonly end: number;
-	/** `<<-`: every body line's leading tabs were stripped. */
 	readonly stripTabs: boolean;
 };
 
-/** Leading tabs of each line, which `<<-` removes before the body runs. */
 const LEADING_TABS = /^\t+/gm;
 
-/** The text of a here-document body: its lines, `<<-` tabs stripped, ending with a newline. */
 export function heredocText(body: HeredocBody): string {
 	if (body.start === body.end) return "";
 	const text = body.src.slice(body.start, body.end);
@@ -61,10 +45,6 @@ export type StdinSource =
 	| { readonly kind: "herestring" }
 	| { readonly kind: "heredoc"; readonly quoted: boolean; readonly body: HeredocBody };
 
-/**
- * `stdin` is the last effective fd-0 source in source order (a pipe first, then each redirect). `src`/`start`/`end`
- * is the command's own text, copied only when a block reason quotes it.
- */
 export type SimpleCommand = {
 	readonly words: readonly Word[];
 	readonly stdin: StdinSource | null;
@@ -83,7 +63,6 @@ type Builder = { readonly commands: SimpleCommand[]; readonly nested: Script[] }
 
 type HeredocSlot = { readonly kind: "heredoc"; readonly quoted: boolean; body: HeredocBody };
 
-/** The body of a here-document queued on the current line; `readPendingDocs` replaces it with the source range. */
 const NO_BODY: HeredocBody = { src: "", start: 0, end: 0, stripTabs: false };
 
 type CommandBuilder = { readonly start: number; readonly words: Word[]; stdin: StdinSource | null };
@@ -95,14 +74,12 @@ type Case = "pattern" | "body";
 const isBlank = (ch: string): boolean => ch === " " || ch === "\t" || ch === "\r";
 
 const ASSIGNMENT_PREFIX = /^[A-Za-z_][A-Za-z0-9_]*\+?=$/;
-/** Sticky: matched at the cursor, so no copy of the remaining text is needed. */
 const REDIRECT = /(\d*)(<<<|<<-|<<|<>|<&|>&|>>|>\||<|>)/y;
 const SPECIAL_PARAMETER = /[0-9@*#?$!-]/;
 const NAME_START = /[A-Za-z_]/;
 const NAME_CHAR = /[A-Za-z0-9_]/;
 const GLOB = /[*?]|\[[^\]\0]+\]/;
 const BRACE = /\{[^{}\0]*(,|\.\.)[^{}\0]*\}/;
-/** Reserved words after which `(` still opens a subshell or `((` an arithmetic command. A Set: a `then` key reads as a thenable to Biome. */
 const RESERVED_OPENERS: ReadonlySet<string> = new Set(["!", "if", "then", "elif", "else", "while", "until", "do", "{", "time"]);
 
 class Parser {
@@ -124,14 +101,9 @@ class Parser {
 		}
 	}
 
-	/**
-	 * Parses commands up to the end of text, up to the `)` closing a `$(` / `<(` (`closer` `)`), or up to the `}`
-	 * reserved word closing a Bash 5.3 `${ …; }` / `${| …; }` command substitution (`closer` `}`).
-	 */
 	parseScript(closer: ")" | "}" | null): Script {
 		const builder: Builder = { commands: [], nested: [] };
 		let command: CommandBuilder | null = null;
-		/** `{` groups opened inside a `${ …; }` body: their `}` closes the group, not the substitution. */
 		let braces = 0;
 		let piped = false;
 		let groups = 0;
@@ -155,7 +127,6 @@ class Parser {
 			}
 			return command;
 		};
-		/** Reads `command` with its declared type: the closures above reassign it, which flow narrowing does not see. */
 		const current = (): CommandBuilder | null => command;
 		for (;;) {
 			this.skipBlanks();
@@ -290,7 +261,6 @@ class Parser {
 		return command.words.length === 1 || (command.words.length === 2 && command.words[0]?.text === "function");
 	}
 
-	/** Reads one case pattern list up to `)`; returns true when it met `esac` instead. */
 	private readCasePattern(builder: Builder): boolean {
 		if (this.src.charAt(this.i) === "(") this.i++;
 		for (;;) {
@@ -306,7 +276,6 @@ class Parser {
 		}
 	}
 
-	/** Handles a redirection at the cursor; returns false when the cursor holds a word. */
 	private readRedirect(builder: Builder, open: () => CommandBuilder): boolean {
 		const ch = this.src.charAt(this.i);
 		if ((ch === "<" || ch === ">") && this.src.charAt(this.i + 1) === "(") return false;
@@ -331,8 +300,6 @@ class Parser {
 		const target = this.readWord(builder);
 		if (target.raw.length === 0) this.fail(`missing target after \`${op}\``);
 		if (op === "<<" || op === "<<-") {
-			// Every here-document body is consumed (an unquoted one has substitutions that run), whatever its
-			// descriptor; only fd 0's is the command's stdin.
 			const slot: HeredocSlot = { kind: "heredoc", quoted: /['"\\]/.test(target.raw), body: NO_BODY };
 			this.pending.push({ slot, delimiter: target.text, stripTabs: op === "<<-", owner: builder });
 			if (fd === 0) command.stdin = slot;
@@ -342,7 +309,6 @@ class Parser {
 		switch (op) {
 			case "<":
 			case "<>":
-				// A redirect from a stdin alias reads the pipe or the caller's stdin, not a file the call names.
 				command.stdin = target.literal && STDIN_SCRIPT.test(target.text) ? { kind: "other" } : { kind: "file" };
 				break;
 			case "<<<":
@@ -354,7 +320,6 @@ class Parser {
 		return true;
 	}
 
-	/** Reads here-document bodies queued on the line just ended. */
 	private readPendingDocs(): void {
 		for (const doc of this.pending.splice(0)) {
 			const start = this.i;
@@ -373,24 +338,20 @@ class Parser {
 			}
 			const body: HeredocBody = { src: this.src, start, end: delimiterAt === -1 ? this.src.length : delimiterAt, stripTabs: doc.stripTabs };
 			doc.slot.body = body;
-			// An unquoted body's substitutions run; a quoted one's do not, so its text is read only when a consumer judges it.
 			if (!doc.slot.quoted && expansions) doc.owner.nested.push(...expansionScripts(heredocText(body)));
 		}
 	}
 
-	/** The index of the `\n` ending the line that starts at `at`, or the text length. */
 	private lineEnd(at: number): number {
 		const end = this.src.indexOf("\n", at);
 		return end === -1 ? this.src.length : end;
 	}
 
-	/** True when the line `[start, end)` is `delimiter` after any leading tabs `<<-` ignores. */
 	private isDelimiter(start: number, end: number, delimiter: string, stripTabs: boolean): boolean {
 		if (stripTabs) while (start < end && this.src.charCodeAt(start) === 9) start++;
 		return end - start === delimiter.length && this.src.startsWith(delimiter, start);
 	}
 
-	/** True when the line `[start, end)` holds a `$` or a backtick, so its text may run a substitution. */
 	private hasExpansion(start: number, end: number): boolean {
 		for (let at = start; at < end; at++) {
 			const ch = this.src.charCodeAt(at);
@@ -399,7 +360,6 @@ class Parser {
 		return false;
 	}
 
-	/** One shell word, quotes removed; nested scripts it contains go to `builder.nested`. */
 	readWord(builder: Builder): Word {
 		const start = this.i;
 		let text = "";
@@ -489,12 +449,6 @@ class Parser {
 		this.fail('unterminated `"`');
 	}
 
-	/**
-	 * `$…` at the cursor. A lone `$` is the literal character. Inside double quotes (`inQuotes`) `$'` and `$"` are a
-	 * literal `$`, and single quotes in a `${…}` body are ordinary characters, so substitutions in them still run.
-	 * `${` followed by a blank, a newline or `|` is a Bash 5.3 command substitution run in the current shell: its
-	 * body is a script, inside double quotes too.
-	 */
 	private readDollar(builder: Builder, inQuotes = false): { readonly text: string; readonly literal: boolean } {
 		const start = this.i;
 		const next = this.src.charAt(this.i + 1);
@@ -538,7 +492,6 @@ class Parser {
 		return { text: this.src.slice(start, this.i), literal: false };
 	}
 
-	/** A backtick substitution: its body (with `\``, `\\`, `\$` unescaped) is parsed as its own script. */
 	private readBacktick(builder: Builder): { readonly text: string; readonly literal: boolean } {
 		const start = this.i;
 		this.i++;
@@ -561,7 +514,6 @@ class Parser {
 		this.fail("unterminated backtick");
 	}
 
-	/** Skips `((…))` / `$((…))` (cursor after any `$`), parsing substitutions inside. */
 	private skipArithmetic(builder: Builder, opening: number): void {
 		this.i += opening;
 		let depth = 0;
@@ -588,10 +540,6 @@ class Parser {
 		this.fail("unterminated `((`");
 	}
 
-	/**
-	 * Skips data up to the matching `closer` (`${…}` bodies, `a=(…)` arrays), parsing substitutions inside. Inside
-	 * double quotes (`inQuotes`) a `'` is an ordinary character, not a quote.
-	 */
 	private skipData(builder: Builder, closer: ")" | "}", inQuotes = false): void {
 		const opener = closer === ")" ? "(" : "{";
 		if (this.src.charAt(this.i) === opener) this.i++;
@@ -628,7 +576,6 @@ class Parser {
 		this.fail(`unterminated \`${opener}\``);
 	}
 
-	/** Skips a `[[ … ]]` expression (cursor after `[[`): its words are data, not commands. */
 	private skipDoubleBracket(builder: Builder): void {
 		while (this.i < this.src.length) {
 			const ch = this.src.charAt(this.i);
@@ -659,7 +606,6 @@ class Parser {
 		this.fail("unterminated `[[`");
 	}
 
-	/** Parses only the expansions of here-document text: every `$(…)`, backtick, `${…}` and `$((…))`. */
 	scanExpansions(): Script[] {
 		const builder: Builder = { commands: [], nested: [] };
 		while (this.i < this.src.length) {

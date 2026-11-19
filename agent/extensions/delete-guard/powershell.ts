@@ -2,13 +2,8 @@ import type { ArgvWord } from "./classify.ts";
 import { classifyNestedProgram, programName } from "./nested.ts";
 import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
-/** `Remove-Item` and its built-in aliases. A Set: a plain object would also match `constructor`. */
 const DELETE_COMMANDS: ReadonlySet<string> = new Set(["remove-item", "rm", "ri", "del", "erase", "rd", "rmdir"]);
 
-/**
- * Keywords that open control structures: their conditions (`(…)`) and script blocks (`{…}`) are judged as nested
- * code, and a statement starting with one ends at its block's `}`.
- */
 const KEYWORDS: ReadonlySet<string> = new Set([
 	"if",
 	"elseif",
@@ -36,24 +31,16 @@ const KEYWORDS: ReadonlySet<string> = new Set([
 	"using",
 ]);
 
-/** Keywords followed by a pipeline that runs (`return Remove-Item x`). */
 const PIPELINE_KEYWORDS: ReadonlySet<string> = new Set(["return", "throw", "exit"]);
 
-/** `[System.IO.File]::Delete(…)` and any `Delete`, `DeleteFile`, `DeleteDirectory` or `DeleteFolder` method call, outside strings. */
 const DELETE_METHOD = /(?:\]\s*::\s*|\.)delete(?:file|directory|folder)?\s*\(/i;
 
-/**
- * `[scriptblock]::Create(…)` and the same type spelled `[Management.Automation.ScriptBlock]` or
- * `[System.Management.Automation.ScriptBlock]`: a string turned into executable code cannot be read from the
- * text, so the call is non-literal like `Invoke-Expression`.
- */
 const SCRIPTBLOCK_CREATE = /\[(?:(?:system\.)?management\.automation\.)?scriptblock\]\s*::\s*create\s*\(/i;
 
 type PsWord = ArgvWord & { readonly raw: string };
 
 type PsStatement = { readonly words: readonly PsWord[]; readonly raw: string; readonly code: string };
 
-/** Statements of one block plus every nested block or subexpression found inside it. */
 type PsScript = { readonly statements: readonly PsStatement[]; readonly nested: readonly string[] };
 
 class PsParseFailure extends Error {}
@@ -69,7 +56,6 @@ class PsParser {
 		throw new PsParseFailure(detail);
 	}
 
-	/** Skips to the bracket closing the one at the cursor, honoring strings and nesting; returns the inner text. */
 	private balanced(open: string, close: string): string {
 		const start = this.i + 1;
 		let depth = 0;
@@ -97,7 +83,6 @@ class PsParser {
 		this.fail(`unterminated \`${open}\``);
 	}
 
-	/** Skips a quoted string (cursor on the quote); `$(…)` inside double quotes is recorded as nested code. Returns whether it expands. */
 	private skipString(quote: string): boolean {
 		const hereString = this.src.charAt(this.i - 1) === "@";
 		this.i++;
@@ -171,7 +156,6 @@ class PsParser {
 				this.nested.push(this.balanced("{", "}"));
 				code += " {} ";
 				words.push({ text: "{}", raw: "{}", literal: false });
-				// `if (…) { … } Remove-Item x`: what follows a control block is a statement of its own.
 				const head = words[0];
 				if (head?.literal && KEYWORDS.has(head.text.toLowerCase())) {
 					finish();
@@ -180,12 +164,10 @@ class PsParser {
 				continue;
 			}
 			if (ch === "}") this.fail("unexpected `}`");
-			// PowerShell has no input redirection: a bare `<` is a parse error, so the script never runs.
 			if (ch === "<") this.fail("`<` is reserved for future use");
 			if (ch === ">") {
 				const opStart = this.i;
 				while (this.i < this.src.length && ">&12*".includes(this.src.charAt(this.i))) this.i++;
-				// `2>&1` merges streams and has no target; any other redirect needs one.
 				if (/&[12]$/.test(this.src.slice(opStart, this.i))) continue;
 				while (this.src.charAt(this.i) === " " || this.src.charAt(this.i) === "\t") this.i++;
 				const next = this.src.charAt(this.i);
@@ -201,14 +183,12 @@ class PsParser {
 		return { statements: this.statements, nested: this.nested };
 	}
 
-	/** One argument word: barewords, strings, `$var`, `(…)`/`$(…)`/`@(…)` subexpressions (recorded as nested code). */
 	private readWord(words: PsWord[], emitCode: (piece: string) => void): void {
 		const start = this.i;
 		let text = "";
 		let literal = true;
 		while (this.i < this.src.length) {
 			const ch = this.src.charAt(this.i);
-			// A redirect ends the word (`hi 2>` is `hi`, `2`, `>`), so the parser sees every redirect and its target.
 			if (" \t;\n\r|{}>".includes(ch) || (ch === "<" && this.src.charAt(this.i + 1) !== "#")) break;
 			if (ch === "&" && this.src.charAt(this.i + 1) === "&") break;
 			if (ch === "'" || ch === '"') {
@@ -252,10 +232,6 @@ class PsParser {
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
-/**
- * Where the command of `$x = cmd`, `$x=cmd` or `[int]$x = cmd` starts: the words after `=`, the first one cut from
- * the word holding `=` when it is glued on. Null when the statement is an expression without assignment.
- */
 function assignedCommand(words: readonly PsWord[]): readonly PsWord[] | null {
 	for (let k = 0; k < words.length; k++) {
 		const word = words[k];
@@ -292,14 +268,11 @@ function classifyStatement(statement: PsStatement, depth: number): Verdict {
 		i = 1;
 		const target = words[1];
 		if (target === undefined) return ALLOW;
-		// `& { … }` / `. { … }` run a script block, which is judged as nested code.
 		if (target.raw === "{}") return ALLOW;
 		if (!target.literal) return block("nonLiteral", statement.raw, `\`${operator} ${target.raw}\` runs a command named by an expression`);
-		// A literal target is classified like any command name: `. Remove-Item x` runs the cmdlet; `. ./x.ps1` is a script file.
 	}
 	const command = words[i];
 	if (command === undefined) return ALLOW;
-	// Without `&`, a quoted first word is a string value, not a command (`$x = "rm"`).
 	if (i === 0 && (command.raw.startsWith("'") || command.raw.startsWith('"'))) return ALLOW;
 	if (!command.literal)
 		return command.raw.startsWith("$") ? ALLOW : block("nonLiteral", statement.raw, `the command name \`${command.raw}\` is not literal`);
@@ -312,7 +285,6 @@ function classifyStatement(statement: PsStatement, depth: number): Verdict {
 	return ALLOW;
 }
 
-/** Classifies PowerShell text: every statement, script block and subexpression it contains, and nested shells. */
 export function classifyPowershell(text: string, depth: number): Verdict {
 	if (depth > MAX_DEPTH) return block("nonLiteral", text, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
 	let script: PsScript;

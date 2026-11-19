@@ -1,15 +1,12 @@
 import { type Changes, compareVersions, countChanges, type DatedRelease, isDated, parseVersion, type Release } from "./changelog.ts";
 import type { Member } from "./members.ts";
 
-/** The versions last seen, by package name. */
 export type Seen = ReadonlyMap<string, string>;
 
-/** What reading one member's changelog yields. */
 export type ChangelogLoad =
 	| { readonly kind: "ok"; readonly releases: readonly Release[] }
 	| { readonly kind: "failed"; readonly reason: string };
 
-/** The one case a member falls into at a start. */
 export type Verdict =
 	| { readonly kind: "first-seen" }
 	| { readonly kind: "unchanged" }
@@ -17,10 +14,6 @@ export type Verdict =
 	| { readonly kind: "newer"; readonly from: string; readonly releases: readonly DatedRelease[] }
 	| { readonly kind: "unreadable"; readonly reason: string };
 
-/**
- * Classify `member` against the version last seen for it. `load` reads its changelog and is called only when
- * the current version is newer than the marker. Releases in (marker, current] are returned newest first.
- */
 export function classify(member: Member, marked: string | undefined, load: () => ChangelogLoad): Verdict {
 	const current = parseVersion(member.version);
 	if (current === undefined) return { kind: "unreadable", reason: `version ${member.version} is not X.Y.Z` };
@@ -43,28 +36,21 @@ export function classify(member: Member, marked: string | undefined, load: () =>
 	return { kind: "newer", from: marked, releases: dated };
 }
 
-/** What a start does with the releases a member gained. */
 export type Policy =
 	| { readonly kind: "show"; readonly layout: "summary" | "expanded" }
 	| { readonly kind: "advance" }
 	| { readonly kind: "hold" };
 
-/** `startup.changelogMode` hidden marks the releases seen without showing them; `startup.quiet` otherwise shows nothing and keeps them unseen. */
 export function policyOf(quiet: boolean, mode: "summary" | "expanded" | "hidden"): Policy {
 	if (mode === "hidden") return { kind: "advance" };
 	if (quiet) return { kind: "hold" };
 	return { kind: "show", layout: mode };
 }
 
-/** A member that gained releases and shows them. */
 export type Upgrade = { readonly name: string; readonly from: string; readonly to: string; readonly releases: readonly DatedRelease[] };
 
 export type Settlement = { readonly seen: Seen; readonly upgrades: readonly Upgrade[] };
 
-/**
- * The marker after a start and the upgrades it shows. Only current members keep an entry, so an uninstalled
- * package, or one that stopped declaring `omomp`, drops out. A member that cannot be read keeps what it had.
- */
 export function settle(members: readonly (readonly [Member, Verdict])[], marker: Seen, policy: Policy): Settlement {
 	const seen = new Map<string, string>();
 	const upgrades: Upgrade[] = [];
@@ -106,13 +92,10 @@ export function settle(members: readonly (readonly [Member, Verdict])[], marker:
 	return { seen, upgrades };
 }
 
-/** One release of one package, the unit merged by date. */
 export type Entry = { readonly name: string; readonly release: DatedRelease };
 
-/** The releases of one release day, packages by name, a package's versions newest first. */
 export type Day = { readonly date: string; readonly entries: readonly Entry[] };
 
-/** Group by release date, newest day first. */
 export function groupDays(entries: readonly Entry[]): Day[] {
 	const byDate = new Map<string, Entry[]>();
 	for (const entry of entries) {
@@ -131,7 +114,6 @@ export function groupDays(entries: readonly Entry[]): Day[] {
 export const entriesOf = (upgrades: readonly Upgrade[]): Entry[] =>
 	upgrades.flatMap((upgrade) => upgrade.releases.map((release) => ({ name: upgrade.name, release })));
 
-/** The figures of the startup summary. */
 export type Digest = {
 	readonly components: readonly { readonly name: string; readonly from: string; readonly to: string; readonly changes: number }[];
 	readonly dayCount: number;
@@ -157,15 +139,11 @@ export function digestOf(upgrades: readonly Upgrade[]): Digest {
 	return { components, dayCount: groupDays(entriesOf(upgrades)).length, changeCount, categories };
 }
 
-/** How much history `/omomp-changelog` shows: the latest `count` release days, or all. */
 export type View = { readonly kind: "days"; readonly count: number } | { readonly kind: "full" };
 
-/** The default window and the `last` default, in release days. */
 const RECENT_DAYS = 3;
 const LAST_DAYS = 1;
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@18.18.8 src/utils/changelog.ts#parseChangelogView
-/** The view `args` name, or `usage` when they are not `full` or `last [N]`. */
 export function parseView(args: string): View | { readonly kind: "usage" } {
 	const trimmed = args.trim().toLowerCase();
 	if (!trimmed) return { kind: "days", count: RECENT_DAYS };
@@ -176,4 +154,3 @@ export function parseView(args: string): View | { readonly kind: "usage" } {
 	const count = Number.parseInt(match[1], 10);
 	return count < 1 ? { kind: "usage" } : { kind: "days", count };
 }
-// @upstream-end

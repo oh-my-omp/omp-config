@@ -8,22 +8,16 @@ import { errorText } from "../_shared/errors.ts";
 
 const LIST_LIMIT = 50;
 
-/** What wt_remove would do to the worktree at one instant. */
 export type WorktreeCheck = {
-	/** Realpath of the linked worktree root. */
 	readonly worktree: string;
 	readonly branch: string;
-	/** Realpath of the repository's main checkout. */
 	readonly mainDir: string;
-	/** Binds confirmation to exactly this state. */
 	readonly confirm: string;
 	readonly staged: readonly string[];
 	readonly unstaged: readonly string[];
 	readonly untracked: readonly string[];
 	readonly ignored: readonly string[];
-	/** Branch commits not reachable from the main checkout's HEAD. */
 	readonly unmergedCount: number;
-	/** The first unmergedCount commits, capped at LIST_LIMIT. */
 	readonly unmergedPreview: readonly string[];
 	readonly blockers: readonly string[];
 };
@@ -32,11 +26,6 @@ type CheckResult = { readonly kind: "ok"; readonly check: WorktreeCheck } | { re
 type Recheck = { readonly kind: "ok"; readonly check: WorktreeCheck } | { readonly kind: "stop"; readonly why: string };
 type PorcelainLists = { readonly staged: readonly string[]; readonly unstaged: readonly string[]; readonly untracked: readonly string[] };
 
-/**
- * Walk git status --porcelain=v1 -z without materializing its fields. Each visit sees one status
- * field's x/y chars and path; a rename/copy field is followed by its source path, which this walk
- * consumes as part of the record. `source` is undefined only when no source field follows.
- */
 function forEachPorcelainEntry(raw: string, visit: (x: string, y: string, file: string, source: string | undefined) => void): void {
 	let start = 0;
 	while (start < raw.length) {
@@ -59,14 +48,12 @@ function forEachPorcelainEntry(raw: string, visit: (x: string, y: string, file: 
 	}
 }
 
-/** The number of entries git status --porcelain=v1 -z reports, counted without building them. */
 export function porcelainCount(raw: string): number {
 	let count = 0;
 	forEachPorcelainEntry(raw, () => count++);
 	return count;
 }
 
-/** The staged/unstaged/untracked lists wt_remove shows, folded out of one porcelain pass. */
 function porcelainLists(raw: string): PorcelainLists {
 	const staged: string[] = [];
 	const unstaged: string[] = [];
@@ -96,7 +83,6 @@ export async function git(pi: ExtensionAPI, cwd: string, args: string[]): Promis
 	return result.stdout;
 }
 
-/** Upstream's worktree fingerprint plus ignored files, which its snapshot does not see. `ignoredJoined` is `ignored.join("\\0")`. */
 async function fingerprint(worktree: SessionWorktree, ignoredJoined: string): Promise<string> {
 	const warnings: string[] = [];
 	const plan = await planWorktreeExit(
@@ -111,7 +97,6 @@ async function fingerprint(worktree: SessionWorktree, ignoredJoined: string): Pr
 	return Bun.hash(ignoredJoined === "" ? joined : `${joined}\0${ignoredJoined}`).toString(16);
 }
 
-/** The ignored listing `ls-files -z` reports, as one string: the fields joined by NUL, without the trailing NUL. */
 async function ignoredJoined(pi: ExtensionAPI, worktree: string): Promise<string> {
 	const raw = await git(pi, worktree, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]);
 	return raw.endsWith("\0") ? raw.slice(0, -1) : raw;
@@ -120,7 +105,6 @@ async function ignoredJoined(pi: ExtensionAPI, worktree: string): Promise<string
 async function blockersFor(ctx: ExtensionContext, worktree: string): Promise<string[]> {
 	const blockers = (ctx.getAsyncJobSnapshot()?.running ?? []).map((job) => `background job ${job.id} still running: ${job.label}`);
 	for (const ref of AgentRegistry.global().list()) {
-		// Task agents persist session files; in-memory extension helper sessions never touch the worktree.
 		if (ref.kind !== "sub" || ref.sessionFile === null) continue;
 		if (ref.status === "running") {
 			blockers.push(`subagent ${ref.id} is running`);
@@ -134,7 +118,6 @@ async function blockersFor(ctx: ExtensionContext, worktree: string): Promise<str
 	return blockers;
 }
 
-/** Inspect the linked worktree containing dir. Read-only. */
 export async function inspect(pi: ExtensionAPI, ctx: ExtensionContext, dir: string): Promise<CheckResult> {
 	try {
 		const repository = vcs.git(dir);
@@ -182,7 +165,6 @@ export async function inspect(pi: ExtensionAPI, ctx: ExtensionContext, dir: stri
 	}
 }
 
-/** Reinspect a confirmed worktree: unchanged and unblocked, otherwise the reason to stop. */
 export async function recheck(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,

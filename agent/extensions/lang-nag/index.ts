@@ -1,44 +1,3 @@
-// ============================================================================
-// lang-nag — watches the MAIN session's assistant replies and, when the reply
-// is not written in the configured language, prepends a tiny pre-written
-// instruction (e.g. "说中文") to the front of the NEXT user message so the model
-// self-corrects on its own next turn.
-//
-// What gets classified. Only the run's terminal reply: the last assistant
-// message `agent_end` delivers, when it ended with `stopReason: "stop"`. A run
-// the user interrupted (Esc), one that stopped at a tool call, an error or a
-// truncated reply is not judged, and its earlier mid-run narration never
-// stands in. Of that message only the `type: "text"` blocks count; thinking and
-// tool calls are never reply text. From that body we take the LAST
-// paragraph (blank-line separated) and
-// hand the judge the first 200 code points of it — the natural-language
-// sign-off, not the whole turn.
-//
-// Cancellation. Detection starts at `agent_end` and overlaps with the user
-// reading and typing. The next genuine user message only takes a verdict that
-// has already settled; if detection is still running when the message is sent,
-// the judgment is aborted and the message goes out unchanged.
-//
-// Detection is one choice question on the sample's language, asked through
-// `openJudge` (`_shared/judge.ts`, purpose `lang-nag`): the chat models of the
-// `@lang-nag` model role as prompted judges when assigned; otherwise OMP's
-// JUDGE role chain (`modelRoles.judge`, then `retry.fallbackChains.judge`;
-// native, local or prompted chat). Config — the target language and the
-// literal instruction string — is the `lang-nag.language` and
-// `lang-nag.instruction` plugin settings of `omp-config` (`/settings →
-// Plugins → omp-config` or `omp plugin config`; the project's
-// `.omp/plugin-overrides.json` wins over the machine values); an unreadable
-// or invalid value warns and leaves the extension inert.
-//
-// Scope is the main session only, mirroring tool-policy-nag: subagents run
-// short decomposed slices where a language nag is noise. A judgment failure
-// (every chain candidate failed), no judge candidate, an unanswered question,
-// or an invalid config all degrade to "no nag" — the extension never blocks
-// or corrupts a turn.
-// Registers session_start/switch/branch/tree/compact, agent_end, and input
-// hooks. Reads only the config above; writes no files and sends no extra turns.
-// ============================================================================
-
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Judge } from "@oh-my-pi/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
@@ -50,9 +9,7 @@ import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
 const DETECT_CHAR_LIMIT = 200; // code points of the last paragraph handed to the judge; never more.
 
 const configSchema = z.object({
-	/** Target language name the reply is expected to be in, passed verbatim to the judge (e.g. "中文", "English"). */
 	language: z.string().min(1),
-	/** Literal instruction prepended to the next user message on a mismatch (e.g. "说中文", "say English"). */
 	instruction: z.string().min(1),
 });
 
@@ -60,7 +17,6 @@ const settingsSection = defineSettings(import.meta.dir, configSchema);
 
 type LangNagConfig = z.infer<typeof configSchema>;
 
-// An unreadable or invalid value warns and leaves the extension inert.
 async function loadConfig(pi: ExtensionAPI, cwd: string): Promise<LangNagConfig | null> {
 	const result = await readSettings(settingsSection, { kind: "project", cwd });
 	switch (result.kind) {
@@ -76,11 +32,6 @@ async function loadConfig(pi: ExtensionAPI, cwd: string): Promise<LangNagConfig 
 	}
 }
 
-// The text of the run's terminal reply: its last assistant message when that
-// message ended with `stopReason: "stop"`. A run the user interrupted (Esc:
-// `aborted`), one that stopped at a tool call (`toolUse`), an error or a
-// truncated reply has no terminal reply, and earlier mid-run narration never
-// stands in for one.
 function terminalReplyText(messages: readonly AgentMessage[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
@@ -90,8 +41,6 @@ function terminalReplyText(messages: readonly AgentMessage[]): string {
 	return "";
 }
 
-// The judge sees the reply's last blank-line-separated paragraph, capped at
-// DETECT_CHAR_LIMIT code points from its start.
 function lastParagraphSample(body: string): string {
 	const trimmed = body.trim();
 	if (trimmed === "") return "";
@@ -103,8 +52,6 @@ function lastParagraphSample(body: string): string {
 	return [...last].slice(0, DETECT_CHAR_LIMIT).join("");
 }
 
-// Resolves to the instruction to prepend, or null (in-target / undetermined /
-// no judge / aborted). Never rejects, so it is safe to hold as a floating promise.
 async function detectInstruction(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
@@ -131,8 +78,6 @@ async function detectInstruction(
 	}
 }
 
-// One choice question on the sample's language; answer "no" means nag.
-// Never rejects; a failed or unanswered judgment is no nag.
 async function judgeInstruction(
 	pi: ExtensionAPI,
 	judge: Judge,
@@ -169,10 +114,6 @@ async function judgeInstruction(
 	}
 }
 
-// --- extension registration -------------------------------------------------
-
-// Detection for the latest terminal reply: nothing armed, still running (abortable),
-// or settled with the instruction to prepend (null = no nag).
 type Detection =
 	| { readonly kind: "idle" }
 	| { readonly kind: "running"; readonly controller: AbortController }
@@ -184,7 +125,6 @@ export default function langNag(pi: ExtensionAPI): void {
 	let config: LangNagConfig | null = null;
 	let detection: Detection = IDLE;
 
-	// Drops the current detection, aborting it if it is still running.
 	const cancelDetection = (): void => {
 		switch (detection.kind) {
 			case "running":
@@ -216,7 +156,6 @@ export default function langNag(pi: ExtensionAPI): void {
 			pi.logger.warn("lang-nag: session start failed", { error: errorText(error) });
 		}
 	});
-	// Switching sessions re-reads cwd-local config.
 	pi.on("session_switch", async (_event, ctx) => {
 		try {
 			cancelDetection();
@@ -226,7 +165,6 @@ export default function langNag(pi: ExtensionAPI): void {
 			pi.logger.warn("lang-nag: session switch failed", { error: errorText(error) });
 		}
 	});
-	// Boundaries that swap the working context invalidate any in-flight verdict.
 	pi.on("session_branch", (_event, ctx) => {
 		if (ctx.agent.kind === "main") cancelDetection();
 	});
@@ -240,19 +178,13 @@ export default function langNag(pi: ExtensionAPI): void {
 	pi.on("agent_end", (event, ctx) => {
 		try {
 			if (ctx.agent.kind !== "main" || config === null) return;
-			// An auto-scheduled continuation (reminder, retry, compaction) is not a
-			// user-visible reply. A reply that hands control back while waiting on a
-			// background job (`willContinue` with `awaitingAsyncWork`) is, so it is checked.
 			if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
-			// A newer terminal reply supersedes any verdict still pending for an older one.
 			cancelDetection();
 			const sample = lastParagraphSample(terminalReplyText(event.messages));
 			if (sample === "") return;
 			const controller = new AbortController();
 			const running: Detection = { kind: "running", controller };
 			detection = running;
-			// Runs while the user reads/types; only a verdict that settles before the
-			// next input is used.
 			void detectInstruction(pi, ctx, config, sample, controller.signal).then((instruction) => {
 				if (detection === running) detection = { kind: "settled", instruction };
 			});
@@ -263,7 +195,6 @@ export default function langNag(pi: ExtensionAPI): void {
 
 	pi.on("input", (event, ctx) => {
 		if (ctx.agent.kind !== "main") return;
-		// Slash-command invocations are harness UI, not natural language — never nag.
 		// Drop any verdict: this turn is consumed by the command, and a stale
 		// instruction must not leak into the next genuine user message.
 		if (event.text.startsWith("/")) {

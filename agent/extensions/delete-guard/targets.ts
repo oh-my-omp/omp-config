@@ -2,14 +2,8 @@ import { type BigIntStats, lstatSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 
-/** What `lstat` saw: backends act on the entry itself, never on a link's target. */
 type EntryKind = "file" | "directory" | "link";
 
-/**
- * A path that passed validation. `operand` is what a backend acts on: the
- * literal path resolved against the session cwd, so a symbolic link is deleted
- * as the link itself.
- */
 export type Target = { readonly given: string; readonly operand: string; readonly kind: EntryKind };
 
 type Refusal = { readonly given: string; readonly reason: string };
@@ -18,21 +12,12 @@ type Validation =
 	| { readonly kind: "ok"; readonly targets: readonly Target[] }
 	| { readonly kind: "refused"; readonly refusals: readonly Refusal[] };
 
-/**
- * Protected directories by file identity (`dev:ino`), so case variants,
- * firmlinks, bind mounts and symbolic links of one directory all match, and by
- * canonical spelling (real path; case-folded with `\` separators on Windows),
- * which also covers protected directories that no longer exist (a removed cwd)
- * and filesystems that report no inode.
- */
 type Guard = { readonly identities: ReadonlyMap<string, string>; readonly spelled: ReadonlyMap<string, string> };
 
 const WINDOWS = process.platform === "win32";
 
-/** `dev:ino`, or null when the filesystem reports no inode (every file would share one key). */
 const identityOf = (stats: BigIntStats): string | null => (stats.ino === 0n ? null : `${stats.dev}:${stats.ino}`);
 
-/** A path compared as a spelling: Windows paths are case-insensitive and accept either separator. */
 function spellingOf(file: string): string {
 	if (!WINDOWS) return file;
 	const normalized = path.win32.normalize(file).toLowerCase();
@@ -46,12 +31,10 @@ function statOrNull(file: string, follow: boolean): BigIntStats | null {
 	try {
 		return follow ? statSync(file, { bigint: true }) : lstatSync(file, { bigint: true });
 	} catch {
-		// Absent or unreadable: no identity to compare.
 		return null;
 	}
 }
 
-/** Records `dir` with `selfReason` and each parent with `ancestorReason`; the first reason given to a directory wins. */
 function protectChain(
 	identities: Map<string, string>,
 	spelled: Map<string, string>,
@@ -62,9 +45,7 @@ function protectChain(
 	let real: string | null = null;
 	try {
 		real = realpathSync.native(dir);
-	} catch {
-		// A home or cwd that no longer exists is protected by spelling; its existing ancestors still by identity.
-	}
+	} catch {}
 	let current = real ?? path.resolve(dir);
 	let reason = selfReason;
 	for (;;) {
@@ -92,7 +73,6 @@ function realOrSelf(file: string): string {
 	try {
 		return realpathSync.native(file);
 	} catch {
-		// A dangling link has no real path; name it as written.
 		return file;
 	}
 }
@@ -103,7 +83,6 @@ function validateOne(given: string, cwd: string, guard: Guard): Target | Refusal
 	if (WINDOWS && /^[A-Za-z]:$/.test(given))
 		return { given, reason: "a bare drive (`C:`) names that drive's current directory; give the full path" };
 	const operand = path.resolve(cwd, given);
-	// What the kernel reaches with the text as written: `..`, `.` and a trailing `/` are resolved through links.
 	const written = path.isAbsolute(given) ? given : `${cwd}${path.sep}${given}`;
 	if (isRoot(operand)) return { given, reason: "it is a filesystem root" };
 	const entry = statOrNull(written, false);
@@ -148,7 +127,6 @@ function validateOne(given: string, cwd: string, guard: Guard): Target | Refusal
 	return { given, operand, kind };
 }
 
-/** Validates every path before any is touched: one refusal refuses the whole call. */
 export function validateTargets(paths: readonly string[], cwd: string): Validation {
 	const guard = buildGuard(homedir(), cwd);
 	const targets: Target[] = [];

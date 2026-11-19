@@ -6,10 +6,8 @@ import type { StdinSource } from "./posix-parse.ts";
 import { classifyPowershell } from "./powershell.ts";
 import { ALLOW, type Fragment, fragmentText, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
-/** The dialect a shell program interprets its script in. */
 type ShellKind = "posix" | "powershell" | "cmd";
 
-/** A program name as any dialect sees it: basename (either separator), lowercased, without `.exe`/`.com`. */
 export function programName(text: string): string {
 	const base = text.slice(Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\")) + 1).toLowerCase();
 	return base.endsWith(".exe") || base.endsWith(".com") ? base.slice(0, -4) : base;
@@ -36,7 +34,6 @@ const block = (rule: Rule, fragment: Fragment, detail: string): Verdict => ({
 const tooDeep = (fragment: Fragment): Verdict =>
 	block("nonLiteral", fragment, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
 
-/** PowerShell parameters that take a value; matched by unambiguous prefix like PowerShell does. */
 const PS_VALUE_PARAMS = [
 	"executionpolicy",
 	"windowstyle",
@@ -48,10 +45,6 @@ const PS_VALUE_PARAMS = [
 	"custompipename",
 ];
 
-/**
- * `powershell|pwsh <args>`: `-Command`/`-c` (or a first positional argument) takes the rest of the line as a
- * PowerShell script; `-EncodedCommand` hides it (non-literal); `-File` runs a script file (K5); no script reads stdin.
- */
 export function classifyPowershellInvocation(args: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
 	if (depth > MAX_DEPTH) return tooDeep(fragment);
 	for (let i = 0; i < args.length; i++) {
@@ -81,7 +74,6 @@ function scriptVerdict(words: readonly ArgvWord[], depth: number, fragment: Frag
 		: classifyPowershell(script, depth + 1);
 }
 
-/** `cmd <args>`: `/c` or `/k` takes the rest of the line as a cmd command line; without them cmd reads stdin. */
 export function classifyCmdInvocation(args: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
 	if (depth > MAX_DEPTH) return tooDeep(fragment);
 	for (let i = 0; i < args.length; i++) {
@@ -114,11 +106,6 @@ function classifyShellInvocation(kind: ShellKind, name: ArgvWord, args: readonly
 	}
 }
 
-/**
- * Classifies a program that runs a script from its arguments: a nested shell (`sh -c`, `pwsh -Command`, `cmd /c`) or
- * an interpreter (`python3 -c`, `node -e`, …). Returns null when the program is neither, so the caller classifies it
- * as an ordinary command. `stdin` is the program's own stdin source; dialects without stdin tracking pass null.
- */
 export function classifyNestedProgram(
 	name: ArgvWord,
 	args: readonly ArgvWord[],

@@ -1,82 +1,3 @@
-// ============================================================================
-// append-system-model — prompt fragments with inject / not-inject conditions,
-// one file per fragment, delivered as a delta message beside OMP's system
-// prompt, which stays as OMP built it.
-//
-// WHY THIS EXISTS. OMP's APPEND_SYSTEM.md / SYSTEM.md / SYSTEM_TEMPLATE.md and
-// the rulebook cannot be conditioned on the session (main or subagent, cwd,
-// full or light mode), so a rule meant for one case reaches every case. OMP's
-// `systemPromptTemplates` setting (since 18.19.0) selects a template file by
-// model only, and that file replaces the whole base prompt: it is not read
-// while a discovered SYSTEM_TEMPLATE.md applies (this repo installs one), and
-// adopting it means one full template per model, re-compared after every OMP
-// upgrade. Fragments here add text per session and per model on top of the
-// base prompt instead. A new conditional rule here is a new file, not new code.
-//
-// FILES. `APPEND-SYSTEM-<label>.md`, discovered by `_shared/spec-files.ts`:
-//   - beside this module: fragments the repo ships and machine-local ones;
-//   - <dir>/APPEND-SYSTEM-*.md and <dir>/.omp/APPEND-SYSTEM-*.md, walking from
-//     the session cwd up to the git root.
-// Every file that applies is appended; there is no override by name.
-// Frontmatter (between `---` fences), one `key: value` per line; whole-line
-// `#` comments are skipped, and text after a value, `#` included, is part of
-// the value. The body, everything after the closing fence, is the prompt text
-// and may contain `---` lines. Every key is optional:
-//   enabled:          false
-//   target:           main
-//   cwd:              ~/code/app{,/**}
-//   model:            ^gpt-
-//   provider:         ^openai
-//   mode:             full
-//   delegation:       eager
-//   exclude.target:   task:mid
-//   exclude.cwd:      ~/scratch/**
-//   exclude.model:    ^claude-opus-5-5$
-//   exclude.provider: ^anthropic$
-//   exclude.mode:     light
-//   exclude.delegation: restrained, gated
-// `enabled` keeps the file on only for true/yes/on/1; `target` defaults to
-// main; `cwd` lists absolute or ~/ globs; `model` / `provider` are regexes on
-// the model and provider ids; `mode` lists full and/or light; `delegation`
-// lists delegation biases (eager, balanced, restrained, gated) tested against
-// `resolveDelegationBias` of the current model, the value OMP renders the
-// delegation wording of tool descriptions from; the system prompt's
-// `delegationTier` differs when `task.eager` is on: `eager` in the main session
-// with `task.eager` other than `default` and a bias other than `gated`, the
-// bias otherwise; each `exclude.*` key has the grammar of its inclusion key. Any other
-// key makes the file invalid.
-//
-// MATCHING. `_shared/prompt-conditions.ts` (shared with system-prompt-replace):
-// items inside a key are alternatives, keys AND; `mode` lists `full` and/or
-// `light` (`omp-light` sets `OMOMP_MODE=light`). A fragment is injected when
-// its inclusion keys match the session and its `exclude.*` keys, if it sets
-// any, do not all match. Without `exclude.target` the exclusion covers every
-// session. With no current model a model, provider or delegation constraint
-// never matches, on either side. Without `target` a fragment targets `main`.
-//
-// TIMING. Fragments are re-read and matched at every prompt (`before_agent_start`)
-// and after every tool call (`tool_result`), in the main session and in every
-// subagent, each matched against its own identity, cwd and model. Edits and
-// `/model` switches apply from the next of those points; until then requests
-// keep the delta already in the conversation. A revive's `before_agent_start`
-// is skipped, because OMP discards its result.
-//
-// OUTPUT. The bodies of every applying fragment, in discovery order, joined
-// into one delta of `_shared/omomp-shared/context-delta.ts` with source
-// `omp-config/append-system-model`: a hidden `<system-reminder>` message
-// appended to the conversation (after the prompt, or after the tool batch). It
-// is sent only when it differs from the source's effective delta in the current
-// context; a changed set supersedes the earlier delta, and when nothing applies
-// any longer a delta saying so supersedes it.
-//
-// FAILURE POLICY. An invalid or unreadable file is skipped on its own and
-// warned once per path and reason (UI notification, or stderr when headless,
-// plus a log line); the other files still apply. The prompt and tool results
-// are never blocked. It registers `before_agent_start`, `tool_result` and
-// `turn_start` (which clears the delta stream's same-turn batch), and writes
-// no files.
-// ============================================================================
-
 import { readFileSync } from "node:fs";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
@@ -98,7 +19,6 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set(["enabled", ...CONDITION_KEYS]
 
 interface Fragment {
 	readonly conditions: SessionConditions;
-	/** Raw frontmatter body; trimmed by the caller, only when the fragment matches the session. */
 	readonly body: string;
 }
 
@@ -107,7 +27,6 @@ type FragmentParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-/** `path\0reason` of invalid files already reported, so a broken file warns once per process. */
 const warnedFiles = new Set<string>();
 
 function describeProblem(problem: ConditionProblem): string {
@@ -145,10 +64,6 @@ function parseFragment(path: string): FragmentParse {
 		const detail = errorText(error);
 		return { kind: "invalid", reason: tr(`unreadable: ${detail}`, `无法读取：${detail}`) };
 	}
-	// Every call re-reads the file, so edits apply at the next prompt or tool
-	// result; nothing is kept between calls. The BOM check avoids copying the
-	// whole text when no BOM is present. The body is returned untrimmed; the
-	// trim lives in fragmentDelta and runs only for a fragment the session matches.
 	const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
 	const parsed = parseFrontmatter(stripped);
 	if (!parsed) return { kind: "invalid", reason: tr("missing frontmatter", "缺少 frontmatter") };
@@ -156,7 +71,6 @@ function parseFragment(path: string): FragmentParse {
 	const unknown = Object.keys(fields).find((key) => !ALLOWED_KEYS.has(key));
 	if (unknown !== undefined) return { kind: "invalid", reason: tr(`unknown key ${unknown}`, `未知键 ${unknown}`) };
 	if (fields.enabled !== undefined && !/^(true|yes|on|1)$/i.test(unquote(fields.enabled))) return { kind: "disabled" };
-	// `body.trim() === ""` without materializing the trimmed copy.
 	if (!/\S/.test(body)) return { kind: "invalid", reason: tr("empty body", "正文为空") };
 	const conditions = parseSessionConditions(fields, { kind: "default", targets: [{ kind: "main" }] }, "frontmatter");
 	if (conditions.kind === "invalid") return { kind: "invalid", reason: describeProblem(conditions.problem) };
@@ -173,7 +87,6 @@ function warn(pi: ExtensionAPI, ctx: ExtensionContext, path: string, reason: str
 	else process.stderr.write(`${notice}\n`);
 }
 
-/** The bodies of every fragment that applies to this session, in discovery order, as one delta. */
 function fragmentDelta(pi: ExtensionAPI, ctx: ExtensionContext): Delta {
 	const bodies: string[] = [];
 	const delegation = ctx.model === undefined ? undefined : resolveDelegationBias(ctx.model);
@@ -203,7 +116,6 @@ export default function appendSystemModel(pi: ExtensionAPI): void {
 		deltas.turnStarted();
 	});
 	pi.on("before_agent_start", (event, ctx) => {
-		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;
 		try {
 			return deltas.atPrompt(ctx, fragmentDelta(pi, ctx));

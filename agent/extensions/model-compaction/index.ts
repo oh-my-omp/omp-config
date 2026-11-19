@@ -1,78 +1,3 @@
-// ============================================================================
-// model-compaction — auto-compaction trigger per model, chosen by regex.
-//
-// WHY THIS EXISTS. OMP's native `compaction.modelThresholds` keys are exact
-// `provider/model-id` selectors or `*`-terminated prefixes, so one family of
-// models spread over several providers or id spellings needs one entry each.
-// This extension lets ordered regex rules choose a fixed compaction trigger and
-// hands the result to the native map; OMP itself still decides and compacts.
-//
-// FILE. One rule per `COMPACTION-<label>.md` file: `---`-fenced frontmatter,
-// nothing else. Files come from the extension's own directory (machine rules)
-// plus every directory between cwd and its git root and each one's `.omp`
-// (project rules); re-discovered and re-read every main prompt. The rules are
-// layered like scalar settings: every project rule comes first, every machine
-// rule after it as the fallback, whatever the file names; inside each layer,
-// discovery order (filename order per directory); for each model the first
-// matching valid rule wins. Example:
-//
-//   ---
-//   provider: ^anthropic$
-//   model: opus
-//   thresholdTokens: 150000
-//   ---
-//
-// Rule keys (`model` and/or `provider` required; `thresholdTokens` required):
-//   provider        JavaScript regex tested against the model's provider id (`anthropic`).
-//   model           JavaScript regex tested against the model id (`claude-opus-5-5`).
-//   thresholdTokens Positive integer: the context size, in tokens, at which
-//                   auto-compaction triggers for a matched model.
-// Patterns are unanchored (`RegExp.test`, no flags); write `^`/`$` to anchor and
-// `.*` to match every model. A rule matches when every pattern it sets matches.
-// Values may be wrapped in one pair of quotes. Unknown keys and a non-empty
-// body are errors, so a misspelled key cannot widen a rule.
-//
-// EFFECT. Every model in `ctx.models.list()` that a rule matches gets the exact
-// native entry `"provider/id": "f<thresholdTokens>"` (the native fixed-trigger
-// form) in the main session's runtime settings layer — never written to any
-// config file. Native resolution then applies it per model at every compaction
-// decision, so model switches, retry fallbacks and subagents (whose settings
-// read through the main session's live) each get their own model's trigger.
-// Models no rule matches get no entry and keep the native policy, including
-// the user's own `compaction.modelThresholds` entries; an exact entry generated
-// here outranks a native entry for the same model. A subagent whose
-// `task.agentCompactionThresholdOverrides` entry applies runs with model entries
-// off natively, so that override still wins. Native capping still applies: a
-// trigger at or past a model's window compacts at the window minus its reserve.
-//
-// CONTEXT WINDOW. A native fixed entry at or past a model's standard window opts
-// that model into its extended window. A rule that would change the window
-// tier a model currently runs with is refused for that model with a warning;
-// this extension never changes a context window.
-//
-// TIMING. Main session `session_start`, `session_switch` and
-// `before_agent_start`: the files are re-discovered and re-read against the
-// session's current cwd when the session is built, resumed or switched and on
-// every user prompt, so edits and worktree moves apply from the next of these
-// (subagents follow the main session's latest write). The runtime layer lives
-// only in the process, so a resumed session gets its entries back from
-// `session_start` even when only agent-started turns (notices, continuations,
-// IRC wakes) follow it: those skip `before_agent_start`. Subagent sessions
-// write nothing.
-//
-// OWNERSHIP. The extension writes the runtime layer of
-// `compaction.modelThresholds` only. Before its first write it keeps the
-// runtime record already there; it writes that record plus its own entries and
-// restores it when no entry remains (no valid copy, no match) and on
-// `session_shutdown`. When it finds the runtime record changed by another
-// writer, it warns once and stops managing it for the session.
-//
-// FAILURE POLICY. No file anywhere means no rules, silently. An unreadable or
-// invalid file is skipped with a warning and the other files still apply.
-// Warnings repeat only when they change or a clean read intervened. Warnings go to the log and, with a
-// UI, a notification. The prompt is never blocked.
-// ============================================================================
-
 import { readFileSync } from "node:fs";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Settings } from "@oh-my-pi/pi-coding-agent";
@@ -95,23 +20,19 @@ interface Rule {
 	readonly thresholdTokens: number;
 }
 
-/** Every valid rule in precedence order (project files first), plus why other files were skipped. */
 interface LoadedRules {
 	readonly rules: readonly Rule[];
 	readonly problems: readonly string[];
 }
 
-/** Native `compaction.modelThresholds` entry values: token base, `"f<N>"`/`"<P>%"` string, or `null` (clears an inherited entry). */
 type ThresholdEntry = number | string | null;
 type ThresholdRecord = Readonly<Record<string, ThresholdEntry>>;
 
-/** The session's own runtime-layer record of `compaction.modelThresholds`. */
 type RuntimeRecord =
 	| { readonly kind: "absent" }
 	| { readonly kind: "present"; readonly value: ThresholdRecord }
 	| { readonly kind: "unreadable" };
 
-/** What this extension holds in the main session's runtime layer. */
 type Ownership =
 	| { readonly kind: "idle" }
 	| { readonly kind: "owned"; readonly baseline: Exclude<RuntimeRecord, { kind: "unreadable" }>; readonly written: ThresholdRecord }
@@ -127,7 +48,6 @@ function compiles(pattern: string): boolean {
 		new RegExp(pattern);
 		return true;
 	} catch {
-		// An invalid pattern is the expected failure being tested for.
 		return false;
 	}
 }
@@ -137,7 +57,6 @@ const KNOWN_KEYS: Readonly<Record<string, true>> = { provider: true, model: true
 
 type RuleParse = { readonly kind: "ok"; readonly rule: Rule } | { readonly kind: "invalid"; readonly reason: string };
 
-/** One file's frontmatter as a rule; anything that would silently widen or drop a rule is `invalid`. */
 function parseRuleFile(path: string): RuleParse {
 	let raw: string;
 	try {
@@ -169,11 +88,6 @@ function parseRuleFile(path: string): RuleParse {
 	return { kind: "ok", rule: { constraints: [first, ...rest], thresholdTokens } };
 }
 
-/**
- * Rules from every `COMPACTION-*.md` in scope, project rules (cwd up to the
- * git root, each with its `.omp`) before every machine rule of the extension's
- * own directory. An invalid file is skipped with a problem; the others apply.
- */
 function loadRules(cwd: string): LoadedRules {
 	const files = layerRuleFiles(discoverSpecFiles(FILE_PATTERN, import.meta.dir, cwd), import.meta.dir);
 	const rules: Rule[] = [];
@@ -196,13 +110,8 @@ function loadRules(cwd: string): LoadedRules {
 	return { rules, problems };
 }
 
-/**
- * Why `thresholdTokens` as a native fixed entry would move `model` to another
- * window tier, or null when it keeps the tier the model runs with now.
- */
 function tierChange(ctx: ExtensionContext, settings: Settings, model: Model, thresholdTokens: number): string | null {
 	const tiers = ctx.modelRegistry.contextWindowTiers(model);
-	// No larger tier, or a window pinned by an explicit override: no entry can move it.
 	if (tiers === undefined || (model.contextWindow !== tiers.standard && model.contextWindow !== tiers.extended)) return null;
 	const extendedNow = model.contextWindow === tiers.extended;
 	const extendedWith = cfgExtendedContext.get(settings) || thresholdTokens >= tiers.standard;
@@ -270,7 +179,6 @@ function sessionSettings(ctx: ExtensionContext): Settings {
 
 export default function modelCompaction(pi: ExtensionAPI): void {
 	let ownership: Ownership = { kind: "idle" };
-	/** Last warning set already reported, so an unchanged problem warns once. */
 	let warned: string | null = null;
 
 	const report = (ctx: ExtensionContext, problems: readonly string[]): void => {
@@ -282,7 +190,6 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 		if (ctx.hasUI) ctx.ui.notify(tr(text, `模型压缩：${problems.join("；")}`), "warning");
 	};
 
-	/** Still ours: the runtime record is exactly what this extension last wrote. */
 	const stillOwned = (ctx: ExtensionContext, settings: Settings, written: ThresholdRecord): boolean => {
 		const current = ownRuntimeRecord(settings);
 		if (current.kind === "present" && Bun.deepEquals(current.value, written, true)) return true;

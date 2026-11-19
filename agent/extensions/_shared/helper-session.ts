@@ -4,37 +4,26 @@ import { lastAssistantText } from "./messages.ts";
 import type { Model, ThinkingLevel } from "./models.ts";
 
 interface HelperPrompt {
-	/** Session id shown in logs; also the helper's agent name. */
 	readonly agentId: string;
 	readonly model: Model;
-	/** Undefined keeps the session default. */
 	readonly thinkingLevel: ThinkingLevel | undefined;
 	readonly prompt: string;
-	/** Defaults to `ctx.cwd`. */
 	readonly cwd?: string;
-	/** Tools the helper may call; none by default. */
 	readonly toolNames?: readonly string[];
-	/** `none` sends no system prompt, for self-contained prompts that must not wear the coding-agent persona. */
 	readonly systemPrompt: "default" | "none";
-	/** Aborting cancels the request and resolves `canceled` at once. */
 	readonly signal?: AbortSignal;
-	/** Called with the accumulated reply text after every streamed delta. Must not throw; throttle in the caller. */
+	/** Must not throw; throttle in the caller. */
 	readonly onText?: (partial: string) => void;
 }
 
 type HelperResult =
-	/** Trimmed reply text, possibly empty. */
 	| { readonly kind: "text"; readonly text: string }
 	| { readonly kind: "canceled" }
-	/** The provider answered with `stopReason: "error"` (403, rate limit, …); `message` is its `errorMessage`, possibly empty — the caller words the fallback. */
 	| { readonly kind: "provider-error"; readonly message: string }
-	/** Session creation or the prompt itself threw. */
 	| { readonly kind: "failed"; readonly message: string };
 
-/** What a finished helper run leaves behind: the last assistant turn's failure, and the last assistant text. */
 type FinalAnswer = { readonly stopReason: unknown; readonly errorMessage: string; readonly text: string };
 
-/** The judged parts of a finished run; the message list itself is not retained. */
 function finalAnswer(messages: unknown): FinalAnswer {
 	let stopReason: unknown;
 	let errorMessage = "";
@@ -51,8 +40,7 @@ function finalAnswer(messages: unknown): FinalAnswer {
 }
 
 /**
- * Run one prompt in a fresh, restricted, in-memory helper session and dispose
- * it. Never throws. The session is classified as a subagent (`taskDepth: 1`):
+ * The session is classified as a subagent (`taskDepth: 1`):
  * disposing a main-kind session tears down the global AgentLifecycleManager and
  * strands every live subagent.
  */
@@ -81,7 +69,6 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 	}
 
 	let partial = "";
-	/** Set by the session's `agent_end`, emitted once when the run can no longer resume; held as a property so the subscription's assignment is seen after it. */
 	const final: { answer: FinalAnswer | null } = { answer: null };
 	const unsubscribe = session.subscribe((event) => {
 		if (event.type === "message_update") {
@@ -116,7 +103,6 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 	}
 	if (signal?.aborted) return { kind: "canceled" };
 
-	// A provider failure does not reject prompt(); it lands as an assistant turn with stopReason "error".
 	const answer = final.answer;
 	if (answer !== null && answer.stopReason === "error") return { kind: "provider-error", message: answer.errorMessage };
 	return { kind: "text", text: partial.trim() || (answer === null ? "" : answer.text.trim()) };

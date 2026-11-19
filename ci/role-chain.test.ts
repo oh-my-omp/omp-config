@@ -6,9 +6,6 @@ type Outcome = "hang" | "error" | "aborted-reply" | "length" | "toolUse" | "answ
 const outcomes = new Map<string, Outcome>();
 const seen: { id: string; signal: AbortSignal | undefined }[] = [];
 
-// Provider stand-in: `hang` waits for the attempt signal and then replies `aborted`
-// (the shape a real provider returns when its signal fires), `error` replies with a
-// stop error, `aborted-reply` replies `aborted` at once, `answer` replies text.
 mock.module("@oh-my-pi/pi-ai", () => ({
 	completeSimple: async (model: { id: string }, _context: unknown, options: { signal?: AbortSignal }) => {
 		seen.push({ id: model.id, signal: options.signal });
@@ -108,7 +105,6 @@ describe("completeRoleChain split budget", () => {
 		);
 		const elapsed = Date.now() - started;
 		expect(reply).toMatchObject({ kind: "text", text: "answer from b", failures: ["p/a: attempt timeout"] });
-		// a gets 300/3 = 100 ms; the whole pass stays near the 300 ms budget.
 		expect(elapsed).toBeGreaterThanOrEqual(90);
 		expect(elapsed).toBeLessThan(1000);
 	});

@@ -1,12 +1,3 @@
-// One-time move of a project's omp-config omomp sections (`<project>/.omp/omomp.*`,
-// which OMP once read before the machine's) into that project: scalars into
-// `.omp/plugin-overrides.json` under `settings["omp-config"]`, which OMP lays
-// over the machine's plugin settings for this project, and model-compaction
-// rules into `.omp/COMPACTION-rule-NN.md`, which rule before the machine's.
-// Run by the omp-config-autoupdate extension when a main session starts in the
-// project; nothing else reads the project's omomp file. Only omp-config's own
-// sections leave the file; data with no project-level place, or that would
-// change what the project gets, stays with a reason.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { isMapping, type Mapping } from "./merge.ts";
@@ -16,29 +7,20 @@ export type Kept = { readonly section: string; readonly reason: string };
 
 type RuleFile = { readonly target: string; readonly content: string };
 
-/** What a project holds to move, decided from disk before anything is written. */
 export type ProjectWork =
 	| { readonly kind: "none" }
 	| { readonly kind: "blocked"; readonly reason: string }
-	/** Sections are there but none can leave now: nothing would be written. */
 	| { readonly kind: "stuck"; readonly path: string; readonly kept: readonly Kept[] }
 	| {
 			readonly kind: "ready";
-			/** The project's omomp file. */
 			readonly path: string;
-			/** Sections that leave it. */
 			readonly sections: readonly string[];
-			/** The overrides file holding every value of the leaving sections; undefined when it already holds them all. */
 			readonly overrides: { readonly path: string; readonly content: string } | undefined;
-			/** Every value of the leaving sections, read back after the overrides file is written. */
 			readonly values: ReadonlyMap<string, Scalar>;
-			/** Rule files that do not exist yet. */
 			readonly ruleFiles: readonly RuleFile[];
-			/** The omomp file without the leaving sections; `delete` when nothing else is in it. */
 			readonly omomp: { readonly kind: "rewrite"; readonly text: string } | { readonly kind: "delete" };
 			readonly kept: readonly Kept[];
 			readonly notes: readonly string[];
-			/** Every file the move writes or deletes, absolute. */
 			readonly files: readonly string[];
 	  };
 
@@ -53,7 +35,6 @@ type Overrides =
 	| { readonly kind: "ok"; readonly root: Mapping; readonly own: Mapping }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-/** The project's overrides file and its omp-config settings, both `{}` when the file is absent. */
 function readOverrides(path: string): Overrides {
 	if (!existsSync(path)) return { kind: "ok", root: {}, own: {} };
 	let root: unknown;
@@ -71,14 +52,6 @@ function readOverrides(path: string): Overrides {
 	return { kind: "ok", root, own };
 }
 
-/**
- * Plan the move of `projectDir`'s omomp sections. A section stays when its
- * rule file already exists with other content, when the overrides file cannot
- * be read and the section has values for it, or when the overrides file sets
- * one of its keys to another value: moving it then would change what the
- * project gets. A key the overrides file already sets to the same value needs
- * no write.
- */
 export function planProject(projectDir: string, manifest: Manifest): ProjectWork {
 	const plan = planProjectMigration(projectDir, manifest);
 	if (plan.kind !== "ready") return plan;
@@ -156,11 +129,6 @@ function writeAtomic(path: string, content: string): void {
 	}
 }
 
-/**
- * Carry out `work`: the overrides file, read back with every value of the
- * leaving sections; then the rule files; then the sections leave the omomp
- * file, which is deleted once nothing else is in it.
- */
 export function migrateProject(work: Extract<ProjectWork, { kind: "ready" }>): ProjectResult {
 	const written: string[] = [];
 	const deleted: string[] = [];

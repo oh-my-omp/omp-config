@@ -2,7 +2,6 @@ import { isOp, type PyLaunch, type PyScan, pyLaunchAt, scanPy } from "../_shared
 import { classify } from "./classify.ts";
 import { ALLOW, type Dialect, type Rule, type Verdict } from "./verdict.ts";
 
-/** API names only filesystem deletion uses: blocked wherever code names them, so aliases from earlier cells are caught too. */
 const DISTINCTIVE_DELETE: ReadonlySet<string> = new Set(["rmtree", "removedirs", "unlink", "rmdir"]);
 
 type Context = {
@@ -15,14 +14,12 @@ type Context = {
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
-/** The source line holding offset `at`, for the reason. */
 function lineAt(code: string, at: number): string {
 	const start = code.lastIndexOf("\n", at - 1) + 1;
 	const end = code.indexOf("\n", at);
 	return code.slice(start, end === -1 ? code.length : end).trim();
 }
 
-/** Every launch is judged whatever its binding; a command that is not literal blocks. */
 function judgeLaunch(ctx: Context, launch: PyLaunch, at: number): Verdict {
 	const nonLiteral = (what: string): Verdict => block("nonLiteral", lineAt(ctx.code, at), `${what} is not a literal string`);
 	switch (launch.kind) {
@@ -35,7 +32,6 @@ function judgeLaunch(ctx: Context, launch: PyLaunch, at: number): Verdict {
 				? nonLiteral("the command handed to a shell")
 				: classify(ctx.shell, { kind: "script", text: launch.text }, ctx.depth + 1);
 		case "shellHelper":
-			// The eval prelude's `sh` runs on the embedded bash engine, whatever the platform.
 			return launch.text === null
 				? nonLiteral("the command handed to `sh`")
 				: classify(ctx.brush, { kind: "script", text: launch.text }, ctx.depth + 1);
@@ -65,7 +61,6 @@ function judgeTokens(ctx: Context): Verdict {
 		const assignedTo = isOp(next, "=");
 		if (DISTINCTIVE_DELETE.has(token.value) && !declares && !assignedTo)
 			return block("delete", lineAt(ctx.code, token.start), `\`${token.value}\` deletes files`);
-		// `os.remove` under any local name (`from os import remove as erase`), or `.remove` on `os` or an alias of it.
 		if (!declares && !isOp(previous, ".") && bindings.members.get(token.value) === "os.remove")
 			return block("delete", lineAt(ctx.code, token.start), `\`${token.value}\` is \`os.remove\`, which deletes files`);
 		if (token.value === "remove" && !declares && isOp(previous, ".")) {
@@ -82,16 +77,6 @@ function judgeTokens(ctx: Context): Verdict {
 	return ALLOW;
 }
 
-/**
- * Classifies a py eval cell: filesystem deletion APIs block, and every command
- * handed to a shell or launched is classified — `subprocess`/`os`/`asyncio`
- * launches, `!cmd`, `%sx`/`%system` and `%%bash` (rewritten by the kernel into
- * shell calls), the `sh` helper's command (on the embedded bash engine), the
- * `tool.bash` and `tool.write` to `xd://bash` bridges, and the
- * literal code of builtin `exec`/`eval`. `%time`/`%timeit` arguments, `%%capture`/`%%timeit`
- * bodies and f-string placeholders are classified as Python. Text that cannot
- * be tokenized (unterminated string or bracket) is blocked: it cannot run.
- */
 export function classifyPy(code: string, shell: Dialect, brush: Dialect, depth = 0): Verdict {
 	const scanned = scanPy(code);
 	if (scanned.kind === "unlexable") return block("nonLiteral", code, `the cell cannot be tokenized (${scanned.reason})`);

@@ -11,16 +11,12 @@ import {
 } from "./posix-parse.ts";
 import { ALLOW, type Fragment, fragmentText, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
 
-/** The posix deletion commands; names are compared lowercased (case-insensitive filesystems run `RM`). */
 const DELETE_COMMANDS: ReadonlySet<string> = new Set(["rm", "unlink", "rmdir", "shred"]);
 
 const SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 
-/** `omp <name>` subcommands that run the built-in pi-shell engine as that shell (`omp bash -c '…'`). */
 const OMP_SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh"]);
 
-/** Paths that make `source`/`.` read its script from standard input. */
-/** Words that open or close compound commands; the command follows them. A Set: a `then` key reads as a thenable to Biome. */
 const RESERVED: ReadonlySet<string> = new Set([
 	"!",
 	"{",
@@ -43,23 +39,13 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 /** Name tables are Sets and Maps: a plain object would also match `constructor` or `toString`. */
 type Flags = ReadonlySet<string>;
 
-/**
- * How a prefix command takes its options before the command it runs.
- * `values`: options consuming the next word unless attached (`-uroot`, `--user=root`).
- * `queries`: options after which nothing is executed. `nonLiteral`: options whose
- * value becomes the command line through the prefix's own splitting (`env -S`).
- * An option in none of the lists is read both ways (with and without a value).
- */
 type PrefixSpec = {
 	readonly values: Flags;
 	readonly flags: Flags;
 	readonly queries: Flags;
 	readonly nonLiteral: Flags;
-	/** Words between the options and the command (`timeout DURATION`). */
 	readonly positional: number;
-	/** `NAME=value` words and a bare `-` are options (`env`). */
 	readonly assignments: boolean;
-	/** `-10` is an option (`nice`). */
 	readonly numeric: boolean;
 };
 
@@ -212,13 +198,11 @@ const PREFIXES: ReadonlyMap<string, PrefixSpec> = new Map(
 
 const FIND_EXEC: ReadonlySet<string> = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
-/** Unknown prefix options read both ways at most this many times per command. */
 const AMBIGUITY_BUDGET = 4;
 
 type Context = {
 	readonly depth: number;
 	readonly stdin: StdinSource | null;
-	/** The simple command's own text, quoted in the reason; a source range resolves only when a block is built. */
 	readonly fragment: Fragment;
 };
 
@@ -234,7 +218,6 @@ function classifyNested(text: string, depth: number, fragment: Fragment): Verdic
 	return classifyPosix(text, depth);
 }
 
-/** `trap`, `alias` and `eval` take script text: literal text is classified as a script, anything else is non-literal. */
 function classifyScriptWord(ctx: Context, word: Word, what: string): Verdict {
 	if (!word.literal) return block("nonLiteral", ctx.fragment, `the ${what} \`${word.raw}\` is not a literal script`);
 	return classifyNested(word.text, ctx.depth + 1, ctx.fragment);
@@ -316,13 +299,10 @@ function resolveFind(ctx: Context, words: readonly Word[], start: number): Verdi
 
 type ShellState = { readonly commandMode: boolean; readonly stdinMode: boolean; readonly noExec: boolean };
 
-/** Long shell options that print and exit without running any script. */
 const SHELL_QUERIES: ReadonlySet<string> = new Set(["--version", "--help"]);
 
-/** Long shell options that take the next word as their value (bash `--rcfile`/`--init-file`, zsh `--emulate`). */
 const SHELL_VALUE_OPTIONS: ReadonlySet<string> = new Set(["--rcfile", "--init-file", "--emulate"]);
 
-/** Long shell options known to take no value. */
 const SHELL_FLAGS: ReadonlySet<string> = new Set([
 	"--login",
 	"--noprofile",
@@ -337,16 +317,10 @@ const SHELL_FLAGS: ReadonlySet<string> = new Set([
 	"--pretty-print",
 ]);
 
-/** `sh|bash|zsh|dash|ksh`: `-c` scripts and quoted here-documents on stdin are classified; script files are K5's. */
 function resolveShell(ctx: Context, words: readonly Word[], start: number): Verdict {
 	return resolveShellFrom(ctx, words, start, { commandMode: false, stdinMode: false, noExec: false }, AMBIGUITY_BUDGET);
 }
 
-/**
- * Reads shell options from `start`. Any argument from an expansion may be an option (`"$FLAGS"` = `-c`), so it is
- * non-literal. `+n` undoes `-n`. An unknown long option (zsh takes any option name as `--name`) is read both
- * without and with a value; either reading that reaches a deletion blocks.
- */
 function resolveShellFrom(ctx: Context, words: readonly Word[], start: number, initial: ShellState, budget: number): Verdict {
 	let j = start;
 	let { commandMode, stdinMode, noExec } = initial;
@@ -430,10 +404,6 @@ function resolveAlias(ctx: Context, words: readonly Word[], start: number): Verd
 	return ALLOW;
 }
 
-/**
- * `omp` runs a shell when its first non-option argument is `sh|bash|zsh`; the rest is that shell's command line. An
- * argument from an expansion before it may be that subcommand, so it is non-literal.
- */
 function resolveOmp(ctx: Context, words: readonly Word[], start: number): Verdict {
 	for (let j = start; j < words.length; j++) {
 		const word = words[j];
@@ -446,10 +416,6 @@ function resolveOmp(ctx: Context, words: readonly Word[], start: number): Verdic
 	return ALLOW;
 }
 
-/**
- * `source`/`.` runs the text of its first operand. A literal file passes like `bash x.sh`; text that only exists at
- * run time — a process substitution (`source <(…)`) or standard input — is non-literal.
- */
 function resolveSource(ctx: Context, words: readonly Word[], start: number): Verdict {
 	let j = start;
 	for (;;) {
@@ -460,7 +426,6 @@ function resolveSource(ctx: Context, words: readonly Word[], start: number): Ver
 			break;
 		}
 		if (!word.literal || !word.text.startsWith("-") || word.text === "-") break;
-		// Bash 5.3 `source -p PATH file`: the option's value is a search path, not the script.
 		j += word.text === "-p" ? 2 : 1;
 	}
 	const script = words[j];
@@ -472,7 +437,6 @@ function resolveSource(ctx: Context, words: readonly Word[], start: number): Ver
 	return ALLOW;
 }
 
-/** `hash -p PATH NAME` makes `NAME` run `PATH`: a deletion program there is a deletion command under another name. */
 function resolveHash(ctx: Context, words: readonly Word[], start: number): Verdict {
 	for (let j = start; j < words.length; j++) {
 		const word = words[j];
@@ -502,7 +466,6 @@ function resolveEval(ctx: Context, words: readonly Word[], start: number): Verdi
 	return classifyNested(args.map((word) => word.text).join(" "), ctx.depth + 1, ctx.fragment);
 }
 
-/** Classifies the command `words[start]` runs, following prefix commands, `find`, nested shells and script-taking builtins. */
 function resolveCommand(ctx: Context, words: readonly Word[], start: number): Verdict {
 	const word = words[start];
 	if (word === undefined) return ALLOW;
@@ -535,7 +498,6 @@ function resolveCommand(ctx: Context, words: readonly Word[], start: number): Ve
 	}
 }
 
-/** Skips assignments, reserved words and `function NAME`; `for`/`select` headers run no command. */
 function classifyCommand(command: SimpleCommand, depth: number): Verdict {
 	const { words } = command;
 	let i = 0;
@@ -547,7 +509,6 @@ function classifyCommand(command: SimpleCommand, depth: number): Verdict {
 			continue;
 		}
 		if (!word.literal) break;
-		// `coproc NAME { … }`: the name is not a command; the compound body after it is.
 		if (word.text === "coproc" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(words[i + 1]?.text ?? "") && words[i + 2]?.text === "{") {
 			i += 3;
 			continue;
@@ -578,14 +539,12 @@ function walkScript(script: Script, depth: number): Verdict {
 	return ALLOW;
 }
 
-/** Classifies an argv list run without a shell (`subprocess.run([...])`, `Bun.spawn([...])`): argv[0] is the command. */
 export function classifyPosixArgv(words: readonly { readonly text: string; readonly literal: boolean }[], depth: number): Verdict {
 	const fragment = words.map((word) => (word.literal ? word.text : "<expr>")).join(" ");
 	const argv: Word[] = words.map((word) => ({ text: word.text, raw: word.literal ? word.text : "<expr>", literal: word.literal }));
 	return resolveCommand({ depth, stdin: null, fragment }, argv, 0);
 }
 
-/** Classifies posix shell text: every command it runs, including substitutions and literal nested scripts. */
 export function classifyPosix(text: string, depth: number): Verdict {
 	const parsed = parsePosix(text);
 	switch (parsed.kind) {

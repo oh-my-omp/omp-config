@@ -3,7 +3,6 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { errorText } from "../_shared/errors.ts";
 
-/** Shadow a member only for one operation, restoring the original own-property descriptor. */
 function shadow<T extends object, K extends keyof T>(target: T, key: K, value: T[K]): () => void {
 	const own = Object.getOwnPropertyDescriptor(target, key);
 	Object.defineProperty(target, key, { value, configurable: true, writable: true, enumerable: false });
@@ -24,7 +23,6 @@ function presentedText(content: unknown): string[] {
 	});
 }
 
-/** Run the human's built-in dispatcher and retain the text it shows, without changing the editor draft or history. */
 export async function runSlashCommand(mode: InteractiveModeContext, text: string): Promise<string[]> {
 	const shown: string[] = [];
 	const record = (prefix: string, message: string): void => {

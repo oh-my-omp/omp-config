@@ -1,70 +1,6 @@
-// ============================================================================
-// user-prompt-inject — show chosen subagents what the human actually asked.
-//
-// WHY THIS EXISTS. A mentor or discussant only knows what its advisee tells
-// it, so it can only echo the advisee's framing back. This extension renders a
-// `PROMPT-INJECT-*.md` template with the root main session's user prompts and
-// hands it to the targeted subagents on every model call. OMP has no native
-// way to do this: `before_subagent_spawn` can only reroute the model or block,
-// and `before_agent_start` does not fire when an idle or parked subagent is
-// woken by an IRC message (`write agent://<id>`).
-//
-// FILE FORMAT. `PROMPT-INJECT-<label>.md`, discovered like `WATCHDOG-*.md`:
-//   - user level:  <extension dir>/PROMPT-INJECT-*.md (beside this index.ts)
-//   - repo level:  <dir>/PROMPT-INJECT-*.md and <dir>/.omp/PROMPT-INJECT-*.md,
-//                  walking from cwd up to the git root.
-// Frontmatter (between `---` fences), one `key: value` per line. Only whole-line
-// `#` comments are skipped; text after a value is part of the value.
-//   target:  mentor:default, discuss:steady
-//   name:    user-goal
-//   enabled: true
-// `target` is required (agent names, or `*` for every subagent). `name`
-// defaults to the file label. `enabled` defaults to true; when present, only
-// true/yes/on/1 (case-insensitive, quotes allowed) keep the file enabled.
-// Body = template. `user_prompt` is the root session's user prompts in
-// chronological order (0 = first):
-//   {{user_prompt[0]}}    first prompt;   {{user_prompt[-1]}} latest;
-//   {{user_prompt[-3]}}   third from the latest;
-//   {{user_prompt[3:e]}}  slice, end-exclusive, `e` = end; bounds may be negative.
-// A scalar out of range renders empty; slice bounds clamp. A slice renders each
-// element as `<user_prompt index="N">…</user_prompt>` (N = 0-based position),
-// one per line block. `{{ask_answers}}` renders every decision the user made in
-// the root session's `ask` calls, oldest first, each call as
-// `<ask_answer index="N">question → answer…</ask_answer>` (one line per
-// answered question; a cancelled or refused ask is left out); it renders
-// empty when there are none. Any other `{{user_prompt…}}` / `{{ask_answers…}}`
-// form makes the file invalid (skipped with a warning). Each prompt is the
-// message's text blocks joined by newlines and trimmed; text-empty messages
-// are dropped and take no index. Prompt text is never re-expanded.
-//
-// SOURCE. The root is found by walking `ctx.agent.parentId` through the
-// process agent registry to the `kind: "main"` ref. Its prompts are the user
-// messages on the root session's current branch (`getBranch()` keeps
-// pre-compaction entries) with `attribution: "user"` and not `synthetic`;
-// its ask answers are the `ask` tool results on that branch
-// (`_shared/ask-answers.ts`). A subagent OMP runs in a subagent worker thread
-// sees the root as a peer stub without `getBranch`; it reads the root's
-// persisted transcript instead and takes the path from its last entry. That
-// transcript is read incrementally (`transcript.ts`): a cursor per file keeps
-// the parsed byte offset and where every record sits, so a model call parses
-// only the bytes appended since the previous call and re-derives only the
-// records a template indexes. The cursor is dropped and the file read from the
-// start when the file is replaced, shrinks or is rewritten at its size (see
-// `transcript.ts` for what is detected).
 // Attribution is set by whoever sends the message,
 // so extensions that inject user-role messages must send them with
 // `attribution: "agent"`.
-//
-// RUNTIME. Files are read at session start, so edits apply to the next spawned
-// subagent. On every `context` event (each model call, including IRC wakes) a
-// targeted subagent gets one request-only developer message, placed first,
-// holding every matching rendered template as
-// `<user-prompt-inject name=…>…</user-prompt-inject>`. Nothing is written to the
-// session. Main sessions are never targeted.
-//
-// FAILURE POLICY. Malformed files, a missing root, or a disposed root session
-// degrade to "no injection" plus a warning; the model call is never blocked.
-// ============================================================================
 
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
@@ -79,7 +15,6 @@ import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-fi
 import { type BranchNeed, createTranscriptReader, type PromptSource, type TranscriptReader } from "./transcript.ts";
 
 const FILE_PATTERN = /^PROMPT-INJECT-.+\.md$/i;
-/** Any `{{ user_prompt … }}` or `{{ ask_answers … }}` occurrence; the inner text is parsed separately. */
 const PLACEHOLDER_PATTERN = /\{\{\s*((?:user_prompt|ask_answers)\b[^}]*?)\s*\}\}/g;
 const SCALAR_PATTERN = /^user_prompt\[\s*(-?\d+)\s*\]$/;
 const SLICE_PATTERN = /^user_prompt\[\s*(-?\d+)\s*:\s*(-?\d+|e)\s*\]$/;
@@ -107,21 +42,10 @@ type SpecParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-/** Why the root's prompts cannot be read; the context hook warns once per reason and injects nothing. */
 type MissingRoot = { readonly kind: "missing"; readonly reason: string };
 
-/**
- * The root session's human prompts (resolved per index, so only the positions a template names are
- * read) and the ask answers given there; both oldest first.
- */
 type RootPrompts = { readonly kind: "ok"; readonly prompts: PromptSource; readonly answers: readonly string[] } | MissingRoot;
 
-// --- discovery + parsing ----------------------------------------------------
-
-/**
- * `target` value → target set. Agent names contain `:` (`mentor:default`), so
- * the value is split on commas only; `[a, b]` brackets are accepted.
- */
 function parseTargets(value: string): TargetSet | null {
 	let s = value.trim();
 	if (s.startsWith("[") && s.endsWith("]")) s = s.slice(1, -1);
@@ -204,9 +128,6 @@ function parseSpecFile(path: string): SpecParse {
 	}
 }
 
-// --- rendering ----------------------------------------------------------------
-
-/** Python-style index normalisation for slice bounds: negative counts from the end, then clamp to [0, length]. */
 function clampBound(bound: number, length: number): number {
 	const n = bound < 0 ? length + bound : bound;
 	return Math.min(Math.max(n, 0), length);
@@ -255,14 +176,6 @@ function renderSpec(spec: InjectSpec, root: { readonly prompts: PromptSource; re
 	return `<user-prompt-inject name="${name}">\n${body}\n</user-prompt-inject>`;
 }
 
-// --- root prompt source -------------------------------------------------------
-
-/**
- * Walk the spawn tree from this subagent to the root main session and read the prompts and ask
- * answers the active templates name. A root on this thread is a live session whose branch the host
- * already holds; a root homed on another thread (this subagent runs in a subagent worker thread)
- * exposes its transcript file instead, read incrementally.
- */
 function rootPrompts(ctx: ExtensionContext, need: BranchNeed, reader: TranscriptReader): RootPrompts {
 	const registry = AgentRegistry.global();
 	const visited = new Set<string>();
@@ -285,12 +198,7 @@ function rootPrompts(ctx: ExtensionContext, need: BranchNeed, reader: Transcript
 	return { kind: "missing", reason: "no main ancestor" };
 }
 
-/**
- * The same two windows over the host's live branch: a prompt position resolves to its entry when a
- * template names it, so no prompt text is collected for the rest of the branch.
- */
 function livePrompts(branch: readonly SessionEntry[], need: BranchNeed): RootPrompts {
-	// Only the content of each prompt is kept: the text stays derived, at read time.
 	const prompts: unknown[] = [];
 	const answers: string[] = [];
 	for (const entry of branch) {
@@ -304,7 +212,6 @@ function livePrompts(branch: readonly SessionEntry[], need: BranchNeed): RootPro
 		}
 		if (!need.prompts) continue;
 		if (message.role !== "user" || message.attribution !== "user" || message.synthetic === true) continue;
-		// Emptiness decides the prompt index, so it is tested here; the text itself is left to `at`.
 		if (textOf(message.content, "\n").trim() === "") continue;
 		prompts.push(message.content);
 	}
@@ -317,8 +224,6 @@ function livePrompts(branch: readonly SessionEntry[], need: BranchNeed): RootPro
 		answers,
 	};
 }
-
-// --- extension --------------------------------------------------------------
 
 function targets(spec: InjectSpec, agentName: string): boolean {
 	switch (spec.targets.kind) {
@@ -333,7 +238,6 @@ function targets(spec: InjectSpec, agentName: string): boolean {
 	}
 }
 
-/** Which root facts the given templates read, so a model call skips what none of them names. */
 function needOf(specs: readonly InjectSpec[]): BranchNeed {
 	let prompts = false;
 	let answers = false;
@@ -347,13 +251,9 @@ function needOf(specs: readonly InjectSpec[]): BranchNeed {
 }
 
 export default function userPromptInject(pi: ExtensionAPI): void {
-	/** Specs targeting this session; empty for main sessions and non-targets. */
 	let active: InjectSpec[] = [];
-	/** Which root facts those specs name; set together with them so a call never reads the other. */
 	let need: BranchNeed = { prompts: false, answers: false };
-	/** The root transcript cursor this session's calls advance. */
 	const reader = createTranscriptReader();
-	/** Last root-resolution failure already logged, so a broken chain warns once per reason. */
 	let warnedReason: string | null = null;
 
 	pi.on("session_start", (_event, ctx) => {

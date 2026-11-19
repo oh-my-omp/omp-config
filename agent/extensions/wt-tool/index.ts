@@ -1,70 +1,7 @@
-// ============================================================================
-// wt / wt_remove — let the main agent move its session into a new worktree
-// and back out of it, which OMP only lets the human do.
-//
-// `wt` runs the human's `/wt` itself, not a copy: the request is handed to
-// `executeBuiltinSlashCommand("/wt [<branch>]", { ctx: <live InteractiveMode> })`,
-// the dispatcher the TUI editor submit uses. Everything that path does applies
-// unchanged: argument parsing, the collab-guest host-only gate, the vibe-mode
-// and /btw gates, settings flush, worktree creation, session move and cwd
-// rescope with rollback, `worktree.cleanSource`, the summary line, and
-// registration in InteractiveMode's owned worktrees (so `worktree.onExit`
-// handles it at exit).
-//
-// Before queueing, `wt` checks whether the session is already in a linked
-// worktree. If it is, the call creates nothing and returns that worktree's
-// path, branch, HEAD, uncommitted count, main checkout, what forking from it
-// would do, and a `confirm` value (hash of the worktree path and branch).
-// Only a second call with that value queues `/wt` anyway.
-//
-// `wt_remove` removes the linked worktree the session is in and moves the
-// session to the main checkout. OMP has no removal command, so only the move
-// is the human's (`/move <main checkout>`); the removal is a forced
-// `git worktree remove` that keeps the branch. It takes two calls:
-//   1. Without `confirm`: a check that changes nothing. It reports what removal
-//      would delete (staged, unstaged, untracked, ignored files), the branch
-//      commits not reachable from the main checkout's HEAD (the branch is kept
-//      either way), and what would block it (running background jobs, running
-//      subagents, live subagents whose cwd is in the worktree). It returns a
-//      `confirm` value: a hash of the worktree path, branch, upstream's
-//      worktree fingerprint (`planWorktreeExit`: HEAD, branch tip, porcelain
-//      status, size/mtime of each changed path) and the ignored-file listing.
-//   2. With `confirm`: the check runs again and the value must match, so the
-//      model can only confirm the state it was shown. The removal is queued.
-// When the session is idle the check runs once more before `/move` and once
-// more after it; any difference or blocker stops the removal there.
-//
-// Both tools queue: the human commands refuse while the session is streaming,
-// and a tool call always runs while streaming. On an `agent_end` that hands
-// control back (terminal, or `willContinue` with `awaitingAsyncWork`: only a
-// background job's result can resume the session, which stays open to the
-// human's commands meanwhile) the request is armed; a timer waits until the
-// session is idle with no queued messages, then runs it once. `agent_start`
-// disarms the timer; the next such `agent_end` re-arms it. An end interrupted
-// by the user (Esc) cancels the request. Session switch and shutdown drop it.
-//
-// In vibe mode (`ctx.sessionModes`, read at each call) both tools refuse at the call: they return an error
-// result and queue nothing, `wt_remove`'s check-only call included. A request queued before vibe mode was
-// entered meets the host's own refusal when it runs, reported as the next message.
-//
-// While a human command runs, `showError` / `showWarning` / `showStatus` /
-// `present` on the instance are shadowed by recorders that still delegate, so
-// the human sees exactly what the command shows and the agent gets the same
-// text. `editor.addToHistory` is shadowed by a no-op and `draftDetached` is
-// set, so the agent's command neither enters the human's input history nor
-// clears the human's draft. The outcome goes back as a custom message
-// (`attribution: "agent"`) that starts a turn.
-//
-// The live InteractiveMode is read through `captureInteractiveMode` in `_shared/interactive-mode.ts`.
-//
 // Relies on omp internals (InteractiveMode's prototype and public members,
 // the extension UI context forwarding, `executeBuiltinSlashCommand`, the
 // `/wt` and `/move` TUI handlers, `planWorktreeExit`, `AgentRegistry`);
 // re-verify in a real TUI after every omp upgrade.
-// ============================================================================
-// TUI-main-only tools wt and wt_remove; hooks: session_start/switch/shutdown, agent_start/end.
-// Reads git worktree state; built-in /wt and /move write git/session state, and confirmed removal deletes the worktree.
-// No extension config files. Failures are returned to the agent; hook failures are logged without escaping into omp.
 import * as fs from "node:fs/promises";
 import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -113,14 +50,12 @@ const removeParams = z.object({
 	confirm: z.string().optional().describe("Omit to check. To remove, the `confirm` value from the latest check."),
 });
 
-/** The fields a queued removal needs: where the worktree is and the state it must still match. The reported file lists are not kept. */
 type ConfirmedRemoval = Pick<WorktreeCheck, "worktree" | "branch" | "mainDir" | "confirm">;
 
 type Request =
 	| { readonly kind: "create"; readonly sessionId: string; readonly branch: string | undefined }
 	| { readonly kind: "remove"; readonly sessionId: string; readonly check: ConfirmedRemoval };
 
-/** Lifecycle of the one queued request: queued by a tool, armed after a terminal `agent_end`, then run once. */
 type State =
 	| { readonly kind: "idle" }
 	| { readonly kind: "queued"; readonly request: Request }
@@ -276,7 +211,6 @@ async function activate(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 	await applyActiveTools(pi, [...active, CREATE_TOOL, REMOVE_TOOL]);
 }
 
-/** Why the calling session cannot queue a request, if it cannot. */
 function queueBlocker(runtime: Runtime, ctx: ExtensionContext, tool: string): string | undefined {
 	if (!isEligible(ctx)) return `${tool}: only the main session of the interactive TUI can use this tool.`;
 	if (ctx.sessionModes?.getState().vibe.status === "active")
@@ -297,7 +231,6 @@ function queueBlocker(runtime: Runtime, ctx: ExtensionContext, tool: string): st
 	return undefined;
 }
 
-/** The current linked worktree and what /wt would do from it; undefined outside one. */
 async function currentWorktree(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
@@ -383,8 +316,6 @@ function disarm(runtime: Runtime, ctx: ExtensionContext): void {
 
 function onAgentEnd(runtime: Runtime, event: AgentEndEvent, ctx: ExtensionContext): void {
 	if (runtime.state.kind !== "queued") return;
-	// A continuation the session schedules itself (reminder, retry, compaction) keeps the request queued;
-	// waiting only on background jobs leaves the session idle, where the human could run the command too.
 	if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
 	const request = runtime.state.request;
 	const last = event.messages.findLast((message) => message.role === "assistant");

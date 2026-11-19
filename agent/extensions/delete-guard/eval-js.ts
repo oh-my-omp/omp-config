@@ -13,7 +13,6 @@ import {
 import { classify } from "./classify.ts";
 import { ALLOW, type Dialect, type Rule, type Verdict } from "./verdict.ts";
 
-/** API names only fs uses: blocked wherever code names them, so aliases made in earlier cells are caught too. */
 const DISTINCTIVE_DELETE: ReadonlySet<string> = new Set(["rmSync", "unlinkSync", "rmdirSync", "unlink", "rmdir"]);
 
 type Context = {
@@ -24,12 +23,10 @@ type Context = {
 	readonly depth: number;
 };
 
-/** A js cell's verdict, and the module and launcher names it binds (the session carries them when the cell runs). */
 export type JsJudgement = { readonly verdict: Verdict; readonly carry: JsCarry };
 
 const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
-/** Every launch is judged whatever its binding; a command that is not literal blocks. */
 function judgeLaunch(launch: JsLaunch, fragment: string, ctx: Context): Verdict {
 	const nonLiteral = (what: string): Verdict => block("nonLiteral", fragment, `${what} is not a literal string`);
 	switch (launch.kind) {
@@ -51,7 +48,6 @@ function judgeLaunch(launch: JsLaunch, fragment: string, ctx: Context): Verdict 
 				? nonLiteral("the command list")
 				: classify(ctx.brush, { kind: "argv", words: launch.words }, ctx.depth + 1);
 		case "shellHelper":
-			// The eval `sh` helper runs on the embedded bash engine, whatever the platform.
 			return launch.text === null
 				? nonLiteral("the command handed to `sh`")
 				: classify(ctx.brush, { kind: "script", text: launch.text }, ctx.depth + 1);
@@ -71,7 +67,6 @@ function judgeLaunch(launch: JsLaunch, fragment: string, ctx: Context): Verdict 
 	}
 }
 
-/** Whether a name in this position refers to something, rather than declaring a property or method key. */
 function isReference(node: Node, parent: Node | null): boolean {
 	if (parent === null) return true;
 	if (
@@ -91,7 +86,6 @@ function isReference(node: Node, parent: Node | null): boolean {
 	);
 }
 
-/** Judges one node; `statement` is the top-level statement holding it, quoted for deletion APIs. */
 function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Context): Verdict {
 	const fragment = (target: Node): string => ctx.code.slice(target.start ?? 0, target.end ?? 0);
 	const quoted = fragment(statement);
@@ -118,15 +112,6 @@ function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Contex
 	return launch === null ? ALLOW : judgeLaunch(launch, fragment(node), ctx);
 }
 
-/**
- * Classifies a js eval cell: fs deletion APIs block, and every command handed to
- * a shell or spawned is classified (`shell` for child_process strings, `brush`
- * for `Bun.$`, the `sh` helper, `Bun.spawn` argv and the `tool.bash` bridge).
- * `carry` holds the
- * module and launcher names the session's earlier cells bound; the judgement
- * returns the names this cell's bindings leave for later cells. Parse failures
- * throw to the hook boundary, which blocks the call.
- */
 export function classifyJs(code: string, shell: Dialect, brush: Dialect, carry: JsCarry, depth = 0): JsJudgement {
 	const cell = parseJs(code, carry);
 	const ctx: Context = { code, bindings: cell.bindings, shell, brush, depth };

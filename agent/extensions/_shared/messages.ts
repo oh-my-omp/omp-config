@@ -1,8 +1,3 @@
-/**
- * Text of one message's `content`: the string itself, or its `type: "text"`
- * blocks joined by `separator`. Thinking and tool-call blocks are never
- * included.
- */
 export function textOf(content: unknown, separator = ""): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
@@ -15,7 +10,6 @@ export function textOf(content: unknown, separator = ""): string {
 	return texts.join(separator);
 }
 
-/** Text of the last assistant message that has any; a trailing tool-only message is skipped. */
 export function lastAssistantText(messages: unknown): string {
 	if (!Array.isArray(messages)) return "";
 	for (let i = messages.length - 1; i >= 0; i--) {

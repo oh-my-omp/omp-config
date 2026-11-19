@@ -1,4 +1,3 @@
-// One-time conversion of the former omomp system-prompt-replace section.
 import { parseSessionConditions } from "../_shared/prompt-conditions.ts";
 import { isMapping } from "./merge.ts";
 
@@ -16,9 +15,7 @@ function scalar(value: string): string {
 			.join("\n")}\n`;
 		try {
 			if (Bun.deepEquals(Bun.YAML.parse(`  value: ${block}`), { value })) return block;
-		} catch {
-			// YAML cannot represent every string as a block; quoted JSON scalars can.
-		}
+		} catch {}
 	}
 	return `${JSON.stringify(value).replace(/[\u0085\u2028\u2029]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)}\n`;
 }
@@ -38,7 +35,6 @@ export function convertLegacySystemReplacements(value: unknown): Conversion {
 		if (typeof input.replace !== "string") return invalid("replace must be a string");
 		if (input.scope !== undefined && input.scope !== "all" && input.scope !== "sub") return invalid("scope must be all or sub");
 		if (input.model !== undefined && typeof input.model !== "string") return invalid("model must be a string");
-		// An empty legacy regex matched every model, which is the same as no model condition.
 		const model = input.model === "" ? undefined : input.model;
 		const conditions: Record<string, string> = { mode: "full" };
 		if (input.scope === "sub") conditions.target = "subagents";

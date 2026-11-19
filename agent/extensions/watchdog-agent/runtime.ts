@@ -37,10 +37,8 @@ import {
 	type WatchdogSpec,
 } from "./spec.ts";
 
-/** A finding waiting for the user's next prompt (`delivery: nextTurn`), already in its inject form. */
 type QueuedNote = { readonly filePath: string; readonly inject: InjectMode; readonly text: string };
 
-/** One record per loaded extension; session boundaries rebuild branch-derived state. */
 type Runtime = {
 	readonly pi: ExtensionAPI;
 	identity: ExtensionContext["agent"] | null;
@@ -49,11 +47,9 @@ type Runtime = {
 	overrides: Map<string, boolean>;
 	states: Map<string, WatchdogState>;
 	branchOf: () => ReadonlyArray<unknown>;
-	/** User-mode note index over the branch, folded as the branch grows. */
 	notes: NoteIndex;
 	nextTurnQueue: QueuedNote[];
 	userTurnArmed: boolean;
-	/** Set by `session_shutdown` until the next session boundary: in-flight reviews abort and nothing new starts. */
 	closed: boolean;
 };
 
@@ -75,30 +71,18 @@ export function registerWatchdog(pi: ExtensionAPI): void {
 	registerEvents(runtime);
 }
 
-// --- extension registration -------------------------------------------------
-
-/**
- * `running` keeps the session-level abort handle and the review's settling promise:
- * a switch aborts it, a shutdown aborts it and awaits `done` before the session ends.
- */
 type RunState =
 	| { readonly kind: "idle" }
 	| { readonly kind: "running"; readonly flushAfter: boolean; readonly controller: AbortController; readonly done: Promise<void> };
 
-/** Per-watchdog runtime state; each watchdog counts, runs and caps on its own. */
 type WatchdogState = {
-	/** Latest parse of the watchdog's file; replaced in place when the roster is re-read. */
 	spec: WatchdogSpec;
-	/** Watched actions since this watchdog's last run started; restored as the actions after the cursor. */
 	pending: number;
-	/** Newest message timestamp covered by the last review that reached a verdict; persisted per file. */
 	cursor: number;
 	run: RunState;
-	/** Advisories delivered since the last compaction; restored from the branch; compared against `maxPerContext`. */
 	sent: number;
 };
 
-/** Session-scoped switch for one watchdog file, persisted as a custom session entry. */
 const OVERRIDE_ENTRY_TYPE = "mouriya.omp.watchdog-agent.override";
 type SessionOverride = { readonly filePath: string; readonly enabled: boolean | null };
 
@@ -109,7 +93,6 @@ function parseOverride(data: unknown): SessionOverride | null {
 	return { filePath: data.filePath, enabled };
 }
 
-/** Session overrides in effect on the given branch: the last entry per file wins; `null` clears. */
 function overridesFromBranch(entries: ReadonlyArray<unknown>): Map<string, boolean> {
 	const out = new Map<string, boolean>();
 	for (const e of entries) {
@@ -122,11 +105,9 @@ function overridesFromBranch(entries: ReadonlyArray<unknown>): Map<string, boole
 	return out;
 }
 
-/** Window cursor of one watchdog file, persisted after each review that reaches a verdict. */
 const CURSOR_ENTRY_TYPE = "mouriya.omp.watchdog-agent.cursor";
 type CursorEntry = { readonly filePath: string; readonly cursor: number };
 
-/** Cursors in effect on the given branch: the last entry per file wins. */
 function cursorsFromBranch(entries: ReadonlyArray<unknown>): Map<string, number> {
 	const out = new Map<string, number>();
 	for (const e of entries) {
@@ -139,19 +120,12 @@ function cursorsFromBranch(entries: ReadonlyArray<unknown>): Map<string, number>
 	return out;
 }
 
-/** Attribute-safe watchdog name, as written into the injected `<watchdog name="…">` tag. */
 function escapeAttr(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/** Custom message type of system-mode notes (stored as `custom_message` session entries, `details: { filePaths }`). */
 const NOTE_CUSTOM_TYPE = "watchdog";
 
-/**
- * Index of user-mode notes: the text a watchdog sent as a user message and the files it came from.
- * It records the send, not the delivery; a note counts only once an agent-attributed user message
- * with that text is on the branch.
- */
 const USER_NOTE_ENTRY_TYPE = "mouriya.omp.watchdog-agent.user-note";
 type UserNoteEntry = { readonly filePaths: readonly string[]; readonly text: string };
 
@@ -160,10 +134,8 @@ function filePathsOf(data: unknown): readonly string[] {
 	return data.filePaths.filter((path): path is string => typeof path === "string");
 }
 
-/** User-mode note index over the branch prefix folded so far, and the entry that prefix ends at. */
 type NoteIndex = { count: number; anchor: unknown; index: Map<string, readonly string[]> };
 
-/** Fold one branch entry into the note index: its trimmed text → the watchdog files it came from. */
 function foldNote(entry: unknown, out: Map<string, readonly string[]>): void {
 	if (!hasKey(entry, "type") || entry.type !== "custom" || !hasKey(entry, "customType") || entry.customType !== USER_NOTE_ENTRY_TYPE)
 		return;
@@ -172,11 +144,6 @@ function foldNote(entry: unknown, out: Map<string, readonly string[]>): void {
 	out.set(data.text.trim(), filePathsOf(data));
 }
 
-/**
- * The note index up to the end of `entries`, folded incrementally: entries already folded are
- * not rescanned. An anchor that no longer sits where it was folded (a replaced or shortened
- * branch) rebuilds the index from the start.
- */
 function noteIndexOf(runtime: Runtime, entries: ReadonlyArray<unknown>): Map<string, readonly string[]> {
 	const notes = runtime.notes;
 	if (notes.count > entries.length || (notes.count > 0 && entries[notes.count - 1] !== notes.anchor)) {
@@ -189,7 +156,6 @@ function noteIndexOf(runtime: Runtime, entries: ReadonlyArray<unknown>): Map<str
 	return notes.index;
 }
 
-/** Watchdog files a branch entry carries a delivered note of: a system-mode custom message, or an indexed user-mode message. */
 function noteFiles(entry: unknown, index: ReadonlyMap<string, readonly string[]>): readonly string[] {
 	if (!hasKey(entry, "type")) return [];
 	if (entry.type === "custom_message" && hasKey(entry, "customType") && entry.customType === NOTE_CUSTOM_TYPE)
@@ -200,7 +166,6 @@ function noteFiles(entry: unknown, index: ReadonlyMap<string, readonly string[]>
 	return index.get(textBlocks(hasKey(message, "content") ? message.content : undefined).trim()) ?? [];
 }
 
-/** Notes of the watchdog file delivered on the branch since its last compaction. */
 function deliveredSinceCompaction(
 	entries: ReadonlyArray<unknown>,
 	filePath: string,
@@ -214,13 +179,11 @@ function deliveredSinceCompaction(
 	return count;
 }
 
-/** Watched actions of a message: its actions when the filter's model/provider constraints match its producer, else 0. */
 function watchedActions(filter: SessionFilter, message: unknown): number {
 	const producer = producerOf(message);
 	return producer !== null && producerMatches(filter, producer) ? countActions(message) : 0;
 }
 
-/** Watched actions on the branch stamped after the cursor. */
 function actionsAfter(entries: ReadonlyArray<unknown>, cursor: number, filter: SessionFilter): number {
 	let count = 0;
 	for (const m of branchMessages(entries)) {
@@ -236,7 +199,6 @@ function effectiveEnabled(runtime: Runtime, spec: WatchdogSpec): boolean {
 	return runtime.overrides.get(spec.filePath) ?? spec.enabled;
 }
 
-/** Re-read every watchdog file and rebuild the active set, keeping state of watchdogs that stay active. */
 function refresh(runtime: Runtime, warn: boolean): void {
 	const specs: WatchdogSpec[] = [];
 	for (const file of discoverWatchdogFiles(runtime.cwd())) {
@@ -246,8 +208,6 @@ function refresh(runtime: Runtime, warn: boolean): void {
 	}
 	runtime.roster = specs;
 	const next = new Map<string, WatchdogState>();
-	// Only a new state is rebuilt from the branch: an existing one carries its own cursor, so a
-	// later turn reads no branch entries at all. Directories are enumerated on every call.
 	let branch: ReadonlyArray<unknown> | undefined;
 	let cursors: Map<string, number> | undefined;
 	let notes: Map<string, readonly string[]> | undefined;
@@ -285,7 +245,6 @@ function logActive(runtime: Runtime): void {
 	);
 }
 
-/** Session boundary: identity, overrides and the active set are rebuilt; state is restored from the branch. */
 function load(runtime: Runtime, ctx: ExtensionContext): void {
 	runtime.closed = false;
 	runtime.identity = ctx.agent;
@@ -300,11 +259,6 @@ function load(runtime: Runtime, ctx: ExtensionContext): void {
 	logActive(runtime);
 }
 
-/**
- * Send notes of one inject form as one message. `system`: a `watchdog` custom message (LLM
- * `developer` role) that starts a turn when the session is idle. `user`: an agent-attributed
- * user message, indexed first so the watchdog can recognise it on the branch.
- */
 function send(runtime: Runtime, inject: InjectMode, notes: readonly QueuedNote[], deliverAs: Exclude<DeliverAs, "nextTurn">): void {
 	const text = notes.map((note) => note.text).join("\n\n");
 	const filePaths = notes.map((note) => note.filePath);
@@ -326,7 +280,6 @@ function send(runtime: Runtime, inject: InjectMode, notes: readonly QueuedNote[]
 	}
 }
 
-/** A finding in its inject form: tagged for `system`; for `user` the reviewer already wrote it in the user's voice. */
 function noteText(spec: WatchdogSpec, severity: string, note: string): string {
 	switch (spec.inject) {
 		case "system":
@@ -353,13 +306,11 @@ function deliver(runtime: Runtime, state: WatchdogState, verdict: Verdict): void
 	);
 }
 
-/** Advance and persist the window cursor once a review covering up to `reviewed` reached a verdict. */
 function advanceCursor(runtime: Runtime, state: WatchdogState, reviewed: number): void {
 	if (reviewed <= state.cursor) return;
 	state.cursor = reviewed;
 	runtime.pi.appendEntry<CursorEntry>(CURSOR_ENTRY_TYPE, { filePath: state.spec.filePath, cursor: reviewed });
 }
-/** Abort every in-flight review and return their settling promises for the caller to await or drop. */
 function abortReviews(runtime: Runtime): Promise<void>[] {
 	const done: Promise<void>[] = [];
 	for (const state of runtime.states.values()) {
@@ -370,7 +321,6 @@ function abortReviews(runtime: Runtime): Promise<void>[] {
 	return done;
 }
 
-/** Start one review now; never awaited by the caller, so the watched agent keeps running. */
 function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, tail: unknown): void {
 	if (runtime.closed) return;
 	const spec = state.spec;
@@ -387,12 +337,10 @@ function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, ta
 		spec.kind === "jev"
 			? runJev(runtime.pi, ctx, spec, transcript, controller.signal)
 			: runReviewer(runtime.pi, ctx, spec, transcript, controller.signal);
-	// A session boundary, branch move or switch-off removed this state; its finding is stale.
 	const live = (): boolean => runtime.states.get(spec.filePath) === state;
 	const done = review
 		.then(
 			(verdict) => {
-				// No verdict = failed review: the cursor stays, so the next run covers this range again.
 				if (!live() || verdict === null) return;
 				advanceCursor(runtime, state, reviewed);
 				deliver(runtime, state, verdict);
@@ -406,11 +354,9 @@ function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, ta
 			if (state.pending >= state.spec.every || (flush && state.pending > 0)) start(runtime, state, ctx, undefined);
 		})
 		.catch((error) => runtime.pi.logger.warn("watchdog review delivery failed", { error: errorText(error) }));
-	// run is registered last so `done` settles the chain the state itself carries.
 	state.run = { kind: "running", flushAfter: false, controller, done };
 }
 
-/** One line per watchdog file for `/watchdog list`. */
 function describe(runtime: Runtime, spec: WatchdogSpec): string {
 	const override = runtime.overrides.get(spec.filePath);
 	const state = !targetsHere(runtime, spec)
@@ -422,7 +368,6 @@ function describe(runtime: Runtime, spec: WatchdogSpec): string {
 	const backend = spec.kind === "jev" ? "JUDGE" : `${tr("chat", "聊天")} ${spec.model ?? "@advisor"}`;
 	return `${spec.name}: ${state} · ${tr("global", "全局")} ${spec.enabled ? tr("on", "开启") : tr("off", "关闭")} · ${tr("session", "会话")} ${session} · ${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, tr("any", "不限"))} · inject ${spec.inject} · ${tr("every", "每")} ${spec.every} · ${tr("scope", "范围")} ${spec.scope === "full" ? tr("full", "全部") : tr("window", "窗口")} · ${backend}\n  ${spec.filePath}`;
 }
-/** Model-facing watchdog description kept in English for tool-result content. */
 function describeForToolResult(runtime: Runtime, spec: WatchdogSpec): string {
 	const override = runtime.overrides.get(spec.filePath);
 	const state = !targetsHere(runtime, spec) ? "not for this session" : effectiveEnabled(runtime, spec) ? "ON" : "OFF";
@@ -431,7 +376,6 @@ function describeForToolResult(runtime: Runtime, spec: WatchdogSpec): string {
 	return `${spec.name}: ${state} · global ${spec.enabled ? "on" : "off"} · session ${session} · ${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, "any")} · inject ${spec.inject} · every ${spec.every} · scope ${spec.scope} · ${backend}\n  ${spec.filePath}`;
 }
 
-/** Status line a `write`/`edit` result carries for a watchdog file it touched. */
 function fileStatus(runtime: Runtime, path: string): string {
 	if (!existsSync(path)) return `watchdog file ${path}: removed; no watchdog loads from it.`;
 	const parsed = parseWatchdogFile(path);
@@ -448,7 +392,6 @@ function fileStatus(runtime: Runtime, path: string): string {
 	return `watchdog file ${path}: recognised, ${active}.\n${describeForToolResult(runtime, spec)}`;
 }
 
-/** The one discovered watchdog with this name (case-insensitive), or the error to show. */
 function findByName(
 	runtime: Runtime,
 	name: string,
@@ -477,10 +420,6 @@ function findByName(
 	return { kind: "found", spec };
 }
 
-/**
- * Split `/watchdog edit` arguments into the longest discovered name they start with and the
- * requested change (null when none follows). Null when no name matches.
- */
 function splitEditTarget(runtime: Runtime, rest: string): { readonly name: string; readonly change: string | null } | null {
 	const lower = rest.toLowerCase();
 	let best = "";
@@ -494,7 +433,6 @@ function splitEditTarget(runtime: Runtime, rest: string): { readonly name: strin
 	return { name: rest.slice(0, best.length), change: change === "" ? null : change };
 }
 
-/** The model prompt for `/watchdog add|edit`, or the error to show instead. */
 function draftPrompt(
 	runtime: Runtime,
 	command: Extract<WatchdogCommand, { kind: "add" | "edit" }>,
@@ -541,7 +479,6 @@ function draftPrompt(
 	}
 }
 
-/** `/watchdog rm`: delete the file after the user confirms, and drop this session's override of it. */
 async function remove(
 	runtime: Runtime,
 	name: string,
@@ -621,7 +558,6 @@ function toggle(
 					text: tr(`cannot write ${spec.filePath}: ${errorText(error)}`, `无法写入 ${spec.filePath}：${errorText(error)}`),
 				};
 			}
-			// The file is now the switch; a session override would keep shadowing it here.
 			if (runtime.overrides.delete(spec.filePath))
 				runtime.pi.appendEntry<SessionOverride>(OVERRIDE_ENTRY_TYPE, { filePath: spec.filePath, enabled: null });
 			refresh(runtime, false);
@@ -751,7 +687,6 @@ function registerCommand(runtime: Runtime): void {
 							ctx.ui.notify(prompt.text, "error");
 							return;
 						}
-						// Extension-authored like every injected message here, so user-prompt-inject never mistakes it for the user's words.
 						runtime.pi.sendUserMessage(
 							prompt.text,
 							ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "followUp", attribution: "agent" },
@@ -793,8 +728,6 @@ function registerEvents(runtime: Runtime): void {
 			runtime.pi.logger.warn(`watchdog ${"session_switch"} handler failed`, { error: errorText(error) });
 		}
 	});
-	// Shutdown ends the session: abort every in-flight review (no more verdicts, no more helper
-	// model calls) and close the runtime so no review starts for a session that is gone.
 	runtime.pi.on("session_shutdown", async () => {
 		try {
 			runtime.closed = true;
@@ -802,15 +735,11 @@ function registerEvents(runtime: Runtime): void {
 			runtime.states = new Map();
 			runtime.nextTurnQueue = [];
 			runtime.userTurnArmed = false;
-			// The aborted reviews are this session's inner work: they finish (helper disposed,
-			// judgment returned) before the session's own teardown proceeds.
 			await Promise.allSettled(settling);
 		} catch (error) {
 			runtime.pi.logger.warn(`watchdog ${"session_shutdown"} handler failed`, { error: errorText(error) });
 		}
 	});
-	// Branch and tree moves swap the working transcript: overrides, cursors and cap counts are
-	// re-read from the new branch, and findings in flight about the old one are dropped.
 	runtime.pi.on("session_branch", (_event, ctx) => {
 		try {
 			load(runtime, ctx);
@@ -826,8 +755,6 @@ function registerEvents(runtime: Runtime): void {
 		}
 	});
 
-	// A write or edit of a WATCHDOG-*.md (the last step of `/watchdog add`, or any hand edit) is
-	// picked up at once, and the tool result tells the model whether the file is recognised.
 	runtime.pi.on("tool_result", (event) => {
 		try {
 			if (event.isError) return;
@@ -841,9 +768,6 @@ function registerEvents(runtime: Runtime): void {
 		}
 	});
 
-	// Compaction starts a new context on the same transcript: only the per-context budget
-	// (`maxPerContext` count) resets. Accumulated actions, the `window` cursor and
-	// in-flight reviews carry over.
 	runtime.pi.on("session_compact", () => {
 		try {
 			for (const state of runtime.states.values()) {
@@ -854,8 +778,6 @@ function registerEvents(runtime: Runtime): void {
 		}
 	});
 
-	// `nextTurn` findings wait for a real user prompt: interactive or RPC input that is not a
-	// slash command arms the turn it starts. A subagent has no user, so its next turn delivers.
 	runtime.pi.on("input", (event) => {
 		try {
 			if (event.source !== "extension" && !event.text.trimStart().startsWith("/")) runtime.userTurnArmed = true;
@@ -863,9 +785,6 @@ function registerEvents(runtime: Runtime): void {
 			runtime.pi.logger.warn(`watchdog ${"input"} handler failed`, { error: errorText(error) });
 		}
 	});
-	// A queued `nextTurn` note reaches the turn the prompt starts from its first model call: a
-	// `system` note as the returned custom message, a `user` note as a steer queued while the
-	// prompt is being prepared (the session already counts as streaming here).
 	runtime.pi.on("before_agent_start", () => {
 		try {
 			if (runtime.closed) return;
@@ -896,9 +815,7 @@ function registerEvents(runtime: Runtime): void {
 	runtime.pi.on("message_end", (event, ctx) => {
 		try {
 			if (runtime.closed) return;
-			// Registration can precede the first session boundary; initialize lazily.
 			if (runtime.identity === null) load(runtime, ctx);
-			// One count per message, shared by every watchdog; only the filter test is per watchdog.
 			const actions = countActions(event.message);
 			if (actions === 0) return;
 			const producer = producerOf(event.message);
@@ -917,8 +834,6 @@ function registerEvents(runtime: Runtime): void {
 		try {
 			if (runtime.closed) return;
 			if (runtime.identity === null) load(runtime, ctx);
-			// A continuation the session schedules itself (reminder, retry, compaction) is not a settled run;
-			// a wait on background jobs hands control back, so pending reviews start here too.
 			if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
 			for (const state of runtime.states.values()) {
 				if (state.pending === 0) continue;

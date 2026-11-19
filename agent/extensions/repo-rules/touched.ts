@@ -2,11 +2,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type ToolResultEvent, z } from "@oh-my-pi/pi-coding-agent";
 
-/**
- * Absolute files a successful tool call read, wrote or edited — the events that load a Claude Code
- * path-scoped rule: Read, Write and Edit, plus a Bash command that reads one file (`cat`, `head`,
- * `tail`). Paths come from the tool's result details; only bash is resolved here, from its input.
- */
 export function touchedFiles(event: ToolResultEvent, cwd: string): string[] {
 	if (event.isError) return [];
 	switch (event.toolName) {
@@ -30,7 +25,6 @@ const readSchema = z.object({
 	displayReadTargetLinks: z.array(z.string().nullable()).optional(),
 });
 
-/** A file read exposes `resolvedPath` or a path-typed `meta.source`; a multi-target read lists its links. */
 function readFiles(details: unknown): string[] {
 	const parsed = readSchema.safeParse(details);
 	if (!parsed.success || parsed.data.isDirectory === true) return [];
@@ -43,7 +37,6 @@ function readFiles(details: unknown): string[] {
 const writeInputSchema = z.object({ path: z.string() });
 const writeDetailsSchema = z.object({ resolvedPath: z.string() });
 
-/** Handler-owned writes (`xd://`, `proc://`, `agent://`) carry no file; `local://` writes are files. */
 function writeFiles(input: unknown, details: unknown): string[] {
 	const target = writeInputSchema.safeParse(input);
 	if (!target.success) return [];
@@ -59,7 +52,6 @@ const editSchema = z.object({
 	perFileResults: z.array(editFileSchema).optional(),
 });
 
-/** One file result or several; a rename touches both its source and its destination. */
 function editFiles(details: unknown): string[] {
 	const parsed = editSchema.safeParse(details);
 	if (!parsed.success) return [];
@@ -85,17 +77,9 @@ function expandHome(value: string): string {
 	return value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value;
 }
 
-/** Unquoted characters that make a command more than one static simple command. */
 const SHELL_SPECIAL = "|&;<>()`$*?[]{}!#";
-/** JavaScript's whitespace class, tested per character. */
 const SPACE = /\s/;
 
-/**
- * Walks the words of a command that is one simple command with static arguments, calling `emit` for
- * each word and stopping when it returns false. Returns false for anything that needs a shell to
- * resolve (pipes, chains, redirects, substitution, expansion, globbing) or an unterminated quote.
- * Words are sliced out of the command instead of appended one character at a time.
- */
 function scanWords(command: string, emit: (word: string) => boolean): boolean {
 	let parts: string[] = [];
 	let started = false;
@@ -154,10 +138,6 @@ function scanWords(command: string, emit: (word: string) => boolean): boolean {
 	return true;
 }
 
-/**
- * Words of a command that is one simple command with static arguments, or null for anything that
- * needs a shell to resolve (pipes, chains, redirects, substitution, expansion, globbing).
- */
 function shellWords(command: string): string[] | null {
 	const words: string[] = [];
 	return scanWords(command, (word) => {
@@ -168,7 +148,6 @@ function shellWords(command: string): string[] | null {
 		: null;
 }
 
-/** The program a command runs, or null when only a shell could tell: stops after the first word. */
 function firstWord(command: string): string | null {
 	let program: string | null = null;
 	scanWords(command, (word) => {
@@ -178,7 +157,6 @@ function firstWord(command: string): string | null {
 	return program;
 }
 
-/** Text of a double-quoted span starting after its opening quote; null when it expands or never closes. */
 function doubleQuoted(command: string, start: number): { readonly text: string; readonly next: number } | null {
 	let text = "";
 	for (let i = start; i < command.length; i++) {
@@ -197,10 +175,8 @@ function doubleQuoted(command: string, start: number): { readonly text: string; 
 }
 
 const READERS: Record<string, true> = { cat: true, head: true, tail: true };
-/** `head`/`tail` options whose value is the next word. */
 const VALUE_OPTIONS: Record<string, true> = { "-n": true, "-c": true, "--lines": true, "--bytes": true };
 
-/** The one file a plain `cat`/`head`/`tail` command reads, or null. */
 function singleFileRead(command: string): string | null {
 	const program = firstWord(command);
 	if (program === null || READERS[program] !== true) return null;

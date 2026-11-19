@@ -1,5 +1,3 @@
-// What goes into the sandbox (S1–S3) and the optional ssh target. Every copy is a tar stream or a
-// stdin pipe into `docker exec`; nothing credential-bearing is staged on the host disk.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { compareImages, snapshot, type TableCheck } from "./agentdb.ts";
@@ -10,7 +8,6 @@ export const TARGET_IMAGE = "debian:stable-slim";
 export const PLATFORM = "linux/arm64";
 const TAR_FLAGS = ["--no-xattrs", "--no-mac-metadata"];
 
-/** Session history, caches, locks and the live databases stay on the host; agent.db is copied by copyAgentDb. */
 const AGENT_EXCLUDES = [
 	"agent/sessions",
 	"agent/blobs",
@@ -21,7 +18,6 @@ const AGENT_EXCLUDES = [
 	"agent/history.db*",
 	"agent/agent.db*",
 	"agent/*.lock",
-	// Built for the host's platform; copyPlugins reinstalls them from the lock file.
 	"plugins/node_modules",
 ];
 
@@ -36,7 +32,6 @@ export async function installTools(container: string): Promise<void> {
 	]);
 }
 
-/** ~/.omp/agent and ~/.omp/plugins, minus AGENT_EXCLUDES. */
 export async function copyOmpDir(container: string, home: string): Promise<void> {
 	const excludes = AGENT_EXCLUDES.map((pattern) => `--exclude=${pattern}`);
 	await pipe(
@@ -45,7 +40,6 @@ export async function copyOmpDir(container: string, home: string): Promise<void>
 	);
 }
 
-/** agent.db through a serialized snapshot over stdin, then a field-by-field comparison of the copy with that snapshot. */
 export async function copyAgentDb(container: string, home: string): Promise<TableCheck[]> {
 	const target = join(home, ".omp", "agent", "agent.db");
 	const image = snapshot(target);
@@ -54,7 +48,6 @@ export async function copyAgentDb(container: string, home: string): Promise<Tabl
 	return compareImages(image, copy);
 }
 
-/** ~/.claude rules, skills and CLAUDE.md, those that exist. */
 export async function copyClaude(container: string, home: string): Promise<string[]> {
 	const items = ["rules", "skills", "CLAUDE.md"].filter((item) => existsSync(join(home, ".claude", item)));
 	if (items.length === 0) return items;
@@ -65,10 +58,8 @@ export async function copyClaude(container: string, home: string): Promise<strin
 	return items;
 }
 
-/** The working tree under test, uncommitted and untracked files included, ignored files excluded, at /repo. */
 export async function copyRepo(container: string, repo: string): Promise<number> {
 	const listed = (await must(["git", "-C", repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard"])).split("\0");
-	// Tracked files deleted in the working tree are listed but cannot be archived.
 	const files = listed.filter((file) => file !== "" && existsSync(join(repo, file)));
 	await pipe(
 		["tar", ...TAR_FLAGS, "-C", repo, "--null", "-T", "-", "-cf", "-"],
@@ -78,13 +69,6 @@ export async function copyRepo(container: string, repo: string): Promise<number>
 	return files.length;
 }
 
-/**
- * Plugin dependencies for linux from the copied lock file, the latest omp, the /repo updater applying
- * the working tree (it links the plugin `omp-config` and moves the copied omomp values into its
- * settings), then the startup auto-update switched off in those settings (the copied host switch
- * would apply the GitHub `release` branch over /repo at the first omp start). Returns the omp version and the
- * switch read back.
- */
 export async function installOmp(container: string, home: string): Promise<{ readonly version: string; readonly autoupdate: string }> {
 	await must(["docker", "exec", "-w", join(home, ".omp", "plugins"), container, "bun", "install"]);
 	await must(["docker", "exec", container, "bun", "install", "-g", "@oh-my-pi/pi-coding-agent"]);
@@ -104,7 +88,6 @@ export async function installOmp(container: string, home: string): Promise<{ rea
 	return { version: (await must(["docker", "exec", container, "omp", "--version"])).trim(), autoupdate };
 }
 
-/** The ssh target: sshd in `target`, a key generated inside the sandbox, and the ssh alias `target` (root). */
 export async function setUpTarget(
 	container: string,
 	home: string,

@@ -1,11 +1,3 @@
-// omp-config-update three-way apply: unmodified items follow the repo,
-// customizations survive (merged, kept, or reported as conflicts until
-// resolved), seed and machine-owned paths are never overwritten, code stays
-// repo-wins, deletions respect customizations, machine-owned agent
-// definitions follow the repo while unmodified but a machine-modified or
-// -removed copy always wins, a machine without a base is matched against the
-// repo's history, a first install over omp's own first-run config.yml writes
-// every managed key, and --check writes nothing.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -47,7 +39,6 @@ function writeTree(root: string, files: Record<string, string | null>): void {
 	}
 }
 
-/** A source repo: each `commit` adds one snapshot of `agent/…` files (null deletes). */
 function source(): { dir: string; commit: (files: Record<string, string | null>) => void } {
 	const dir = temp("omp-src-");
 	git(dir, "init", "-q");
@@ -369,7 +360,6 @@ describe("exclusions", () => {
 		expect(host(agentDir, "PERSONALITY.md")).toBe("p1\n");
 		expect(host(agentDir, "APPEND_SYSTEM.md")).toBe("a2\n");
 		expect(report.skipped).toEqual([{ path: join(agentDir, "PERSONALITY.md"), reason: expect.stringContaining("exclude") }]);
-		// The recorded base never advanced, so removing the entry takes the repo value without a conflict.
 		writeTree(agentDir, { "omomp.yml": null });
 		const next = await apply(src.dir, agentDir);
 		expect(next.conflicts).toEqual([]);
@@ -387,7 +377,6 @@ describe("exclusions", () => {
 		expect(report.errors).toEqual([]);
 		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({ task: { eager: "preferred" }, lsp: { enabled: true } });
 		expect(report.skipped).toEqual([{ path: `${join(agentDir, "config.yml")}:task.eager`, reason: expect.stringContaining("exclude") }]);
-		// The base kept the pre-exclusion value, so un-excluding takes the next repo value without a conflict.
 		writeTree(agentDir, { "omomp.yml": null });
 		src.commit({ "agent/config.yml": "task:\n  eager: later\nlsp:\n  enabled: true\n" });
 		const next = await apply(src.dir, agentDir);
@@ -467,7 +456,6 @@ describe("machines without a base", () => {
 		const agentDir = temp("omp-agent-");
 		src.commit({ "agent/agents/old.md": "v1\n", "agent/PERSONALITY.md": "c1\n", "agent/config.yml": "lsp:\n  enabled: false\n" });
 		src.commit({ "agent/agents/old.md": "v2\n", "agent/PERSONALITY.md": "c2\n", "agent/config.yml": "lsp:\n  enabled: true\n" });
-		// What an older updater left behind: the first commit, plus local edits, and the updater itself; no base record.
 		writeTree(agentDir, {
 			"agents/old.md": "v1\n",
 			"agents/custom.md": "mine\n",
@@ -504,7 +492,6 @@ describe("machines without a base", () => {
 				"",
 			].join("\n"),
 		});
-		// omp's first-run setup, plus one managed key the user set before installing; no base record, no updater.
 		writeTree(agentDir, {
 			"config.yml": [
 				"modelRoles:",
@@ -842,7 +829,6 @@ describe("legacy system replacement rule files", () => {
 	if (!Array.isArray(modelEraSection.replacements)) throw new Error("missing model-era rules");
 	const modelEraRules: unknown[] = modelEraSection.replacements;
 	const shipped = readFileSync(join(repoRoot, repoRuleRel), "utf8");
-	/** The rule file the migration commit shipped, which the legacy section converts to; later commits evolve `shipped`. */
 	const migrationEra = spawnSync("git", ["show", `2428f5f:${repoRuleRel}`], { cwd: repoRoot, encoding: "utf8" });
 	if (migrationEra.status !== 0) throw new Error(migrationEra.stderr);
 	const migratedRules = migrationEra.stdout;

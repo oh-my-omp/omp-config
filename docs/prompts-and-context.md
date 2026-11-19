@@ -24,7 +24,7 @@ No extension rewrites the tool definitions OMP sends. The system prompt is rewri
 
 ### system-prompt-replace
 
-Source: `agent/extensions-last/system-prompt-replace/`. Listed as the final entry of `extensions` in `agent/config.yml` and in `agent/config-light.yml`. Its header comment is the reference for keys and matching.
+Source: `agent/extensions-last/system-prompt-replace/`. Listed as the final entry of `extensions` in `agent/config.yml` and in `agent/config-light.yml`.
 
 `before_agent_start` handlers run in load order: native discovery (`~/.omp/agent/extensions/` and `settings.json` modules) → hooks → plugins → `-e` paths → `config.yml` `extensions` → OMP inline extensions. Keeping this extension in `extensions-last/` outside `extensions/` and at the end of the `extensions` list makes it run after every other path-loaded extension in both modes, so its delta follows theirs among a prompt's messages (see [`agent/extensions-last/README.md`](../agent/extensions-last/README.md)).
 
@@ -65,7 +65,7 @@ The updater converts a machine's `system-prompt-replace` section in `omomp.yml` 
 
 ### append-system-model
 
-Source: `agent/extensions/append-system-model/`. Its header comment is the reference for keys and matching.
+Source: `agent/extensions/append-system-model/`.
 
 At every prompt and after every tool call (main session and each subagent, each matched against itself), the extension reads every `APPEND-SYSTEM-<label>.md` beside it (repo-shipped and machine-local files share that directory) and in each directory from the session cwd up to the git root or the home directory, whichever comes first (only `cwd` when neither bounds the walk), plus that directory's `.omp/`. Every fragment that applies is used; there is no override by name. Matching bodies are joined in discovery order into one [delta message](#prompt-files) with source `omp-config/append-system-model`; the system prompt is left unchanged. Files are re-read each time, so a new or edited fragment and a `/model` switch take effect at the next prompt or tool batch without restart, as a delta superseding the earlier one; a subagent turn woken by IRC keeps the delta already in its conversation.
 

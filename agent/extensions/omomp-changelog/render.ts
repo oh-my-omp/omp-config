@@ -2,11 +2,9 @@ import { tr } from "../_shared/i18n.ts";
 import { nestCategories, orderedCategories } from "./changelog.ts";
 import type { Day, Digest } from "./plan.ts";
 
-/** `1 component`, `2 components`; the Chinese text has no plural. */
 const plural = (count: number, en: string, enPlural: string, zh: string): string =>
 	tr(`${count} ${count === 1 ? en : enPlural}`, `${count} ${zh}`);
 
-/** The first line of both layouts. */
 export function headerLine(digest: Digest): string {
 	return [
 		"omomp",
@@ -16,7 +14,6 @@ export function headerLine(digest: Digest): string {
 	].join(" · ");
 }
 
-/** The Chinese name of a category the format names; any other category keeps its heading. */
 function zhCategory(category: string): string {
 	switch (category) {
 		case "Breaking Changes":
@@ -40,14 +37,11 @@ function zhCategory(category: string): string {
 	}
 }
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@18.18.8 src/utils/changelog.ts#categoryLabel
 function categoryLabel(category: string, count: number): string {
 	if (category === "Breaking Changes") return tr(count === 1 ? "breaking change" : "breaking changes", zhCategory(category));
 	return tr(category.toLowerCase(), zhCategory(category));
 }
-// @upstream-end
 
-/** The `summary` layout: the figures, the category counts with the pointer to the command, then one row per component. */
 export function summaryLines(digest: Digest): string[] {
 	const breakdown = orderedCategories(digest.categories).map((category) => {
 		const count = digest.categories.get(category) ?? 0;
@@ -63,7 +57,6 @@ export function summaryLines(digest: Digest): string[] {
 	];
 }
 
-/** Markdown of release days as given: `## <date>`, then `### <package> vX.Y.Z` with that release's entries. */
 export function daysMarkdown(days: readonly Day[]): string {
 	return days
 		.map((day) => {

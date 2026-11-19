@@ -5,27 +5,18 @@ import { z } from "@oh-my-pi/pi-coding-agent";
 import { loadCapability } from "@oh-my-pi/pi-coding-agent/capability";
 import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "@oh-my-pi/pi-coding-agent/capability/rule";
 
-/** Rule directories scanned from the cwd up to the repository root (only the cwd outside a repository). */
 const PROJECT_RULE_DIRS = [".claude/rules", ".agents/rules", ".pi/rules"] as const;
-/** Claude Code's user-level rule directory, scanned in every session. */
 const USER_RULE_DIR = path.join(os.homedir(), ".claude", "rules");
 
-/**
- * Placement of a rule that applies everywhere. An always-apply rule keeps the form its body is
- * searched for in OMP's prompt, normalized once here instead of on every delivery.
- */
 type UnscopedKind =
 	| { readonly kind: "always"; readonly normalizedBody: string }
 	| { readonly kind: "catalog"; readonly description: string };
 
-/** Text with whitespace runs collapsed to one space and trimmed: how a rule body and OMP's prompt are compared. */
 export function normalizeWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-/** A scanned rule without `paths`, rendered into the repo-rules delta. */
 export interface UnscopedRule {
-	/** Real path of the rule file. */
 	readonly id: string;
 	readonly name: string;
 	readonly displayPath: string;
@@ -33,37 +24,21 @@ export interface UnscopedRule {
 	readonly kind: UnscopedKind;
 }
 
-/**
- * Where OMP itself puts a native rule (`bucketRules`: alwaysApply before description). When the
- * rule has `paths`, it stays there; the delta quotes it as limited to its `paths`, and the extension
- * loads it by path.
- */
 type NativePlacement = { readonly kind: "always"; readonly content: string } | { readonly kind: "rulebook" } | { readonly kind: "dropped" };
 
-/** Who discovered a path-scoped rule. Native rules keep OMP's agent scope. */
 type ScopedOrigin =
 	| { readonly kind: "scan" }
 	| { readonly kind: "native"; readonly agents: string[] | undefined; readonly placement: NativePlacement };
 
-/**
- * One compiled `paths` pattern. Claude Code patterns are relative to the rule's base directory; a
- * pattern starting with `~/` or absolute by `path.isAbsolute` (`/…`, and on Windows also `C:/…` or
- * `C:\…`; an extension of Claude Code's syntax, where such a pattern matches nothing) is matched
- * against the touched file's absolute path, `~` being the home directory.
- */
 type PathGlob = { readonly kind: "relative"; readonly glob: Bun.Glob } | { readonly kind: "absolute"; readonly glob: Bun.Glob };
 
-/** A rule with Claude Code `paths` frontmatter: loaded only when a matching file is touched. */
 export interface ScopedRule {
-	/** Real path of the rule file: identity for deduplication and the loaded marker. */
 	readonly id: string;
 	readonly name: string;
 	readonly body: string;
 	readonly patterns: readonly string[];
 	readonly globs: readonly PathGlob[];
-	/** Directory relative patterns are relative to. */
 	readonly base: string;
-	/** `base` resolved through symlinks, once when the rule is collected. */
 	readonly realBase: string;
 	readonly origin: ScopedOrigin;
 }
@@ -74,7 +49,6 @@ export interface RuleCatalog {
 	readonly scoped: readonly ScopedRule[];
 }
 
-/** The frontmatter keys this extension reads; their values are checked where they are used. */
 const fieldsSchema = z.object({
 	paths: z.unknown().optional(),
 	alwaysApply: z.unknown().optional(),
@@ -89,7 +63,6 @@ type Frontmatter =
 
 const FRONTMATTER = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 
-/** Splits leading `---` frontmatter; YAML that does not parse to a mapping (or nothing) is invalid. */
 function parseFrontmatter(raw: string): Frontmatter {
 	const text = raw.replace(/^\uFEFF/, "").trimStart();
 	const match = FRONTMATTER.exec(text);
@@ -99,7 +72,6 @@ function parseFrontmatter(raw: string): Frontmatter {
 	try {
 		fields = Bun.YAML.parse(match[1] ?? "");
 	} catch {
-		// Claude Code ignores frontmatter that does not parse and loads the rule unconditionally.
 		return { kind: "invalid", body };
 	}
 	if (fields === null || fields === undefined) return { kind: "valid", body, fields: {} };
@@ -107,7 +79,6 @@ function parseFrontmatter(raw: string): Frontmatter {
 	return parsed.success ? { kind: "valid", body, fields: parsed.data } : { kind: "invalid", body };
 }
 
-/** Splits a comma-separated `paths` string at commas outside `{…}` and `[…]`, so brace alternatives survive. */
 function splitPatterns(value: string): string[] {
 	const out: string[] = [];
 	let braces = 0;
@@ -129,7 +100,6 @@ function splitPatterns(value: string): string[] {
 	return out;
 }
 
-/** Claude Code `paths`: a YAML list or a comma-separated string of globs relative to the rule's base directory, or absolute (`~/` or `path.isAbsolute`). */
 function parsePaths(value: unknown): string[] {
 	let items: string[];
 	if (typeof value === "string") items = splitPatterns(value);
@@ -143,7 +113,6 @@ function realpathOr(filePath: string): string {
 	try {
 		return fs.realpathSync(filePath);
 	} catch {
-		// A path that cannot be resolved keeps its lexical form.
 		return filePath;
 	}
 }
@@ -160,11 +129,9 @@ function repoRoot(cwd: string): string {
 
 interface ScanDir {
 	readonly dir: string;
-	/** Directory `paths` patterns of rules in `dir` are relative to. */
 	readonly base: string;
 }
 
-/** cwd first, then each ancestor up to the repository root, then the user-level directory. */
 function scanDirs(cwd: string): ScanDir[] {
 	const root = repoRoot(cwd);
 	const dirs: ScanDir[] = [];
@@ -181,8 +148,6 @@ function scanDirs(cwd: string): ScanDir[] {
 }
 
 function markdownFiles(dir: string, visited = new Set<string>()): string[] {
-	// Each real directory is expanded once per traversal: a symlink that points back at an
-	// already-expanded directory contributes nothing, which bounds the walk on symlink loops.
 	let realDir: string;
 	try {
 		realDir = fs.realpathSync(dir);
@@ -195,7 +160,6 @@ function markdownFiles(dir: string, visited = new Set<string>()): string[] {
 	try {
 		entries = fs.readdirSync(dir, { withFileTypes: true });
 	} catch {
-		// Missing or unreadable rule directories contribute no rules.
 		return [];
 	}
 	let out: string[] = [];
@@ -210,7 +174,6 @@ function markdownFiles(dir: string, visited = new Set<string>()): string[] {
 				isDirectory = stat.isDirectory();
 				isFile = stat.isFile();
 			} catch {
-				// A dangling symlink contributes no rules.
 				continue;
 			}
 		}
@@ -224,7 +187,6 @@ function readText(filePath: string): string | null {
 	try {
 		return fs.readFileSync(filePath, "utf8");
 	} catch {
-		// A rule file may disappear or become unreadable after discovery.
 		return null;
 	}
 }
@@ -232,7 +194,6 @@ function readText(filePath: string): string | null {
 function compilePattern(pattern: string): PathGlob {
 	if (pattern.startsWith("~/"))
 		return { kind: "absolute", glob: new Bun.Glob(path.posix.join(os.homedir().split(path.sep).join("/"), pattern.slice(2))) };
-	// Bun.Glob patterns are `/`-separated on every platform, like the absolute paths they are matched against.
 	if (path.isAbsolute(pattern)) return { kind: "absolute", glob: new Bun.Glob(pattern.split(path.sep).join("/")) };
 	return { kind: "relative", glob: new Bun.Glob(pattern) };
 }
@@ -241,7 +202,6 @@ function scopedRule(id: string, name: string, body: string, patterns: string[], 
 	return { id, name, body, patterns, globs: patterns.map(compilePattern), base, realBase: realpathOr(base), origin };
 }
 
-/** Placement of a scanned file: `paths` wins; otherwise the existing alwaysApply/description semantics. */
 function classifyScanned(frontmatter: Frontmatter): { readonly kind: "scoped"; readonly patterns: string[] } | UnscopedKind {
 	switch (frontmatter.kind) {
 		case "absent":
@@ -284,12 +244,6 @@ function collectScanned(cwd: string, unscoped: Map<string, UnscopedRule>, scoped
 	}
 }
 
-/**
- * Base directory of a native rule. User-level rules match against the cwd (Claude Code's user-rule
- * semantics). A project rule inside a dot directory of the cwd or one of its ancestors (`.omp`,
- * `.claude`, `.cursor`, `.github`, …) matches against that ancestor; a rule under a plugin or
- * extension root's `rules/` matches against that root. Anything else has no defined base.
- */
 function nativeBase(rule: Rule, cwd: string): string | null {
 	if (rule._source.level !== "project") return cwd;
 	let dir = cwd;
@@ -307,24 +261,16 @@ function nativeBase(rule: Rule, cwd: string): string | null {
 	return null;
 }
 
-/** Native rules `paths` can scope: all but OMP's bundled defaults and TTSR rules, which OMP triggers itself. */
 function nativeDefersToPaths(rule: Rule): boolean {
 	if (rule._source.provider === BUILTIN_DEFAULTS_PROVIDER_ID) return false;
 	return !((rule.condition?.length ?? 0) > 0 || (rule.astCondition?.length ?? 0) > 0 || rule.question !== undefined);
 }
 
 interface NativeCollection {
-	/** Real paths of rule files OMP places itself; the scan does not render them again. */
 	readonly placed: ReadonlySet<string>;
-	/** Path-scoped rule files skipped for lack of a base directory. */
 	readonly unbased: readonly string[];
 }
 
-/**
- * Native rules re-read from disk for the `paths` field OMP does not parse. A file the scan already
- * holds as path-scoped keeps its scanned base but takes OMP's agent scope and placement, or leaves
- * the path-scoped set when OMP triggers it itself (TTSR).
- */
 async function collectNative(cwd: string, scoped: Map<string, ScopedRule>): Promise<NativeCollection> {
 	const placed = new Set<string>();
 	const unbased: string[] = [];
@@ -363,7 +309,6 @@ async function collectNative(cwd: string, scoped: Map<string, ScopedRule>): Prom
 	return { placed, unbased };
 }
 
-/** Collects every rule for `cwd`. `unbased` lists native path-scoped rules skipped for lack of a base directory. */
 export async function collectRules(cwd: string): Promise<{ readonly catalog: RuleCatalog; readonly unbased: readonly string[] }> {
 	const unscoped = new Map<string, UnscopedRule>();
 	const scoped = new Map<string, ScopedRule>();
@@ -377,7 +322,6 @@ export async function collectRules(cwd: string): Promise<{ readonly catalog: Rul
 	return { catalog, unbased };
 }
 
-/** Normalised `/`-separated path of `file` relative to `base`, or null when `file` is not inside `base`. */
 function relativeInside(base: string, file: string): string | null {
 	const rel = path.relative(base, file);
 	if (rel === "" || path.isAbsolute(rel)) return null;
@@ -385,28 +329,21 @@ function relativeInside(base: string, file: string): string | null {
 	return rel.split(path.sep).join("/");
 }
 
-/** A touched file as the patterns see it: its path, and that path resolved through symlinks once per call. */
 export interface MatchTarget {
 	readonly file: string;
 	readonly real: string;
 }
 
-/** The touched file and its form resolved through symlinks. */
 export function matchTarget(file: string): MatchTarget {
 	return { file, real: realpathOr(file) };
 }
 
-/**
- * Whether a touched file matches the rule, lexically or with both paths resolved through symlinks:
- * relative patterns against the path inside the base directory, absolute ones against the whole path.
- */
 export function ruleMatches(rule: ScopedRule, target: MatchTarget): boolean {
 	if (matchesInside(rule, rule.base, target.file)) return true;
 	if (rule.realBase === rule.base && target.real === target.file) return false;
 	return matchesInside(rule, rule.realBase, target.real);
 }
 
-/** The rule's globs against `target` seen from `base`; the relative and slash forms are built only when a glob needs them. */
 function matchesInside(rule: ScopedRule, base: string, target: string): boolean {
 	let relative: string | null = null;
 	let relativeKnown = false;

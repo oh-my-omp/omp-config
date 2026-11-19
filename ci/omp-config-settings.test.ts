@@ -1,9 +1,3 @@
-// The updater's SETTINGS step: the plugin `omp-config` is linked from the
-// agent dir, the omp-config sections of a machine's omomp file move into its
-// plugin settings and their list data into md files, sections of other owners
-// stay, and anything that cannot move stays with a note. OMP is replaced by a
-// stand-in `omp` on PATH that keeps its plugin state in a JSON file; the real
-// CLI behind these commands is exercised by the sandbox acceptance runs.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -56,10 +50,6 @@ function source(...snapshots: Record<string, string | null>[]): string {
 	return dir;
 }
 
-/**
- * Stand-in for the four `omp plugin` commands the updater uses; state and calls in $FAKE_OMP_STATE. Like OMP, `config list` lays the cwd's `.omp/plugin-overrides.json` over the machine's settings.
- * With `clobber`, `config list` also plays another writer of the agent dir's `config.yml`, rebinding a `"@smol"` `input-polish` role to `x/other`.
- */
 const FAKE_OMP = `#!/usr/bin/env bun
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -138,7 +128,6 @@ const SHIPPED_RULES =
 	"tool-topic-injection:\n  rules:\n    - id: read-ssh\n      tool: read\n      parameter: path\n      pattern: '^ssh://'\n      topic: tool://read/ssh\n";
 const HOST_RULES = `tool-topic-injection:\n  rules:\n    - id: read-ssh\n      tool: read\n      parameter: path\n      pattern: ^ssh://\n      topic: tool://read/ssh\n`;
 
-/** A repo whose history once shipped the omomp file, and now ships the manifest instead. */
 const repo = (extra: Record<string, string | null> = {}): string =>
 	source(
 		{ "agent/omomp.yml": `${SHIPPED_RULES}lang-nag:\n  language: 中文\n  instruction: 说中文\n` },
@@ -215,7 +204,6 @@ describe("settings move", () => {
 			"omp-config-autoupdate.enabled": true,
 			"omp-config-autoupdate.exclude": "PERSONALITY.md",
 		});
-		// The exclude list still in the omomp file already applied in this run.
 		expect(readFileSync(join(agentDir, "PERSONALITY.md"), "utf8")).toBe("mine\n");
 		expect(report.skipped).toContainEqual({ path: join(agentDir, "PERSONALITY.md"), reason: expect.stringContaining("exclude") });
 		expect(readFileSync(join(agentDir, "omomp.yml"), "utf8")).toBe("omp-unified-exec:\n  stop: off\n");
@@ -225,7 +213,6 @@ describe("settings move", () => {
 		expect(readFileSync(join(agentDir, "agents/free1.md"), "utf8")).toBe(
 			"---\nname: task:free1\ndescription: worker\ncompletionJudge: true\nsplitCheck: true\n---\nBody.\n",
 		);
-		// fallbackRole becomes a reference to that role, only where the machine assigned none.
 		expect(Bun.YAML.parse(readFileSync(join(agentDir, "config.yml"), "utf8"))).toEqual({
 			modelRoles: { default: "x/main", "task-split-check": "x/pinned:medium", "input-polish": "@smol" },
 		});
@@ -245,7 +232,6 @@ describe("settings move", () => {
 		expect(omp.state().calls.filter((call) => call.includes(" set ") || call.includes(" link "))).toEqual(
 			state.calls.filter((call) => call.includes(" set ") || call.includes(" link ")),
 		);
-		// The exclude option is now the plugin setting.
 		expect(readFileSync(join(agentDir, "PERSONALITY.md"), "utf8")).toBe("mine\n");
 	});
 
@@ -271,7 +257,6 @@ describe("settings move", () => {
 			"omomp.yml": "lang-nag:\n  language: 中文\n  instruction: from omomp\nomp-config-autoupdate:\n  exclude:\n    - PERSONALITY.md\n",
 			"PERSONALITY.md": "mine\n",
 		});
-		// The updater runs from a project whose overrides set both keys; OMP lists them only for that cwd.
 		const project = temp("omp-settings-project-");
 		writeTree(project, {
 			".omp/plugin-overrides.json": JSON.stringify({
@@ -380,7 +365,6 @@ describe("settings move", () => {
 	});
 });
 
-// A project's `.omp/omomp.*`: moved into the project itself when a main session starts there.
 describe("project sections move", () => {
 	const manifest = parseManifest(MANIFEST, "package.json");
 	const PROJECT_OMOMP = [
@@ -425,7 +409,6 @@ describe("project sections move", () => {
 			"input-polish": { fallbackRole: "smol" },
 			"omomp-lang": { language: "en" },
 		});
-		// Only sections with no project-level place are left: nothing to write, so nothing to announce.
 		const again = planProject(project, manifest);
 		expect(again.kind === "stuck" && again.kept.map((entry) => entry.section).toSorted()).toEqual(["input-polish", "omomp-lang"]);
 	});

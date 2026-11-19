@@ -6,7 +6,6 @@ import { loadCatalog } from "../agent/extensions/tool-topics/catalog.ts";
 
 const CATALOG_DIR = join(import.meta.dir, "..", "agent", "extensions", "tool-topics");
 
-/** The shipped inject rules, verbatim from the retired `omomp.yml` `tool-topic-injection` section. */
 const SHIPPED: Readonly<Record<string, { readonly tool: string; readonly parameter: string; readonly pattern: string }>> = {
 	"read-ssh": { tool: "read", parameter: "path", pattern: "^ssh://" },
 	"eval-ssh-cat": { tool: "eval", parameter: "code", pattern: "\\bssh\\b[^\\n;|&]*\\bcat\\b" },

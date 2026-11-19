@@ -1,6 +1,5 @@
 import { z } from "@oh-my-pi/pi-coding-agent";
 
-/** A host tool call that runs shell text or eval code, read from a `tool_call` event. `reset` is the eval cell's kernel reset flag. */
 export type WatchedCall =
 	| { readonly kind: "shell"; readonly tool: DeviceTool; readonly command: string }
 	| { readonly kind: "eval"; readonly language: string; readonly code: string; readonly reset: boolean };
@@ -11,13 +10,11 @@ const evalSchema = z.object({ language: z.string(), code: z.string(), reset: z.b
 
 type DeviceTool = "bash" | "bash_bg";
 
-/** Device paths that carry a shell command, mapped to the tool the payload runs. */
 const DEVICE_TOOLS: Record<string, DeviceTool> = {
 	"xd://bash": "bash",
 	"xd://bash_bg": "bash_bg",
 };
 
-/** Device JSON is untrusted; malformed or non-shell payloads are intentionally ignored. */
 function deviceShellCall(path: string, content: string): WatchedCall | null {
 	const tool = DEVICE_TOOLS[path];
 	if (tool === undefined) return null;
@@ -25,11 +22,8 @@ function deviceShellCall(path: string, content: string): WatchedCall | null {
 	try {
 		payload = JSON.parse(content);
 	} catch {
-		// Invalid device JSON is an expected non-shell payload.
 		return null;
 	}
-	// Name the tool the payload runs, not the device path: the judge and the nag
-	// then describe the same operation the same way whichever lane called it.
 	return shellCall(tool, payload);
 }
 function shellCall(tool: DeviceTool, input: unknown): WatchedCall | null {
