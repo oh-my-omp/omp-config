@@ -50,6 +50,11 @@ function judgeLaunch(launch: JsLaunch, fragment: string, ctx: Context): Verdict 
 			return launch.words === null
 				? nonLiteral("the command list")
 				: classify(ctx.brush, { kind: "argv", words: launch.words }, ctx.depth + 1);
+		case "shellHelper":
+			// The eval `sh` helper runs on the embedded bash engine, whatever the platform.
+			return launch.text === null
+				? nonLiteral("the command handed to `sh`")
+				: classify(ctx.brush, { kind: "script", text: launch.text }, ctx.depth + 1);
 		case "bunShell":
 			return launch.text === null
 				? block("nonLiteral", fragment, "the `Bun.$` template interpolates values, so it is not a literal command")
@@ -116,7 +121,8 @@ function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Contex
 /**
  * Classifies a js eval cell: fs deletion APIs block, and every command handed to
  * a shell or spawned is classified (`shell` for child_process strings, `brush`
- * for `Bun.$`, `Bun.spawn` argv and the `tool.bash` bridge). `carry` holds the
+ * for `Bun.$`, the `sh` helper, `Bun.spawn` argv and the `tool.bash` bridge).
+ * `carry` holds the
  * module and launcher names the session's earlier cells bound; the judgement
  * returns the names this cell's bindings leave for later cells. Parse failures
  * throw to the hook boundary, which blocks the call.

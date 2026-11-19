@@ -80,7 +80,9 @@
 //     calls), and the kernel's shell lines (`!cmd`, `x = !cmd`, `%sx`,
 //     `%system` at any line start outside strings) and `%%bash` body: the
 //     literal command is classified as a system-shell script (posix on macOS
-//     and Linux, cmd on Windows; `%%bash` stays posix); launches without a
+//     and Linux, cmd on Windows; `%%bash` stays posix); the `sh` helper's
+//     command is a posix script on every platform, since it runs on omp's
+//     embedded bash engine; launches without a
 //     shell — `subprocess` `run|call|check_call|check_output|Popen`,
 //     `asyncio.create_subprocess_exec` — classify a literal argv (argv[0]
 //     non-literal → blocked); the `tool.bash({"command": …})` bridge and
@@ -101,12 +103,14 @@
 //     `spawn|spawnSync|execFile|execFileSync` as argv (a script when the
 //     options may start a shell: `shell` not literally false/null/undefined,
 //     or options not spelled out), `Bun.spawn|spawnSync` argv, `Bun.$`
-//     templates (posix), the `tool.bash({command})` bridge and
-//     `tool.write` to `xd://bash`.
+//     templates and the `sh` helper (`sh("…")`, `globalThis.sh`, a tagged
+//     template; posix on every platform), the `tool.bash({command})` bridge
+//     and `tool.write` to `xd://bash`.
 //     A launch whose command the source does not fix blocks as non-literal: a
 //     spread argument or argv element, or an argument object with a spread,
 //     method, accessor, computed non-literal or duplicate key. Launcher aliases
-//     (`const s = Bun.spawn`, `tool.bash`, child_process functions, and
+//     (`const s = Bun.spawn`, `tool.bash`, `sh`, `globalThis.sh`,
+//     child_process functions, and
 //     `child_process`/`bun` module aliases) judge as their launcher and carry to
 //     the session's later js cells until a `reset: true` cell, a `session_start`
 //     or `session_switch` (a new js kernel); a python reset does not clear them.
