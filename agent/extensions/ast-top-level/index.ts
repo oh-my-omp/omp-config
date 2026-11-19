@@ -38,9 +38,9 @@
 // escaping into omp.
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { isMountableUnderXdev, XDEV_KEEP_TOP_LEVEL } from "@oh-my-pi/pi-coding-agent/tools/xdev";
-import { applyActiveTools } from "../_shared/active-tools.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
+import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";
 
 const TOOLS = ["ast_grep", "ast_edit"] as const;
 

@@ -43,8 +43,9 @@ Behavior is described where it lives; read the matching one before changing it:
   are never overwritten; the marker, not the filename, decides. Never write the
   contiguous Otty marker literal in the updater: it would skip updating itself.
 - **Never commit** runtime state or anything credential-bearing (databases,
-  locks, sessions, caches, logs, `models.yml`, `node_modules/`, `bun.lock`),
-  including files `.gitignore` misses.
+  locks, sessions, caches, logs, `models.yml`, `node_modules/`),
+  including files `.gitignore` misses. `bun.lock` is committed: the
+  `omomp-check` workflow installs with `bun install --frozen-lockfile`.
 - **Load order.** `extensions-last/system-prompt-replace/index.ts` stays the
   last `config.yml` `extensions` entry and outside `extensions/`. Order inside
   `extensions/` is unspecified, so filename prefixes cannot order hooks.
@@ -52,7 +53,7 @@ Behavior is described where it lives; read the matching one before changing it:
   definitions OMP builds: no `systemPrompt` in a `before_agent_start` result,
   no system or tools edit in `before_provider_request` or any other hook. A
   customization reaches the model as the extension's delta stream from
-  `_shared/context-delta.ts`.
+  `_shared/omomp-shared/context-delta.ts`.
 - **Subagents.** Model bindings live only in `config.yml`
   `task.agentModelOverrides`; agent `.md` files carry no `model` field.
   Non-agent notes in `agent/agents/` are `.txt`, because every `.md` there is
@@ -88,7 +89,10 @@ review.
 - **Sharing:** no cross-extension imports. Code used by two or more extensions
   lives in `_shared/`, imported by relative path with `.ts`. `_shared` holds
   mechanics; retries, timeouts, wording and failure-to-null rules stay in the
-  caller.
+  caller. `_shared/omomp-shared/` holds the byte-identical copies of
+  `oh-my-omp/shared` files declared in `omomp-shared.json`; they are never
+  edited here (change them in shared; a sync PR refreshes the copies) and are
+  imported like any other `_shared` module.
 - **Config and files:** an extension's settings are `<extension>.<key>` keys
   of the `omp-config` plugin manifest (`_shared/package.json`), read through
   `_shared/plugin-settings.ts` (`defineSettings` / `readSettings` /
@@ -125,7 +129,7 @@ review.
   A tool that is an `xd://` device or serves only some sessions registers
   `defaultInactive` and is activated on `session_start` / `session_switch`,
   never in `before_agent_start`. Every active-set change goes through
-  `_shared/active-tools.ts`, which lists tools in canonical order: built-in tools in registry order first, all others sorted by name.
+  `_shared/omomp-shared/active-tools.ts`, which lists tools in canonical order: built-in tools in registry order first, all others sorted by name.
 - **Imports:** host package roots (`pi-agent-core`, `pi-ai`, `pi-catalog`,
   `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins
   and relative paths. A host subpath is used only if an extension already loads
@@ -145,7 +149,7 @@ review.
 ```bash
 bun install          # dev dependencies (types only; runtime uses the copies inside omp)
 bun run check        # biome check . && tsc --noEmit
-bun run test         # bun test ci
+bun run test         # bun test --isolate ci
 bun run format       # biome check --write .
 bun ci/check.ts      # configuration check in a throwaway HOME (exit 0 clean, 1 diagnostics, 2 free model unavailable)
 ./plugin-audit.sh    # install-plugins.sh vs `omp plugin list`

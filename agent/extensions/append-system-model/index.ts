@@ -57,7 +57,7 @@
 // is skipped, because OMP discards its result.
 //
 // OUTPUT. The bodies of every applying fragment, in discovery order, joined
-// into one delta of `_shared/context-delta.ts` with source
+// into one delta of `_shared/omomp-shared/context-delta.ts` with source
 // `omp-config/append-system-model`: a hidden `<system-reminder>` message
 // appended to the conversation (after the prompt, or after the tool batch). It
 // is sent only when it differs from the source's effective delta in the current
@@ -67,16 +67,17 @@
 // FAILURE POLICY. An invalid or unreadable file is skipped on its own and
 // warned once per path and reason (UI notification, or stderr when headless,
 // plus a log line); the other files still apply. The prompt and tool results
-// are never blocked. It registers `before_agent_start`, `tool_result` and the
-// delta stream's `turn_start`, and writes no files.
+// are never blocked. It registers `before_agent_start`, `tool_result` and
+// `turn_start` (which clears the delta stream's same-turn batch), and writes
+// no files.
 // ============================================================================
 
 import { readFileSync } from "node:fs";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { createDeltaStream, type Delta } from "../_shared/context-delta.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
+import { createDeltaStream, type Delta } from "../_shared/omomp-shared/context-delta.ts";
 import {
 	CONDITION_KEYS,
 	type ConditionProblem,
@@ -192,7 +193,10 @@ function fragmentDelta(pi: ExtensionAPI, ctx: ExtensionContext): Delta {
 }
 
 export default function appendSystemModel(pi: ExtensionAPI): void {
-	const deltas = createDeltaStream(pi, "append-system-model");
+	const deltas = createDeltaStream("omp-config/append-system-model");
+	pi.on("turn_start", () => {
+		deltas.turnStarted();
+	});
 	pi.on("before_agent_start", (event, ctx) => {
 		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;

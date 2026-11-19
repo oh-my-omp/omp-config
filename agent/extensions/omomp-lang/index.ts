@@ -21,7 +21,8 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
-import { LANGUAGE_ENV, omompLangSetting, parseLanguage, tr } from "../_shared/i18n.ts";
+import { LANGUAGE_ENV, omompLangSetting, tr } from "../_shared/i18n.ts";
+import { parseLanguage } from "../_shared/omomp-shared/i18n.ts";
 
 type Export =
 	| { readonly kind: "exported"; readonly language: string }
@@ -34,7 +35,7 @@ function exportConfigured(): Export {
 			return { kind: "invalid", reason: omompLangSetting.reason };
 		case "ok": {
 			const launch = parseLanguage(process.env[LANGUAGE_ENV]);
-			if (launch !== null) {
+			if (launch !== undefined) {
 				return { kind: "launch-wins", launch, configured: omompLangSetting.value.language };
 			}
 			process.env[LANGUAGE_ENV] = omompLangSetting.value.language;

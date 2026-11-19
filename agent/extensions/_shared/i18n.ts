@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { z } from "@oh-my-pi/pi-coding-agent";
+import { LANGUAGE_ENV, type Language, languageFrom, parseLanguage } from "./omomp-shared/i18n.ts";
 import { defineSettings, readSettings } from "./plugin-settings.ts";
 
 /**
@@ -24,14 +25,13 @@ import { defineSettings, readSettings } from "./plugin-settings.ts";
  * setting. It is read once per process (top-level `await` at module load), so
  * a change applies from the next OMP start.
  *
+ * Steps 1, 3 and 4 are the shared resolver of `omomp-shared/i18n.ts`
+ * (`parseLanguage`, `languageFrom`); only the setting step is local to
+ * omp-config, so `language()` composes the three steps itself.
+ *
  * Text sent to the model (prompts, steers, tool descriptions, tool-result
  * content) does not go through here.
  */
-
-type Language = "en" | "zh";
-
-/** The environment variable that names the language explicitly. */
-export const LANGUAGE_ENV = "OMOMP_LANG";
 
 const sectionSchema = z.object({ language: z.enum(["en", "zh"]) }).strict();
 
@@ -41,21 +41,12 @@ const omompLangSection = defineSettings(join(import.meta.dir, "..", "omomp-lang"
 /** The `omomp-lang` plugin settings, read once at module load and kept for the life of the process. */
 export const omompLangSetting = await readSettings(omompLangSection, { kind: "machine" });
 
-/** `en` or `zh` when `value` names one (any case, surrounding space ignored). */
-export function parseLanguage(value: string | undefined): Language | null {
-	const normalized = value?.trim().toLowerCase();
-	return normalized === "en" || normalized === "zh" ? normalized : null;
-}
+export { LANGUAGE_ENV };
 
 function language(): Language {
-	const explicit = parseLanguage(process.env[LANGUAGE_ENV]);
-	if (explicit !== null) return explicit;
+	if (parseLanguage(process.env[LANGUAGE_ENV]) !== undefined) return languageFrom(process.env);
 	if (omompLangSetting.kind === "ok") return omompLangSetting.value.language;
-	for (const key of ["LC_ALL", "LC_MESSAGES", "LANG"]) {
-		const value = process.env[key]?.trim();
-		if (value) return value.toLowerCase().startsWith("zh") ? "zh" : "en";
-	}
-	return "en";
+	return languageFrom(process.env);
 }
 
 /** The text for the current language; both are written where the text is used, English first. */

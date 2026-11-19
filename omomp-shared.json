@@ -1,0 +1,4 @@
+{
+	"directory": "agent/extensions/_shared/omomp-shared",
+	"files": ["active-tools.ts", "biome.base.json", "context-delta.ts", "i18n.ts", "internal-url.ts", "todo-read.ts"]
+}
