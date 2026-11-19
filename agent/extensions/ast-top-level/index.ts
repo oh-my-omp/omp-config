@@ -27,7 +27,7 @@
 // LIFETIME. The table is process-wide and outlives the extension: disabling
 // the extension takes effect after a restart.
 //
-// Relies on OMP internals (`@oh-my-pi/pi-coding-agent/tools/xdev`:
+// Relies on OMP internals (`@oh-my-pi/pi-coding-agent` package root:
 // `XDEV_KEEP_TOP_LEVEL`, `isMountableUnderXdev`); re-verify after every OMP
 // upgrade.
 // ============================================================================
@@ -36,8 +36,7 @@
 // is no longer consulted is logged at load and shown on each main session
 // start; the tools then stay devices. Hook failures are logged without
 // escaping into omp.
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { isMountableUnderXdev, XDEV_KEEP_TOP_LEVEL } from "@oh-my-pi/pi-coding-agent/tools/xdev";
+import { type ExtensionAPI, isMountableUnderXdev, XDEV_KEEP_TOP_LEVEL } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";

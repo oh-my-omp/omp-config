@@ -8,7 +8,7 @@
  * counters, fake context ids, user messages, command changes or body cache.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { createContextDelivery } from "../_shared/context-delivery.ts";
 import { errorText } from "../_shared/errors.ts";
 

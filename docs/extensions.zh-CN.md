@@ -21,7 +21,7 @@
 | 11 | `turn-judge` | [turn-judge](#turn-judge) | 主 + 子，按文件条件 | 否 | `TURN-JUDGE-*.md`（仓库示例或本机文件） | 编写判定问题、触发规则、提醒和会话条件，绑定适合的判定或聊天模型 |
 | 12 | `lang-nag` | [lang-nag](#lang-nag) | 主会话 | 是 | `lang-nag.language`、`lang-nag.instruction` | 在本机或项目中选择回复语言与提醒措辞；需要专用聊天判定时绑定 `@lang-nag` |
 | 13 | `child-memory-warning` | [child-memory-warning](#child-memory-warning) | 进程全局，仅 macOS | 是 | `child-memory-warning.thresholdGiB` | 在本机或项目中按自己的硬件和负载选择告警阈值 |
-| 14 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `input-polish.key`、`input-polish.instruction` | 选择快捷键和改写指令；将 `@input-polish` 绑定到自己的可用模型 |
+| 14 | `input-polish` | [input-polish](#input-polish) | 主 TUI | 是 | `input-polish.key`、`input-polish.instruction` | 选择快捷键和改写指令；将 `@input-polish` 绑定到自己的可用模型；快捷键同时被占用时告警一次 |
 | 15 | `wt-tool` | [wt-tool](#wt-tool) | 主 TUI | 是 | 无配置文件 | 通过工具选择工作树分支，并核对移除时的状态 |
 | 16 | `harness-restart` | [harness-restart](#harness-restart) | 主 TUI | 是 | 无配置文件 | 带原因请求重启，重启后恢复会话 |
 | 17 | `omp-config-autoupdate` | [安装、同步与维护](operations.zh-CN.md#omp-config-autoupdate) | 根主会话 | 是 | `omp-config-autoupdate.enabled`、`.conflicts`、`.exclude` | 通过 `/omp-config-autoupdate` 选择启动更新及冲突处理方式，按需适配冲突 |
@@ -94,8 +94,8 @@
 
 `turn-judge`、`tool-policy-nag` 的 `intent` 通道（`detector: jev` 时）、`watchdog-agent` 的选项模式与 `lang-nag` 以自身扩展名作为 purpose 调用 `agent/extensions/_shared/judge.ts` 中的 `openJudge`。purpose 既是用量记录的标签，也是该扩展自己的模型角色名（`@turn-judge`、`@tool-policy-nag`、`@watchdog-agent`、`@lang-nag`，登记在 `agent/config.yml` 的 `modelTags`）：
 
-1. `@<purpose>` 解析出聊天模型时（在 `/model` 中配置，保存在本机 `modelRoles`），按链顺序由这些模型以提示式判定（`TextJudge`）作答。此时跳过 OMP 的 judge 角色链，该 purpose 不会由原生或本地判定模型作答。`judge` 模型答不好某个扩展的问题时绑定该角色，例如原生判定模型把英文回复判成中文时绑定 `@lang-nag`。
-2. 否则先走 OMP 的 judge 角色链（`resolveJudge`：`modelRoles.judge` → `retry.fallbackChains.judge` → OMP 内置默认链）。跳过无凭据候选，遇到 provider 错误换下一个（401/402/403 使该候选冷却 5 分钟），遇到中止或超时立即停止。从链中第一个原生判定 API 模型起只保留原生候选，`openJudge` 不把当前会话模型加入链中。
+1. `@<purpose>` 解析出聊天模型时（在 `/model` 中配置，保存在本机 `modelRoles`），按链顺序由这些模型以提示式判定（`TextJudge`）作答。模型以 401/402/403/404 拒绝后冷却 5 分钟，与 judge 角色链的候选一致。此时跳过 OMP 的 judge 角色链，该 purpose 不会由原生或本地判定模型作答。`judge` 模型答不好某个扩展的问题时绑定该角色，例如原生判定模型把英文回复判成中文时绑定 `@lang-nag`。
+2. 否则先走 OMP 的 judge 角色链（`resolveJudge`：`modelRoles.judge` → `retry.fallbackChains.judge` → OMP 内置默认链）。跳过无凭据候选，遇到 provider 错误换下一个（401/402/403/404 使该候选冷却 5 分钟，与第 1 条相同；网关 502 且上游凭据不可用时，OMP 也会使该候选冷却），遇到中止或超时立即停止。从链中第一个原生判定 API 模型起只保留原生候选，`openJudge` 不把当前会话模型加入链中。
 3. 没有聊天回退：链解析不出任何模型时 `openJudge` 报 inactive，候选失败时判定失败，由调用方扩展自己的失败策略处理。聊天回退的表达方式是绑定 `@<purpose>` 本身。
 4. 提示式判定的概率为 one-hot（选中项为 1），低于 1 的阈值只看选中项。每次请求都以 purpose 记入会话用量账本，提示式请求另记作答模型所属的角色。相同的原生请求复用 OMP 判定缓存，提示式请求不复用。角色绑定在每次触发时重读。
 
@@ -235,10 +235,11 @@ cwd: /absolute/path/to/leader-checkout
 
 源码：`agent/extensions/input-polish/`。仅在主会话交互式 TUI 运行。
 
-在输入框按下 `input-polish.key` 设置（`omp-config`；默认 `ctrl+enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可设 `alt+enter`）时，用 `@input-polish` 及 `default` 角色链（改写指令取 `input-polish.instruction`，manifest 默认 `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`；项目覆盖优先于机器值）在 `taskDepth: 1` 无工具内存会话中改写草稿，流式显示在输入框上方的只读浮层中（输入框内原草稿不变）：
+在输入框按下 `input-polish.key` 设置（`omp-config`；默认 `ctrl+enter`；不支持 Kitty 键盘协议或 `modifyOtherKeys` 的终端可设 `alt+enter`；omp 保留了该键，选它时总会出现下文「omp 保留了该键」的告警）时，用 `@input-polish` 及 `default` 角色链（改写指令取 `input-polish.instruction`，manifest 默认 `在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。`；项目覆盖优先于机器值）在 `taskDepth: 1` 无工具内存会话中改写草稿，流式显示在输入框上方的只读浮层中（输入框内原草稿不变）：
 
 - 生成完成后按 `Enter` 用改写稿替换输入框内容并提交；按 `Esc` 或 `Ctrl+C` 取消并关闭浮层。
 - 空白草稿及以 `/`、`!`、`$` 开头的草稿不处理。若改写结果改变了 `[Paste #N …]` 或 `[Image #N …]` 占位符的数量或内容，直接报错并显示在浮层中。
+- 主会话交互式 TUI 附着时，若快捷键同时被 omp 或其他扩展占用，每个进程告警一次（写入日志并显示）：点名占用它的 omp 键位动作（可在 `~/.omp/agent/keybindings.yml` 中改绑），或说明 omp 保留了该键，或点名绑定它的扩展。无论哪种情况，`input-polish` 仍占用该快捷键。
 
 ### wt-tool
 
@@ -248,6 +249,8 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 
 - **`wt`**：执行 `/wt [<branch>]`。若当前会话已在 linked worktree 中，首次调用不创建目录，只返回当前 worktree 路径、分支、HEAD、未提交项数、主 checkout 路径与 `confirm` 哈希；需要再次新建时传入该 `confirm` 二次调用。工具描述要求模型在工作区出现自己没做的改动时提出切到 worktree，分不清是否属于干扰时先问用户。
 - **`wt_remove`**：分两步调用。不传 `confirm` 时做只读检查，返回 worktree 与主 checkout 路径、`SAFE`/`UNSAFE`/`BLOCKED` 结论、删除会丢失的文件（staged、unstaged、untracked、ignored，每类最多列 50 项及总数）、主 checkout HEAD 未合并的分支提交（保留在分支上）、运行中任务/子代理阻塞项，以及绑定当前状态指纹的 `confirm` 哈希。传入 `confirm` 二次调用时，在空闲后按 **重检指纹 → `/move <主 checkout>` → 确认新 `cwd` → 再检指纹 → `worktreeRemove(path, true)`** 顺序执行，任一步状态变化即停止并报告停在哪一步。
+
+处于 vibe 模式时，两个工具在调用当场返回错误结果且不排队，`wt_remove` 的只读检查调用同样如此。错误文本说明会话处于 vibe 模式，并含 `exit vibe mode first`，要求先退出 vibe 模式。调用之后才进入 vibe 模式的已排队请求，在执行时被宿主拒绝，结果消息中同样带有 `Exit vibe mode first.`。
 
 ### harness-restart
 
@@ -272,7 +275,7 @@ Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-
 
 `tools.xdev` 开启时，OMP 把 `loadMode` 为 `discoverable` 的已启用工具都挂到 `xd://` 下：它的 schema 不进请求的工具列表，模型要向 `xd://<tool>` 写 JSON 才能调用。内置 `ast_grep` 与 `ast_edit` 都是 discoverable，OMP 也没有让单个工具留在顶层的设置；唯一的豁免是 OMP 进程全局的 `XDEV_KEEP_TOP_LEVEL` 表（`todo`、`yield`、`ask`、`grep`、`web_search`），每次分区都经 `isMountableUnderXdev` 查询它：
 
-- **加载**：把 `ast_grep` 与 `ast_edit` 加进该表（`@oh-my-pi/pi-coding-agent/tools/xdev`），并检查 OMP 已把它们留在顶层。此后每次分区（构建会话、`setActiveTools`、设置重载、MCP 刷新、plan 模式、晚注册的工具、子代理会话）都把两者作为函数工具发送。工具实例与设置开关（`astGrep.enabled`、`astEdit.enabled`）仍归 OMP；`ast_edit` 仍只生成预览，预览经 `xd://resolve` 应用、经 `xd://reject` 放弃。
+- **加载**：把 `ast_grep` 与 `ast_edit` 加进该表，并检查 OMP 已把它们留在顶层。此后每次分区（构建会话、`setActiveTools`、设置重载、MCP 刷新、plan 模式、晚注册的工具、子代理会话）都把两者作为函数工具发送。工具实例与设置开关（`astGrep.enabled`、`astEdit.enabled`）仍归 OMP；`ast_edit` 仍只生成预览，预览经 `xd://resolve` 应用、经 `xd://reject` 放弃。
 - **晚绑定**：OMP 可能在会话已完成工具分区后才绑定本扩展（首帧前无需注册任何东西的扩展会被延后加载）。OMP 会把 `session_start` 补发给晚绑定的扩展；此时含这两个工具之一的会话重新应用一次自身当前工具集，依据该表重新分区；新会话与恢复会话因此按相同顺序列出工具。
 - **生命周期**：该表进程全局且不会还原；停用扩展后重启才生效。
 - **失败处理**：导出被改名时扩展加载失败。表拒绝写入或 OMP 不再查询该表时，加载时记 warning，每次主会话启动弹一次警告；两个工具保持为设备。

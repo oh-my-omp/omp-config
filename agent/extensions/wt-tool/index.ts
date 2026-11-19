@@ -43,6 +43,10 @@
 // disarms the timer; the next such `agent_end` re-arms it. An end interrupted
 // by the user (Esc) cancels the request. Session switch and shutdown drop it.
 //
+// In vibe mode (`ctx.sessionModes`, read at each call) both tools refuse at the call: they return an error
+// result and queue nothing, `wt_remove`'s check-only call included. A request queued before vibe mode was
+// entered meets the host's own refusal when it runs, reported as the next message.
+//
 // While a human command runs, `showError` / `showWarning` / `showStatus` /
 // `present` on the instance are shadowed by recorders that still delegate, so
 // the human sees exactly what the command shows and the agent gets the same
@@ -275,6 +279,8 @@ async function activate(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 /** Why the calling session cannot queue a request, if it cannot. */
 function queueBlocker(runtime: Runtime, ctx: ExtensionContext, tool: string): string | undefined {
 	if (!isEligible(ctx)) return `${tool}: only the main session of the interactive TUI can use this tool.`;
+	if (ctx.sessionModes?.getState().vibe.status === "active")
+		return `${tool}: the session is in vibe mode, so nothing was queued: exit vibe mode first, then call ${tool} again.`;
 	switch (runtime.state.kind) {
 		case "idle":
 			break;

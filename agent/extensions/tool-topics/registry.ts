@@ -1,13 +1,13 @@
 // The `tool://` scheme on OMP's URL router: omp-config's topics for tools it does not own, built once
 // from the catalog. Nothing else registers here; plugin tools serve their own topics as `xd://<tool>/<topic>`.
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
-import type {
-	InternalResource,
-	InternalUrl,
-	ProtocolHandler,
-	SchemeSpec,
-	UrlCompletion,
-} from "@oh-my-pi/pi-coding-agent/internal-urls/types";
+import {
+	type InternalResource,
+	type InternalUrl,
+	InternalUrlRouter,
+	type ProtocolHandler,
+	type SchemeSpec,
+	type UrlCompletion,
+} from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { type RegisterSchemeResult, registerInternalScheme } from "../_shared/omomp-shared/internal-url.ts";
 import type { Topic } from "./catalog.ts";
 
