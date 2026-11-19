@@ -1,7 +1,8 @@
 // ============================================================================
 // system-prompt-replace — wording-level edits of OMP's system prompt, from
 // rule files with per-rule session conditions, delivered as a delta message
-// beside the system prompt, which stays as OMP built it.
+// beside the system prompt while the context is uncompacted, and as the
+// edited system prompt itself once it starts from a compaction.
 //
 // WHY THIS EXISTS. SYSTEM_TEMPLATE.md owns the base workflow. Whole tool
 // descriptions belong to the tool-topics extension (surface + topic index,
@@ -50,25 +51,36 @@
 // order, each to the text the previous one left, across every system-prompt
 // block; that text exists only to find the next rule's matches.
 //
-// INPUT. The system prompt this extension is handed, never changed:
-// `event.systemPrompt` at a prompt, `ctx.getSystemPrompt()` after a tool call.
+// INPUT. The system prompt this extension is handed: `event.systemPrompt` at
+// a prompt, `ctx.getSystemPrompt()` after a tool call.
 //
 // TIMING. Rules are re-read and matched at every prompt (`before_agent_start`)
 // and after every tool call (`tool_result`), in the main session and in every
 // subagent, each matched against its own identity, cwd, model and mode. Edits
-// to rule files and `/model` switches apply from the next of those points;
-// until then requests keep the delta already in the conversation. A revive's
+// to rule files and `/model` switches apply from the next of those points
+// (from the next prompt while the edited prompt is sent); until then
+// requests keep what was already sent. A revive's
 // `before_agent_start` is skipped, because OMP discards its result.
 //
-// OUTPUT. One delta of `_shared/omomp-shared/context-delta.ts` with source
-// `omp-config/system-prompt-replace`: a hidden `<system-reminder>` message
-// appended to the conversation (after the prompt, or after the tool batch)
-// that lists, in rule order, each distinct matched passage and its replaced
-// text, or that the passage does not apply when the replacement is empty. A
-// rule without a match adds nothing. It is sent only when it differs from the
-// source's effective delta in the current context; a changed list supersedes
-// the earlier delta, and when no rule matches any longer a delta saying so
-// supersedes it.
+// OUTPUT, UNCOMPACTED CONTEXT. The system prompt is left as OMP built it, so
+// the cached prefix holds. One delta of `_shared/omomp-shared/context-delta.ts`
+// with source `omp-config/system-prompt-replace`: a hidden `<system-reminder>`
+// message appended to the conversation (after the prompt, or after the tool
+// batch) that lists, in rule order, each distinct matched passage and its
+// replaced text, or that the passage does not apply when the replacement is
+// empty. A rule without a match adds nothing. It is sent only when it differs
+// from the source's effective delta in the current context; a changed list
+// supersedes the earlier delta, and when no rule matches any longer a delta
+// saying so supersedes it.
+//
+// OUTPUT, COMPACTED CONTEXT. When the leaf's branch holds a compaction after
+// its latest `/clear` boundary, the conversation was rebuilt and has no
+// cached prefix to keep: the `before_agent_start` result's `systemPrompt` is
+// the edited prompt, and a delta still in the context is retracted. OMP
+// keeps that prompt for the run and after it until its next base rebuild;
+// after a tool call that finds the agent's prompt edited nothing is sent,
+// otherwise (a rebuild before an agent-initiated run, which skips
+// `before_agent_start`) the delta above is sent until the next prompt.
 //
 // FAILURE POLICY. No file means no delta. An unreadable or invalid file is
 // skipped on its own and warned once per path and reason; the other files
@@ -440,8 +452,12 @@ function renderEdit(edit: Edit): string {
 		: `${passage}reads instead\n<replacement>\n${edit.replacement}\n</replacement>`;
 }
 
-/** The edits of every rule that applies to this session, matched against `systemPrompt`, as one delta. */
-function replacementDelta(pi: ExtensionAPI, ctx: ExtensionContext, systemPrompt: readonly string[]): Delta {
+/** `systemPrompt` after every rule that applies to this session, and the distinct edits in rule order. */
+function applyRules(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	systemPrompt: readonly string[],
+): { readonly blocks: readonly string[]; readonly edits: readonly Edit[] } {
 	let blocks = systemPrompt;
 	const edits: Edit[] = [];
 	const delegation = ctx.model === undefined ? undefined : resolveDelegationBias(ctx.model);
@@ -473,29 +489,59 @@ function replacementDelta(pi: ExtensionAPI, ctx: ExtensionContext, systemPrompt:
 			}
 		}
 	}
+	return { blocks, edits };
+}
+
+/** `edits` as one delta for a request that carries the system prompt unchanged. */
+function editsDelta(edits: readonly Edit[]): Delta {
 	if (edits.length === 0) return { kind: "none" };
 	let body = PREAMBLE;
 	for (const edit of edits) body += `\n\n${renderEdit(edit)}`;
 	return { kind: "text", body };
 }
 
+/**
+ * Whether the leaf's model context starts from a compaction: the branch holds a compaction after
+ * its latest `/clear` boundary, as `buildSessionContext` projects it.
+ */
+function compacted(ctx: ExtensionContext): boolean {
+	const latest = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "compaction" || entry.type === "reset_boundary");
+	return latest?.type === "compaction";
+}
+
 export default function systemPromptReplace(pi: ExtensionAPI): void {
 	const deltas = createDeltaStream("omp-config/system-prompt-replace");
+	// The edited system prompt returned at the latest prompt. OMP keeps it as the agent's prompt
+	// after that run until its next base rebuild, so agent-initiated runs may still send it.
+	let edited: readonly string[] | undefined;
 	pi.on("turn_start", () => {
 		deltas.turnStarted();
 	});
 	pi.on("before_agent_start", (event, ctx) => {
 		// OMP discards the result of a revive.
 		if (event.reason === "revive") return;
+		edited = undefined;
 		try {
-			return deltas.atPrompt(ctx, replacementDelta(pi, ctx, event.systemPrompt));
+			const { blocks, edits } = applyRules(pi, ctx, event.systemPrompt);
+			if (edits.length > 0 && compacted(ctx)) {
+				// A compacted context has no cached prefix to keep: send the edited prompt itself and
+				// retract a delta still in the projection.
+				edited = blocks;
+				return { systemPrompt: [...blocks], ...deltas.atPrompt(ctx, { kind: "none" }) };
+			}
+			return deltas.atPrompt(ctx, editsDelta(edits));
 		} catch (error) {
 			pi.logger.warn("system-prompt-replace: cannot deliver edits", { error: errorText(error) });
 		}
 	});
 	pi.on("tool_result", (_event, ctx) => {
+		const systemPrompt = ctx.getSystemPrompt();
+		// The request already carries the edited prompt; rule-file changes apply from the next prompt.
+		if (edited !== undefined && edited.length === systemPrompt.length && edited.every((block, index) => block === systemPrompt[index])) {
+			return;
+		}
 		try {
-			return deltas.afterTools(ctx, replacementDelta(pi, ctx, ctx.getSystemPrompt()));
+			return deltas.afterTools(ctx, editsDelta(applyRules(pi, ctx, systemPrompt).edits));
 		} catch (error) {
 			pi.logger.warn("system-prompt-replace: cannot deliver edits", { error: errorText(error) });
 		}
