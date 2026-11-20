@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ToolExecutionEndEvent } from "@oh-my-pi/pi-coding-agent/modes/rpc/wire/rpc-wire.generated";
 
 export type ToolCall = {
-	readonly tool: string;
+	readonly tool: ToolExecutionEndEvent["toolName"];
 	readonly args: { readonly [key: string]: unknown };
 	readonly isError: boolean;
 	readonly text: string;

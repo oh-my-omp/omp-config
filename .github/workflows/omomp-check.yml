@@ -1,6 +1,8 @@
 name: omomp-check
 on:
   pull_request:
+  schedule:
+    - cron: "0 18 * * *"
   push:
     branches: [main]
 permissions:

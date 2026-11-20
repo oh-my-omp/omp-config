@@ -17,10 +17,10 @@ export function captureInteractiveMode(ctx: ExtensionContext): InteractiveModeCa
 	if (typeof original?.value !== "function") {
 		return { kind: "missing-setEditorComponent" };
 	}
-	let captured: unknown;
+	let captured: InteractiveMode | undefined;
 	Object.defineProperty(proto, "setEditorComponent", {
 		...original,
-		value: function (this: unknown): void {
+		value: function (this: InteractiveMode): void {
 			captured = this;
 		},
 	});
@@ -32,7 +32,7 @@ export function captureInteractiveMode(ctx: ExtensionContext): InteractiveModeCa
 	if (!(captured instanceof InteractiveMode)) {
 		return { kind: "unreachable" };
 	}
-	const mode = captured as unknown as InteractiveModeContext;
+	const mode: InteractiveModeContext = captured;
 	if (mode.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) {
 		return { kind: "other-session" };
 	}

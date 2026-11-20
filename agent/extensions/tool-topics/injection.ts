@@ -41,6 +41,7 @@ export function installToolTopicInjection(
 				try {
 					const marker = `<tool-topic-injection rule="${encodeURIComponent(options.owner)}/${encodeURIComponent(rule.id)}" `;
 					const resource = await InternalUrlRouter.instance().resolve(rule.topic);
+					if (typeof resource.content !== "string") throw new Error(`Topic '${rule.topic}' is binary`);
 					if (!resource.content.trim()) throw new Error(`Topic '${rule.topic}' is empty`);
 					ready.push({ marker, topic: rule.topic, content: resource.content });
 				} catch (error) {

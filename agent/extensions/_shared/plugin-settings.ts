@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { z, type zod } from "@oh-my-pi/pi-coding-agent";
 import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
 import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
+import type { PluginManifest, PluginSettingSchema } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/types";
 import { errorText } from "./errors.ts";
 
 export const PLUGIN = "omp-config";
@@ -13,15 +14,16 @@ export type SettingsSection<T> = { readonly id: string; readonly schema: zod.Zod
 
 export type SettingsRead<T> = { readonly kind: "ok"; readonly value: T } | { readonly kind: "invalid"; readonly reason: string };
 
-type Scalar = string | number | boolean;
+type Scalar = NonNullable<PluginSettingSchema["default"]>;
 
-const settingSchema = z.union([
+const settingSchema: zod.ZodLikeSchema<PluginSettingSchema> = z.union([
 	z.object({ type: z.literal("string"), default: z.string().optional() }).passthrough(),
 	z.object({ type: z.literal("number"), default: z.number().optional() }).passthrough(),
 	z.object({ type: z.literal("boolean"), default: z.boolean().optional() }).passthrough(),
 	z.object({ type: z.literal("enum"), values: z.array(z.string()), default: z.string().optional() }).passthrough(),
 ]);
-const manifestSchema = z
+type ManifestShape = { name: string; omp: Pick<PluginManifest, "settings"> & { settings: Record<string, PluginSettingSchema> } };
+const manifestSchema: zod.ZodLikeSchema<ManifestShape> = z
 	.object({ name: z.literal(PLUGIN), omp: z.object({ settings: z.record(z.string(), settingSchema) }) })
 	.passthrough();
 

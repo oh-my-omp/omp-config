@@ -1,141 +1,116 @@
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { runHelperPrompt } from "../_shared/helper-session.ts";
 import { openJudge } from "../_shared/judge.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
 import type { Model, ThinkingLevel } from "../_shared/models.ts";
 import type { InjectMode, Producer } from "../_shared/session-filter.ts";
-import { type ChatWatchdog, type DeliverAs, hasKey, type JevWatchdog, type Scope, type Verdict } from "./spec.ts";
+import type { ChatWatchdog, DeliverAs, JevWatchdog, Scope, Verdict } from "./spec.ts";
 
 const REVIEW_TIMEOUT_MS = 90_000;
 
-function toolCallSummaries(content: unknown): string[] {
-	if (!Array.isArray(content)) return [];
+function toolCallSummaries(content: AssistantMessage["content"]): string[] {
 	const calls: string[] = [];
 	for (const b of content) {
-		if (!hasKey(b, "type") || b.type !== "toolCall") continue;
-		const name =
-			hasKey(b, "toolName") && typeof b.toolName === "string"
-				? b.toolName
-				: hasKey(b, "name") && typeof b.name === "string"
-					? b.name
-					: "tool";
-		const rawArgs = hasKey(b, "args") ? b.args : hasKey(b, "arguments") ? b.arguments : hasKey(b, "input") ? b.input : undefined;
+		if (b.type !== "toolCall") continue;
 		let args = "";
 		try {
-			args = rawArgs === undefined ? "" : JSON.stringify(rawArgs);
+			args = JSON.stringify(b.arguments);
 		} catch {
 			args = "";
 		}
-		calls.push(`${name}(${args})`);
+		calls.push(`${b.name}(${args})`);
 	}
 	return calls;
 }
 
-function toolCallCount(content: unknown): number {
-	if (!Array.isArray(content)) return 0;
-	let count = 0;
-	for (const b of content) {
-		if (hasKey(b, "type") && b.type === "toolCall") count += 1;
-	}
-	return count;
+export function countActions(message: AgentMessage): number {
+	if (message.role !== "assistant") return 0;
+	const calls = message.content.filter((b) => b.type === "toolCall").length;
+	const text = message.content.some((b) => b.type === "text" && /\S/.test(b.text));
+	return calls + (text ? 1 : 0);
 }
 
-function hasText(content: unknown): boolean {
-	const nonBlank = /\S/;
-	if (typeof content === "string") return nonBlank.test(content);
-	if (!Array.isArray(content)) return false;
-	for (const b of content) {
-		if (!hasKey(b, "type") || b.type !== "text") continue;
-		if (hasKey(b, "text") && typeof b.text === "string" && nonBlank.test(b.text)) return true;
-	}
-	return false;
-}
-
-export function countActions(message: unknown): number {
-	if (!hasKey(message, "role") || message.role !== "assistant") return 0;
-	const content = hasKey(message, "content") ? message.content : undefined;
-	return toolCallCount(content) + (hasText(content) ? 1 : 0);
-}
-
-export function messageTimestamp(message: unknown): number | undefined {
-	return hasKey(message, "timestamp") && typeof message.timestamp === "number" ? message.timestamp : undefined;
-}
-
-export function producerOf(message: unknown): Producer | null {
-	if (!hasKey(message, "role") || message.role !== "assistant") return null;
-	if (!hasKey(message, "model") || typeof message.model !== "string") return null;
-	if (!hasKey(message, "provider") || typeof message.provider !== "string") return null;
+export function producerOf(message: AgentMessage): Producer | null {
+	if (message.role !== "assistant") return null;
 	return { model: message.model, provider: message.provider };
 }
 
-export function isOwnUserNote(message: unknown, ownNotes: Pick<ReadonlySet<string>, "has">): boolean {
-	if (!hasKey(message, "role") || message.role !== "user") return false;
-	if (!hasKey(message, "attribution") || message.attribution !== "agent") return false;
-	return ownNotes.has(textBlocks(hasKey(message, "content") ? message.content : undefined).trim());
+function isOwnUserNote(message: AgentMessage, ownNotes: Pick<ReadonlySet<string>, "has">): boolean {
+	if (message.role !== "user" || message.attribution !== "agent") return false;
+	return ownNotes.has(textBlocks(message.content).trim());
 }
 
-function renderMessage(m: unknown, ownNotes: Pick<ReadonlySet<string>, "has">): string | undefined {
-	if (!hasKey(m, "role") || typeof m.role !== "string") return undefined;
-	const role = m.role;
-	const content = hasKey(m, "content") ? m.content : undefined;
-	if (role === "assistant") {
-		const text = textBlocks(content).trim();
-		const segs: string[] = [];
-		if (text) segs.push(`ASSISTANT: ${text}`);
-		for (const c of toolCallSummaries(content)) segs.push(`  → tool ${c}`);
-		return segs.length > 0 ? segs.join("\n") : undefined;
+function renderMessage(m: AgentMessage, ownNotes: Pick<ReadonlySet<string>, "has">): string | undefined {
+	switch (m.role) {
+		case "assistant": {
+			const text = textBlocks(m.content).trim();
+			const segs: string[] = [];
+			if (text) segs.push(`ASSISTANT: ${text}`);
+			for (const c of toolCallSummaries(m.content)) segs.push(`  → tool ${c}`);
+			return segs.length > 0 ? segs.join("\n") : undefined;
+		}
+		case "user": {
+			if (isOwnUserNote(m, ownNotes)) return undefined;
+			const text = textBlocks(m.content).trim();
+			return text ? `USER: ${text}` : undefined;
+		}
+		case "toolResult":
+			return `RESULT[${m.toolName}]: ${textBlocks(m.content).trim()}`;
+		case "developer": {
+			const text = textBlocks(m.content).trim();
+			return text ? `DEV: ${text}` : undefined;
+		}
+		case "bashExecution":
+		case "pythonExecution":
+		case "custom":
+		case "hookMessage":
+		case "branchSummary":
+		case "compactionSummary":
+		case "fileMention":
+			return undefined;
+		default: {
+			const unreachable: never = m;
+			return unreachable;
+		}
 	}
-	if (role === "user") {
-		if (isOwnUserNote(m, ownNotes)) return undefined;
-		const text = textBlocks(content).trim();
-		return text ? `USER: ${text}` : undefined;
-	}
-	if (role === "toolResult") {
-		const name = hasKey(m, "toolName") && typeof m.toolName === "string" ? m.toolName : "tool";
-		return `RESULT[${name}]: ${textBlocks(content).trim()}`;
-	}
-	if (role === "developer") {
-		const text = textBlocks(content).trim();
-		return text ? `DEV: ${text}` : undefined;
-	}
-	return undefined;
 }
 
-export function branchMessages(entries: ReadonlyArray<unknown>): unknown[] {
-	const out: unknown[] = [];
+export function branchMessages(entries: ReadonlyArray<SessionEntry>): AgentMessage[] {
+	const out: AgentMessage[] = [];
 	for (const e of entries) {
-		if (hasKey(e, "type") && e.type === "message" && hasKey(e, "message")) out.push(e.message);
+		if (e.type === "message") out.push(e.message);
 	}
 	return out;
 }
 
 export function reviewTranscript(
-	entries: ReadonlyArray<unknown>,
+	entries: ReadonlyArray<SessionEntry>,
 	scope: Scope,
 	after: number,
-	tail: unknown,
+	tail: AgentMessage | undefined,
 	ownNotes: Pick<ReadonlySet<string>, "has">,
 ): { readonly transcript: string; readonly reviewed: number } {
-	const tailStamp = messageTimestamp(tail);
 	const parts: string[] = [];
 	let onBranch = false;
 	let reviewed = after;
 	for (const entry of entries) {
-		if (!hasKey(entry, "type") || entry.type !== "message" || !hasKey(entry, "message")) continue;
+		if (entry.type !== "message") continue;
 		const message = entry.message;
-		const stamp = messageTimestamp(message) ?? 0;
-		if (tailStamp !== undefined && stamp === tailStamp) onBranch = true;
+		const stamp = message.timestamp;
+		if (tail !== undefined && stamp === tail.timestamp) onBranch = true;
 		if (scope === "window" && stamp <= after) continue;
 		if (stamp > reviewed) reviewed = stamp;
 		const part = renderMessage(message, ownNotes);
 		if (part !== undefined) parts.push(part);
 	}
-	if (tail !== undefined && tailStamp !== undefined && !onBranch && (scope === "full" || tailStamp > after)) {
+	if (tail !== undefined && !onBranch && (scope === "full" || tail.timestamp > after)) {
 		const part = renderMessage(tail, ownNotes);
 		if (part !== undefined) parts.push(part);
-		if (tailStamp > reviewed) reviewed = tailStamp;
+		if (tail.timestamp > reviewed) reviewed = tail.timestamp;
 	}
 	return { transcript: parts.join("\n"), reviewed };
 }

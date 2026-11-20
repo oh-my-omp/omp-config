@@ -4,7 +4,7 @@
  */
 import { basename } from "node:path";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
-import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type TaskItem, type TaskParams, z, type zod } from "@oh-my-pi/pi-coding-agent";
 import { declaresFlag } from "../_shared/agent-definition.ts";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
@@ -20,37 +20,29 @@ const EFFORT =
 	})();
 const DEADLINE_MS = 25_000;
 
-type TaskItem = {
-	readonly text: string;
-	readonly name: string | undefined;
-	readonly agent: string | undefined;
+const taskItemShape = {
+	task: z
+		.string()
+		.refine((task) => task.trim() !== "")
+		.optional(),
+	steps: z
+		.array(z.string())
+		.min(1)
+		.refine((steps) => steps.every((step) => step.trim() !== ""))
+		.optional(),
+	name: z.string().optional(),
+	agent: z.string().optional(),
+} satisfies { [K in keyof TaskItem]?: zod.ZodLikeSchema<TaskItem[K]> };
+const taskItemSchema: zod.ZodLikeSchema<TaskItem> = z
+	.object(taskItemShape)
+	.refine((item) => (item.task === undefined) !== (item.steps === undefined));
+const batchShape = { context: z.string().optional(), tasks: z.array(taskItemSchema) } satisfies {
+	[K in keyof TaskParams]?: zod.ZodLikeSchema<TaskParams[K]>;
 };
-
-const taskItemSchema = z
-	.object({
-		task: z
-			.string()
-			.refine((task) => task.trim() !== "")
-			.optional(),
-		steps: z
-			.array(z.string())
-			.min(1)
-			.refine((steps) => steps.every((step) => step.trim() !== ""))
-			.optional(),
-		name: z.string().optional(),
-		agent: z.string().optional(),
-	})
-	.passthrough()
-	.refine((item) => (item.task === undefined) !== (item.steps === undefined))
-	.transform(
-		(item): TaskItem => ({
-			text: item.steps?.join("\n") ?? item.task ?? "",
-			name: item.name,
-			agent: item.agent,
-		}),
-	);
-const batchSchema = z.object({ context: z.string().optional(), tasks: z.array(taskItemSchema) }).passthrough();
+const batchSchema: zod.ZodLikeSchema<Pick<TaskParams, "context"> & Required<Pick<TaskParams, "tasks">>> = z.object(batchShape);
 type TaskCall = { readonly context: string | undefined; readonly items: readonly TaskItem[] };
+
+const textOf = (item: TaskItem): string => item.steps?.join("\n") ?? item.task ?? "";
 
 const parseTaskCall = (input: unknown): TaskCall | null => {
 	const batch = batchSchema.safeParse(input);
@@ -130,11 +122,11 @@ const parseAnswer = (text: string, check: Check): Verdict => {
 };
 
 const renderPrompt = (context: string | undefined, item: TaskItem): string =>
-	["<shared-context>", context?.trim() || "(none)", "</shared-context>", "<assignment>", item.text.trim(), "</assignment>"].join("\n");
+	["<shared-context>", context?.trim() || "(none)", "</shared-context>", "<assignment>", textOf(item).trim(), "</assignment>"].join("\n");
 
 const memoryDigest = (context: string | undefined, item: TaskItem): string => {
 	const contextText = context?.trim() || "(none)";
-	const taskText = item.text.trim();
+	const taskText = textOf(item).trim();
 	const hasher = new Bun.CryptoHasher("sha256");
 	hasher.update(`${contextText.length}:${taskText.length}\0`);
 	hasher.update(contextText);

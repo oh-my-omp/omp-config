@@ -3,7 +3,7 @@
 // `/wt` and `/move` TUI handlers, `planWorktreeExit`, `AgentRegistry`);
 // re-verify in a real TUI after every omp upgrade.
 import * as fs from "node:fs/promises";
-import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { type AgentEndEvent, type AgentToolResult, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { cfgWorktreeCleanSource } from "@oh-my-pi/pi-coding-agent/task/settings";
@@ -67,7 +67,7 @@ const requestLabel = (request: Request): string => (request.kind === "create" ? 
 const isEligible = (ctx: ExtensionContext): boolean => ctx.mode === "tui" && ctx.agent.kind === "main";
 
 type Runtime = { readonly pi: ExtensionAPI; state: State };
-type ToolResult = { content: { type: "text"; text: string }[]; isError?: true };
+type ToolResult = AgentToolResult<undefined>;
 
 function unexpected(value: never): never {
 	throw new Error(`Unexpected wt state: ${String(value)}`);

@@ -1,4 +1,4 @@
-import { type AgentEndEvent, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import { type AgentEndEvent, type AgentToolResult, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -30,7 +30,7 @@ type State =
 	| { readonly kind: "running"; readonly request: Request };
 
 type Runtime = { readonly pi: ExtensionAPI; state: State };
-type ToolResult = { content: { type: "text"; text: string }[]; isError?: true };
+type ToolResult = AgentToolResult<undefined>;
 
 const markerSchema = z.object({ reason: z.string(), at: z.number() }).passthrough();
 const consumedSchema = z.object({ consumed: z.literal(true) }).passthrough();

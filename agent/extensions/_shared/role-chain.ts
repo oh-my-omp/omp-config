@@ -1,11 +1,11 @@
-import { completeSimple } from "@oh-my-pi/pi-ai";
+import { completeSimple, type StopReason } from "@oh-my-pi/pi-ai";
 import type { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "./errors.ts";
 import { textOf } from "./messages.ts";
 import { modelLabel, type RoleModel, roleModels } from "./roles.ts";
 
-export type AnswerStopReason = "stop" | "length" | "toolUse";
+export type AnswerStopReason = Extract<StopReason, "stop" | "length" | "toolUse">;
 
 export type RoleChainReply =
 	| {

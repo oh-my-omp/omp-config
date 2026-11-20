@@ -1,12 +1,20 @@
-import { z } from "@oh-my-pi/pi-coding-agent";
+import { z, type zod } from "@oh-my-pi/pi-coding-agent";
+import type { BashToolInput } from "@oh-my-pi/pi-coding-agent/tools/bash";
+import type { EvalToolParams } from "@oh-my-pi/pi-coding-agent/tools/eval";
+import type { WriteToolInput } from "@oh-my-pi/pi-coding-agent/tools/write";
 
 export type WatchedCall =
 	| { readonly kind: "shell"; readonly tool: DeviceTool; readonly command: string }
 	| { readonly kind: "eval"; readonly language: string; readonly code: string; readonly reset: boolean };
 
-const shellSchema = z.object({ command: z.string() });
-const writeSchema = z.object({ path: z.string(), content: z.string() });
-const evalSchema = z.object({ language: z.string(), code: z.string(), reset: z.boolean().optional() });
+const shellSchema: zod.ZodLikeSchema<BashToolInput> = z.object({ command: z.string() });
+const writeSchema: zod.ZodLikeSchema<WriteToolInput> = z.object({ path: z.string(), content: z.string() });
+type EvalCallInput = Pick<EvalToolParams, "code" | "reset"> & { language: string };
+const evalSchema: zod.ZodLikeSchema<EvalCallInput> = z.object({
+	language: z.string(),
+	code: z.string(),
+	reset: z.boolean().optional(),
+});
 
 type DeviceTool = "bash" | "bash_bg";
 

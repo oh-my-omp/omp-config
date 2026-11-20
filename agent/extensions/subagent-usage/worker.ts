@@ -1,6 +1,8 @@
-// Pure fs/JSON: host packages are not importable from a worker.
+// Pure fs/JSON: host packages are not importable from a worker; type imports are erased.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { Usage } from "@oh-my-pi/pi-ai";
+import type { CustomEntry, ModelChangeEntry, ModelUsageEntry, SessionInitEntry, SessionMessageEntry } from "@oh-my-pi/pi-coding-agent";
 import type { DispatchRecord, ScannedDispatch, ScanRequest, ScanResult } from "./records.ts";
 
 declare const self: Worker;
@@ -67,18 +69,34 @@ function isCache(value: unknown): value is Cache {
 	return isRecord(value) && value.version === CACHE_VERSION && isRecord(value.files);
 }
 
-function parseLine(line: string): Json | undefined {
+type WantedEntry = SessionMessageEntry | ModelUsageEntry | SessionInitEntry | ModelChangeEntry | CustomEntry;
+
+function parseEntry(line: string): WantedEntry | undefined {
+	let value: unknown;
 	try {
-		const value: unknown = JSON.parse(line);
-		return isRecord(value) ? value : undefined;
+		value = JSON.parse(line);
 	} catch {
 		return undefined;
 	}
+	if (!isRecord(value) || typeof value.type !== "string") return undefined;
+	switch (value.type) {
+		case "message":
+			return value as unknown as SessionMessageEntry;
+		case "model_usage":
+			return value as unknown as ModelUsageEntry;
+		case "session_init":
+			return value as unknown as SessionInitEntry;
+		case "model_change":
+			return value as unknown as ModelChangeEntry;
+		case "custom":
+			return value.customType === "session_exit" ? (value as unknown as CustomEntry) : undefined;
+		default:
+			return undefined;
+	}
 }
 
-function costOf(usage: unknown): number {
-	if (!isRecord(usage) || !isRecord(usage.cost)) return 0;
-	const total = usage.cost.total;
+function costOf(usage: Usage | undefined): number {
+	const total = usage?.cost?.total;
 	return typeof total === "number" && Number.isFinite(total) ? total : 0;
 }
 
@@ -251,27 +269,33 @@ function charge(state: Aggregate, provider: string, model: string, timestamp: un
 }
 
 function fold(line: string, state: Aggregate): void {
-	if (line.startsWith('{"type":"message"')) {
-		const entry = parseLine(line);
-		const message = entry?.message;
-		if (!isRecord(message) || message.role !== "assistant") return;
-		const { provider, model } = message;
-		if (typeof provider !== "string" || typeof model !== "string") return;
-		if (state.agent !== undefined) state.models.add(`${provider}/${model}`);
-		charge(state, provider, model, entry?.timestamp, costOf(message.usage));
-	} else if (line.startsWith('{"type":"model_usage"')) {
-		const entry = parseLine(line);
-		if (entry && typeof entry.provider === "string" && typeof entry.model === "string") {
-			charge(state, entry.provider, entry.model, entry.timestamp, costOf(entry.usage));
+	const entry = parseEntry(line);
+	if (entry === undefined) return;
+	switch (entry.type) {
+		case "message": {
+			const { message } = entry;
+			if (message.role !== "assistant") return;
+			const { provider, model } = message;
+			if (typeof provider !== "string" || typeof model !== "string") return;
+			if (state.agent !== undefined) state.models.add(`${provider}/${model}`);
+			charge(state, provider, model, entry.timestamp, costOf(message.usage));
+			return;
 		}
-	} else if (line.startsWith('{"type":"session_init"')) {
-		const entry = parseLine(line);
-		if (entry && typeof entry.agent === "string") state.agent = entry.agent;
-		if (entry && typeof entry.resolvedModel === "string") state.resolvedModel = entry.resolvedModel;
-	} else if (line.startsWith('{"type":"model_change"')) {
-		if (parseLine(line)?.resolvedModelIsFallback === true) state.fallback = true;
-	} else if (line.startsWith('{"type":"custom"')) {
-		state.exited = true;
+		case "model_usage":
+			if (typeof entry.provider === "string" && typeof entry.model === "string") {
+				charge(state, entry.provider, entry.model, entry.timestamp, costOf(entry.usage));
+			}
+			return;
+		case "session_init":
+			if (typeof entry.agent === "string") state.agent = entry.agent;
+			if (typeof entry.resolvedModel === "string") state.resolvedModel = entry.resolvedModel;
+			return;
+		case "model_change":
+			if (entry.resolvedModelIsFallback === true) state.fallback = true;
+			return;
+		case "custom":
+			state.exited = true;
+			return;
 	}
 }
 

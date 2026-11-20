@@ -1,5 +1,6 @@
 import { closeSync, openSync, readSync, type Stats, statSync } from "node:fs";
-import { parseSessionContent, SESSION_TITLE_SLOT_BYTES } from "@oh-my-pi/pi-coding-agent";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { parseSessionContent, SESSION_TITLE_SLOT_BYTES, type SessionEntry, type SessionHeader } from "@oh-my-pi/pi-coding-agent";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { textOf } from "../_shared/messages.ts";
 
@@ -49,7 +50,7 @@ export function createTranscriptReader(): TranscriptReader {
 	let cursorFile = "";
 	let handle: number | null = null;
 	let scratch: Uint8Array = new Uint8Array(0);
-	const record = (facts: EntryFacts): Record<string, unknown> | null => {
+	const record = (facts: EntryFacts): AgentMessage | null => {
 		handle ??= openSync(cursorFile, "r");
 		const length = facts.end - facts.start;
 		if (scratch.length < length) scratch = new Uint8Array(length);
@@ -198,26 +199,24 @@ function absorbRecord(cursor: Cursor, line: Uint8Array, start: number, end: numb
 	const value = Bun.JSONL.parseChunk(line).values[0];
 	if (value === undefined) return;
 	if (cursor.header === "pending") {
-		const header = asRecord(value);
-		cursor.header = header !== null && header.type === "session" && typeof header.id === "string" ? "ok" : "invalid";
+		cursor.header = isSessionHeader(value) ? "ok" : "invalid";
 		return;
 	}
 	if (cursor.header === "invalid") return;
-	const record = asRecord(value);
-	if (record === null || record.type === "session" || typeof record.id !== "string") return;
-	cursor.entries.set(record.id, factsOf(record, start, end));
-	cursor.leafId = record.id;
+	if (!isSessionEntry(value)) return;
+	cursor.entries.set(value.id, factsOf(value, start, end));
+	cursor.leafId = value.id;
 }
 
-function factsOf(record: Record<string, unknown>, start: number, end: number): EntryFacts {
-	const parentId = typeof record.parentId === "string" ? record.parentId : null;
-	return { parentId, role: roleOf(record), start, end };
+function factsOf(entry: SessionEntry, start: number, end: number): EntryFacts {
+	const parentId = typeof entry.parentId === "string" ? entry.parentId : null;
+	return { parentId, role: roleOf(entry), start, end };
 }
 
-function roleOf(record: Record<string, unknown>): EntryRole {
-	if (record.type !== "message") return "other";
-	const message = asRecord(record.message);
-	if (message === null) return "other";
+function roleOf(entry: SessionEntry): EntryRole {
+	if (entry.type !== "message") return "other";
+	const message = entry.message;
+	if (!isRecord(message)) return "other";
 	if (message.role === "toolResult") return askAnswers(message) === null ? "other" : "answers";
 	if (message.role !== "user" || message.attribution !== "user" || message.synthetic === true) return "other";
 	return textOf(message.content, "\n").trim() === "" ? "other" : "prompt";
@@ -238,12 +237,12 @@ function branchOf(cursor: Cursor): EntryFacts[] {
 	return branch;
 }
 
-type RecordReader = (facts: EntryFacts) => Record<string, unknown> | null;
+type RecordReader = (facts: EntryFacts) => AgentMessage | null;
 
 function promptText(read: RecordReader, facts: EntryFacts | undefined): string {
 	if (facts === undefined) return "";
 	const message = read(facts);
-	return message === null ? "" : textOf(message.content, "\n").trim();
+	return message !== null && message.role === "user" ? textOf(message.content, "\n").trim() : "";
 }
 
 function answerTexts(read: RecordReader, branch: readonly EntryFacts[]): readonly string[] {
@@ -251,17 +250,17 @@ function answerTexts(read: RecordReader, branch: readonly EntryFacts[]): readonl
 	for (const facts of branch) {
 		if (facts.role !== "answers") continue;
 		const message = read(facts);
-		if (message === null) continue;
+		if (message === null || message.role !== "toolResult") continue;
 		const answered = askAnswers(message);
 		if (answered !== null) answers.push(formatAskAnswers(answered));
 	}
 	return answers;
 }
 
-function parseMessage(bytes: Uint8Array): Record<string, unknown> | null {
-	const value = Bun.JSONL.parseChunk(bytes).values[0];
-	const record = value === undefined ? null : asRecord(value);
-	return record === null ? null : asRecord(record.message);
+function parseMessage(bytes: Uint8Array): AgentMessage | null {
+	const value: unknown = Bun.JSONL.parseChunk(bytes).values[0];
+	if (!isSessionEntry(value) || value.type !== "message") return null;
+	return isRecord(value.message) ? value.message : null;
 }
 
 function readInto(fd: number, buffer: Uint8Array, position: number, length: number): number {
@@ -279,6 +278,14 @@ function readBytesAt(fd: number, position: number, length: number): Buffer {
 	return buffer.subarray(0, readInto(fd, buffer, position, length));
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-	return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSessionHeader(value: unknown): value is SessionHeader {
+	return isRecord(value) && value.type === "session" && typeof value.id === "string";
+}
+
+function isSessionEntry(value: unknown): value is SessionEntry {
+	return isRecord(value) && value.type !== "session" && typeof value.id === "string";
 }

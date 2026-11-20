@@ -4,6 +4,7 @@
  */
 
 import { basename } from "node:path";
+import type { AssistantMessage, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -71,27 +72,6 @@ const yieldInputSchema = z
 	.passthrough();
 type YieldInput = z.infer<typeof yieldInputSchema>;
 
-const toolCallBlockSchema = z
-	.object({ type: z.literal("toolCall"), id: z.string(), name: z.string(), arguments: z.unknown() })
-	.passthrough();
-
-const messageEntrySchema = z
-	.object({
-		type: z.literal("message"),
-		message: z.union([
-			z.object({ role: z.literal("assistant"), content: z.array(z.unknown()) }).passthrough(),
-			z
-				.object({
-					role: z.literal("toolResult"),
-					toolCallId: z.string(),
-					content: z.unknown(),
-					isError: z.boolean().optional(),
-				})
-				.passthrough(),
-		]),
-	})
-	.passthrough();
-
 type Round = { readonly kind: "open"; readonly bounced: boolean; readonly todoPrompted: boolean } | { readonly kind: "settled" };
 
 const FIRST_ROUND: Round = { kind: "open", bounced: false, todoPrompted: false };
@@ -103,8 +83,14 @@ type Verdict =
 
 type YieldCall = { readonly kind: "data" } | { readonly kind: "text" } | { readonly kind: "not_terminal" };
 
-type ToolCallRecord = { readonly id: string; readonly name: string; readonly args: unknown; readonly assistantEntry: unknown };
-type ResultsByCallId = ReadonlyMap<string, { readonly isError: boolean; readonly entry: unknown }>;
+type ToolCallRecord = {
+	readonly id: string;
+	readonly name: string;
+	readonly args: ToolCall["arguments"];
+	readonly message: AssistantMessage;
+};
+type ResultsByCallId = ReadonlyMap<string, { readonly isError: boolean; readonly content: ToolResultMessage["content"] }>;
+type MessageContent = AssistantMessage["content"] | ToolResultMessage["content"];
 
 type Transcript = {
 	readonly assignment: string;
@@ -150,39 +136,16 @@ const boundedText = (produce: (emit: (part: string) => void) => void, limit: num
 	return `${held}\n…[${seen - limit} chars omitted]…\n${trailing}`;
 };
 
-const textBlockOf = (block: unknown): string | undefined =>
-	typeof block === "object" &&
-	block !== null &&
-	"type" in block &&
-	block.type === "text" &&
-	"text" in block &&
-	typeof block.text === "string"
-		? block.text
-		: undefined;
-
-const textWithin = (content: unknown, separator: string, limit: number): string =>
+const textWithin = (content: MessageContent, separator: string, limit: number): string =>
 	boundedText((emit) => {
-		if (typeof content === "string") {
-			emit(content);
-			return;
-		}
-		if (!Array.isArray(content)) return;
 		let first = true;
 		for (const block of content) {
-			const text = textBlockOf(block);
-			if (text === undefined) continue;
+			if (block.type !== "text") continue;
 			if (!first) emit(separator);
 			first = false;
-			emit(text);
+			emit(block.text);
 		}
 	}, limit);
-
-const contentOf = (entry: unknown): readonly unknown[] | undefined => {
-	if (typeof entry !== "object" || entry === null || !("message" in entry)) return undefined;
-	const message = entry.message;
-	if (typeof message !== "object" || message === null || !("content" in message)) return undefined;
-	return Array.isArray(message.content) ? message.content : undefined;
-};
 
 const estimateTokens = (text: string): number => {
 	let tokens = 0;
@@ -336,32 +299,13 @@ const classifyYield = (input: YieldInput): YieldCall => {
 	return input.data === undefined || input.data === null ? { kind: "text" } : { kind: "data" };
 };
 
-const branchEntries = (ctx: ExtensionContext): readonly unknown[] => {
-	const manager: unknown = ctx.sessionManager;
-	if (typeof manager !== "object" || manager === null) return [];
-	const view: unknown =
-		"getBranchView" in manager && typeof manager.getBranchView === "function"
-			? manager.getBranchView()
-			: "getBranch" in manager && typeof manager.getBranch === "function"
-				? manager.getBranch()
-				: [];
-	return Array.isArray(view) ? view : [];
-};
-
 const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
-	const view = branchEntries(ctx);
+	const view = ctx.sessionManager.getBranch();
 	let start = -1;
 	let assignment = "";
 	for (let index = view.length - 1; index >= 0; index--) {
-		const entry: unknown = view[index];
-		if (
-			typeof entry === "object" &&
-			entry !== null &&
-			"type" in entry &&
-			entry.type === "session_init" &&
-			"task" in entry &&
-			typeof entry.task === "string"
-		) {
+		const entry = view[index];
+		if (entry?.type === "session_init") {
 			start = index;
 			assignment = entry.task;
 			break;
@@ -369,28 +313,18 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 	}
 	if (start === -1) return undefined;
 	const calls: ToolCallRecord[] = [];
-	const resultsByCallId = new Map<string, { readonly isError: boolean; readonly entry: unknown }>();
+	const resultsByCallId = new Map<string, { readonly isError: boolean; readonly content: ToolResultMessage["content"] }>();
 	for (let index = start + 1; index < view.length; index++) {
-		const entry: unknown = view[index];
-		if (entry === null || typeof entry !== "object") continue;
-		const parsed = messageEntrySchema.safeParse(entry);
-		if (!parsed.success) continue;
-		const message = parsed.data.message;
-		switch (message.role) {
-			case "assistant":
-				for (const block of message.content) {
-					const call = toolCallBlockSchema.safeParse(block);
-					if (!call.success) continue;
-					calls.push({ id: call.data.id, name: call.data.name, args: call.data.arguments, assistantEntry: entry });
-				}
-				break;
-			case "toolResult":
-				resultsByCallId.set(message.toolCallId, { isError: message.isError === true, entry: message.content });
-				break;
-			default: {
-				const unexpected: never = message;
-				throw new Error(`Unexpected transcript message: ${unexpected}`);
+		const entry = view[index];
+		if (entry?.type !== "message") continue;
+		const message = entry.message;
+		if (message.role === "assistant") {
+			for (const block of message.content) {
+				if (block.type !== "toolCall") continue;
+				calls.push({ id: block.id, name: block.name, args: block.arguments, message });
 			}
+		} else if (message.role === "toolResult") {
+			resultsByCallId.set(message.toolCallId, { isError: message.isError, content: message.content });
 		}
 	}
 	const callById = new Map<string, ToolCallRecord>();
@@ -430,7 +364,7 @@ const renderCall = (call: ToolCallRecord, n: number, results: ResultsByCallId): 
 	return [
 		`<call n="${n}" tool="${call.name}" status="${status}">`,
 		`<args>${stringifyWithin(call.args, ARGS_CHAR_LIMIT)}</args>`,
-		`<result>${result === undefined ? "" : textWithin(result.entry, "", RESULT_CHAR_LIMIT)}</result>`,
+		`<result>${result === undefined ? "" : textWithin(result.content, "", RESULT_CHAR_LIMIT)}</result>`,
 		"</call>",
 	].join("\n");
 };
@@ -545,11 +479,9 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 			rounds.set(sessionFile, { kind: "settled" });
 			return undefined;
 		}
-		const yieldEntry = transcript.callById.get(toolCallId)?.assistantEntry;
+		const yieldContent = transcript.callById.get(toolCallId)?.message.content;
 		const submission =
-			call.kind === "text"
-				? textWithin(contentOf(yieldEntry), "", SUBMISSION_CHAR_LIMIT)
-				: stringifyWithin(input.data, SUBMISSION_CHAR_LIMIT);
+			call.kind === "text" ? textWithin(yieldContent ?? [], "", SUBMISSION_CHAR_LIMIT) : stringifyWithin(input.data, SUBMISSION_CHAR_LIMIT);
 		const todo = requireReviewTodo(pi, ctx.agent.id);
 		const verdict = await judge(ctx, renderPrompt(ctx, transcript, toolCallId, submission, todo), AbortSignal.timeout(DEADLINE_MS));
 		pi.logger.info("task-completion-judge verdict", {

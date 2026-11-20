@@ -1,65 +1,63 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ToolResultEvent, z } from "@oh-my-pi/pi-coding-agent";
+import { type BashToolInput, type ToolResultEvent, type WriteToolInput, z, type zod } from "@oh-my-pi/pi-coding-agent";
+import type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
+
+type BuiltinToolName = "read" | "write" | "edit" | "bash";
+type BuiltinResult<N extends BuiltinToolName> = Extract<ToolResultEvent, { toolName: N }>;
+
+// Do not narrow with `switch (event.toolName)`: custom results keep `toolName: string`, so their `details: unknown` stays in the union.
+function resultOf<N extends BuiltinToolName>(event: ToolResultEvent, toolName: N): event is BuiltinResult<N> {
+	return event.toolName === toolName;
+}
 
 export function touchedFiles(event: ToolResultEvent, cwd: string): string[] {
 	if (event.isError) return [];
-	switch (event.toolName) {
-		case "read":
-			return readFiles(event.details);
-		case "write":
-			return writeFiles(event.input, event.details);
-		case "edit":
-			return editFiles(event.details);
-		case "bash":
-			return bashFiles(event.input, cwd);
-		default:
-			return [];
+	if (resultOf(event, "read")) return readFiles(event.details);
+	if (resultOf(event, "write")) {
+		// Do not read `resolvedPath` from the event's typed details: they are typed `undefined`, yet the write result carries it.
+		// Once the host types them, the line below stops compiling; then delete the parse and read the typed details.
+		const hostDetails: undefined = event.details;
+		return writeFiles(event.input, hostDetails);
 	}
+	if (resultOf(event, "edit")) return editFiles(event.details);
+	if (resultOf(event, "bash")) return bashFiles(event.input, cwd);
+	return [];
 }
 
-const readSchema = z.object({
-	isDirectory: z.boolean().optional(),
-	resolvedPath: z.string().optional(),
-	meta: z.object({ source: z.object({ type: z.string(), value: z.string() }).optional() }).optional(),
-	displayReadTargetLinks: z.array(z.string().nullable()).optional(),
-});
-
-function readFiles(details: unknown): string[] {
-	const parsed = readSchema.safeParse(details);
-	if (!parsed.success || parsed.data.isDirectory === true) return [];
-	const { resolvedPath, meta, displayReadTargetLinks } = parsed.data;
+function readFiles(details: BuiltinResult<"read">["details"]): string[] {
+	if (details === undefined || details.isDirectory === true) return [];
+	const { resolvedPath, meta, displayReadTargetLinks } = details;
 	if (displayReadTargetLinks !== undefined) return displayReadTargetLinks.filter((link): link is string => link !== null);
 	if (resolvedPath !== undefined) return [resolvedPath];
-	return meta?.source?.type === "path" ? [meta.source.value] : [];
+	const source = meta?.source;
+	return source?.type === "path" ? [source.value] : [];
 }
 
-const writeInputSchema = z.object({ path: z.string() });
-const writeDetailsSchema = z.object({ resolvedPath: z.string() });
+const writeInputSchema: zod.ZodLikeSchema<Pick<WriteToolInput, "path">> = z.object({ path: z.string() });
+const writeDetailsSchema: zod.ZodLikeSchema<Pick<WriteToolDetails, "resolvedPath">> = z.object({
+	resolvedPath: z.string().optional(),
+});
 
 function writeFiles(input: unknown, details: unknown): string[] {
 	const target = writeInputSchema.safeParse(input);
 	if (!target.success) return [];
 	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target.data.path) && !target.data.path.startsWith("local://")) return [];
 	const parsed = writeDetailsSchema.safeParse(details);
-	return parsed.success ? [parsed.data.resolvedPath] : [];
+	const resolvedPath = parsed.success ? parsed.data.resolvedPath : undefined;
+	return resolvedPath === undefined ? [] : [resolvedPath];
 }
 
-const editFileSchema = z.object({ path: z.string().optional(), sourcePath: z.string().optional() });
-const editSchema = z.object({
-	path: z.string().optional(),
-	sourcePath: z.string().optional(),
-	perFileResults: z.array(editFileSchema).optional(),
-});
-
-function editFiles(details: unknown): string[] {
-	const parsed = editSchema.safeParse(details);
-	if (!parsed.success) return [];
-	const files = parsed.data.perFileResults ?? [parsed.data];
+function editFiles(details: BuiltinResult<"edit">["details"]): string[] {
+	if (details === undefined) return [];
+	const files = details.perFileResults ?? [details];
 	return files.flatMap((file) => [file.path, file.sourcePath].filter((value): value is string => value !== undefined));
 }
 
-const bashInputSchema = z.object({ command: z.string(), cwd: z.string().optional() });
+const bashInputSchema: zod.ZodLikeSchema<Pick<BashToolInput, "command" | "cwd">> = z.object({
+	command: z.string(),
+	cwd: z.string().optional(),
+});
 
 function bashFiles(input: unknown, sessionCwd: string): string[] {
 	const parsed = bashInputSchema.safeParse(input);

@@ -12,13 +12,11 @@ function shadow<T extends object, K extends keyof T>(target: T, key: K, value: T
 	};
 }
 
-function presentedText(content: unknown): string[] {
-	const components: unknown[] = Array.isArray(content) ? content : [content];
+function presentedText(content: Parameters<InteractiveModeContext["present"]>[0]): string[] {
+	const components = Array.isArray(content) ? content : [content];
 	return components.flatMap((component) => {
-		if ((typeof component !== "object" && typeof component !== "function") || component === null || !("getText" in component)) return [];
-		const getText = component.getText;
-		if (typeof getText !== "function") return [];
-		const text = stripVTControlCharacters(String(getText.call(component))).trim();
+		if (!("getText" in component) || typeof component.getText !== "function") return [];
+		const text = stripVTControlCharacters(String(component.getText.call(component))).trim();
 		return text ? [text] : [];
 	});
 }

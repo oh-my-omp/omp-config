@@ -1,5 +1,12 @@
 import { dirname } from "node:path";
-import { type AgentSession, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import {
+	type AgentSession,
+	type AgentToolResult,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+	type ExtensionContext,
+	z,
+} from "@oh-my-pi/pi-coding-agent";
 import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { worktreeSessionDirs } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { callerSession } from "../_shared/caller-session.ts";
@@ -25,7 +32,7 @@ const DESCRIPTION = [
 const params = z.object({});
 const consentSection = defineSettings(import.meta.dir, z.object({ enabled: z.boolean() }).strict());
 
-type ToolResult = { content: { type: "text"; text: string }[]; isError?: true };
+type ToolResult = AgentToolResult<undefined>;
 
 async function consented(): Promise<boolean> {
 	const loaded = await readSettings(consentSection, { kind: "machine" });

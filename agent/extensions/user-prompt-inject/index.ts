@@ -10,7 +10,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { errorText } from "../_shared/errors.ts";
-import { textOf } from "../_shared/messages.ts";
+import { type MessageContent, textOf } from "../_shared/messages.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 import { type BranchNeed, createTranscriptReader, type PromptSource, type TranscriptReader } from "./transcript.ts";
 
@@ -199,7 +199,7 @@ function rootPrompts(ctx: ExtensionContext, need: BranchNeed, reader: Transcript
 }
 
 function livePrompts(branch: readonly SessionEntry[], need: BranchNeed): RootPrompts {
-	const prompts: unknown[] = [];
+	const prompts: MessageContent[] = [];
 	const answers: string[] = [];
 	for (const entry of branch) {
 		if (entry.type !== "message") continue;
@@ -219,7 +219,10 @@ function livePrompts(branch: readonly SessionEntry[], need: BranchNeed): RootPro
 		kind: "ok",
 		prompts: {
 			length: prompts.length,
-			at: (index) => textOf(prompts[index], "\n").trim(),
+			at: (index) => {
+				const content = prompts[index];
+				return content === undefined ? "" : textOf(content, "\n").trim();
+			},
 		},
 		answers,
 	};

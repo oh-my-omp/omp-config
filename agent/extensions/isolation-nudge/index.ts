@@ -1,43 +1,37 @@
 import { createHash } from "node:crypto";
-import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
+import {
+	type AgentProgress,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type TaskItem,
+	type TaskParams,
+	z,
+	type zod,
+} from "@oh-my-pi/pi-coding-agent";
 
 import { errorText } from "../_shared/errors.ts";
 
 const isWriter = (agent: string | undefined): boolean => agent === undefined || /^task(?::|$)/.test(agent) || /^m\d+$/.test(agent);
 
-type TaskItem = {
-	readonly text: string;
-	readonly name: string | undefined;
-	readonly agent: string | undefined;
-	readonly isolated: boolean | undefined;
-};
-
-const taskItemSchema = z
-	.object({
-		task: z
-			.string()
-			.refine((task) => task.trim() !== "")
-			.optional(),
-		steps: z
-			.array(z.string())
-			.min(1)
-			.refine((steps) => steps.every((step) => step.trim() !== ""))
-			.optional(),
-		name: z.string().optional(),
-		agent: z.string().optional(),
-		isolated: z.boolean().optional(),
-	})
-	.passthrough()
-	.refine((item) => (item.task === undefined) !== (item.steps === undefined))
-	.transform(
-		(item): TaskItem => ({
-			text: item.steps?.join("\n") ?? item.task ?? "",
-			name: item.name,
-			agent: item.agent,
-			isolated: item.isolated,
-		}),
-	);
-const batchSchema = z.object({ tasks: z.array(taskItemSchema) }).passthrough();
+const taskItemShape = {
+	task: z
+		.string()
+		.refine((task) => task.trim() !== "")
+		.optional(),
+	steps: z
+		.array(z.string())
+		.min(1)
+		.refine((steps) => steps.every((step) => step.trim() !== ""))
+		.optional(),
+	name: z.string().optional(),
+	agent: z.string().optional(),
+	isolated: z.boolean().optional(),
+} satisfies { [K in keyof TaskItem]?: zod.ZodLikeSchema<TaskItem[K]> };
+const taskItemSchema: zod.ZodLikeSchema<TaskItem> = z
+	.object(taskItemShape)
+	.refine((item) => (item.task === undefined) !== (item.steps === undefined));
+const batchShape = { tasks: z.array(taskItemSchema) } satisfies { [K in keyof TaskParams]?: zod.ZodLikeSchema<TaskParams[K]> };
+const batchSchema: zod.ZodLikeSchema<Required<Pick<TaskParams, "tasks">>> = z.object(batchShape);
 
 const parseTaskItems = (input: unknown): readonly TaskItem[] | null => {
 	const batch = batchSchema.safeParse(input);
@@ -46,14 +40,21 @@ const parseTaskItems = (input: unknown): readonly TaskItem[] | null => {
 	return flat.success ? [flat.data] : null;
 };
 
-const taskDetailsSchema = z.object({ progress: z.array(z.object({ index: z.number(), id: z.string() }).passthrough()) }).passthrough();
+type SpawnRecord = Pick<AgentProgress, "index" | "id">;
 
-const spawnProgress = (details: unknown): readonly { readonly index: number; readonly id: string }[] => {
+const spawnShape = { index: z.number(), id: z.string() } satisfies { [K in keyof SpawnRecord]: zod.ZodLikeSchema<SpawnRecord[K]> };
+const taskDetailsSchema: zod.ZodLikeSchema<{ readonly progress: readonly SpawnRecord[] }> = z.object({
+	progress: z.array(z.object(spawnShape)),
+});
+
+const spawnProgress = (details: unknown): readonly SpawnRecord[] => {
 	const parsed = taskDetailsSchema.safeParse(details);
 	return parsed.success ? parsed.data.progress : [];
 };
 
-const promptHash = (item: TaskItem): string => createHash("sha256").update(item.text).digest("hex");
+const textOf = (item: TaskItem): string => item.steps?.join("\n") ?? item.task ?? "";
+
+const promptHash = (item: TaskItem): string => createHash("sha256").update(textOf(item)).digest("hex");
 
 const itemLabel = (item: TaskItem, index: number): string => `\`${item.name ?? `item ${index + 1}`}\``;
 

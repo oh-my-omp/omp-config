@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import { type ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import type { AgentDefinition, AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { resolveAgentModelPatterns, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
@@ -7,15 +8,13 @@ import type { AgentSessionHandle } from "@oh-my-pi/pi-coding-agent/session/agent
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 
-const THINKING_LEVELS: ReadonlySet<string> = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
 export type Binding =
 	| {
 			readonly kind: "resolved";
 			readonly agent: string;
 			readonly pattern: string;
 			readonly model: Model<Api>;
-			readonly thinking: string | undefined;
+			readonly thinking: ResolvedThinkingLevel | undefined;
 	  }
 	| { readonly kind: "unresolved"; readonly agent: string; readonly pattern: string | undefined };
 
@@ -51,7 +50,7 @@ export function bindAgent(session: AgentSession, agent: AgentDefinition): Bindin
 		agent: agent.name,
 		pattern,
 		model: parsed.model,
-		thinking: thinking !== undefined && THINKING_LEVELS.has(thinking) ? thinking : undefined,
+		thinking: thinking === "auto" || thinking === ThinkingLevel.Inherit ? undefined : thinking,
 	};
 }
 

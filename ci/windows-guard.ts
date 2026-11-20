@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import type { ToolExecutionEndEvent, ToolExecutionStartEvent } from "@oh-my-pi/pi-coding-agent/modes/rpc/wire/rpc-wire.generated";
 import { bindModelRoles, MODEL } from "./windows-env.ts";
 import { type Session, type Step, type StepUi, steps, type ToolCall } from "./windows-guard-steps.ts";
 
@@ -14,6 +15,16 @@ const SETUP_TIMEOUT_MS = 600_000;
 type Mapping = { readonly [key: string]: unknown };
 
 const isMapping = (value: unknown): value is Mapping => typeof value === "object" && value !== null && !Array.isArray(value);
+
+function toolStartOf(event: Mapping): Pick<ToolExecutionStartEvent, "toolCallId" | "toolName" | "args"> | undefined {
+	if (typeof event.toolCallId !== "string" || typeof event.toolName !== "string") return undefined;
+	return { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args };
+}
+
+function toolEndOf(event: Mapping): Pick<ToolExecutionEndEvent, "toolCallId" | "toolName" | "result" | "isError"> | undefined {
+	if (typeof event.toolCallId !== "string" || typeof event.toolName !== "string") return undefined;
+	return { toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError === true };
+}
 
 function run(command: readonly string[], cwd: string): { code: number | null; out: string } {
 	const [program, ...args] = command;
@@ -52,7 +63,7 @@ async function runSession(prompt: string, cwd: string, ui: StepUi): Promise<Sess
 	});
 	const stderr = new Response(proc.stderr).text();
 	const timer = setTimeout(() => proc.kill(), SESSION_TIMEOUT_MS);
-	const started = new Map<string, { name: string; args: unknown }>();
+	const started = new Map<string, ToolExecutionStartEvent["args"]>();
 	const calls: ToolCall[] = [];
 	const confirms: string[] = [];
 	let sent = false;
@@ -81,14 +92,18 @@ async function runSession(prompt: string, cwd: string, ui: StepUi): Promise<Sess
 			if (event.method === "confirm") confirms.push(`${String(event.title)}\n${String(event.message)}`);
 			proc.stdin.write(`${JSON.stringify(answer)}\n`);
 			proc.stdin.flush();
-		} else if (event.type === "tool_execution_start" && typeof event.toolCallId === "string" && typeof event.toolName === "string") {
-			started.set(event.toolCallId, { name: event.toolName, args: event.args });
+		} else if (event.type === "tool_execution_start") {
+			const start = toolStartOf(event);
+			if (start !== undefined) started.set(start.toolCallId, start.args);
 		} else if (event.type === "message_end" && isMapping(event.message) && event.message.role === "assistant") {
 			const text = textOf(event.message);
 			if (text !== "") reply = text;
-		} else if (event.type === "tool_execution_end" && typeof event.toolCallId === "string" && typeof event.toolName === "string") {
-			const args = started.get(event.toolCallId)?.args;
-			calls.push({ tool: event.toolName, args: isMapping(args) ? args : {}, isError: event.isError === true, text: textOf(event.result) });
+		} else if (event.type === "tool_execution_end") {
+			const end = toolEndOf(event);
+			if (end !== undefined) {
+				const args = started.get(end.toolCallId);
+				calls.push({ tool: end.toolName, args: isMapping(args) ? args : {}, isError: end.isError === true, text: textOf(end.result) });
+			}
 		} else if (!done && event.id === "step" && (event.type === "prompt_result" || (event.type === "response" && event.success === false))) {
 			done = true;
 			proc.stdin.end();

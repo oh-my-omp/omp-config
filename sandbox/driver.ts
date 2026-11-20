@@ -1,6 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type {
+	AssistantMessage,
+	PromptResultEvent,
+	SessionState,
+	StopReason,
+	ToolExecutionEndEvent,
+	ToolExecutionStartEvent,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/wire/rpc-wire.generated";
 
 const RECORDER_READY = join(import.meta.dir, "recorder.ready");
 const SINK_POINTER = join(import.meta.dir, ".requests-sink");
@@ -23,8 +31,8 @@ export interface Scenario {
 }
 
 interface Call {
-	readonly tool: string;
-	readonly input: unknown;
+	readonly tool: ToolExecutionEndEvent["toolName"];
+	readonly input: ToolExecutionStartEvent["args"];
 	readonly isError: boolean;
 	readonly result: string;
 }
@@ -37,11 +45,32 @@ type Outcome =
 	| { readonly kind: "untested"; readonly reason: string }
 	| { readonly kind: "harness-error"; readonly reason: string };
 
+type PromptOutcome =
+	| { readonly kind: "result"; readonly status: PromptResultEvent["status"] }
+	| { readonly kind: "unrecognized"; readonly status: string }
+	| { readonly kind: "rejected"; readonly error: string };
+
+type Reply = Pick<AssistantMessage, "errorMessage"> & {
+	readonly stopReason: AssistantMessage["stopReason"] | undefined;
+	readonly text: string;
+};
+
+type ToolStart = Pick<ToolExecutionStartEvent, "toolCallId" | "args">;
+
+type ToolEnd = Pick<ToolExecutionEndEvent, "toolCallId" | "toolName" | "result" | "isError">;
+
+// Exhaustive tables: the host adding or removing a variant is a compile error here, not a silent drop of frames.
+const STOP_REASONS: Record<StopReason, true> = { stop: true, length: true, toolUse: true, error: true, aborted: true };
+const PROMPT_STATUSES: Record<PromptResultEvent["status"], true> = { completed: true, aborted: true, error: true };
+
 const SESSION_TIMEOUT_MS = 600_000;
 const NAME = /^[a-z0-9][a-z0-9._-]*$/;
 
 const isMapping = (value: unknown): value is Mapping => typeof value === "object" && value !== null && !Array.isArray(value);
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+const isStopReason = (value: unknown): value is StopReason => typeof value === "string" && Object.hasOwn(STOP_REASONS, value);
+const isPromptStatus = (value: unknown): value is PromptResultEvent["status"] =>
+	typeof value === "string" && Object.hasOwn(PROMPT_STATUSES, value);
 
 function parseMatcher(value: unknown, where: string): Matcher {
 	if (!isMapping(value) || !(typeof value.tool === "string" || (isStringArray(value.tool) && value.tool.length > 0)))
@@ -130,13 +159,53 @@ function assertionFailures(scenario: Scenario, calls: readonly Call[], finalCode
 
 interface Session {
 	readonly ready: boolean;
-	readonly promptStatus: string | null;
+	readonly prompt: PromptOutcome | null;
 	readonly sessionFile: string | null;
 	readonly calls: readonly Call[];
-	readonly replies: readonly Mapping[];
+	readonly replies: readonly Reply[];
 	readonly timedOut: boolean;
 	readonly exitCode: number;
 	readonly stderr: string;
+}
+
+function promptStatusText(outcome: PromptOutcome): string {
+	switch (outcome.kind) {
+		case "result":
+		case "unrecognized":
+			return outcome.status;
+		case "rejected":
+			return `rejected: ${outcome.error}`;
+	}
+}
+
+function replyOf(message: Mapping): Reply | undefined {
+	if (message.role !== "assistant") return undefined;
+	return {
+		stopReason: isStopReason(message.stopReason) ? message.stopReason : undefined,
+		errorMessage: typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+		text: textOf(message),
+	};
+}
+
+function toolStartOf(frame: Mapping): ToolStart | undefined {
+	if (frame.type !== "tool_execution_start" || typeof frame.toolCallId !== "string") return undefined;
+	return { toolCallId: frame.toolCallId, args: frame.args };
+}
+
+function toolEndOf(frame: Mapping): ToolEnd | undefined {
+	if (frame.type !== "tool_execution_end" || typeof frame.toolCallId !== "string" || typeof frame.toolName !== "string") return undefined;
+	return { toolCallId: frame.toolCallId, toolName: frame.toolName, result: frame.result, isError: frame.isError === true };
+}
+
+function promptOutcomeOf(frame: Mapping): PromptOutcome | undefined {
+	if (frame.type === "prompt_result")
+		return isPromptStatus(frame.status) ? { kind: "result", status: frame.status } : { kind: "unrecognized", status: String(frame.status) };
+	if (frame.type === "response" && frame.success === false) return { kind: "rejected", error: String(frame.error) };
+	return undefined;
+}
+
+function sessionFileOf(data: unknown): Pick<SessionState, "sessionFile"> {
+	return { sessionFile: isMapping(data) && typeof data.sessionFile === "string" ? data.sessionFile : undefined };
 }
 
 async function runSession(model: string, prompt: string, cwd: string, eventsPath: string): Promise<Session> {
@@ -148,11 +217,11 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 		proc.kill();
 	}, SESSION_TIMEOUT_MS);
 	const sink = Bun.file(eventsPath).writer();
-	const started = new Map<string, unknown>();
+	const started = new Map<string, ToolStart["args"]>();
 	const dispatched = new Map<string, Call | null>();
-	const replies: Mapping[] = [];
+	const replies: Reply[] = [];
 	let ready = false;
-	let promptStatus: string | null = null;
+	let outcome: PromptOutcome | null = null;
 	let sessionFile: string | null = null;
 	const send = (frame: Mapping): void => {
 		proc.stdin.write(`${JSON.stringify(frame)}\n`);
@@ -170,27 +239,33 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 		if (!ready && frame.type === "ready") {
 			ready = true;
 			send({ id: "prompt", type: "prompt", message: prompt });
-		} else if (frame.type === "tool_execution_start" && typeof frame.toolCallId === "string") {
-			started.set(frame.toolCallId, frame.args);
-			dispatched.set(frame.toolCallId, null);
-		} else if (frame.type === "tool_execution_end" && typeof frame.toolCallId === "string" && typeof frame.toolName === "string") {
-			dispatched.set(frame.toolCallId, {
-				tool: frame.toolName,
-				input: started.get(frame.toolCallId) ?? null,
-				isError: frame.isError === true,
-				result: textOf(frame.result),
-			});
-		} else if (frame.type === "message_end" && isMapping(frame.message) && frame.message.role === "assistant") {
-			replies.push(frame.message);
-		} else if (
-			promptStatus === null &&
-			frame.id === "prompt" &&
-			(frame.type === "prompt_result" || (frame.type === "response" && frame.success === false))
-		) {
-			promptStatus = frame.type === "prompt_result" ? String(frame.status) : `rejected: ${String(frame.error)}`;
-			send({ id: "state", type: "get_state" });
+		} else if (frame.type === "tool_execution_start") {
+			const start = toolStartOf(frame);
+			if (start !== undefined) {
+				started.set(start.toolCallId, start.args);
+				dispatched.set(start.toolCallId, null);
+			}
+		} else if (frame.type === "tool_execution_end") {
+			const end = toolEndOf(frame);
+			if (end !== undefined) {
+				dispatched.set(end.toolCallId, {
+					tool: end.toolName,
+					input: started.get(end.toolCallId) ?? null,
+					isError: end.isError === true,
+					result: textOf(end.result),
+				});
+			}
+		} else if (frame.type === "message_end" && isMapping(frame.message)) {
+			const reply = replyOf(frame.message);
+			if (reply !== undefined) replies.push(reply);
+		} else if (outcome === null && frame.id === "prompt") {
+			const next = promptOutcomeOf(frame);
+			if (next !== undefined) {
+				outcome = next;
+				send({ id: "state", type: "get_state" });
+			}
 		} else if (frame.id === "state" && frame.type === "response") {
-			if (isMapping(frame.data) && typeof frame.data.sessionFile === "string") sessionFile = frame.data.sessionFile;
+			sessionFile = sessionFileOf(frame.data).sessionFile ?? null;
 			proc.stdin.end();
 		}
 	};
@@ -210,7 +285,7 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 	await sink.end();
 	return {
 		ready,
-		promptStatus,
+		prompt: outcome,
 		sessionFile,
 		calls: [...dispatched.values()].filter((call): call is Call => call !== null),
 		replies,
@@ -227,8 +302,8 @@ function classify(model: string, session: Session, failures: readonly string[]):
 		return { kind: "harness-error", reason: `omp exited ${session.exitCode} before its ready frame` };
 	}
 	if (session.timedOut) return { kind: "harness-error", reason: `no prompt result within ${SESSION_TIMEOUT_MS / 1000}s` };
-	if (session.promptStatus === null) return { kind: "harness-error", reason: `omp exited ${session.exitCode} before the prompt result` };
-	if (session.promptStatus.startsWith("rejected:")) return { kind: "harness-error", reason: `prompt ${session.promptStatus}` };
+	if (session.prompt === null) return { kind: "harness-error", reason: `omp exited ${session.exitCode} before the prompt result` };
+	if (session.prompt.kind === "rejected") return { kind: "harness-error", reason: `prompt ${promptStatusText(session.prompt)}` };
 	if (session.exitCode !== 0) return { kind: "harness-error", reason: `omp exited ${session.exitCode}` };
 	const failed = session.replies.filter((reply) => reply.stopReason === "error" || reply.stopReason === "aborted");
 	if (session.replies.length > 0 && failed.length === session.replies.length && session.calls.length === 0) {
@@ -268,7 +343,7 @@ async function main(argv: readonly string[]): Promise<number> {
 	writeFileSync(SINK_POINTER, evidence("requests.jsonl"));
 	const session = await runSession(model, scenario.prompt, cwd, evidence("events.jsonl")).finally(() => writeFileSync(SINK_POINTER, ""));
 	const finalState = shell(scenario.finalAssertion, cwd);
-	const lastReply = textOf(session.replies.at(-1));
+	const lastReply = session.replies.at(-1)?.text ?? "";
 	const outcome = classify(model, session, assertionFailures(scenario, session.calls, finalState.code, lastReply));
 	if (session.sessionFile !== null && existsSync(session.sessionFile)) copyFileSync(session.sessionFile, evidence("session.jsonl"));
 	return write(outcome, {
@@ -276,7 +351,7 @@ async function main(argv: readonly string[]): Promise<number> {
 		finalAssertion: { command: scenario.finalAssertion, exit: finalState.code, output: finalState.out },
 		toolSequence: session.calls.map((call) => `${call.tool}${call.isError ? "(error)" : ""}`),
 		calls: session.calls.map((call) => ({ ...call, result: call.result.slice(0, 400) })),
-		promptStatus: session.promptStatus,
+		promptStatus: session.prompt === null ? null : promptStatusText(session.prompt),
 		sessionFile: session.sessionFile,
 		timedOut: session.timedOut,
 		exitCode: session.exitCode,

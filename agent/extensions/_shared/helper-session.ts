@@ -1,3 +1,5 @@
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type AgentSession, createAgentSession, type ExtensionContext, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "./errors.ts";
 import { lastAssistantText } from "./messages.ts";
@@ -22,21 +24,15 @@ type HelperResult =
 	| { readonly kind: "provider-error"; readonly message: string }
 	| { readonly kind: "failed"; readonly message: string };
 
-type FinalAnswer = { readonly stopReason: unknown; readonly errorMessage: string; readonly text: string };
+type FinalAnswer = {
+	readonly stopReason: AssistantMessage["stopReason"] | undefined;
+	readonly errorMessage: string;
+	readonly text: string;
+};
 
-function finalAnswer(messages: unknown): FinalAnswer {
-	let stopReason: unknown;
-	let errorMessage = "";
-	if (Array.isArray(messages)) {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message: unknown = messages[i];
-			if (typeof message !== "object" || message === null || !("role" in message) || message.role !== "assistant") continue;
-			stopReason = "stopReason" in message ? message.stopReason : undefined;
-			errorMessage = "errorMessage" in message && typeof message.errorMessage === "string" ? message.errorMessage : "";
-			break;
-		}
-	}
-	return { stopReason, errorMessage, text: lastAssistantText(messages) };
+function finalAnswer(messages: readonly AgentMessage[]): FinalAnswer {
+	const last = messages.findLast((message): message is AssistantMessage => message.role === "assistant");
+	return { stopReason: last?.stopReason, errorMessage: last?.errorMessage ?? "", text: lastAssistantText(messages) };
 }
 
 /**

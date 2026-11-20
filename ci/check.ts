@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import type { logger } from "@oh-my-pi/pi-utils";
 
 const REPO = resolve(import.meta.dir, "..");
 const OMP_VERSION = process.env.OMP_VERSION?.trim() || "latest";
@@ -55,7 +56,7 @@ type Finding = { readonly hash: string; readonly kind: Diagnostic["kind"]; reado
 
 type ModelRef = { readonly provider: string; readonly id: string };
 
-type LogRecord = { readonly level: string; readonly message: string; readonly [field: string]: unknown };
+type LogRecord = { readonly level: logger.LogLevel; readonly message: string; readonly [field: string]: unknown };
 
 type ShadowRequest = { readonly provider: string; readonly model: string; readonly status: number };
 
@@ -366,6 +367,12 @@ async function runSession(
 	if (code !== 0 && !timedOut) out.push({ kind: fallout, phase, text: `omp exited ${code}` });
 }
 
+function logRecordOf(value: unknown): LogRecord | undefined {
+	if (!isMapping(value) || typeof value.message !== "string") return undefined;
+	if (value.level !== "warn" && value.level !== "error") return undefined;
+	return { ...value, level: value.level, message: value.message };
+}
+
 function readLogs(home: string, out: Diagnostic[], ignored: string[]): void {
 	const dir = join(home, ".omp", "logs");
 	if (!existsSync(dir)) return;
@@ -379,8 +386,8 @@ function readLogs(home: string, out: Diagnostic[], ignored: string[]): void {
 			} catch {
 				continue;
 			}
-			if (!isMapping(record) || typeof record.message !== "string" || (record.level !== "warn" && record.level !== "error")) continue;
-			const entry = record as LogRecord;
+			const entry = logRecordOf(record);
+			if (entry === undefined) continue;
 			const { timestamp: _t, pid: _p, level, message, ...context } = entry;
 			const keys = Object.keys(context);
 			const text =

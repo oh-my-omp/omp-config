@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import {
 	type FilterKeys,
@@ -30,7 +31,7 @@ const DEFAULT_EVERY = 30; // watched actions (tool calls + text replies) between
 
 export type Scope = "full" | "window";
 
-export type DeliverAs = "aside" | "steer" | "nextTurn" | "followUp";
+export type DeliverAs = NonNullable<NonNullable<Parameters<ExtensionAPI["sendMessage"]>[1]>["deliverAs"]>;
 
 type WatchdogBase = {
 	readonly name: string;

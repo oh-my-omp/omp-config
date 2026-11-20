@@ -2,7 +2,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { planWorktreeExit, type SessionWorktree } from "@oh-my-pi/pi-coding-agent/session/session-worktree";
+import { planWorktreeExit } from "@oh-my-pi/pi-coding-agent/session/session-worktree";
+import type { SessionWorktree } from "@oh-my-pi/pi-coding-agent/worktree/backend";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { errorText } from "../_shared/errors.ts";
 

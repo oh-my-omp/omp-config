@@ -1,4 +1,4 @@
-import { type ExtensionAPI, z } from "@oh-my-pi/pi-coding-agent";
+import { type AgentToolResult, type ExtensionAPI, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { type Outcome, type Platform, runDeletion, supportedPlatform, trashUnavailable } from "./backends.ts";
@@ -25,7 +25,7 @@ const deleteParams = z.object({
 		),
 });
 
-type ToolResult = { content: { type: "text"; text: string }[]; isError?: true };
+type ToolResult = AgentToolResult<undefined>;
 
 type Consent = "granted" | "declined" | "unavailable";
 

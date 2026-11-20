@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
@@ -15,17 +16,7 @@ import {
 	touchedWatchdogFiles,
 	type WatchdogCommand,
 } from "./commands.ts";
-import {
-	branchMessages,
-	countActions,
-	defaultReviewerModel,
-	isOwnUserNote,
-	messageTimestamp,
-	producerOf,
-	reviewTranscript,
-	runJev,
-	runReviewer,
-} from "./review.ts";
+import { branchMessages, countActions, defaultReviewerModel, producerOf, reviewTranscript, runJev, runReviewer } from "./review.ts";
 import {
 	type DeliverAs,
 	discoverWatchdogFiles,
@@ -46,7 +37,7 @@ type Runtime = {
 	roster: WatchdogSpec[];
 	overrides: Map<string, boolean>;
 	states: Map<string, WatchdogState>;
-	branchOf: () => ReadonlyArray<unknown>;
+	branchOf: () => ReadonlyArray<SessionEntry>;
 	notes: NoteIndex;
 	nextTurnQueue: QueuedNote[];
 	userTurnArmed: boolean;
@@ -93,11 +84,11 @@ function parseOverride(data: unknown): SessionOverride | null {
 	return { filePath: data.filePath, enabled };
 }
 
-function overridesFromBranch(entries: ReadonlyArray<unknown>): Map<string, boolean> {
+function overridesFromBranch(entries: ReadonlyArray<SessionEntry>): Map<string, boolean> {
 	const out = new Map<string, boolean>();
 	for (const e of entries) {
-		if (!hasKey(e, "type") || e.type !== "custom" || !hasKey(e, "customType") || e.customType !== OVERRIDE_ENTRY_TYPE) continue;
-		const parsed = parseOverride(hasKey(e, "data") ? e.data : undefined);
+		if (e.type !== "custom" || e.customType !== OVERRIDE_ENTRY_TYPE) continue;
+		const parsed = parseOverride(e.data);
 		if (!parsed) continue;
 		if (parsed.enabled === null) out.delete(parsed.filePath);
 		else out.set(parsed.filePath, parsed.enabled);
@@ -108,11 +99,11 @@ function overridesFromBranch(entries: ReadonlyArray<unknown>): Map<string, boole
 const CURSOR_ENTRY_TYPE = "mouriya.omp.watchdog-agent.cursor";
 type CursorEntry = { readonly filePath: string; readonly cursor: number };
 
-function cursorsFromBranch(entries: ReadonlyArray<unknown>): Map<string, number> {
+function cursorsFromBranch(entries: ReadonlyArray<SessionEntry>): Map<string, number> {
 	const out = new Map<string, number>();
 	for (const e of entries) {
-		if (!hasKey(e, "type") || e.type !== "custom" || !hasKey(e, "customType") || e.customType !== CURSOR_ENTRY_TYPE) continue;
-		const data = hasKey(e, "data") ? e.data : undefined;
+		if (e.type !== "custom" || e.customType !== CURSOR_ENTRY_TYPE) continue;
+		const data = e.data;
 		if (!hasKey(data, "filePath") || typeof data.filePath !== "string" || !hasKey(data, "cursor") || typeof data.cursor !== "number")
 			continue;
 		out.set(data.filePath, data.cursor);
@@ -134,60 +125,57 @@ function filePathsOf(data: unknown): readonly string[] {
 	return data.filePaths.filter((path): path is string => typeof path === "string");
 }
 
-type NoteIndex = { count: number; anchor: unknown; index: Map<string, readonly string[]> };
+type NoteIndex = { count: number; anchor: SessionEntry | undefined; index: Map<string, readonly string[]> };
 
-function foldNote(entry: unknown, out: Map<string, readonly string[]>): void {
-	if (!hasKey(entry, "type") || entry.type !== "custom" || !hasKey(entry, "customType") || entry.customType !== USER_NOTE_ENTRY_TYPE)
-		return;
-	const data = hasKey(entry, "data") ? entry.data : undefined;
+function foldNote(entry: SessionEntry, out: Map<string, readonly string[]>): void {
+	if (entry.type !== "custom" || entry.customType !== USER_NOTE_ENTRY_TYPE) return;
+	const data = entry.data;
 	if (!hasKey(data, "text") || typeof data.text !== "string") return;
 	out.set(data.text.trim(), filePathsOf(data));
 }
 
-function noteIndexOf(runtime: Runtime, entries: ReadonlyArray<unknown>): Map<string, readonly string[]> {
+function noteIndexOf(runtime: Runtime, entries: ReadonlyArray<SessionEntry>): Map<string, readonly string[]> {
 	const notes = runtime.notes;
 	if (notes.count > entries.length || (notes.count > 0 && entries[notes.count - 1] !== notes.anchor)) {
 		notes.count = 0;
 		notes.index = new Map();
 	}
-	for (let i = notes.count; i < entries.length; i++) foldNote(entries[i], notes.index);
+	for (const entry of entries.slice(notes.count)) foldNote(entry, notes.index);
 	notes.count = entries.length;
 	notes.anchor = entries[entries.length - 1];
 	return notes.index;
 }
 
-function noteFiles(entry: unknown, index: ReadonlyMap<string, readonly string[]>): readonly string[] {
-	if (!hasKey(entry, "type")) return [];
-	if (entry.type === "custom_message" && hasKey(entry, "customType") && entry.customType === NOTE_CUSTOM_TYPE)
-		return filePathsOf(hasKey(entry, "details") ? entry.details : undefined);
-	if (entry.type !== "message" || !hasKey(entry, "message")) return [];
+function noteFiles(entry: SessionEntry, index: ReadonlyMap<string, readonly string[]>): readonly string[] {
+	if (entry.type === "custom_message" && entry.customType === NOTE_CUSTOM_TYPE) return filePathsOf(entry.details);
+	if (entry.type !== "message") return [];
 	const message = entry.message;
-	if (!isOwnUserNote(message, index)) return [];
-	return index.get(textBlocks(hasKey(message, "content") ? message.content : undefined).trim()) ?? [];
+	if (message.role !== "user" || message.attribution !== "agent") return [];
+	return index.get(textBlocks(message.content).trim()) ?? [];
 }
 
 function deliveredSinceCompaction(
-	entries: ReadonlyArray<unknown>,
+	entries: ReadonlyArray<SessionEntry>,
 	filePath: string,
 	index: ReadonlyMap<string, readonly string[]>,
 ): number {
 	let count = 0;
 	for (const e of entries) {
-		if (hasKey(e, "type") && e.type === "compaction") count = 0;
+		if (e.type === "compaction") count = 0;
 		else if (noteFiles(e, index).includes(filePath)) count += 1;
 	}
 	return count;
 }
 
-function watchedActions(filter: SessionFilter, message: unknown): number {
+function watchedActions(filter: SessionFilter, message: AgentMessage): number {
 	const producer = producerOf(message);
 	return producer !== null && producerMatches(filter, producer) ? countActions(message) : 0;
 }
 
-function actionsAfter(entries: ReadonlyArray<unknown>, cursor: number, filter: SessionFilter): number {
+function actionsAfter(entries: ReadonlyArray<SessionEntry>, cursor: number, filter: SessionFilter): number {
 	let count = 0;
 	for (const m of branchMessages(entries)) {
-		if ((messageTimestamp(m) ?? 0) > cursor) count += watchedActions(filter, m);
+		if (m.timestamp > cursor) count += watchedActions(filter, m);
 	}
 	return count;
 }
@@ -208,7 +196,7 @@ function refresh(runtime: Runtime, warn: boolean): void {
 	}
 	runtime.roster = specs;
 	const next = new Map<string, WatchdogState>();
-	let branch: ReadonlyArray<unknown> | undefined;
+	let branch: ReadonlyArray<SessionEntry> | undefined;
 	let cursors: Map<string, number> | undefined;
 	let notes: Map<string, readonly string[]> | undefined;
 	for (const spec of specs) {
@@ -321,7 +309,7 @@ function abortReviews(runtime: Runtime): Promise<void>[] {
 	return done;
 }
 
-function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, tail: unknown): void {
+function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, tail: AgentMessage | undefined): void {
 	if (runtime.closed) return;
 	const spec = state.spec;
 	state.pending = 0;

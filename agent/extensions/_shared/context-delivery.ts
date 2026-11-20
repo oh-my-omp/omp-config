@@ -1,30 +1,27 @@
 import { getAnthropicCompactionPayload } from "@oh-my-pi/pi-agent-core";
+import type { DeveloperMessage } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getOpenAiRemoteCompactionPayload } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { textOf } from "./messages.ts";
 
-function contentIncludes(content: unknown, marker: string): boolean {
+function contentIncludes(content: DeveloperMessage["content"], marker: string): boolean {
 	if (typeof content === "string") return content.includes(marker);
-	if (!Array.isArray(content) || marker === "" || marker.includes("\n")) {
-		return textOf(content, "\n").includes(marker);
-	}
+	if (marker === "" || marker.includes("\n")) return textOf(content, "\n").includes(marker);
 	for (const block of content) {
-		if (typeof block !== "object" || block === null) continue;
-		if (!("type" in block) || block.type !== "text") continue;
-		if ("text" in block && typeof block.text === "string" && block.text.includes(marker)) return true;
+		if (block.type === "text" && block.text.includes(marker)) return true;
 	}
 	return false;
 }
 
-function deliveredContents(ctx: ExtensionContext): unknown[] {
+function deliveredContents(ctx: ExtensionContext): DeveloperMessage["content"][] {
 	const manager = ctx.sessionManager;
 	const leafId = manager.getLeafId();
 	if (leafId === null) return [];
 	const leaf = manager.getEntry(leafId);
 	if (leaf === undefined) return [];
 
-	const contents: unknown[] = [];
+	const contents: DeveloperMessage["content"][] = [];
 	const seen = new Set<string>([leaf.id]);
 	const parentOf = (entry: SessionEntry): SessionEntry | undefined => {
 		if (entry.parentId === null || seen.has(entry.parentId)) return undefined;
@@ -52,7 +49,7 @@ function deliveredContents(ctx: ExtensionContext): unknown[] {
 						? undefined
 						: entry.firstKeptEntryId;
 			const boundInclusive = remote === undefined && anthropic === undefined;
-			const kept: unknown[] = [];
+			const kept: DeveloperMessage["content"][] = [];
 			while (current !== undefined && current.id !== boundId) {
 				const older = current;
 				current = parentOf(older);
