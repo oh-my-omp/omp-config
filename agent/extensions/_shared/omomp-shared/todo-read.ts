@@ -1,3 +1,5 @@
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+
 export const TODO_READ_EVENT = "omp-todo-more:read";
 
 export const TODO_READ_STATUSES = ["pending", "in_progress", "completed", "abandoned", "blocked"] as const;
@@ -106,9 +108,7 @@ export function parseTodoReadResponse(value: unknown): TodoReadResponseParsed {
 	return { kind: "ok", goal, openItems, counts };
 }
 
-export interface TodoReadEvents {
-	emit(channel: string, data: unknown): void;
-}
+export type TodoReadEvents = Pick<ExtensionAPI["events"], "emit">;
 
 export function readTodos(events: TodoReadEvents, agentId: string): TodoReadResult {
 	let sent = false;
