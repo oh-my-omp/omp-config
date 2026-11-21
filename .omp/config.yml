@@ -1,3 +1,0 @@
-task:
-  agentModelOverrides:
-    consult:carbon: google-antigravity/gemini-4-carbon:high
