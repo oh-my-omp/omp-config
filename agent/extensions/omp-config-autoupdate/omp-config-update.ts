@@ -1295,6 +1295,7 @@ function parseDeclaredPlugin(spec: string): DeclaredPlugin {
 interface LockEntry {
 	readonly version: string | null;
 	readonly disabled: boolean;
+	readonly features: readonly string[] | null;
 }
 
 interface PluginRecords {
@@ -1320,7 +1321,11 @@ function pluginRecords(): PluginRecords {
 	const lock = new Map<string, LockEntry>();
 	for (const [name, entry] of Object.entries(isMapping(runtime.plugins) ? runtime.plugins : {}))
 		if (isMapping(entry))
-			lock.set(name, { version: typeof entry.version === "string" ? entry.version : null, disabled: entry.enabled === false });
+			lock.set(name, {
+				version: typeof entry.version === "string" ? entry.version : null,
+				disabled: entry.enabled === false,
+				features: isStringArray(entry.enabledFeatures) ? entry.enabledFeatures : null,
+			});
 	return { dependencies, lock };
 }
 
@@ -1337,18 +1342,52 @@ function installedRecord(plugin: Exclude<DeclaredPlugin, { kind: "unrecognized" 
 	return { name: plugin.name, dependency: records.dependencies.get(plugin.name), lock: records.lock.get(plugin.name) };
 }
 
-function isSymlink(path: string): boolean {
+const packagePath = (name: string): string => join(PLUGINS_HOME, "node_modules", name);
+
+function linkTarget(path: string): string | undefined {
 	try {
-		return lstatSync(path).isSymbolicLink();
+		return lstatSync(path).isSymbolicLink() ? resolve(dirname(path), readlinkSync(path)) : undefined;
 	} catch {
-		return false;
+		return undefined;
 	}
 }
 
 function locallyLinked(record: InstalledRecord): boolean {
 	if (record.dependency !== undefined && LOCAL_DEPENDENCY.test(record.dependency)) return true;
 	if (record.dependency === undefined && record.lock !== undefined) return true;
-	return isSymlink(join(PLUGINS_HOME, "node_modules", record.name));
+	return linkTarget(packagePath(record.name)) !== undefined;
+}
+
+interface OverlaidLink {
+	readonly name: string;
+	readonly target: string;
+	readonly lock: LockEntry | undefined;
+}
+
+function overlaidLinks(records: PluginRecords): OverlaidLink[] {
+	return [...records.dependencies.keys()].flatMap((name) => {
+		const target = linkTarget(packagePath(name));
+		return target === undefined ? [] : [{ name, target, lock: records.lock.get(name) }];
+	});
+}
+
+function restoreLinks(omp: string, links: readonly OverlaidLink[]): string[] {
+	const errors: string[] = [];
+	for (const link of links) {
+		if (linkTarget(packagePath(link.name)) === link.target) continue;
+		const commands: string[][] = [["plugin", "link", link.target]];
+		if (link.lock?.disabled === true) commands.push(["plugin", "disable", link.name]);
+		const features = link.lock?.features;
+		if (features !== undefined && features !== null)
+			commands.push(["plugin", "features", link.name, `--set=${features.length > 0 ? features.join(",") : ","}`]);
+		for (const args of commands) {
+			const error = runOmp(omp, args);
+			if (error === undefined) continue;
+			errors.push(error);
+			break;
+		}
+	}
+	return errors;
 }
 
 type PluginStep =
@@ -1530,9 +1569,12 @@ function runOmp(omp: string, args: readonly string[]): string | undefined {
  * recorded spec), then `omp plugin disable <name>` if it was disabled, or the disable is lost.
  * A spec pinned to the recorded exact npm version and an unrecognized spec must run no command:
  * upgrade passes the pin, and an unrecognized spec never matches its record, so it would be
- * reinstalled on every apply.
+ * reinstalled on every apply. Every bun install the host runs, for any plugin, replaces a package
+ * linked over its installed dependency with that dependency: do not drop the restore of those links,
+ * and restore `enabled` and `enabledFeatures` after `omp plugin link`, which resets both.
  */
 function refreshPlugins(omp: string, steps: readonly PluginStep[]): Omit<PluginRefresh, "notes"> {
+	const links = overlaidLinks(pluginRecords());
 	const installed: string[] = [];
 	const upgraded: string[] = [];
 	const errors: string[] = [];
@@ -1587,6 +1629,7 @@ function refreshPlugins(omp: string, steps: readonly PluginStep[]): Omit<PluginR
 			}
 		}
 	}
+	errors.push(...restoreLinks(omp, links));
 	return { installed, upgraded, errors, changes };
 }
 

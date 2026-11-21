@@ -10,7 +10,7 @@
   - 缺失的必装插件执行 `omp install <spec>`；
   - 记录的 spec 与声明相同的已装插件（同一 GitHub owner/repo 且 `#ref` 相同，两边都不带 ref 也算相同；或以裸名声明、记录为版本范围的 npm 包）执行 `omp plugin upgrade <name>`：`#release` 与默认分支来源移到新提交，裸名 npm 包升到最新版，`enabled` 与 `enabledFeatures` 保持不变；
   - spec 变了的已装插件（换了 `#ref`、npm 版本或来源，或从不带 ref 的 URL 改声明为 `#release`）执行 `omp install <spec>`，原先停用的再执行 `omp plugin disable <name>`；features 按新 spec 求出。以范围、不完整版本或 dist-tag 声明的 npm 条目每次 apply 都这样重装；钉在与记录相同的精确版本上的不运行任何命令；
-  - 以本地链接方式安装的插件（依赖值为 `link:`、`file:`、`workspace:` 或 `portal:`，`omp plugin link` 装的、没有依赖项的条目，或 `~/.omp/plugins/node_modules` 中的符号链接）不会被安装覆盖或升级；
+  - 以本地链接方式安装的插件（依赖值为 `link:`、`file:`、`workspace:` 或 `portal:`，`omp plugin link` 装的、没有依赖项的条目，或 `~/.omp/plugins/node_modules` 中的符号链接）不会被安装覆盖或升级。在已装依赖上做的链接，会在任一插件被安装或升级时被宿主的 bun 安装换回依赖副本，所以更新器在自己的命令之后用 `omp plugin link` 重新链接，并恢复被 link 重置的 `enabled` 与 `enabledFeatures`；
   - 既不是 GitHub 来源（`https://`、`git+https://`、`git@github.com:`、`github:`）也不是 npm 包名的 spec 不运行任何命令，报告记一条「不认得的插件 spec，未处理」的 note。
 - 启动自动更新在远端配置提交未变时，仍按同样的规则刷新每个不带 `#ref` 或处在 `#release` 通道的 GitHub 条目（必装项及已安装的可选项），使各插件跟随自己的发布（不带 ref 的跟随默认分支），不必等配置提交；钉在其他引用上的条目等到下次配置提交。已安装条目按 owner/repo 与声明的 GitHub 来源匹配，兼容 OMP 记录的 `github:`、HTTPS 和 git URL 等形式。
 - `./plugin-audit.sh` 以 `omp install` 在 `~/.omp/plugins/package.json` 中记录的包名（下表第二列）比对 Git/URL 条目；本机已安装的可选插件列在 `[保留]` 下，不算缺失也不进卸载候选。
