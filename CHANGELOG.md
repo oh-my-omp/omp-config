@@ -37,6 +37,7 @@
 
 ### Fixed
 
+- Located the shared batch context for `task-completion-judge` by the host subagent template's `⁂ Context` heading instead of a `§ Context` marker the host no longer renders
 - Kept the `harness-restart` completion notice pending until OMP accepted it: a refused or failed send is now logged and re-sent on the next session start or switch instead of being marked consumed
 - Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
 - Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
