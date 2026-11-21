@@ -1,10 +1,11 @@
 // LIFETIME. The table is process-wide and outlives the extension: disabling
 // the extension takes effect after a restart.
 //
-// Relies on OMP internals (`@oh-my-pi/pi-coding-agent` package root:
-// `XDEV_KEEP_TOP_LEVEL`, `isMountableUnderXdev`); re-verify after every OMP
-// upgrade.
-import { type ExtensionAPI, isMountableUnderXdev, XDEV_KEEP_TOP_LEVEL } from "@oh-my-pi/pi-coding-agent";
+// Relies on OMP internals (`@oh-my-pi/pi-coding-agent/tools/tool-commands`:
+// `TOOL_COMMAND_KEEP_TOP_LEVEL`, `isMountableAsToolCommand`); re-verify after
+// every OMP upgrade.
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { isMountableAsToolCommand, TOOL_COMMAND_KEEP_TOP_LEVEL } from "@oh-my-pi/pi-coding-agent/tools/tool-commands";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";
@@ -15,13 +16,13 @@ type Pin = { readonly kind: "pinned" } | { readonly kind: "failed"; readonly rea
 
 function pinTopLevel(): Pin {
 	try {
-		for (const name of TOOLS) XDEV_KEEP_TOP_LEVEL[name] = true;
+		for (const name of TOOLS) TOOL_COMMAND_KEEP_TOP_LEVEL[name] = true;
 	} catch (error) {
 		return { kind: "failed", reason: errorText(error) };
 	}
-	const mounted = TOOLS.filter((name) => isMountableUnderXdev({ name, loadMode: "discoverable" }));
+	const mounted = TOOLS.filter((name) => isMountableAsToolCommand({ name, loadMode: "discoverable" }));
 	if (mounted.length === 0) return { kind: "pinned" };
-	return { kind: "failed", reason: `OMP still mounts ${mounted.join(", ")} under xd://` };
+	return { kind: "failed", reason: `OMP still mounts ${mounted.join(", ")} as bash tool commands` };
 }
 
 export default function astTopLevel(pi: ExtensionAPI): void {
@@ -40,8 +41,8 @@ export default function astTopLevel(pi: ExtensionAPI): void {
 					if (ctx.agent.kind === "main" && ctx.hasUI)
 						ctx.ui.notify(
 							tr(
-								`ast-top-level: ast_grep/ast_edit stay xd:// devices (${pin.reason})`,
-								`ast-top-level：ast_grep/ast_edit 仍是 xd:// 设备（${pin.reason}）`,
+								`ast-top-level: ast_grep/ast_edit stay bash tool commands (${pin.reason})`,
+								`ast-top-level：ast_grep/ast_edit 仍是 bash 里的 tool command（${pin.reason}）`,
 							),
 							"warning",
 						);
