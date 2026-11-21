@@ -640,6 +640,6 @@ const CATEGORY_TEXT: Record<PtyCategory, string> = {
 export function ptyRefusal(hit: PtyHit, tool: string): string {
 	return [
 		`pty 路由：这次 \`${tool}\` 调用没有执行：\`${hit.program}\` ${CATEGORY_TEXT[hit.category]}（${hit.category}，规则 \`${hit.rule}\`）。`,
-		"xd://exec_command",
+		"help://exec_command",
 	].join("\n");
 }

@@ -13,5 +13,4 @@ upstream: pi-coding-agent@18.22.0 src/tools/write.ts, src/internal-urls/{agent,p
 - `local://<path>`: a file in the session's shared scratch area (also visible to subagents); writes stay inside it.
 - `vault://<path>`: a file under the vault root, when the vault is enabled.
 - `ssh://<host>/<path>`: writes a remote text file over SSH (exec approval).
-- `xd://<device>`: runs that device with the JSON object in `content`; `xd://<device>/<topic>` is documentation, read it, never write it.
-- Read-only schemes (`artifact://`, `skill://`, `history://`, `omp://`, `issue://` …) are refused. A line selector on a write target is refused (`:raw` and `:conflicts` are the only peeled selectors).
+- Read-only schemes (`artifact://`, `skill://`, `history://`, `omp://`, `help://`, `issue://` …) are refused. A line selector on a write target is refused (`:raw` and `:conflicts` are the only peeled selectors).

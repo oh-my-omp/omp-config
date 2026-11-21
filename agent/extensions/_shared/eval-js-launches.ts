@@ -16,7 +16,7 @@ export type JsLaunch =
 	| { readonly kind: "bunSpawn"; readonly words: readonly LaunchWord[] | null }
 	| { readonly kind: "shellHelper"; readonly api: string; readonly via: LaunchVia; readonly text: string | null }
 	| { readonly kind: "bunShell"; readonly text: string | null }
-	| { readonly kind: "bridge"; readonly source: "bash" | "deviceWrite"; readonly command: string | null }
+	| { readonly kind: "bridge"; readonly command: string | null }
 	| { readonly kind: "indeterminate"; readonly what: string };
 
 export type JsCell = { readonly program: Program; readonly bindings: Bindings; readonly carry: JsCarry };
@@ -60,8 +60,6 @@ export function jsLaunchOf(node: Node, bindings: Bindings): JsLaunch | null {
 	switch (api) {
 		case "tool.bash":
 			return opaque ? unknownLaunch(api) : bashBridge(args[0]);
-		case "tool.write":
-			return opaque ? unknownLaunch(api) : deviceWriteBridge(args[0]);
 		case "child_process.exec":
 		case "child_process.execSync":
 			return opaque ? unknownLaunch(api) : { kind: "childScript", api, via, text: literalString(args[0]) };
@@ -111,20 +109,10 @@ function calleeApi(callee: Node, bindings: Bindings): { readonly api: string; re
 const unknownLaunch = (what: string): JsLaunch => ({ kind: "indeterminate", what });
 
 function bashBridge(arg: Node | undefined): JsLaunch {
-	if (arg?.type !== "ObjectExpression") return { kind: "bridge", source: "bash", command: null };
+	if (arg?.type !== "ObjectExpression") return { kind: "bridge", command: null };
 	const props = propsOf(arg);
 	if (props.kind === "indeterminate") return unknownLaunch("the `tool.bash` arguments");
-	return { kind: "bridge", source: "bash", command: literalString(props.value.get("command")) };
-}
-
-function deviceWriteBridge(arg: Node | undefined): JsLaunch | null {
-	if (arg?.type !== "ObjectExpression") return null;
-	const props = propsOf(arg);
-	if (props.kind === "indeterminate") return unknownLaunch("the `tool.write` arguments");
-	if (literalString(props.value.get("path")) !== "xd://bash") return null;
-	const command = payloadCommand(props.value.get("content"));
-	if (command.kind === "indeterminate") return unknownLaunch("the xd://bash payload");
-	return { kind: "bridge", source: "deviceWrite", command: command.value };
+	return { kind: "bridge", command: literalString(props.value.get("command")) };
 }
 
 function spawnArguments(args: readonly Expression[]): Read<{ readonly shell: boolean; readonly words: readonly LaunchWord[] | null }> {
@@ -373,24 +361,4 @@ function argvOf(head: readonly (Node | null | undefined)[], array: ArrayExpressi
 	const elements = array?.elements ?? [];
 	if (elements.some((item) => item?.type === "SpreadElement")) return UNKNOWN;
 	return read([...head, ...elements].map(wordOf));
-}
-
-function payloadCommand(content: Node | null | undefined): Read<string | null> {
-	if (content?.type === "CallExpression" && isMember(content.callee, "JSON", "stringify")) {
-		const [object] = content.arguments;
-		if (object?.type !== "ObjectExpression") return read(null);
-		const props = propsOf(object);
-		return props.kind === "indeterminate" ? UNKNOWN : read(literalString(props.value.get("command")));
-	}
-	const text = literalString(content);
-	return read(text === null ? null : bridgeCommand(text));
-}
-
-function bridgeCommand(content: string): string | null {
-	try {
-		const payload: unknown = JSON.parse(content);
-		if (typeof payload === "object" && payload !== null && "command" in payload && typeof payload.command === "string")
-			return payload.command;
-	} catch {}
-	return null;
 }

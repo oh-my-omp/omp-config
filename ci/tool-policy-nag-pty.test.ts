@@ -188,7 +188,7 @@ describe("pty refusal", () => {
 			expect(lines[0]).toContain(hit.category);
 			expect(lines[0]).toContain(`\`${hit.program}\``);
 			expect(lines[0]).toContain(hit.rule);
-			expect(lines[1]).toBe("xd://exec_command");
+			expect(lines[1]).toBe("help://exec_command");
 			for (const recipe of ["write_stdin", "monitor", "kill_session", "heredoc", "cmd", "shell 参数"]) expect(shown).not.toContain(recipe);
 		}
 	});

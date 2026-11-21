@@ -57,7 +57,7 @@ function judgeLaunch(launch: JsLaunch, fragment: string, ctx: Context): Verdict 
 				: classify(ctx.brush, { kind: "script", text: launch.text }, ctx.depth + 1);
 		case "bridge":
 			if (launch.command !== null) return classify(ctx.brush, { kind: "script", text: launch.command }, ctx.depth + 1);
-			return nonLiteral(launch.source === "bash" ? "the bash bridge command" : "the xd://bash payload");
+			return nonLiteral("the bash bridge command");
 		case "indeterminate":
 			return block("nonLiteral", fragment, `${launch.what} is not statically known`);
 		default: {

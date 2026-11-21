@@ -14,4 +14,4 @@ upstream: pi-coding-agent@18.22.0 src/tools/bash.ts, src/exec/settings.ts, src/i
 - A non-zero exit or a reached timeout marks the job `failed`; progress updates carry `details.async.state` `running` / `completed` / `failed` / `cancelled`.
 - A requested timeout outside 1–3600 is clamped and the result says so (`details.requestedTimeoutSeconds` vs `timeoutSeconds`).
 - Service mode (`name`/`ready`) is disabled in this setup (`launch.enabled: false`).
-xd://exec_command
+help://exec_command
