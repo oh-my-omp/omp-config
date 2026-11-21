@@ -70,6 +70,7 @@
 - Skipped rejected judge candidates: 401/402/403 and 451 rejections exclude the model for the process, while a 404 keeps the five-minute cooldown
 - Pointed `install-plugins.sh` and the plugin docs at `oh-my-omp/omp-actual-terminal#release`, the terminal plugin's renamed repository; the old `omp-unified-exec` address returns 404, which failed the updater's apply
 - Returned the final assistant turn's text ahead of accumulated streamed deltas in `_shared/helper-session.ts` so multi-turn tool-using watchdogs that narrate before a tool call still resolve a final `PASS` verdict cleanly
+- Kept the host's `SYSTEM_TEMPLATE.md`, `APPEND_SYSTEM*.md`, `PERSONALITY.md`, `config-light.yml` and `omp-light.ts` out of the sandbox copy of `~/.omp/agent`, so the updater writes them from the working tree instead of keeping the host copy as an `unknown-base` conflict and sessions load the checkout's prompt template
 - Made `omp-config-update` enumerate `agent/extensions/` directories absent from the upstream snapshot and remove their non-app-managed files along with empty extension directories (such as `task-tool-trim` and empty `fork-task`), while preserving app-managed, excluded, symlinked and top-level files
 
 ## [1.2.1] - 2026-11-19

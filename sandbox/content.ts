@@ -8,6 +8,8 @@ export const TARGET_IMAGE = "debian:stable-slim";
 export const PLATFORM = "linux/arm64";
 const TAR_FLAGS = ["--no-xattrs", "--no-mac-metadata"];
 
+// Every updater-managed plain file must stay excluded: without `.omp-config-base/files`, a host copy is an
+// `unknown-base` conflict and the updater keeps it instead of writing the `/repo` version.
 const AGENT_EXCLUDES = [
 	"agent/sessions",
 	"agent/blobs",
@@ -26,6 +28,11 @@ const AGENT_EXCLUDES = [
 	"agent/extensions",
 	"agent/extensions-last",
 	"agent/agents",
+	"agent/SYSTEM_TEMPLATE.md",
+	"agent/APPEND_SYSTEM*.md",
+	"agent/PERSONALITY.md",
+	"agent/config-light.yml",
+	"agent/omp-light.ts",
 	"agent/.omp-config-base/files",
 	"agent/*.lock",
 	"plugins/node_modules",
