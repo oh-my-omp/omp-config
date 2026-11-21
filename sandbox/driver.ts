@@ -24,6 +24,7 @@ export interface Scenario {
 	readonly name: string;
 	readonly init: string;
 	readonly prompt: string;
+	readonly prompts: readonly string[];
 	readonly finalAssertion: string;
 	readonly expect: readonly Matcher[];
 	readonly forbid: readonly Matcher[];
@@ -97,9 +98,23 @@ function parseMatchers(value: unknown, where: string): Matcher[] {
 
 export function parseScenario(raw: unknown): Scenario {
 	if (!isMapping(raw)) throw new Error("the scenario must be a JSON object");
-	for (const key of ["name", "init", "prompt", "finalAssertion"] as const) {
+	for (const key of ["name", "init", "finalAssertion"] as const) {
 		if (typeof raw[key] !== "string") throw new Error(`scenario "${key}" must be a string`);
 	}
+	let prompts: readonly string[];
+	if (raw.prompt !== undefined && raw.prompts !== undefined) {
+		throw new Error('scenario cannot specify both "prompt" and "prompts"');
+	}
+	if (raw.prompts !== undefined) {
+		if (!isStringArray(raw.prompts) || raw.prompts.length === 0) throw new Error('scenario "prompts" must be a non-empty string array');
+		prompts = raw.prompts;
+	} else if (typeof raw.prompt === "string") {
+		prompts = [raw.prompt];
+	} else {
+		throw new Error('scenario needs "prompt" (a string) or "prompts" (a non-empty string array)');
+	}
+	const firstPrompt = prompts[0];
+	if (firstPrompt === undefined) throw new Error('scenario "prompts" must be non-empty');
 	const name = String(raw.name);
 	if (!NAME.test(name)) throw new Error(`scenario "name" must match ${NAME}`);
 	const calls = raw.calls === undefined ? {} : raw.calls;
@@ -109,7 +124,8 @@ export function parseScenario(raw: unknown): Scenario {
 	return {
 		name,
 		init: String(raw.init),
-		prompt: String(raw.prompt),
+		prompt: firstPrompt,
+		prompts,
 		finalAssertion: String(raw.finalAssertion),
 		expect: parseMatchers(calls.expect, "calls.expect"),
 		forbid: parseMatchers(calls.forbid, "calls.forbid"),
@@ -208,7 +224,7 @@ function sessionFileOf(data: unknown): Pick<SessionState, "sessionFile"> {
 	return { sessionFile: isMapping(data) && typeof data.sessionFile === "string" ? data.sessionFile : undefined };
 }
 
-async function runSession(model: string, prompt: string, cwd: string, eventsPath: string): Promise<Session> {
+async function runSession(model: string, prompts: readonly string[], cwd: string, eventsPath: string): Promise<Session> {
 	const proc = Bun.spawn(["omp", "--mode", "rpc", "--no-ui", "--model", model], { cwd, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
 	const stderr = new Response(proc.stderr).text();
 	let timedOut = false;
@@ -221,6 +237,9 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 	const dispatched = new Map<string, Call | null>();
 	const replies: Reply[] = [];
 	let ready = false;
+	let promptIndex = 0;
+	let currentPromptId = "prompt";
+	let donePrompts = false;
 	let outcome: PromptOutcome | null = null;
 	let sessionFile: string | null = null;
 	const send = (frame: Mapping): void => {
@@ -238,7 +257,8 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 		if (!isMapping(frame)) return;
 		if (!ready && frame.type === "ready") {
 			ready = true;
-			send({ id: "prompt", type: "prompt", message: prompt });
+			const first = prompts[0];
+			if (first !== undefined) send({ id: currentPromptId, type: "prompt", message: first });
 		} else if (frame.type === "tool_execution_start") {
 			const start = toolStartOf(frame);
 			if (start !== undefined) {
@@ -258,11 +278,20 @@ async function runSession(model: string, prompt: string, cwd: string, eventsPath
 		} else if (frame.type === "message_end" && isMapping(frame.message)) {
 			const reply = replyOf(frame.message);
 			if (reply !== undefined) replies.push(reply);
-		} else if (outcome === null && frame.id === "prompt") {
+		} else if (!donePrompts && frame.id === currentPromptId) {
 			const next = promptOutcomeOf(frame);
 			if (next !== undefined) {
-				outcome = next;
-				send({ id: "state", type: "get_state" });
+				const nextPrompt = prompts[promptIndex + 1];
+				if (next.kind === "result" && next.status === "completed" && nextPrompt !== undefined) {
+					outcome = null;
+					promptIndex += 1;
+					currentPromptId = `prompt-${promptIndex}`;
+					send({ id: currentPromptId, type: "prompt", message: nextPrompt });
+				} else {
+					outcome = next;
+					donePrompts = true;
+					send({ id: "state", type: "get_state" });
+				}
 			}
 		} else if (frame.id === "state" && frame.type === "response") {
 			sessionFile = sessionFileOf(frame.data).sessionFile ?? null;
@@ -327,7 +356,7 @@ async function main(argv: readonly string[]): Promise<number> {
 		writeFileSync(evidence("driver.json"), `${JSON.stringify({ scenario: scenario.name, model, result: outcome, ...details }, null, 2)}\n`);
 		const why = outcome.kind === "fail" ? outcome.failures.join("; ") : outcome.kind === "pass" ? "" : outcome.reason;
 		console.log(`${outcome.kind} ${model} ${scenario.name}${why === "" ? "" : ` :: ${why}`}`);
-		return outcome.kind === "pass" || outcome.kind === "untested" ? 0 : 1;
+		return outcome.kind === "pass" ? 0 : 1;
 	};
 
 	const cwd = join("/runs", model.replaceAll("/", "_"), `${scenario.name}-${Date.now()}`);
@@ -341,7 +370,7 @@ async function main(argv: readonly string[]): Promise<number> {
 		);
 	writeFileSync(evidence("requests.jsonl"), "");
 	writeFileSync(SINK_POINTER, evidence("requests.jsonl"));
-	const session = await runSession(model, scenario.prompt, cwd, evidence("events.jsonl")).finally(() => writeFileSync(SINK_POINTER, ""));
+	const session = await runSession(model, scenario.prompts, cwd, evidence("events.jsonl")).finally(() => writeFileSync(SINK_POINTER, ""));
 	const finalState = shell(scenario.finalAssertion, cwd);
 	const lastReply = session.replies.at(-1)?.text ?? "";
 	const outcome = classify(model, session, assertionFailures(scenario, session.calls, finalState.code, lastReply));
@@ -350,13 +379,13 @@ async function main(argv: readonly string[]): Promise<number> {
 		cwd,
 		finalAssertion: { command: scenario.finalAssertion, exit: finalState.code, output: finalState.out },
 		toolSequence: session.calls.map((call) => `${call.tool}${call.isError ? "(error)" : ""}`),
-		calls: session.calls.map((call) => ({ ...call, result: call.result.slice(0, 400) })),
+		calls: session.calls.map((call) => ({ ...call, result: call.result.slice(0, 4000) })),
 		promptStatus: session.prompt === null ? null : promptStatusText(session.prompt),
 		sessionFile: session.sessionFile,
 		timedOut: session.timedOut,
 		exitCode: session.exitCode,
 		stderr: session.stderr.slice(0, 2000),
-		lastReply: lastReply.slice(0, 1000),
+		lastReply: lastReply.slice(0, 4000),
 	});
 }
 

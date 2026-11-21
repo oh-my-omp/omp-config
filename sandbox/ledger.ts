@@ -24,12 +24,27 @@ export function ledgerStart(run: string, started: string, purpose: string): void
 	writeFileSync(LEDGER, `${text.endsWith("\n") ? text : `${text}\n`}${rowFor(run, started, purpose, "进行中", "—")}\n`);
 }
 
+export function ledgerInProgress(path: string = LEDGER): string[] {
+	if (!existsSync(path)) return [];
+	const runs: string[] = [];
+	for (const line of readFileSync(path, "utf8").split("\n")) {
+		const match = /^\| `omp-sandbox-([a-z0-9]+)` \|/.exec(line);
+		if (match?.[1] === undefined) continue;
+		const cols = line.split(" | ");
+		if (cols[3]?.trim() === "进行中") runs.push(match[1]);
+	}
+	return runs;
+}
+
 export function ledgerEnd(run: string, state: string, evidence: string): void {
 	const marker = `| \`omp-sandbox-${run}\` |`;
-	const lines = readFileSync(LEDGER, "utf8").split("\n");
+	const lines = existsSync(LEDGER) ? readFileSync(LEDGER, "utf8").split("\n") : HEADER.split("\n");
 	const index = lines.findIndex((line) => line.startsWith(marker));
 	if (index < 0) {
+		const trailing = lines.at(-1) === "";
+		if (trailing) lines.pop();
 		lines.push(rowFor(run, "?", "（开始时未登记）", state, evidence));
+		if (trailing) lines.push("");
 	} else {
 		const kept = (lines[index] ?? "").split(" | ").slice(0, 3).join(" | ");
 		lines[index] = `${kept} | ${cell(state)} | ${cell(evidence)} |`;

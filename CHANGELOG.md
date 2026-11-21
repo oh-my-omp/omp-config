@@ -4,6 +4,10 @@
 
 ### Added
 
+- Added a sandbox `prune` subcommand that tears down leftover runs from earlier builds while sparing sandboxes that are still active
+- Added a repeatable `--plugin DIR` option to sandbox `hold` and `run` that copies the plugin into the container and links it with `omp plugin link`
+- Added a `prompts` scenario field that sends several user messages in sequence, stopping at the first failed or unsuccessful turn
+- Added a `prune-config` sandbox command that strips model roles, agent overrides and retry fallback chains referencing providers outside the target list and drops a missing `exec.initFile`
 - Added an updater report note for each `install-plugins.sh` spec that is neither a GitHub source nor an npm name; apply and startup auto-update run no omp command for it
 - Added `task` guidance for staged `steps` execution and its mutual exclusivity with `task`, gated on the `task.steps` setting
 - Added `delete-guard` inspection of eval `sh` helper commands (also `globalThis.sh`, tagged templates and names bound to the helper) as posix shell scripts on every platform, blocking non-literal commands
@@ -14,6 +18,10 @@
 
 ### Changed
 
+- Made sandbox `run` and `matrix` exit nonzero unless every model result is `pass`, so `untested` results now fail the command
+- Rewrote `baseUrl` in sandbox provider `models` and `modelOverrides` onto the local recorder port, sharing one target per upstream origin
+- Created the sandbox bridge network only when `--target` is passed, falling back to the default bridge otherwise
+- Pruned cache, usage and performance tables from agentdb snapshots while keeping `auth_credentials`, and exported recorder logs and captured requests as run evidence
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Updated the shared copies of `context-delta.ts`, `todo-read.ts` to oh-my-omp/shared@80068ad.
 - Extended `isolation-nudge` to remind on steps-based task items, keying each run by all its steps joined in order instead of skipping the item
