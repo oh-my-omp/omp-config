@@ -1406,4 +1406,43 @@ describe("unshipped extension directories", () => {
 		expect(existsSync(join(agentDir, "extensions/retired"))).toBe(false);
 		expect(existsSync(join(agentDir, "extensions/keep/index.ts"))).toBe(true);
 	});
+
+	test("removes an upstream-deleted extension directory without duplicate delete when upgrading from previousCommit with no base", async () => {
+		const src = source();
+		const agentDir = temp("omp-ext-prev-commit-");
+		src.commit({
+			"agent/extensions/keep/index.ts": "export default 1;\n",
+			"agent/extensions/old-ext/index.ts": "export default 2;\n",
+		});
+		const previousCommit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: src.dir, encoding: "utf8" }).stdout.trim();
+		src.commit({ "agent/extensions/old-ext/index.ts": null });
+		writeTree(agentDir, {
+			"extensions/keep/index.ts": "export default 1;\n",
+			"extensions/old-ext/index.ts": "export default 2;\n",
+		});
+
+		const report = await applySnapshot({ source: src.dir, agentDir, previousCommit, check: false, plugins: false });
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts).toEqual([]);
+		expect(report.deleted.filter((path) => path === join(agentDir, "extensions/old-ext/index.ts"))).toHaveLength(1);
+		expect(existsSync(join(agentDir, "extensions/old-ext"))).toBe(false);
+		expect(existsSync(join(agentDir, "extensions/keep/index.ts"))).toBe(true);
+	});
+
+	test("skips dotfiles inside an unshipped extension directory without reporting unknown-base conflicts", async () => {
+		const src = source();
+		const agentDir = temp("omp-ext-dotfile-");
+		src.commit({ "agent/extensions/keep/index.ts": "export default 1;\n" });
+		writeTree(agentDir, {
+			"extensions/keep/index.ts": "export default 1;\n",
+			"extensions/old-ext/index.ts": "export default 2;\n",
+			"extensions/old-ext/.DS_Store": "finder metadata",
+		});
+
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts).toEqual([]);
+		expect(existsSync(join(agentDir, "extensions/old-ext/index.ts"))).toBe(false);
+		expect(existsSync(join(agentDir, "extensions/old-ext/.DS_Store"))).toBe(true);
+	});
 });

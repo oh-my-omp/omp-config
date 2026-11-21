@@ -806,8 +806,12 @@ function planPlain(ctx: PlanContext): Op[] {
 		if (!managedPlain(rel) || retiring(ctx, rel)) ops.push({ kind: "base", rel, change: { kind: "plain-drop", rel } });
 		else ops.push(...planPlainItem(ctx, rel, undefined));
 	}
-	for (const [rel, content] of droppedBeforeBase(ctx))
-		if (!known.has(rel) && !skipExcluded(ctx, rel)) ops.push(...planPlainItem(ctx, rel, undefined, content));
+	for (const [rel, content] of droppedBeforeBase(ctx)) {
+		if (known.has(rel)) continue;
+		known.add(rel);
+		if (skipExcluded(ctx, rel)) continue;
+		ops.push(...planPlainItem(ctx, rel, undefined, content));
+	}
 	try {
 		for (const entry of readdirSync(join(opts.agentDir, "agents"), { withFileTypes: true })) {
 			const rel = `agent/agents/${entry.name}`;
@@ -839,6 +843,10 @@ function planRemovedExtensionDir(
 	const ops: Op[] = [];
 	let removable = true;
 	for (const child of entries) {
+		if (child.name.startsWith(".")) {
+			removable = false;
+			continue;
+		}
 		const childRel = `${dirRel}/${child.name}`;
 		if (child.isDirectory()) {
 			if (skipExcluded(ctx, childRel)) {
