@@ -1379,7 +1379,7 @@ function restoreLinks(omp: string, links: readonly OverlaidLink[]): string[] {
 		if (link.lock?.disabled === true) commands.push(["plugin", "disable", link.name]);
 		const features = link.lock?.features;
 		if (features !== undefined && features !== null)
-			commands.push(["plugin", "features", link.name, `--set=${features.length > 0 ? features.join(",") : ","}`]);
+			commands.push(["plugin", "features", link.name, "--set", features.length > 0 ? features.join(",") : ","]);
 		for (const args of commands) {
 			const error = runOmp(omp, args);
 			if (error === undefined) continue;
