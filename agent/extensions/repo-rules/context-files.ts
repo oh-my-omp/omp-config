@@ -49,6 +49,8 @@ function readNonEmpty(file: string): string | null {
 	}
 }
 
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/discovery/helpers.ts#loadStandaloneContextFiles
+// Visits one directory per level through a callback, so the caller claims depth slots across file names; the host reads every file and returns a list. samePath and isWithin skip path.resolve because every path here is already absolute.
 function samePath(left: string, right: string): boolean {
 	return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
@@ -80,6 +82,7 @@ function walk(scope: ContextFileScope, name: StandaloneName, visit: (file: strin
 		current = parent;
 	}
 }
+// @upstream-end
 
 function displayPath(scope: ContextFileScope, file: string): string {
 	const posix = (relative: string): string => relative.split(path.sep).join("/");

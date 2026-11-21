@@ -10,6 +10,7 @@ import {
 import { defaultRankingStrategy } from "@oh-my-pi/pi-ai/usage/registry";
 import type { Calibration } from "./store.ts";
 
+// @upstream verbatim @oh-my-pi/pi-ai@19.1.0 src/auth/usage-report.ts#reserveUsageLimits
 export function reserveUsageLimits(
 	strategy: CredentialRankingStrategy | undefined,
 	report: UsageReport,
@@ -23,10 +24,13 @@ export function reserveUsageLimits(
 		return modelId === undefined || rankingContext.modelId === undefined || modelId === rankingContext.modelId;
 	});
 }
+// @upstream-end
 
+// @upstream verbatim @oh-my-pi/pi-ai@19.1.0 src/auth/usage-report.ts#scopedUsageLimits
 function scopedUsageLimits(strategy: CredentialRankingStrategy, report: UsageReport, context: CredentialRankingContext): UsageLimit[] {
 	return strategy.scopeLimits?.(report, context) ?? report.limits;
 }
+// @upstream-end
 
 export function limitKey(provider: string, accountKey: string, limit: UsageLimit): string {
 	const account = createHash("sha256").update(accountKey).digest("hex").slice(0, 16);
