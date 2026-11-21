@@ -126,14 +126,15 @@ review.
   `defaultInactive` and is activated on `session_start` / `session_switch`,
   never in `before_agent_start`. Every active-set change goes through
   `_shared/omomp-shared/active-tools.ts`, which lists tools in canonical order: built-in tools in registry order first, all others sorted by name.
-- **Imports:** host package roots (`pi-agent-core`, `pi-ai`, `pi-catalog`,
-  `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins
-  and relative paths. A host subpath is used only if an extension already loads
-  it in a real omp session: `tsc` resolves from `node_modules/` and passes
-  subpaths the omp binary does not map. An `import type` may also name the type
-  package of a host dependency (`@babel/types` for omp's Babel parser): it is
-  erased before omp loads the module. Native bindings load only after a
-  platform guard.
+- **Imports:** a value import (`import`, `export … from`, a dynamic
+  `import()` with a literal specifier) names a Node/Bun built-in, a relative
+  path, or a key of the omp binary's module table, the set the installed
+  host's `collectBundledPiEntries()` returns; `bun run check` fails on any
+  other. `tsc` resolves from `node_modules/` and passes specifiers the binary
+  cannot load. An `import type` may name any type of a host dependency
+  (`@babel/types` for omp's Babel parser, `@oh-my-pi/pi-wire`): it is erased
+  before omp loads the module. Native bindings load only after a platform
+  guard.
 - **Comments** are warnings only: what must not be done and what breaks if it
   is. No descriptions of behavior, design rationale, upstream provenance or
   `@upstream` markers.
@@ -144,7 +145,7 @@ review.
 
 ```bash
 bun install          # dev dependencies (types only; runtime uses the copies inside omp)
-bun run check        # biome check . && tsc --noEmit
+bun run check        # biome check . && tsc --noEmit && bun ci/host-imports.ts
 bun run test         # bun test --isolate ci
 bun run format       # biome check --write .
 bun ci/check.ts      # configuration check in a throwaway HOME (exit 0 clean, 1 diagnostics, 2 free model unavailable)

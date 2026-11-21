@@ -273,12 +273,12 @@ Cloud Code Assist 把 `functionCall` 作为一个完整 part 下发，`gemini-4-
 
 源码：`agent/extensions/ast-top-level/`。主会话与子代理、完整与轻量模式都加载；无配置。
 
-`tools.xdev` 开启时，OMP 把 `loadMode` 为 `discoverable` 的已启用工具都挂到 `xd://` 下：它的 schema 不进请求的工具列表，模型要向 `xd://<tool>` 写 JSON 才能调用。内置 `ast_grep` 与 `ast_edit` 都是 discoverable，OMP 也没有让单个工具留在顶层的设置；唯一的豁免是 OMP 进程全局的 `XDEV_KEEP_TOP_LEVEL` 表（`todo`、`yield`、`ask`、`grep`、`web_search`），每次分区都经 `isMountableUnderXdev` 查询它：
+OMP 的 tool command 通道启用时，OMP 把 `loadMode` 为 `discoverable` 的已启用工具都挂成内置 `bash` 引擎的命令：它的 schema 不进请求的工具列表，模型要在 `bash` 调用里以 `<tool> args…` 运行它。内置 `ast_grep` 与 `ast_edit` 都是 discoverable，OMP 也没有让单个工具留在顶层的设置；唯一的豁免是 `@oh-my-pi/pi-coding-agent/tools/tool-commands` 里 OMP 进程全局的 `TOOL_COMMAND_KEEP_TOP_LEVEL` 表（`todo`、`yield`、`ask`、`grep`、`web_search`），每次分区都经 `isMountableAsToolCommand` 查询它：
 
-- **加载**：把 `ast_grep` 与 `ast_edit` 加进该表，并检查 OMP 已把它们留在顶层。此后每次分区（构建会话、`setActiveTools`、设置重载、MCP 刷新、plan 模式、晚注册的工具、子代理会话）都把两者作为函数工具发送。工具实例与设置开关（`astGrep.enabled`、`astEdit.enabled`）仍归 OMP；`ast_edit` 仍只生成预览，预览经 `xd://resolve` 应用、经 `xd://reject` 放弃。
+- **加载**：把 `ast_grep` 与 `ast_edit` 加进该表，并检查 OMP 已把它们留在顶层。此后每次分区（构建会话、`setActiveTools`、设置重载、MCP 刷新、plan 模式、晚注册的工具、子代理会话）都把两者作为函数工具发送。工具实例与设置开关（`astGrep.enabled`、`astEdit.enabled`）仍归 OMP；`ast_edit` 仍只生成预览，预览用 `resolve` 命令应用、用 `reject` 放弃。
 - **晚绑定**：OMP 可能在会话已完成工具分区后才绑定本扩展（首帧前无需注册任何东西的扩展会被延后加载）。OMP 会把 `session_start` 补发给晚绑定的扩展；此时含这两个工具之一的会话重新应用一次自身当前工具集，依据该表重新分区；新会话与恢复会话因此按相同顺序列出工具。
 - **生命周期**：该表进程全局且不会还原；停用扩展后重启才生效。
-- **失败处理**：导出被改名时扩展加载失败。表拒绝写入或 OMP 不再查询该表时，加载时记 warning，每次主会话启动弹一次警告；两个工具保持为设备。
+- **失败处理**：导出被改名时扩展加载失败。表拒绝写入或 OMP 不再查询该表时，加载时记 warning，每次主会话启动弹一次警告；两个工具保持为 bash 里的 tool command。
 
 ### tool-topics
 
