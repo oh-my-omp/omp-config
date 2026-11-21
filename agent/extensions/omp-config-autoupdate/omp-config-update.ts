@@ -1640,6 +1640,11 @@ function moveSection(
 			case "declined":
 				report.notes.push(`${targetOf(edit.rel, opts.agentDir)} sets splitCheck itself; left as it is`);
 				break;
+			case "unreadable":
+				report.notes.push(
+					`${targetOf(edit.rel, opts.agentDir)}: frontmatter does not parse (${edit.reason}); splitCheck not added, left as it is`,
+				);
+				break;
 			case "missing":
 				report.notes.push(`task-split-check.agents names ${name}, which no agents/*.md defines; add splitCheck: true to its definition`);
 				break;

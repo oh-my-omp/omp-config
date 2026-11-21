@@ -37,10 +37,13 @@ function zhCategory(category: string): string {
 	}
 }
 
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#categoryLabel
+// Adds the zh labels; the host function is not exported.
 function categoryLabel(category: string, count: number): string {
 	if (category === "Breaking Changes") return tr(count === 1 ? "breaking change" : "breaking changes", zhCategory(category));
 	return tr(category.toLowerCase(), zhCategory(category));
 }
+// @upstream-end
 
 export function summaryLines(digest: Digest): string[] {
 	const breakdown = orderedCategories(digest.categories).map((category) => {

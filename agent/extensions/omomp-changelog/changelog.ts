@@ -13,22 +13,17 @@ export type DatedRelease = Release & { readonly date: string };
 
 export const isDated = (release: Release): release is DatedRelease => release.date !== null;
 
-export function parseVersion(text: string): Version | undefined {
-	const match = text.match(/^(\d+)\.(\d+)\.(\d+)$/);
-	if (!match) return undefined;
-	return {
-		major: Number.parseInt(match[1] ?? "", 10),
-		minor: Number.parseInt(match[2] ?? "", 10),
-		patch: Number.parseInt(match[3] ?? "", 10),
-	};
-}
-
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#compareChangelogEntries
+// Compares parsed versions instead of changelog entries; the host function is not exported.
 export function compareVersions(a: Version, b: Version): number {
 	if (a.major !== b.major) return a.major - b.major;
 	if (a.minor !== b.minor) return a.minor - b.minor;
 	return a.patch - b.patch;
 }
+// @upstream-end
 
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#parseChangelogContent
+// Also keeps the release date and drops the heading from the body; the host function is not exported.
 export function parseReleases(content: string): Release[] {
 	const releases: Release[] = [];
 	let current: { version: Version; date: string | null; lines: string[] } | null = null;
@@ -62,10 +57,13 @@ export function parseReleases(content: string): Release[] {
 	finish();
 	return releases;
 }
-
-const UNCATEGORIZED = "Other";
+// @upstream-end
 
 export type Changes = { readonly count: number; readonly categories: ReadonlyMap<string, number> };
+
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#summarizeChangelogEntries
+// Counts one release body per call; the host function is not exported.
+const UNCATEGORIZED = "Other";
 
 export function countChanges(body: string): Changes {
 	const categories = new Map<string, number>();
@@ -86,7 +84,10 @@ export function countChanges(body: string): Changes {
 	}
 	return { count, categories };
 }
+// @upstream-end
 
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#formatStartupChangelogSummary
+// Only the category ordering: importing the whole function would replace the What's New summary format.
 const CATEGORY_ORDER: readonly string[] = ["Breaking Changes", "Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"];
 
 export function orderedCategories(counts: ReadonlyMap<string, number>): string[] {
@@ -95,6 +96,7 @@ export function orderedCategories(counts: ReadonlyMap<string, number>): string[]
 		...[...counts.keys()].filter((category) => !CATEGORY_ORDER.includes(category)).sort(),
 	];
 }
+// @upstream-end
 
 const FENCE = /^\s*(```|~~~)/;
 
