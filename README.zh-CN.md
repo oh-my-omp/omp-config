@@ -81,8 +81,8 @@
   - `ci/check.ts` + `config-check.yml` — 功能：配置检查：在一次性 HOME 中安装最新 omp、用仓库自带更新器应用配置、注册 Kilo 匿名 `ci-free` 模型并为每个被引用 `provider/model` 挂 shadow 代理，跑真实会话并输出去重诊断（`config`/`environment`/`provider`），finding 取稳定 12 位十六进制 id。时机：push 到 `main`、PR、每日 `cron: "17 3 * * *"`、`workflow_dispatch`；只报告，不卡合并。实例：`bun ci/check.ts`。
   - `ci/windows-guard.ts` + `delete-guard-windows.yml` — 功能：在 `windows-latest` runner 上做 delete-guard 的 Windows 验收。时机：`workflow_dispatch` 与同仓库 PR。实例：`bun ci/windows-guard.ts`。
   - `ci/windows-accept.ts` + `windows-accept.yml` — 功能：在 Windows runner 上对 `%RUNNER_TEMP%\src` 下 `owner/repo@sha` 的检出执行传入的 Bun 脚本，按 run id 定位。时机：`workflow_dispatch` 与同仓库 PR。实例：输入 `repos`（"owner/repo@<40-hex sha>"）与 `script`。
-  - `omomp-check.yml` — 功能：调用 `oh-my-omp/.github` 的共享检查 workflow（bun install、Biome、`tsc --noEmit`、`bun run test` 跑 `ci/*.test.ts`、omomp-shared 副本比对），为测试的 `git show` 夹具取全量历史。时机：按共享 workflow 的 push/PR 触发。实例：`uses: oh-my-omp/.github/.github/workflows/omomp-check.yml@main`。
-  - `omomp-release.yml` — 功能：调用共享 omomp 发布 workflow：按 `CHANGELOG.md` `## [Unreleased]` 分类定版本号、打 `vX.Y.Z` tag、快进 `release` 分支、建 GitHub Release。时机：每日 `cron: "0 17 * * *"`（GMT+9 02:00）与 `workflow_dispatch`。实例：`uses: oh-my-omp/.github/.github/workflows/omomp-release.yml@main`。
+  - `omomp-check.yml` — 功能：以全量历史检出本仓库（供测试的 `git show` 夹具）并检出 `oh-my-omp/shared` main，依次运行 `deps.ts check`、bun install、`@oh-my-pi` 升级、`bun run check`（Biome、`tsc --noEmit`）、`bun run test` 跑 `ci/*.test.ts` 与副本比对 `verify.ts`。时机：push 到 `main`、PR、每日 `cron: "0 18 * * *"`。
+  - `omomp-release.yml` — 功能：运行 `oh-my-omp/shared` main 上的 `release.ts`：按 `CHANGELOG.md` `## [Unreleased]` 分类定版本号、打 `vX.Y.Z` tag、快进 `release` 分支、建 GitHub Release。时机：每日 `cron: "0 17 * * *"`（GMT+9 02:00）与 `workflow_dispatch`。
   - `ci/*.test.ts` — 功能：扩展与更新器的 bun 单元测试（`bun test --isolate ci`）。时机：本地 `bun run test` 与 `omomp-check` 中。实例：`ci/delete-guard-tool.test.ts`、`ci/omp-config-update.test.ts`、`ci/tool-topics-catalog.test.ts`。
   - `package.json` scripts — 功能：`bun run check`（Biome + `tsc --noEmit`）、`bun run format`、`bun run test`。时机：本地开发与 CI。实例：`"test": "bun test --isolate ci"`。
 - **共享扩展运行时（`agent/extensions/_shared/`）**

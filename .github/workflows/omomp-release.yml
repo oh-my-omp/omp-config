@@ -5,12 +5,36 @@ on:
     - cron: "0 17 * * *"
   workflow_dispatch:
 
+concurrency:
+  group: omomp-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   release:
-    uses: oh-my-omp/.github/.github/workflows/omomp-release.yml@main
-    with:
-      package-dir: agent/extensions/_shared
-      changelog: CHANGELOG.md
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+        with:
+          ref: main
+          fetch-depth: 0
+          path: repository
+
+      - uses: actions/checkout@main
+        with:
+          repository: oh-my-omp/shared
+          ref: main
+          path: omomp-shared
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@main
+        with:
+          bun-version: latest
+
+      - name: Release
+        working-directory: repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun ../omomp-shared/release.ts --github-release "$GITHUB_REPOSITORY" --package-dir agent/extensions/_shared --changelog CHANGELOG.md
