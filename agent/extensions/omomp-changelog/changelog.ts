@@ -59,11 +59,11 @@ export function parseReleases(content: string): Release[] {
 }
 // @upstream-end
 
+export type Changes = { readonly count: number; readonly categories: ReadonlyMap<string, number> };
+
 // @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#summarizeChangelogEntries
 // Counts one release body per call; the host function is not exported.
 const UNCATEGORIZED = "Other";
-
-export type Changes = { readonly count: number; readonly categories: ReadonlyMap<string, number> };
 
 export function countChanges(body: string): Changes {
 	const categories = new Map<string, number>();

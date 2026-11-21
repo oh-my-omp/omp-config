@@ -26,7 +26,8 @@ export function reserveUsageLimits(
 }
 // @upstream-end
 
-// @upstream verbatim @oh-my-pi/pi-ai@19.1.0 src/auth/usage-report.ts#scopedUsageLimits
+// @upstream adapted @oh-my-pi/pi-ai@19.1.0 src/auth/usage-report.ts#scopedUsageLimits
+// Not exported: only reserveUsageLimits in this file calls it.
 function scopedUsageLimits(strategy: CredentialRankingStrategy, report: UsageReport, context: CredentialRankingContext): UsageLimit[] {
 	return strategy.scopeLimits?.(report, context) ?? report.limits;
 }
