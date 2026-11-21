@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Updated the shared copies of `context-delta.ts`, `todo-read.ts` to oh-my-omp/shared@80068ad.
 - Extended `isolation-nudge` to remind on steps-based task items, keying each run by all its steps joined in order instead of skipping the item
 - Extended `task-split-check` to judge steps-based task items as one run using their steps joined in order
