@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 export const TODO_READ_EVENT = "omp-todo-more:read";
 
-export const TODO_READ_STATUSES = ["pending", "in_progress", "completed", "abandoned", "blocked"] as const;
+export const TODO_READ_STATUSES = ["pending", "in_progress", "completed", "abandoned"] as const;
 
 export type TodoReadStatus = (typeof TODO_READ_STATUSES)[number];
 
@@ -61,7 +61,7 @@ function recordOf(value: unknown): Readonly<Record<string, unknown>> | undefined
 function parseCounts(value: unknown): TodoReadCounts | undefined {
 	const record = recordOf(value);
 	if (record === undefined) return undefined;
-	const counts: Record<TodoReadStatus, number> = { pending: 0, in_progress: 0, completed: 0, abandoned: 0, blocked: 0 };
+	const counts: Record<TodoReadStatus, number> = { pending: 0, in_progress: 0, completed: 0, abandoned: 0 };
 	for (const status of TODO_READ_STATUSES) {
 		const n = record[status];
 		if (typeof n !== "number" || !Number.isInteger(n) || n < 0) return undefined;
