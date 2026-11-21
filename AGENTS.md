@@ -133,7 +133,9 @@ review.
   other. `tsc` resolves from `node_modules/` and passes specifiers the binary
   cannot load. An `import type` may name any type of a host dependency
   (`@babel/types` for omp's Babel parser, `@oh-my-pi/pi-wire`): it is erased
-  before omp loads the module. Native bindings load only after a platform
+  before omp loads the module. What the host exports under such a key is
+  imported, never copied; only host code the binary cannot load is copied,
+  without provenance markers. Native bindings load only after a platform
   guard.
 - **Comments** are warnings only: what must not be done and what breaks if it
   is. No descriptions of behavior, design rationale, upstream provenance or
