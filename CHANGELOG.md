@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added plugin refresh notes to the auto-update report, listing skipped unrecognized specs
+- Added an updater report note for each `install-plugins.sh` spec that is neither a GitHub source nor an npm name; apply and startup auto-update run no omp command for it
 - Added `task` guidance for staged `steps` execution and its mutual exclusivity with `task`, gated on the `task.steps` setting
 - Added `delete-guard` inspection of eval `sh` helper commands (also `globalThis.sh`, tagged templates and names bound to the helper) as posix shell scripts on every platform, blocking non-literal commands
 - Added `sh` helper commands to `tool-policy-nag`'s terminal and open-ended detection when the helper is spelled under its own name
@@ -14,8 +14,6 @@
 
 ### Changed
 
-- Changed the updater to refresh each required and installed optional plugin against its declared spec on every apply, installing missing plugins and upgrading or reinstalling changed ones
-- Changed startup auto-update on unchanged config commits to refresh every GitHub plugin entry, not only those without a ref or on `#release`
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Updated the shared copies of `context-delta.ts`, `todo-read.ts` to oh-my-omp/shared@80068ad.
 - Extended `isolation-nudge` to remind on steps-based task items, keying each run by all its steps joined in order instead of skipping the item
@@ -40,6 +38,7 @@
 
 ### Fixed
 
+- Kept the user's enabled state and feature selection of installed plugins across updater applies and startup auto-update: a plugin whose declared spec is unchanged is refreshed with `omp plugin upgrade` instead of `omp install`, a plugin whose spec changed is reinstalled and disabled again if it was disabled, an npm plugin pinned to the recorded exact version is left as is, and a locally linked plugin is no longer installed over
 - Kept the `harness-restart` completion notice pending until OMP accepted it: a refused or failed send is now logged and re-sent on the next session start or switch instead of being marked consumed
 - Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
 - Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
