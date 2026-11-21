@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added plugin refresh notes to the auto-update report, listing skipped unrecognized specs
 - Added `task` guidance for staged `steps` execution and its mutual exclusivity with `task`, gated on the `task.steps` setting
 - Added `delete-guard` inspection of eval `sh` helper commands (also `globalThis.sh`, tagged templates and names bound to the helper) as posix shell scripts on every platform, blocking non-literal commands
 - Added `sh` helper commands to `tool-policy-nag`'s terminal and open-ended detection when the helper is spelled under its own name
@@ -13,6 +14,8 @@
 
 ### Changed
 
+- Changed the updater to refresh each required and installed optional plugin against its declared spec on every apply, installing missing plugins and upgrading or reinstalling changed ones
+- Changed startup auto-update on unchanged config commits to refresh every GitHub plugin entry, not only those without a ref or on `#release`
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Updated the shared copies of `context-delta.ts`, `todo-read.ts` to oh-my-omp/shared@80068ad.
 - Extended `isolation-nudge` to remind on steps-based task items, keying each run by all its steps joined in order instead of skipping the item
