@@ -32,6 +32,7 @@
 ### Removed
 
 - Removed `task` guidance for consulting a past session with `agent: "seance"` and the rule that isolated items cannot use it
+- Removed the project agents `loop:scout`, `loop:worker`, `loop:worker-free`, `loop:guardian` and `loop:verifier` and their `.omp/config.yml` model bindings
 
 ### Fixed
 
