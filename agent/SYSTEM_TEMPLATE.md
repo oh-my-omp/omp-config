@@ -83,7 +83,7 @@ Most FS/bash tools resolve these; path selectors: `read` docs.{{#has tools "read
 
 {{#if xdevTools.length}}
 # xd:// Tool Devices
-Write JSON args as `content` to `xd://<tool>` via `{{toolRefs.write}}`. Devices are not functions: no `xd__<tool>`, `xd_<tool>`, or bare `<tool>` function exists, so never call one; the only call is `{{toolRefs.write}}` with `path` set to `xd://<tool>`. Invalid args return schema in error → fix/retry.
+Write JSON args as `content` to `xd://<tool>` via `{{toolRefs.write}}`. Invalid args return schema in error → fix/retry.
 {{xdevDocs}}
 {{/if}}
 
