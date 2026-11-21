@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Wrote the user-report rule (`NEVER rerun checks to doubt them`), the compiled-code rule (`NEVER add avoidable allocation`) and the `xd://` device header directly into `SYSTEM_TEMPLATE.md`, and removed the three `REPLACE-SYSTEM-default.yml` rules that rewrote these lines of this repository's own template; the shipped rules now match only text OMP owns
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Updated the shared copies of `context-delta.ts`, `todo-read.ts` to oh-my-omp/shared@80068ad.
 - Extended `isolation-nudge` to remind on steps-based task items, keying each run by all its steps joined in order instead of skipping the item
@@ -36,7 +37,6 @@
 ### Fixed
 
 - Kept the `harness-restart` completion notice pending until OMP accepted it: a refused or failed send is now logged and re-sent on the next session start or switch instead of being marked consumed
-- Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
 - Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
 - Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
 - Skipped prompted judge candidates for five minutes after a 401/402/403/404 rejection instead of re-requesting them on every judgment
