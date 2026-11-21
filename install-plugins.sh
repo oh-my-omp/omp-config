@@ -8,7 +8,7 @@ command -v omp >/dev/null 2>&1 || {
 
 plugins=(
   'https://github.com/mouriya-s-lab/pi-bansos'
-  'https://github.com/oh-my-omp/omp-unified-exec#release'
+  'https://github.com/oh-my-omp/omp-actual-terminal#release'
   'https://github.com/oh-my-omp/omp-todo-more#release'
   'pi-pretty-codeblocks'
   'https://github.com/oh-my-omp/omp-thinking-translator#release'
