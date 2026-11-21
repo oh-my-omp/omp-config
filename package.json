@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"check": "biome check . && tsc --noEmit -p tsconfig.json",
+		"check": "biome check . && tsc --noEmit -p tsconfig.json && bun ci/host-imports.ts",
 		"format": "biome check --write .",
 		"test": "bun test --isolate ci"
 	},

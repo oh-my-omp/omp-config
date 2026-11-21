@@ -10,9 +10,13 @@
 - Added `xd://read/urls` guidance for further read sub-paths, queries and limits when the read tool is available
 - Added optional result-shaping guidance to the system prompt
 - Warned once per process when the `input-polish` shortcut is also held by an omp keybinding, a reserved chord, or another extension, naming the holder while `input-polish` keeps the chord
+- Added a host-import check to `bun run check` (`ci/host-imports.ts`): a value import under `agent/` whose specifier is not a built-in, a relative path or a key of the omp binary's module table (taken from the installed host's `collectBundledPiEntries()`) fails the check with its file and specifier
 
 ### Changed
 
+- Moved `ast-top-level` onto OMP's tool-command partition for keeping `ast_grep` and `ast_edit` top-level, with the pin-failure warning now reporting that both stay bash tool commands
+- Refreshed `bun.lock` to the `@oh-my-pi` 19.1.0 release and added the lockfile refresh to the after-upgrade steps in `docs/operations.md`
+- Rewrote the `AGENTS.md` Imports rule to the module-table criterion `bun run check` enforces, dropping the condition that a host subpath must have been loaded in a real omp session
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Updated the shared copies of `context-delta.ts`, `todo-read.ts` to oh-my-omp/shared@80068ad.
 - Extended `isolation-nudge` to remind on steps-based task items, keying each run by all its steps joined in order instead of skipping the item
@@ -24,7 +28,7 @@
 - Updated `bash`, `task` and `write` tool guidance: `proc://<id>/kill` writes require `content: ""`, jobs can report a `cancelled` state, and settled-job reports carry a `Delivery:` line
 - Directed the agent to make file edits with the edit tool and never through sed/perl/python when shell tools are available
 - Made the `wt` and `wt_remove` tools refuse calls while the session is in vibe mode, queueing nothing and returning an error that asks to exit vibe mode first
-- Imported `XDEV_KEEP_TOP_LEVEL`, `isMountableUnderXdev` and the internal URL router types from OMP's exported entry points (`@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-coding-agent/internal-urls`) in `ast-top-level` and `tool-topics` instead of host-internal file paths
+- Imported `TOOL_COMMAND_KEEP_TOP_LEVEL` and `isMountableAsToolCommand` from `@oh-my-pi/pi-coding-agent/tools/tool-commands` in `ast-top-level` and the internal URL router types from `@oh-my-pi/pi-coding-agent/internal-urls` in `tool-topics`, instead of host-internal file paths
 - Documented in the `tool-topics` surfaces that `out://` is a write-only mid-turn reply channel (`read`) and that the shell runs in-process utilities ahead of PATH, handed back by `PI_DISABLE_UUTILS_BUILTINS` (`bash`)
 - Made `system-prompt-replace` send the edited system prompt itself at every prompt instead of a reminder that quotes each original passage and its replacement; the reminder is sent only after a tool call in a run that skipped the prompt hook after OMP rebuilt its prompt
 - Made `tool-topics` write each OMP tool's surface and `Topics` index into the system prompt in place of the native description at every prompt, instead of an `omp-config/tool-topics` reminder that was sent again after every compaction; the replaced descriptions no longer reach the model twice
