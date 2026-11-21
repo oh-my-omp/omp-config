@@ -34,14 +34,14 @@ bun sandbox/sandbox.ts prune                                                    
 
 内容以 tar 流或经 stdin 管道进入 `docker exec`，宿主机磁盘上不暂存任何含凭据的东西：
 
-- `~/.omp/agent`，不含 `sessions/`、`blobs/`、`terminal-sessions/`、`custom-session-files/`、`predict/`、`cache/`、`history.db*`、`agent.db*`、`models.db*`、`transcripts.db*`、`skill-descriptions.db*`、`models.yml.bak*`、`rules/`、`mcp.json*`、`extensions/`、`extensions-last/`、`agents/`、`.omp-config-base/files` 与锁文件。`~/.omp/logs` 不复制。副本中若存在 `.omp-config-base/state.json`，会将其 `unknownPlain` 清空并保留 `structured`，使 updater 完整写入 `/repo` 中的所有普通托管文件，同时仍对 `config.yml` 执行三路合并。
+- `~/.omp/agent`，不含 `sessions/`、`blobs/`、`terminal-sessions/`、`custom-session-files/`、`predict/`、`cache/`、`history.db*`、`agent.db*`、`models.db*`、`transcripts.db*`、`skill-descriptions.db*`、`models.yml.bak*`、`rules/`、`mcp.json*`、`extensions/`、`extensions-last/`、`agents/`、updater 托管的普通文件 `SYSTEM_TEMPLATE.md`、`APPEND_SYSTEM*.md`、`PERSONALITY.md`、`config-light.yml` 与 `omp-light.ts`、`.omp-config-base/files` 与锁文件。`~/.omp/logs` 不复制。副本中若存在 `.omp-config-base/state.json`，会将其 `unknownPlain` 清空并保留 `structured`；容器里既无本机副本也无基线记录，updater 便写入 `/repo` 中的所有普通托管文件，同时仍对 `config.yml` 执行三路合并。
 - `agent.db`：对宿主机数据库的只读连接做 SQLite 序列化，在同一个读事务内完成，因此包含尚未 checkpoint 的 WAL 帧。随后在内存可写副本中清空 `PRUNED_TABLES` 列出的历史与缓存表（`cache`、`client_usage`、`command_usage`、`model_perf`、`model_usage`、`usage_cost_history`、`usage_history`）并压缩镜像，再标成回滚日志库（头部第 18–19 字节），逐字节写入容器，在容器内改回 WAL 并执行 `integrity_check`。宿主机随后读回容器内的副本，在内存里与裁剪后的快照逐表、逐行、逐字段比较，任何差异都让构建失败。只打印表名、行数与「every field equal」，从不打印值或摘要。在这次比较之后，只有容器内的副本会删去 provider 没有记录代理目标的 `auth_credentials` 行（见下文「凭据」）；宿主机数据库不变。
 - `~/.omp/plugins`，包含锁文件，不含 `node_modules/`（为 macOS 构建）；容器内 `bun install` 按锁文件为 Linux 装相同版本，若失败则删除容器内的 `bun.lock` 后重试 `bun install`。
 - `~/.claude/rules`、`~/.claude/skills`、`~/.claude/CLAUDE.md`，存在才复制。
 - 工作树放到 `/repo`：已跟踪与未跟踪的文件，含未提交改动，不含被忽略的文件，并在容器内初始化为 `main` 分支的 git 仓库并创建 `sandbox` 提交。
 - 每个 `--plugin DIR`：其未被忽略的 git 文件（非 git 目录时排除 `node_modules` 与 `.git` 打包）复制到 `/plugins/<basename>`。
 
-之后容器安装最新的 `@oh-my-pi/pi-coding-agent`，运行 `/repo` 里的 updater（`omp-config-update.ts apply --source /repo`，它会 link `omp-config` 插件并把复制来的 omomp 值迁移进插件设置），把启动自动更新写进这些设置关掉（`sandbox/autoupdate-off.ts` 通过 `omp plugin config set` 把 `omp-config-autoupdate.enabled` 设为 `false` 并打印读回的值），并安装与链接所有 `--plugin` 目录。容器 agent 目录中的扩展与子代理因此来自工作树，而不是宿主机上次应用的版本，并且在沙箱里每次启动 omp 后都保持如此：否则复制进来的宿主机开关会在首次启动时用 GitHub `release` 覆盖它们。宿主机自己的设置不受影响。
+之后容器安装最新的 `@oh-my-pi/pi-coding-agent`，运行 `/repo` 里的 updater（`omp-config-update.ts apply --source /repo`，它会 link `omp-config` 插件并把复制来的 omomp 值迁移进插件设置），把启动自动更新写进这些设置关掉（`sandbox/autoupdate-off.ts` 通过 `omp plugin config set` 把 `omp-config-autoupdate.enabled` 设为 `false` 并打印读回的值），并安装与链接所有 `--plugin` 目录。容器 agent 目录中的扩展、子代理、提示模板与 light 模式文件因此来自工作树，而不是宿主机上次应用的版本，并且在沙箱里每次启动 omp 后都保持如此：否则复制进来的宿主机开关会在首次启动时用 GitHub `release` 覆盖它们。宿主机自己的设置不受影响。
 
 ### 凭据
 
