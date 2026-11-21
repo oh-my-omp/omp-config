@@ -135,9 +135,17 @@ review.
   (`@babel/types` for omp's Babel parser, `@oh-my-pi/pi-wire`): it is erased
   before omp loads the module. Native bindings load only after a platform
   guard.
+- **Code copied from OMP:** what the host exports under a module-table key is
+  imported, never copied; only host code the binary cannot load is copied.
+  A copy is wrapped in
+  `// @upstream <verbatim|adapted> <package>@<version> <src path>#<symbol>` …
+  `// @upstream-end`, where `<version>` is the host release it was last
+  compared against; an `adapted` copy states on the line after the marker
+  what differs from the host and why. Copies are re-compared after OMP
+  upgrades.
 - **Comments** are warnings only: what must not be done and what breaks if it
-  is. No descriptions of behavior, design rationale, upstream provenance or
-  `@upstream` markers.
+  is. No descriptions of behavior or design rationale. `@upstream` markers
+  are not comments under this rule.
 - **Size and format:** a function over ~150 lines is split into named
   module-level functions. Format with `bun run format` only.
 
