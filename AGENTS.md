@@ -49,9 +49,14 @@ Behavior is described where it lives; read the matching one before changing it:
 - **Load order.** `extensions-last/system-prompt-replace/index.ts` stays the
   last `config.yml` `extensions` entry and outside `extensions/`. Order inside
   `extensions/` is unspecified, so filename prefixes cannot order hooks.
-- **Prompt ownership.** No extension changes the system prompt or tool
-  definitions OMP builds: no `systemPrompt` in a `before_agent_start` result,
-  no system or tools edit in `before_provider_request` or any other hook. A
+- **Prompt ownership.** Wording of this repository's prompt input files
+  (`SYSTEM_TEMPLATE.md`, `PERSONALITY.md`, `APPEND_SYSTEM*.md`) is changed in
+  those files; `system-prompt-replace` rules match only text OMP owns. Only
+  `tool-topics` and `system-prompt-replace` rewrite the system prompt OMP
+  builds, as the `systemPrompt` of their `before_agent_start` result; no other
+  extension returns `systemPrompt`, and no hook edits tool definitions or
+  changes the system prompt in `before_provider_request`. A `registerTool`
+  under a built-in tool's name only takes over that whole tool. Every other
   customization reaches the model as the extension's delta stream from
   `_shared/omomp-shared/context-delta.ts`.
 - **Subagents.** Model bindings live only in `config.yml`
