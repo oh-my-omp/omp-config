@@ -153,7 +153,10 @@ on every dispatch. Keep notes as .txt — non-markdown files are never scanned.
 The `task-completion-judge` extension intercepts terminal structured `yield`
 calls only from subagents whose definition file declares `completionJudge: true`
 in its frontmatter. Unknown frontmatter keys are ignored by the host, so the
-key is safe to add. Without it the subagent's yields pass unjudged. The shipped
+key is safe to add. The frontmatter is read with omp's own parser: only the
+YAML boolean `true` under `completionJudge` (or `completion-judge`) counts; a
+quoted `"true"`, another key casing, or a frontmatter that does not parse does
+not. Without it the subagent's yields pass unjudged. The shipped
 `task-free`, `task-mid` and `task-low` declare it; `task:high` does not.
 
 
@@ -162,6 +165,7 @@ key is safe to add. Without it the subagent's yields pass unjudged. The shipped
 The `task-split-check` extension's `split` check intercepts `task` dispatches
 in the main session only for items whose `agent` definition file declares
 `splitCheck: true` in its frontmatter. Unknown frontmatter keys are ignored by
-the host, so the key is safe to add. Items without `agent` are not
+the host, so the key is safe to add. As in item 14, only the YAML boolean `true`
+under `splitCheck` (or `split-check`) counts. Items without `agent` are not
 split-checked. The shipped `task-free`, `task-mid` and `task-low` declare it;
 `task:high` does not.

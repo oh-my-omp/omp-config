@@ -49,9 +49,14 @@ Behavior is described where it lives; read the matching one before changing it:
 - **Load order.** `extensions-last/system-prompt-replace/index.ts` stays the
   last `config.yml` `extensions` entry and outside `extensions/`. Order inside
   `extensions/` is unspecified, so filename prefixes cannot order hooks.
-- **Prompt ownership.** No extension changes the system prompt or tool
-  definitions OMP builds: no `systemPrompt` in a `before_agent_start` result,
-  no system or tools edit in `before_provider_request` or any other hook. A
+- **Prompt ownership.** Wording of this repository's prompt input files
+  (`SYSTEM_TEMPLATE.md`, `PERSONALITY.md`, `APPEND_SYSTEM*.md`) is changed in
+  those files; `system-prompt-replace` rules match only text OMP owns. Only
+  `tool-topics` and `system-prompt-replace` rewrite the system prompt OMP
+  builds, as the `systemPrompt` of their `before_agent_start` result; no other
+  extension returns `systemPrompt`, and no hook edits tool definitions or
+  changes the system prompt in `before_provider_request`. A `registerTool`
+  under a built-in tool's name only takes over that whole tool. Every other
   customization reaches the model as the extension's delta stream from
   `_shared/omomp-shared/context-delta.ts`.
 - **Subagents.** Model bindings live only in `config.yml`
@@ -126,17 +131,26 @@ review.
   `defaultInactive` and is activated on `session_start` / `session_switch`,
   never in `before_agent_start`. Every active-set change goes through
   `_shared/omomp-shared/active-tools.ts`, which lists tools in canonical order: built-in tools in registry order first, all others sorted by name.
-- **Imports:** host package roots (`pi-agent-core`, `pi-ai`, `pi-catalog`,
-  `pi-coding-agent`, `pi-natives`, `pi-tui`, `pi-utils`), Node/Bun built-ins
-  and relative paths. A host subpath is used only if an extension already loads
-  it in a real omp session: `tsc` resolves from `node_modules/` and passes
-  subpaths the omp binary does not map. An `import type` may also name the type
-  package of a host dependency (`@babel/types` for omp's Babel parser): it is
-  erased before omp loads the module. Native bindings load only after a
-  platform guard.
+- **Imports:** a value import (`import`, `export … from`, a dynamic
+  `import()` with a literal specifier) names a Node/Bun built-in, a relative
+  path, or a key of the omp binary's module table, the set the installed
+  host's `collectBundledPiEntries()` returns; `bun run check` fails on any
+  other. `tsc` resolves from `node_modules/` and passes specifiers the binary
+  cannot load. An `import type` may name any type of a host dependency
+  (`@babel/types` for omp's Babel parser, `@oh-my-pi/pi-wire`): it is erased
+  before omp loads the module. Native bindings load only after a platform
+  guard.
+- **Code copied from OMP:** what the host exports under a module-table key is
+  imported, never copied; only host code the binary cannot load is copied.
+  A copy is wrapped in
+  `// @upstream <verbatim|adapted> <package>@<version> <src path>#<symbol>` …
+  `// @upstream-end`, where `<version>` is the host release it was last
+  compared against; an `adapted` copy states on the line after the marker
+  what differs from the host and why. Copies are re-compared after OMP
+  upgrades.
 - **Comments** are warnings only: what must not be done and what breaks if it
-  is. No descriptions of behavior, design rationale, upstream provenance or
-  `@upstream` markers.
+  is. No descriptions of behavior or design rationale. `@upstream` markers
+  are not comments under this rule.
 - **Size and format:** a function over ~150 lines is split into named
   module-level functions. Format with `bun run format` only.
 
@@ -144,7 +158,7 @@ review.
 
 ```bash
 bun install          # dev dependencies (types only; runtime uses the copies inside omp)
-bun run check        # biome check . && tsc --noEmit
+bun run check        # biome check . && tsc --noEmit && bun ci/host-imports.ts
 bun run test         # bun test --isolate ci
 bun run format       # biome check --write .
 bun ci/check.ts      # configuration check in a throwaway HOME (exit 0 clean, 1 diagnostics, 2 free model unavailable)

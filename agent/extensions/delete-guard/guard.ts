@@ -17,10 +17,13 @@ export function resetEvalSession(session: EvalSession): void {
 	session.carry = EMPTY_CARRY;
 }
 
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/eval/input.ts#prepareEvalSource
+// Only the test for a standalone percent command, without the rewrite; eval/input is not in the binary's module table.
 function isStandalonePercentCommand(code: string): boolean {
 	const command = /^%(load|pip|bun|environment)(?:[ \t]+([\s\S]*))?$/.exec(code.trim());
 	return command !== null && !/[\r\n]/.test(command[2] ?? "");
 }
+// @upstream-end
 
 const FRAGMENT_LIMIT = 300;
 

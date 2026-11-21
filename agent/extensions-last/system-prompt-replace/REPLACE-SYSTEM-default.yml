@@ -2,12 +2,6 @@
   replace: ""
   target: "subagents"
   mode: "full"
-- literal: "User-reported errors, failures, observations are ground truth; NEVER rerun checks to confirm them."
-  replace: "User-reported errors, failures, observations are ground truth; NEVER rerun checks to doubt them. Reproducing to locate the cause and confirming the fix still apply."
-  mode: "full"
-- literal: "Compiled code: NEVER avoidable allocation, copying, computation."
-  replace: "Compiled code: NEVER add avoidable allocation, copying, computation."
-  mode: "full"
 - literal: "On error, retry only the failed step; earlier steps may have taken effect."
   replace: |2-
     On error, retry only the failed step; earlier steps may have taken effect.

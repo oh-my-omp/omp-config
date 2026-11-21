@@ -1,4 +1,5 @@
-import { type Changes, compareVersions, countChanges, type DatedRelease, isDated, parseVersion, type Release } from "./changelog.ts";
+import { parseChangelogVersion } from "@oh-my-pi/pi-coding-agent/utils/changelog";
+import { type Changes, compareVersions, countChanges, type DatedRelease, isDated, type Release } from "./changelog.ts";
 import type { Member } from "./members.ts";
 
 export type Seen = ReadonlyMap<string, string>;
@@ -15,10 +16,10 @@ export type Verdict =
 	| { readonly kind: "unreadable"; readonly reason: string };
 
 export function classify(member: Member, marked: string | undefined, load: () => ChangelogLoad): Verdict {
-	const current = parseVersion(member.version);
+	const current = parseChangelogVersion(member.version);
 	if (current === undefined) return { kind: "unreadable", reason: `version ${member.version} is not X.Y.Z` };
 	if (marked === undefined) return { kind: "first-seen" };
-	const last = parseVersion(marked);
+	const last = parseChangelogVersion(marked);
 	if (last === undefined) return { kind: "first-seen" };
 	const order = compareVersions(current, last);
 	if (order === 0) return { kind: "unchanged" };
@@ -144,6 +145,8 @@ export type View = { readonly kind: "days"; readonly count: number } | { readonl
 const RECENT_DAYS = 3;
 const LAST_DAYS = 1;
 
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#parseChangelogView
+// Counts release days rather than entries and answers /omomp-changelog's usage, so the exported host function is not imported.
 export function parseView(args: string): View | { readonly kind: "usage" } {
 	const trimmed = args.trim().toLowerCase();
 	if (!trimmed) return { kind: "days", count: RECENT_DAYS };
@@ -154,3 +157,4 @@ export function parseView(args: string): View | { readonly kind: "usage" } {
 	const count = Number.parseInt(match[1], 10);
 	return count < 1 ? { kind: "usage" } : { kind: "days", count };
 }
+// @upstream-end

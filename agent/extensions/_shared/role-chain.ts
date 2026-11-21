@@ -1,9 +1,12 @@
-import { completeSimple, type StopReason } from "@oh-my-pi/pi-ai";
+import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
+import type { StopReason } from "@oh-my-pi/pi-ai";
 import type { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { journalCompletion } from "@oh-my-pi/pi-coding-agent/session/model-usage-journal";
+import { callerSession } from "./caller-session.ts";
 import { errorText } from "./errors.ts";
 import { textOf } from "./messages.ts";
-import { modelLabel, type RoleModel, roleModels } from "./roles.ts";
+import { modelLabel, type RoleModel, roleModels, roleName } from "./roles.ts";
 
 export type AnswerStopReason = Extract<StopReason, "stop" | "length" | "toolUse">;
 
@@ -35,24 +38,46 @@ export async function completeRoleChain(
 ): Promise<RoleChainReply> {
 	const failures: string[] = [];
 	try {
+		const session = callerSession(ctx);
+		if (session === undefined) throw new Error("role chain: current OMP session is not registered");
 		const models = roleModels(ctx, roles);
 		if (models.length === 0) return { kind: "no-model" };
+		const purpose = roleName(roles[0] ?? "");
+		const registry = session.modelRegistry;
+		const sessionId = session.sessionId;
+		const telemetry = resolveTelemetry(session.agent.telemetry, sessionId);
 		for (const [position, candidate] of models.entries()) {
 			const { model, level } = candidate;
 			if (signal.aborted) return { kind: "deadline" };
 			const isLast = models.length - position === 1;
 			const attempt = attemptSignal(signal, budget, models.length - position);
 			try {
-				const reply = await completeSimple(
+				if (!(await registry.getApiKey(model, sessionId, { signal: attempt }))) {
+					failures.push(`${modelLabel(model)}: no API key`);
+					continue;
+				}
+				try {
+					session.costGate.admit();
+				} catch (error) {
+					return { kind: "error", error };
+				}
+				const journal = journalCompletion(session.sessionManager, { purpose, role: candidate.role });
+				const apiKey = registry.resolver(model, sessionId);
+				// Must follow getApiKey: earlier metadata misses the session-sticky credential getApiKey records.
+				const metadata = session.agent.metadataForProvider(model.provider);
+				const reply = await instrumentedCompleteSimple(
 					model,
 					{
 						systemPrompt: [systemPrompt],
 						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 					},
 					level === "off"
-						? { apiKey: ctx.modelRegistry.resolver(model), disableReasoning: true, signal: attempt }
-						: { apiKey: ctx.modelRegistry.resolver(model), reasoning: level ?? effort, signal: attempt },
+						? { apiKey, metadata, disableReasoning: true, signal: attempt }
+						: { apiKey, metadata, reasoning: level ?? effort, signal: attempt },
+					{ telemetry, oneshotKind: purpose },
 				);
+				session.costGate.record(reply.usage.cost.total);
+				journal?.(reply, prompt);
 				switch (reply.stopReason) {
 					case "stop":
 					case "length":

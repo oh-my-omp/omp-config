@@ -15,9 +15,20 @@
 - Added `xd://read/urls` guidance for further read sub-paths, queries and limits when the read tool is available
 - Added optional result-shaping guidance to the system prompt
 - Warned once per process when the `input-polish` shortcut is also held by an omp keybinding, a reserved chord, or another extension, naming the holder while `input-polish` keeps the chord
+- Added a host-import check to `bun run check` (`ci/host-imports.ts`): a value import under `agent/` whose specifier is not a built-in, a relative path or a key of the omp binary's module table (taken from the installed host's `collectBundledPiEntries()`) fails the check with its file and specifier
 
 ### Changed
 
+- Gated every `task-split-check` and `task-completion-judge` model attempt on the session's spend cap (a refusal ends the check without trying the next model) and recorded each reply's usage in the calling session's ledger, its cost in the session's spend and a chat telemetry span
+- Made `task-split-check` and `task-completion-judge` skip a model without credentials and move on to the next one
+- Gated every `@<purpose>` prompted judgment attempt (`turn-judge`, `lang-nag`, `tool-policy-nag`, `watchdog-agent`) on the session's spend cap, adding each billed attempt's cost to the session's spend, its duration to the ledger entry and one judgment telemetry span; judgments through OMP's judge chain now pass the same cap
+- Restricted `@<purpose>` prompted judge models to the session model's provider when `models.noJudge` or `models.offline` is set, reporting the judge inactive when none remain
+- Counted only the YAML boolean `true` under `completionJudge` or `splitCheck` (or their hyphenated spellings) for the completion judge and split check; quoted `"true"`, other key casing, nested keys and unparseable frontmatter no longer count
+- Left agent definitions with unparseable frontmatter unchanged when adding `splitCheck: true`, reporting the parse error in the migration note instead of writing the key
+- Wrote the user-report rule (`NEVER rerun checks to doubt them`) and the compiled-code rule (`NEVER add avoidable allocation`) directly into `SYSTEM_TEMPLATE.md`, and removed the two `REPLACE-SYSTEM-default.yml` rules that rewrote these lines of this repository's own template
+- Moved `ast-top-level` onto OMP's tool-command partition for keeping `ast_grep` and `ast_edit` top-level, with the pin-failure warning now reporting that both stay bash tool commands
+- Refreshed `bun.lock` to the `@oh-my-pi` 19.1.0 release and added the lockfile refresh to the after-upgrade steps in `docs/operations.md`
+- Rewrote the `AGENTS.md` Imports rule to the module-table criterion `bun run check` enforces, dropping the condition that a host subpath must have been loaded in a real omp session
 - Made sandbox `run` and `matrix` exit nonzero unless every model result is `pass`, so `untested` results now fail the command
 - Rewrote `baseUrl` in sandbox provider `models` and `modelOverrides` onto the local recorder port, sharing one target per upstream origin
 - Created the sandbox bridge network only when `--target` is passed, falling back to the default bridge otherwise
@@ -33,7 +44,7 @@
 - Updated `bash`, `task` and `write` tool guidance: `proc://<id>/kill` writes require `content: ""`, jobs can report a `cancelled` state, and settled-job reports carry a `Delivery:` line
 - Directed the agent to make file edits with the edit tool and never through sed/perl/python when shell tools are available
 - Made the `wt` and `wt_remove` tools refuse calls while the session is in vibe mode, queueing nothing and returning an error that asks to exit vibe mode first
-- Imported `XDEV_KEEP_TOP_LEVEL`, `isMountableUnderXdev` and the internal URL router types from OMP's exported entry points (`@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-coding-agent/internal-urls`) in `ast-top-level` and `tool-topics` instead of host-internal file paths
+- Imported `TOOL_COMMAND_KEEP_TOP_LEVEL` and `isMountableAsToolCommand` from `@oh-my-pi/pi-coding-agent/tools/tool-commands` in `ast-top-level` and the internal URL router types from `@oh-my-pi/pi-coding-agent/internal-urls` in `tool-topics`, instead of host-internal file paths
 - Documented in the `tool-topics` surfaces that `out://` is a write-only mid-turn reply channel (`read`) and that the shell runs in-process utilities ahead of PATH, handed back by `PI_DISABLE_UUTILS_BUILTINS` (`bash`)
 - Made `system-prompt-replace` send the edited system prompt itself at every prompt instead of a reminder that quotes each original passage and its replacement; the reminder is sent only after a tool call in a run that skipped the prompt hook after OMP rebuilt its prompt
 - Made `tool-topics` write each OMP tool's surface and `Topics` index into the system prompt in place of the native description at every prompt, instead of an `omp-config/tool-topics` reminder that was sent again after every compaction; the replaced descriptions no longer reach the model twice
@@ -49,13 +60,14 @@
 
 ### Fixed
 
+- Compared repo-rules context-file boundaries case-insensitively on Windows so home and repo-root paths match regardless of casing
 - Kept the user's enabled state and feature selection of installed plugins across updater applies and startup auto-update: a plugin whose declared spec is unchanged is refreshed with `omp plugin upgrade` instead of `omp install`, a plugin whose spec changed is reinstalled and disabled again if it was disabled, an npm plugin pinned to the recorded exact version is left as is, and a locally linked plugin is no longer installed over; a link made over an installed dependency, which the host's bun install replaces whenever any plugin is installed or upgraded, is linked again with its enable state and features restored
 - Located the shared batch context for `task-completion-judge` by the host subagent template's `⁂ Context` heading instead of a `§ Context` marker the host no longer renders
 - Kept the `harness-restart` completion notice pending until OMP accepted it: a refused or failed send is now logged and re-sent on the next session start or switch instead of being marked consumed
 - Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
 - Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
 - Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
-- Skipped prompted judge candidates for five minutes after a 401/402/403/404 rejection instead of re-requesting them on every judgment
+- Skipped rejected judge candidates: 401/402/403 and 451 rejections exclude the model for the process, while a 404 keeps the five-minute cooldown
 - Pointed `install-plugins.sh` and the plugin docs at `oh-my-omp/omp-actual-terminal#release`, the terminal plugin's renamed repository; the old `omp-unified-exec` address returns 404, which failed the updater's apply
 - Returned the final assistant turn's text ahead of accumulated streamed deltas in `_shared/helper-session.ts` so multi-turn tool-using watchdogs that narrate before a tool call still resolve a final `PASS` verdict cleanly
 - Kept the host's `SYSTEM_TEMPLATE.md`, `APPEND_SYSTEM*.md`, `PERSONALITY.md`, `config-light.yml` and `omp-light.ts` out of the sandbox copy of `~/.omp/agent`, so the updater writes them from the working tree instead of keeping the host copy as an `unknown-base` conflict and sessions load the checkout's prompt template
