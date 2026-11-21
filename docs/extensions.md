@@ -71,7 +71,7 @@ Runs at `tool_call` on terminal structured `yield` calls inside subagents whose 
 - **Verdict parsing**: the verdict is the reply's leading first-line token — `DONE`, `NOT_DONE` or `NOT DONE` — after trimming and stripping wrapping backticks/asterisks, followed by the end of the line, whitespace, or Unicode punctuation other than `_` (`NOT_DONE: missing tests`, `DONE — all done` count; `Verdict: DONE`, `NOT-DONE`, `NOT_DONE_X`, `DONEFOO` do not). The rest of the reply becomes the reason. A reply that matches none of this, a missing model, a timeout, or every model failing judges nothing: that `yield` alone passes and the next terminal `yield` is judged again.
 - **Bounce rules**:
   1. The first `NOT_DONE` blocks `yield` with the reason so the worker finishes and verifies the work.
-  2. After `DONE`, the extension queries `omp-todo-more:read` and blocks once if any `pending` or `in_progress` items remain (`blocked` items do not block), listing their explanations so the worker updates its Todo list first.
+  2. After `DONE`, the extension queries `omp-todo-more:read` and blocks once if any `pending` or `in_progress` items remain, listing their explanations so the worker updates its Todo list first.
   3. Each bounce happens at most once per subagent session so a blocked worker cannot get trapped in an infinite bounce loop; once a `yield` passes, subsequent `yield` calls in that session are not judged. The verdict is only logged (`task-completion-judge verdict`); the `yield` data keeps the agent's `{ report }` schema. Config, model, or plugin-read errors log a warning and fail open.
 
 ### subagent-usage
