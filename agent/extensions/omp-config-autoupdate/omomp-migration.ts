@@ -520,6 +520,7 @@ export function splitCheckEdit(
 	| { readonly kind: "edit"; readonly rel: string; readonly content: string }
 	| { readonly kind: "present" }
 	| { readonly kind: "declined"; readonly rel: string }
+	| { readonly kind: "unreadable"; readonly rel: string; readonly reason: string }
 	| { readonly kind: "missing" } {
 	const dir = join(agentDir, "agents");
 	let entries: string[];
@@ -535,8 +536,11 @@ export function splitCheckEdit(
 		const parsed = parseFrontmatter(text);
 		if (parsed === null || unquote(parsed.fields.name ?? "") !== name) continue;
 		const rel = `agent/agents/${entry}`;
-		const current = parsed.fields.splitcheck;
-		if (current !== undefined) return unquote(current).toLowerCase() === "true" ? { kind: "present" } : { kind: "declined", rel };
+		const frontmatter = agentFrontmatter(text);
+		if (frontmatter.kind === "unreadable") return { kind: "unreadable", rel, reason: frontmatter.reason };
+		if (Object.hasOwn(frontmatter.fields, "splitCheck")) {
+			return frontmatter.fields.splitCheck === true ? { kind: "present" } : { kind: "declined", rel };
+		}
 		const close = /\r?\n---(\r?\n|$)/.exec(text.slice(3));
 		if (close === null) continue;
 		const at = 3 + close.index;
@@ -544,6 +548,71 @@ export function splitCheckEdit(
 		return { kind: "edit", rel, content: `${text.slice(0, at)}${newline}splitCheck: true${text.slice(at)}` };
 	}
 	return { kind: "missing" };
+}
+
+// Must read agent definitions exactly as omp's parseFrontmatter with level "fatal" does: a looser reading marks
+// definitions omp ignores as set, or inserts a second splitCheck key over the user's own value.
+function agentFrontmatter(
+	content: string,
+): { readonly kind: "parsed"; readonly fields: Mapping } | { readonly kind: "unreadable"; readonly reason: string } {
+	const newlineNormalized = content.replace(/\r\n?/g, "\n");
+	const normalized = stripLeadingHtmlComments(newlineNormalized);
+	if (!normalized.startsWith("---")) return { kind: "parsed", fields: {} };
+	const endIndex = normalized.indexOf("\n---", 3);
+	if (endIndex === -1) return { kind: "parsed", fields: {} };
+	const metadata = normalized.slice(4, endIndex).replace(/<!--[\s\S]*?-->/g, "");
+	try {
+		return { kind: "parsed", fields: camelKeys(yamlRecord(metadata)) };
+	} catch (error) {
+		const quoted = quoteAmbiguousPlainScalars(metadata);
+		if (quoted !== undefined) {
+			try {
+				return { kind: "parsed", fields: camelKeys(yamlRecord(quoted)) };
+			} catch {}
+		}
+		return { kind: "unreadable", reason: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+function stripLeadingHtmlComments(content: string): string {
+	const leading = /^(?:(?:\s*<!--[\s\S]*?-->)+)/.exec(content);
+	if (leading === null) return content;
+	const rest = content.slice(leading[0].length);
+	return /^\s*---/.test(rest) ? rest.replace(/^\s+/, "") : content;
+}
+
+function yamlRecord(metadata: string): Mapping {
+	const loaded: unknown = Bun.YAML.parse(metadata.replaceAll("\t", "  "));
+	return isMapping(loaded) ? loaded : {};
+}
+
+const PLAIN_SCALAR_KEY_VALUE = /^(\s*[A-Za-z_][\w-]*:\s+)(\S.*?)(\s*)$/;
+const FLOW_OR_EXPLICIT_VALUE_START = new Set(['"', "'", "[", "{", "|", ">", "!", "&", "*", "#"]);
+
+function quoteAmbiguousPlainScalars(metadata: string): string | undefined {
+	let changed = false;
+	const lines = metadata.split("\n").map((line) => {
+		const match = PLAIN_SCALAR_KEY_VALUE.exec(line);
+		if (match === null) return line;
+		const [, prefix = "", rawValue = "", suffix = ""] = match;
+		const value = rawValue.trimEnd();
+		if (!value.includes(": ")) return line;
+		if (FLOW_OR_EXPLICIT_VALUE_START.has(value[0] ?? "")) return line;
+		changed = true;
+		return `${prefix}${JSON.stringify(value)}${suffix}`;
+	});
+	return changed ? lines.join("\n") : undefined;
+}
+
+function camelKeys(mapping: Mapping): Mapping {
+	return Object.fromEntries(
+		Object.entries(mapping).map(([key, item]) => [key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase()), camelValue(item)]),
+	);
+}
+
+function camelValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(camelValue);
+	return isMapping(value) ? camelKeys(value) : value;
 }
 
 export type PluginState =

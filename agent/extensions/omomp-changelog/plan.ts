@@ -1,4 +1,5 @@
-import { type Changes, compareVersions, countChanges, type DatedRelease, isDated, parseVersion, type Release } from "./changelog.ts";
+import { parseChangelogVersion } from "@oh-my-pi/pi-coding-agent/utils/changelog";
+import { type Changes, compareVersions, countChanges, type DatedRelease, isDated, type Release } from "./changelog.ts";
 import type { Member } from "./members.ts";
 
 export type Seen = ReadonlyMap<string, string>;
@@ -15,10 +16,10 @@ export type Verdict =
 	| { readonly kind: "unreadable"; readonly reason: string };
 
 export function classify(member: Member, marked: string | undefined, load: () => ChangelogLoad): Verdict {
-	const current = parseVersion(member.version);
+	const current = parseChangelogVersion(member.version);
 	if (current === undefined) return { kind: "unreadable", reason: `version ${member.version} is not X.Y.Z` };
 	if (marked === undefined) return { kind: "first-seen" };
-	const last = parseVersion(marked);
+	const last = parseChangelogVersion(marked);
 	if (last === undefined) return { kind: "first-seen" };
 	const order = compareVersions(current, last);
 	if (order === 0) return { kind: "unchanged" };

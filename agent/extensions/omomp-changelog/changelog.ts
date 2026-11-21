@@ -13,16 +13,6 @@ export type DatedRelease = Release & { readonly date: string };
 
 export const isDated = (release: Release): release is DatedRelease => release.date !== null;
 
-export function parseVersion(text: string): Version | undefined {
-	const match = text.match(/^(\d+)\.(\d+)\.(\d+)$/);
-	if (!match) return undefined;
-	return {
-		major: Number.parseInt(match[1] ?? "", 10),
-		minor: Number.parseInt(match[2] ?? "", 10),
-		patch: Number.parseInt(match[3] ?? "", 10),
-	};
-}
-
 export function compareVersions(a: Version, b: Version): number {
 	if (a.major !== b.major) return a.major - b.major;
 	if (a.minor !== b.minor) return a.minor - b.minor;

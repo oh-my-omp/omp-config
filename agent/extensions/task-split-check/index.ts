@@ -12,7 +12,7 @@ import { type AttemptBudget, completeRoleChain } from "../_shared/role-chain.ts"
 import { modelLabel } from "../_shared/roles.ts";
 
 const ROLE = basename(import.meta.dir);
-const SPLIT_CHECK_KEY = "splitcheck";
+const SPLIT_CHECK_KEY = "splitCheck";
 const EFFORT =
 	THINKING_EFFORTS.find((effort) => effort === "medium") ??
 	(() => {

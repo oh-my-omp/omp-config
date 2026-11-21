@@ -49,24 +49,28 @@ function readNonEmpty(file: string): string | null {
 	}
 }
 
+function samePath(left: string, right: string): boolean {
+	return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
 function isWithin(parent: string, child: string): boolean {
-	const relative = path.relative(parent, child);
+	const relative = process.platform === "win32" ? path.relative(parent.toLowerCase(), child.toLowerCase()) : path.relative(parent, child);
 	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
 function walk(scope: ContextFileScope, name: StandaloneName, visit: (file: string, depth: number) => void): void {
 	const { cwd, home, repoRoot } = scope;
 	const cwdIsUnderHome = isWithin(home, cwd);
-	const repoIsHome = repoRoot !== null && repoRoot === home;
+	const repoIsHome = repoRoot !== null && samePath(repoRoot, home);
 	const repoIsUnderHome = repoRoot !== null && isWithin(home, repoRoot) && !repoIsHome;
 	const scanToHome = repoRoot !== null && cwdIsUnderHome && repoIsUnderHome;
 	const boundary = scanToHome ? home : (repoRoot ?? (cwdIsUnderHome ? home : path.parse(cwd).root));
-	const includeBoundary = repoRoot === null ? cwdIsUnderHome : boundary !== home || repoIsHome;
+	const includeBoundary = repoRoot === null ? cwdIsUnderHome : !samePath(boundary, home) || repoIsHome;
 	const cwdDepth = cwd.split(path.sep).length;
 	let current = cwd;
 	for (;;) {
-		const atBoundary = current === boundary;
-		const atHome = scanToHome && current === home;
+		const atBoundary = samePath(current, boundary);
+		const atHome = scanToHome && samePath(current, home);
 		if (!(atHome || (atBoundary && !includeBoundary)) && !path.basename(current).startsWith(".")) {
 			visit(path.join(current, name), cwdDepth - current.split(path.sep).length);
 		}
