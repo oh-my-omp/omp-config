@@ -2,7 +2,7 @@ import type { ToolDocs } from "./catalog.ts";
 
 export type Entry = { readonly kind: "ok"; readonly lines: readonly string[] } | { readonly kind: "drift"; readonly reason: string };
 
-type Layout = "inline" | "device";
+type Layout = "inline" | "command";
 
 export class Description {
 	readonly block: number;
@@ -10,26 +10,35 @@ export class Description {
 	readonly length: number;
 	readonly layout: Layout;
 	readonly examples: boolean;
+	readonly tool: string;
 	readonly #lines: readonly string[];
 
-	constructor(block: number, lines: readonly string[], start: number, length: number, layout: Layout, examples: boolean) {
+	constructor(block: number, lines: readonly string[], start: number, length: number, layout: Layout, examples: boolean, tool: string) {
 		this.block = block;
 		this.#lines = lines;
 		this.start = start;
 		this.length = length;
 		this.layout = layout;
 		this.examples = examples;
+		this.tool = tool;
 	}
 
 	line(index: number): string {
 		const raw = this.#lines[this.start + index] ?? "";
-		if (this.layout === "device") return raw;
+		if (this.layout === "command") {
+			if (index === 0) {
+				const prefix = `${this.tool} — `;
+				return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
+			}
+			return raw;
+		}
 		return raw.startsWith("// ") ? raw.slice(3) : raw.slice(2);
 	}
 }
 
 export type Rendered =
 	| { readonly kind: "found"; readonly description: Description }
+	| { readonly kind: "catalog" }
 	| { readonly kind: "absent" }
 	| { readonly kind: "drift"; readonly reason: string };
 
@@ -47,7 +56,9 @@ const HEADING = /^(#{1,6}) (.+)$/;
 const NATIVE = /\{\{native:([^}]+)\}\}/g;
 const NAMESPACE_OPEN = "namespace functions {";
 const NAMESPACE_CLOSE = "} // namespace functions";
-const DEVICE_DRIFT = "xd:// device section no longer has the heading/blank/description/blank/### Schema layout";
+const TOOL_COMMANDS_HEADING = "# Tool Commands";
+const CATALOG_HEADING = "## More commands (help on demand)";
+const COMMAND_DRIFT = "tool command section no longer has the heading/blank/<tool> — description/blank/Usage: layout";
 
 function inlineDescriptions(block: number, lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
 	const found = new Map<string, Rendered>();
@@ -70,49 +81,72 @@ function inlineDescriptions(block: number, lines: readonly string[], tools: read
 				end = comment > start && lines[comment - 1] === "//" ? comment - 1 : comment;
 				break;
 			}
-			found.set(tool, { kind: "found", description: new Description(block, lines, start, end - start, "inline", examples) });
+			found.set(tool, { kind: "found", description: new Description(block, lines, start, end - start, "inline", examples, tool) });
 		}
 	}
 	return found;
 }
 
-function deviceSection(block: number, lines: readonly string[], heading: number): Rendered {
-	let schema = -1;
+function commandSection(block: number, lines: readonly string[], heading: number, tool: string): Rendered {
+	let usage = -1;
 	for (let index = heading + 1; index < lines.length; index++) {
 		const line = lines[index] ?? "";
-		if (line.startsWith("## ")) break;
-		if (line === "### Schema") {
-			schema = index;
+		if (line.startsWith("## ") || line.startsWith("# ")) break;
+		if (line === "Usage:") {
+			usage = index;
 			break;
 		}
 	}
-	if (schema < 0 || lines[heading + 1] !== "" || lines[schema - 1] !== "") return { kind: "drift", reason: DEVICE_DRIFT };
-	return { kind: "found", description: new Description(block, lines, heading + 2, Math.max(0, schema - heading - 3), "device", false) };
+	const prefix = `${tool} — `;
+	if (usage < heading + 4 || lines[heading + 1] !== "" || !(lines[heading + 2] ?? "").startsWith(prefix) || lines[usage - 1] !== "") {
+		return { kind: "drift", reason: COMMAND_DRIFT };
+	}
+	return { kind: "found", description: new Description(block, lines, heading + 2, usage - heading - 3, "command", false, tool) };
 }
 
-function deviceDescriptions(block: number, lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
+function commandDescriptions(block: number, lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
 	const found = new Map<string, Rendered>();
-	for (let index = 0; index < lines.length; index++) {
+	const start = lines.indexOf(TOOL_COMMANDS_HEADING);
+	if (start < 0) return found;
+	let inCatalog = false;
+	for (let index = start + 1; index < lines.length; index++) {
 		const line = lines[index] ?? "";
-		if (!line.startsWith("## ")) continue;
-		for (const tool of tools) {
-			if (found.has(tool)) continue;
-			const rest = 3 + tool.length;
-			if (!line.startsWith(tool, 3) || (line.length !== rest && !line.startsWith(" — ", rest))) continue;
-			found.set(tool, deviceSection(block, lines, index));
+		if (line.startsWith("# ")) break;
+		if (line === CATALOG_HEADING) {
+			inCatalog = true;
+			continue;
+		}
+		if (line.startsWith("## ")) {
+			inCatalog = false;
+			for (const tool of tools) {
+				if (found.has(tool) || line !== `## ${tool}`) continue;
+				found.set(tool, commandSection(block, lines, index, tool));
+			}
+			continue;
+		}
+		if (inCatalog && line.startsWith("- `")) {
+			for (const tool of tools) {
+				if (found.has(tool) || !line.startsWith(`- \`${tool}\` — `)) continue;
+				found.set(tool, { kind: "catalog" });
+			}
 		}
 	}
 	return found;
 }
 
-function prefixed(layout: Layout, line: string): string {
-	switch (layout) {
-		case "inline":
-			return line === "" ? "//" : `// ${line}`.trimEnd();
-		case "device":
-			return line;
+function renderLines(description: Description, replacement: readonly string[]): string[] {
+	switch (description.layout) {
+		case "inline": {
+			const rendered = replacement.map((line) => (line === "" ? "//" : `// ${line}`.trimEnd()));
+			if (description.examples && description.length === 0 && rendered.length > 0) rendered.push("//");
+			return rendered;
+		}
+		case "command": {
+			if (replacement.length === 0) return [`${description.tool} — session tool`];
+			return [`${description.tool} — ${replacement[0]}`, ...replacement.slice(1)];
+		}
 		default: {
-			const unreachable: never = layout;
+			const unreachable: never = description.layout;
 			return unreachable;
 		}
 	}
@@ -127,9 +161,9 @@ export function indexPrompt(blocks: readonly string[], tools: readonly string[])
 		const lines = text.split("\n");
 		split.set(block, lines);
 		const inline = inlineDescriptions(block, lines, pending);
-		const device = deviceDescriptions(block, lines, pending);
+		const commands = commandDescriptions(block, lines, pending);
 		for (const tool of pending) {
-			const section = inline.get(tool) ?? device.get(tool);
+			const section = inline.get(tool) ?? commands.get(tool);
 			if (section !== undefined) found.set(tool, section);
 		}
 		pending = pending.filter((tool) => !found.has(tool));
@@ -152,9 +186,7 @@ export function indexPrompt(blocks: readonly string[], tools: readonly string[])
 				const lines = [...original];
 				list.sort((a, b) => b.description.start - a.description.start);
 				for (const { description, lines: replacement } of list) {
-					const rendered = replacement.map((line) => prefixed(description.layout, line));
-					if (description.examples && description.length === 0 && rendered.length > 0) rendered.push("//");
-					lines.splice(description.start, description.length, ...rendered);
+					lines.splice(description.start, description.length, ...renderLines(description, replacement));
 				}
 				return lines.join("\n");
 			});

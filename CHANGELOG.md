@@ -29,6 +29,9 @@
 - Documented in the `tool-topics` surfaces that `out://` is a write-only mid-turn reply channel (`read`) and that the shell runs in-process utilities ahead of PATH, handed back by `PI_DISABLE_UUTILS_BUILTINS` (`bash`)
 - Made `system-prompt-replace` send the edited system prompt itself at every prompt instead of a reminder that quotes each original passage and its replacement; the reminder is sent only after a tool call in a run that skipped the prompt hook after OMP rebuilt its prompt
 - Made `tool-topics` write each OMP tool's surface and `Topics` index into the system prompt in place of the native description at every prompt, instead of an `omp-config/tool-topics` reminder that was sent again after every compaction; the replaced descriptions no longer reach the model twice
+- Passed the watched session's `sessionId` and `cwd` into `watchdog-agent`'s chat reviewer prompt and matched the tool-usage instruction to whether `tools` grants action tools beyond read-only inspection
+- Aligned `agent/SYSTEM_TEMPLATE.md`, `agent/config.yml` (`tools.commandDocs: inline`), `REPLACE-SYSTEM-default.yml` and `extensions-last/README*.md` with OMP 19.1.0 tool commands (`{{toolCommandDocs}}`, `help://read/urls`, `help://eval/agents`, command form for `report_issue`) and removed the obsolete `xd://` device replacement rule
+- Updated `tool-topics` to index and rewrite OMP 19.1.0 command-mounted tool sections (`## <tool>` / `<tool> — …` / `Usage:`) while skipping catalog-only entries without drift warnings, migrated `SURFACE-*`/`TOPIC-*` docs and `tool-policy-nag/pty.ts` from `xd://` to `help://` and command forms, and removed dead `xd://bash` device-write channel branches and their obsolete tests
 
 ### Removed
 
@@ -39,12 +42,15 @@
 ### Fixed
 
 - Kept the user's enabled state and feature selection of installed plugins across updater applies and startup auto-update: a plugin whose declared spec is unchanged is refreshed with `omp plugin upgrade` instead of `omp install`, a plugin whose spec changed is reinstalled and disabled again if it was disabled, an npm plugin pinned to the recorded exact version is left as is, and a locally linked plugin is no longer installed over; a link made over an installed dependency, which the host's bun install replaces whenever any plugin is installed or upgraded, is linked again with its enable state and features restored
+- Located the shared batch context for `task-completion-judge` by the host subagent template's `⁂ Context` heading instead of a `§ Context` marker the host no longer renders
 - Kept the `harness-restart` completion notice pending until OMP accepted it: a refused or failed send is now logged and re-sent on the next session start or switch instead of being marked consumed
 - Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
 - Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
 - Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
 - Skipped prompted judge candidates for five minutes after a 401/402/403/404 rejection instead of re-requesting them on every judgment
 - Pointed `install-plugins.sh` and the plugin docs at `oh-my-omp/omp-actual-terminal#release`, the terminal plugin's renamed repository; the old `omp-unified-exec` address returns 404, which failed the updater's apply
+- Returned the final assistant turn's text ahead of accumulated streamed deltas in `_shared/helper-session.ts` so multi-turn tool-using watchdogs that narrate before a tool call still resolve a final `PASS` verdict cleanly
+- Made `omp-config-update` enumerate `agent/extensions/` directories absent from the upstream snapshot and remove their non-app-managed files along with empty extension directories (such as `task-tool-trim` and empty `fork-task`), while preserving app-managed, excluded, symlinked and top-level files
 
 ## [1.2.1] - 2026-11-19
 

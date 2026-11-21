@@ -26,4 +26,4 @@ await b.close();
 - Derive the labels from the decision you have to make. `bool` is a probability of yes, and the threshold is yours.
 - An answer sorts and filters; it is not evidence. Read what you act on.
 - Assignment splitting, parallel-writer isolation and `task:*` completion are already judged when you dispatch and when a worker yields; do not judge them again.
-- One text: `await judge(text, questions)`. Signatures, `score`, images and batch draining: `xd://eval/judge`.
+- One text: `await judge(text, questions)`. Signatures, `score`, images and batch draining: `help://eval/judge`.

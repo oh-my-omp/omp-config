@@ -242,7 +242,6 @@ type IntentJob = {
 type Nag = {
 	readonly pi: ExtensionAPI;
 	state: NagState;
-	readonly nestedDeviceCalls: Set<string>;
 	epoch: number;
 	readonly warned: Set<string>;
 	readonly intentJobs: Map<string, IntentJob>;
@@ -460,7 +459,6 @@ function onSessionShutdown(nag: Nag, ctx: ExtensionContext): Promise<void> {
 }
 
 async function onToolCall(nag: Nag, event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> {
-	if (event.toolName !== "write" && nag.nestedDeviceCalls.delete(event.toolCallId)) return;
 	const call = watchedCallOf(event.toolName, event.input);
 	if (call === null) return;
 	let loaded: { lanes: Lanes; warnings: readonly LaneWarning[] };
@@ -476,7 +474,6 @@ async function onToolCall(nag: Nag, event: ToolCallEvent, ctx: ExtensionContext)
 	const slot: ScanSlot = pending ?? { scan: null };
 	const refusal = await ptyRefusalFor(nag.pi, lanes, call, slot);
 	if (refusal !== null) return { block: true, reason: refusal };
-	if (event.toolName === "write") nag.nestedDeviceCalls.add(event.toolCallId);
 	await runForMainSession(nag.pi, ctx, () => {
 		for (const warning of warnings) warnOnce(nag, ctx, warning);
 		const settings = syncInterceptor(nag, ctx, lanes);
@@ -487,7 +484,6 @@ async function onToolCall(nag: Nag, event: ToolCallEvent, ctx: ExtensionContext)
 
 async function onToolResult(nag: Nag, event: ToolResultEvent, ctx: ExtensionContext): Promise<ToolResultEventResult | undefined> {
 	if (ctx.agent.kind !== "main") return;
-	if (event.toolName === "write") return;
 	const call = watchedCallOf(event.toolName, event.input);
 	if (call === null) return;
 	const job = nag.intentJobs.get(event.toolCallId);
@@ -554,7 +550,6 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 	const nag: Nag = {
 		pi,
 		state: WATCHING,
-		nestedDeviceCalls: new Set(),
 		epoch: 0,
 		warned: new Set(),
 		intentJobs: new Map(),

@@ -147,7 +147,7 @@ retry:
       - web/ollama
 inlineToolDescriptors: "on"
 tools:
-  xdevDocs: inline
+  commandDocs: inline
 generate_image:
   enabled: true
 checkpoint:

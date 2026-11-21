@@ -9,4 +9,4 @@ upstream: agent/config.yml launch.enabled; agent/extensions/tool-policy-nag (pty
 
 - Do not loop with `bash` and `sleep`, and do not re-probe call after call.
 - Open-ended waits are refused by the host-tool PTY policy when its alternative is active.
-xd://exec_command
+help://exec_command

@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	type Dirent,
 	existsSync,
 	lstatSync,
 	mkdirSync,
@@ -12,6 +13,7 @@ import {
 	readlinkSync,
 	realpathSync,
 	renameSync,
+	rmdirSync,
 	rmSync,
 	statSync,
 	unlinkSync,
@@ -467,6 +469,7 @@ type Op =
 			readonly fragments: readonly { readonly target: string; readonly content: string }[];
 	  }
 	| { readonly kind: "delete"; readonly rel: string; readonly target: string; readonly base?: BaseChange }
+	| { readonly kind: "rmdir"; readonly rel: string; readonly target: string }
 	| {
 			readonly kind: "migrate-replacements";
 			readonly rel: string;
@@ -735,7 +738,7 @@ function planPlainItem(ctx: PlanContext, rel: string, repo: Buffer | undefined, 
 	}
 	if (repo === undefined) {
 		if (host === undefined) return [{ kind: "base", rel, change: accept }];
-		const unmodified = base.kind === "known" && host.equals(base.content);
+		const unmodified = base.kind === "known" ? host.equals(base.content) : base.kind === "none" && ctx.history.hasVersion(rel, host);
 		if (!unmodified && !code) return conflict(base.kind === "known" ? "dropped-upstream" : "unknown-base");
 		if (!unmodified) report.overwritten.push(target);
 		return [{ kind: "delete", rel, target, base: accept }];
@@ -815,6 +818,89 @@ function planPlain(ctx: PlanContext): Op[] {
 			ops.push({ kind: "base", rel, change: { kind: "plain-unknown", rel } });
 		}
 	} catch {}
+	ops.push(...planUnshippedExtensions(ctx, shipped, known, ops));
+	return ops;
+}
+
+function planRemovedExtensionDir(
+	ctx: PlanContext,
+	dirRel: string,
+	known: Set<string>,
+	deletedRels: ReadonlySet<string>,
+): { readonly ops: Op[]; readonly removable: boolean } {
+	const { opts } = ctx;
+	const target = targetOf(dirRel, opts.agentDir);
+	let entries: Dirent[];
+	try {
+		entries = readdirSync(target, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+	} catch {
+		return { ops: [], removable: false };
+	}
+	const ops: Op[] = [];
+	let removable = true;
+	for (const child of entries) {
+		const childRel = `${dirRel}/${child.name}`;
+		if (child.isDirectory()) {
+			if (skipExcluded(ctx, childRel)) {
+				removable = false;
+				continue;
+			}
+			const sub = planRemovedExtensionDir(ctx, childRel, known, deletedRels);
+			ops.push(...sub.ops);
+			if (!sub.removable) removable = false;
+			continue;
+		}
+		if (child.isSymbolicLink()) {
+			removable = false;
+			continue;
+		}
+		if (!child.isFile()) {
+			removable = false;
+			continue;
+		}
+		if (retiring(ctx, childRel)) {
+			if (CTX_RETIREMENTS.includes(agentPathOf(childRel))) removable = false;
+			continue;
+		}
+		if (known.has(childRel)) {
+			if (!deletedRels.has(childRel)) removable = false;
+			continue;
+		}
+		known.add(childRel);
+		if (skipExcluded(ctx, childRel)) {
+			removable = false;
+			continue;
+		}
+		const planned = planPlainItem(ctx, childRel, undefined);
+		ops.push(...planned);
+		if (!planned.some((op) => op.kind === "delete")) removable = false;
+	}
+	if (removable) ops.push({ kind: "rmdir", rel: dirRel, target });
+	return { ops, removable };
+}
+
+function planUnshippedExtensions(ctx: PlanContext, shipped: readonly string[], known: Set<string>, plannedOps: readonly Op[]): Op[] {
+	const shippedDirs = new Set<string>();
+	for (const rel of shipped) {
+		if (!rel.startsWith("agent/extensions/")) continue;
+		const name = rel.slice("agent/extensions/".length).split("/", 1)[0];
+		if (name) shippedDirs.add(name);
+	}
+	if (shippedDirs.size === 0) return [];
+	let entries: Dirent[];
+	try {
+		entries = readdirSync(join(ctx.opts.agentDir, "extensions"), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+	} catch {
+		return [];
+	}
+	const deletedRels = new Set(plannedOps.filter((op) => op.kind === "delete").map((op) => op.rel));
+	const ops: Op[] = [];
+	for (const entry of entries) {
+		if (!entry.isDirectory() || entry.name.startsWith(".") || shippedDirs.has(entry.name)) continue;
+		const dirRel = `agent/extensions/${entry.name}`;
+		if (skipExcluded(ctx, dirRel)) continue;
+		ops.push(...planRemovedExtensionDir(ctx, dirRel, known, deletedRels).ops);
+	}
 	return ops;
 }
 
@@ -2000,6 +2086,8 @@ interface ApplyState extends PlanContext {
 	ctxReady: boolean;
 }
 
+const OP_RANK: Record<Op["kind"], number> = { move: 0, split: 0, "migrate-replacements": 0, write: 1, delete: 2, rmdir: 3, base: 4 };
+
 function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 	try {
 		const base = BaseRecord.load(opts.agentDir);
@@ -2032,8 +2120,7 @@ function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 		const ctxRetirements = todoRequired ? planRetirements(ctx, CTX_RETIREMENTS) : [];
 		report.notes.push(...history.notes);
 		if (opts.check || !opts.plugins) report.notes.push(...reportPendingSettings(opts, settings));
-		const rank: Record<Op["kind"], number> = { move: 0, split: 0, "migrate-replacements": 0, write: 1, delete: 2, base: 3 };
-		const ops = groupReplacementMigration(opts, replacementMigration, planned).toSorted((a, b) => rank[a.kind] - rank[b.kind]);
+		const ops = groupReplacementMigration(opts, replacementMigration, planned).toSorted((a, b) => OP_RANK[a.kind] - OP_RANK[b.kind]);
 		assertNoExcludedOps(ctx, ops);
 		return { ...ctx, settings, ctxRetirements, ops, ctxReady: false };
 	} catch (error) {
@@ -2116,10 +2203,10 @@ function cutoverNote(state: ApplyState): void {
 
 function runApplyOps(state: ApplyState): BaseChange[] {
 	const { opts, report } = state;
-	const ops = state.ctxReady ? [...state.ops, ...state.ctxRetirements] : state.ops;
+	const ops = state.ctxReady ? [...state.ops, ...state.ctxRetirements].toSorted((a, b) => OP_RANK[a.kind] - OP_RANK[b.kind]) : state.ops;
 	const accepted: BaseChange[] = [];
 	for (const op of ops) {
-		if (!opts.check && op.kind === "delete" && report.errors.length > 0) break;
+		if (!opts.check && (op.kind === "delete" || op.kind === "rmdir") && report.errors.length > 0) break;
 		if (op.kind === "base") {
 			accepted.push(op.change);
 			continue;
@@ -2184,6 +2271,13 @@ function applyOp(state: ApplyState, op: Exclude<Op, { kind: "base" }>, leaf: str
 			if (!opts.check) unlinkSync(op.target);
 			report.deleted.push(op.target);
 			if (op.base !== undefined) accepted.push(op.base);
+			break;
+		case "rmdir":
+			if (!opts.check) {
+				if (!lexists(op.target) || !lstatSync(op.target).isDirectory() || readdirSync(op.target).length > 0) return;
+				rmdirSync(op.target);
+			}
+			report.deleted.push(op.target);
 			break;
 		default: {
 			const unreachable: never = op;
