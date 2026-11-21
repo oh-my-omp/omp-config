@@ -364,6 +364,7 @@ export interface PluginRefresh {
 	readonly upgraded: string[];
 	readonly errors: string[];
 	readonly changes: PluginChange[];
+	readonly notes: string[];
 }
 
 export type ConflictScan =
@@ -1343,58 +1344,195 @@ function movesOnItsOwn(spec: string): boolean {
 	return hash === -1 || spec.slice(hash + 1) === PLUGIN_CHANNEL;
 }
 
-type InstalledPlugins = ReadonlyMap<string, string>;
+const PLUGINS_HOME = join(homedir(), ".omp", "plugins");
 
-function installedPlugins(): InstalledPlugins {
-	const installed = new Map<string, string>();
+interface GithubSource {
+	readonly repo: string;
+	readonly ref: string | undefined;
+}
+
+function githubSource(value: string): GithubSource | undefined {
+	const hash = value.indexOf("#");
+	const source = hash === -1 ? value : value.slice(0, hash);
+	const match = /^(?:github:|(?:git\+)?https:\/\/github\.com\/|git@github\.com:)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(source);
+	if (match === null) return undefined;
+	const ref = hash === -1 ? "" : value.slice(hash + 1);
+	return { repo: `${match[1]}/${match[2]}`.toLowerCase(), ref: ref === "" ? undefined : ref };
+}
+
+const NPM_SPEC = /^((?:@[^/@:#\s]+\/)?[^/@:#\s]+)(?:@([^/:#\s]+))?$/;
+const NPM_RANGE = /^[^/:#]+$/;
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$/;
+const LOCAL_DEPENDENCY = /^(?:file|link|workspace|portal):/i;
+
+type DeclaredPlugin =
+	| { readonly kind: "github"; readonly spec: string; readonly name: string; readonly source: GithubSource }
+	| { readonly kind: "npm"; readonly spec: string; readonly name: string; readonly range: string | undefined }
+	| { readonly kind: "unrecognized"; readonly spec: string };
+
+function parseDeclaredPlugin(spec: string): DeclaredPlugin {
+	const source = githubSource(spec);
+	if (source !== undefined) return { kind: "github", spec, name: source.repo.slice(source.repo.indexOf("/") + 1), source };
+	const npm = NPM_SPEC.exec(spec);
+	if (npm !== null) return { kind: "npm", spec, name: npm[1]!, range: npm[2] };
+	return { kind: "unrecognized", spec };
+}
+
+interface LockEntry {
+	readonly version: string | null;
+	readonly disabled: boolean;
+	readonly features: readonly string[] | null;
+}
+
+interface PluginRecords {
+	readonly dependencies: ReadonlyMap<string, string>;
+	readonly lock: ReadonlyMap<string, LockEntry>;
+}
+
+function readMapping(path: string): Mapping {
 	try {
-		const parsed: unknown = JSON.parse(readFileSync(join(homedir(), ".omp", "plugins", "package.json"), "utf8"));
-		const deps = isMapping(parsed) && isMapping(parsed.dependencies) ? parsed.dependencies : {};
-		for (const [name, value] of Object.entries(deps)) {
-			if (typeof value === "string") installed.set(name, value.split("#", 1)[0]!);
-		}
-	} catch {}
-	return installed;
-}
-
-function npmName(spec: string): string {
-	if (spec.startsWith("@")) {
-		const at = spec.indexOf("@", 1);
-		return at === -1 ? spec : spec.slice(0, at);
+		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+		return isMapping(parsed) ? parsed : {};
+	} catch {
+		return {};
 	}
-	const at = spec.indexOf("@");
-	return at === -1 ? spec : spec.slice(0, at);
 }
 
-function githubRepo(source: string): string | undefined {
-	const match = /^(?:github:|(?:git\+)?https:\/\/github\.com\/|git@github\.com:)([^/\s]+)\/([^/\s#]+?)(?:\.git)?\/?$/i.exec(source);
-	return match === null ? undefined : `${match[1]}/${match[2]}`.toLowerCase();
+function pluginRecords(): PluginRecords {
+	const pkg = readMapping(join(PLUGINS_HOME, "package.json"));
+	const dependencies = new Map<string, string>();
+	for (const [name, value] of Object.entries(isMapping(pkg.dependencies) ? pkg.dependencies : {}))
+		if (typeof value === "string") dependencies.set(name, value);
+	const runtime = readMapping(join(PLUGINS_HOME, "omp-plugins.lock.json"));
+	const lock = new Map<string, LockEntry>();
+	for (const [name, entry] of Object.entries(isMapping(runtime.plugins) ? runtime.plugins : {}))
+		if (isMapping(entry))
+			lock.set(name, {
+				version: typeof entry.version === "string" ? entry.version : null,
+				disabled: entry.enabled === false,
+				features: isStringArray(entry.enabledFeatures) ? entry.enabledFeatures : null,
+			});
+	return { dependencies, lock };
 }
 
-function installedName(spec: string, installed: InstalledPlugins): string | undefined {
-	if (!spec.includes("://")) {
-		const name = npmName(spec);
-		return installed.has(name) ? name : undefined;
-	}
-	const source = spec.split("#", 1)[0] ?? spec;
-	const repo = githubRepo(source);
-	for (const [name, value] of installed) {
-		if (value === source || (repo !== undefined && githubRepo(value) === repo)) return name;
-	}
-	return undefined;
+interface InstalledRecord {
+	readonly name: string;
+	readonly dependency: string | undefined;
+	readonly lock: LockEntry | undefined;
 }
 
-function pluginVersions(): ReadonlyMap<string, string> {
-	const versions = new Map<string, string>();
+function installedRecord(plugin: Exclude<DeclaredPlugin, { kind: "unrecognized" }>, records: PluginRecords): InstalledRecord {
+	if (plugin.kind === "github")
+		for (const [name, dependency] of records.dependencies)
+			if (githubSource(dependency)?.repo === plugin.source.repo) return { name, dependency, lock: records.lock.get(name) };
+	return { name: plugin.name, dependency: records.dependencies.get(plugin.name), lock: records.lock.get(plugin.name) };
+}
+
+const packagePath = (name: string): string => join(PLUGINS_HOME, "node_modules", name);
+
+function linkTarget(path: string): string | undefined {
 	try {
-		const parsed: unknown = JSON.parse(readFileSync(join(homedir(), ".omp", "plugins", "omp-plugins.lock.json"), "utf8"));
-		const plugins = isMapping(parsed) && isMapping(parsed.plugins) ? parsed.plugins : {};
-		for (const [name, entry] of Object.entries(plugins)) {
-			if (isMapping(entry) && typeof entry.version === "string") versions.set(name, entry.version);
-		}
-	} catch {}
-	return versions;
+		return lstatSync(path).isSymbolicLink() ? resolve(dirname(path), readlinkSync(path)) : undefined;
+	} catch {
+		return undefined;
+	}
 }
+
+function locallyLinked(record: InstalledRecord): boolean {
+	if (record.dependency !== undefined && LOCAL_DEPENDENCY.test(record.dependency)) return true;
+	if (record.dependency === undefined && record.lock !== undefined) return true;
+	return linkTarget(packagePath(record.name)) !== undefined;
+}
+
+interface OverlaidLink {
+	readonly name: string;
+	readonly target: string;
+	readonly lock: LockEntry | undefined;
+}
+
+function overlaidLinks(records: PluginRecords): OverlaidLink[] {
+	return [...records.dependencies.keys()].flatMap((name) => {
+		const target = linkTarget(packagePath(name));
+		return target === undefined ? [] : [{ name, target, lock: records.lock.get(name) }];
+	});
+}
+
+function restoreLinks(omp: string, links: readonly OverlaidLink[]): string[] {
+	const errors: string[] = [];
+	for (const link of links) {
+		if (linkTarget(packagePath(link.name)) === link.target) continue;
+		const commands: string[][] = [["plugin", "link", link.target]];
+		if (link.lock?.disabled === true) commands.push(["plugin", "disable", link.name]);
+		const features = link.lock?.features;
+		if (features !== undefined && features !== null)
+			commands.push(["plugin", "features", link.name, "--set", features.length > 0 ? features.join(",") : ","]);
+		for (const args of commands) {
+			const error = runOmp(omp, args);
+			if (error === undefined) continue;
+			errors.push(error);
+			break;
+		}
+	}
+	return errors;
+}
+
+type PluginStep =
+	| { readonly kind: "unrecognized"; readonly spec: string }
+	| { readonly kind: "linked"; readonly spec: string }
+	| { readonly kind: "missing"; readonly spec: string }
+	| { readonly kind: "pinned"; readonly spec: string }
+	| { readonly kind: "upgrade"; readonly spec: string; readonly name: string; readonly from: string | null }
+	| { readonly kind: "reinstall"; readonly spec: string; readonly from: string | null; readonly disabled: boolean };
+
+function sameSpecStep(plugin: Exclude<DeclaredPlugin, { kind: "unrecognized" }>, dependency: string): "upgrade" | "pinned" | "reinstall" {
+	switch (plugin.kind) {
+		case "github": {
+			const recorded = githubSource(dependency);
+			return recorded?.repo === plugin.source.repo && recorded.ref === plugin.source.ref ? "upgrade" : "reinstall";
+		}
+		case "npm":
+			if (!NPM_RANGE.test(dependency)) return "reinstall";
+			if (plugin.range === undefined) return "upgrade";
+			return EXACT_VERSION.test(plugin.range) && dependency === plugin.range ? "pinned" : "reinstall";
+		default: {
+			const unreachable: never = plugin;
+			throw new Error(String(unreachable));
+		}
+	}
+}
+
+function planPlugin(spec: string, records: PluginRecords): PluginStep {
+	const plugin = parseDeclaredPlugin(spec);
+	if (plugin.kind === "unrecognized") return { kind: "unrecognized", spec };
+	const record = installedRecord(plugin, records);
+	if (locallyLinked(record)) return { kind: "linked", spec };
+	if (record.dependency === undefined) return { kind: "missing", spec };
+	const from = record.lock?.version ?? null;
+	const step = sameSpecStep(plugin, record.dependency);
+	switch (step) {
+		case "upgrade":
+			return { kind: "upgrade", spec, name: record.name, from };
+		case "pinned":
+			return { kind: "pinned", spec };
+		case "reinstall":
+			return { kind: "reinstall", spec, from, disabled: record.lock?.disabled === true };
+		default: {
+			const unreachable: never = step;
+			throw new Error(String(unreachable));
+		}
+	}
+}
+
+function planPlugins(plugins: DeclaredPlugins): PluginStep[] {
+	const records = pluginRecords();
+	return [
+		...plugins.required.map((spec) => planPlugin(spec, records)),
+		...plugins.optional.map((spec) => planPlugin(spec, records)).filter((step) => step.kind !== "missing"),
+	];
+}
+
+const unrecognizedNotes = (steps: readonly PluginStep[]): string[] =>
+	steps.flatMap((step) => (step.kind === "unrecognized" ? [`plugin spec not recognized, left unhandled: ${step.spec}`] : []));
 
 type PluginReadiness = { readonly kind: "ready" } | { readonly kind: "missing" } | { readonly kind: "invalid"; readonly message: string };
 
@@ -1485,11 +1623,10 @@ function forkPluginReadiness(catalog: PluginCatalog): PluginReadiness {
 }
 
 function pluginResolutionState(): string {
-	const dir = join(homedir(), ".omp", "plugins");
 	return ["bun.lock", "omp-plugins.lock.json"]
 		.map((name) => {
 			try {
-				return readFileSync(join(dir, name), "utf8");
+				return readFileSync(join(PLUGINS_HOME, name), "utf8");
 			} catch {
 				return "";
 			}
@@ -1497,49 +1634,111 @@ function pluginResolutionState(): string {
 		.join("\0");
 }
 
+function installedName(spec: string): string {
+	const plugin = parseDeclaredPlugin(spec);
+	return plugin.kind === "unrecognized" ? spec : installedRecord(plugin, pluginRecords()).name;
+}
+
+const lockedVersion = (name: string): string | null => pluginRecords().lock.get(name)?.version ?? null;
+
+function runOmp(omp: string, args: readonly string[]): string | undefined {
+	const result = spawnSync(omp, args, { encoding: "utf8" });
+	if (result.status === 0) return undefined;
+	return `omp ${args.join(" ")}: ${(result.stderr || result.stdout || result.error?.message || "").trim()}`;
+}
+
 /**
- * `omp plugin
- * upgrade` is not used: for GitHub-sourced plugins it reports "up to date" while
- * the locked commit is stale.
+ * Never `omp install` an installed plugin whose declared spec is unchanged: install resets the
+ * user's `enabled` and `enabledFeatures`, while `omp plugin upgrade <name>` keeps both and still
+ * moves `#release` and bare npm names forward. Never install or upgrade a locally linked plugin:
+ * both replace the link. A changed spec needs `omp install <spec>` (upgrade re-resolves the
+ * recorded spec), then `omp plugin disable <name>` if it was disabled, or the disable is lost.
+ * A spec pinned to the recorded exact npm version and an unrecognized spec must run no command:
+ * upgrade passes the pin, and an unrecognized spec never matches its record, so it would be
+ * reinstalled on every apply. Every bun install the host runs, for any plugin, replaces a package
+ * linked over its installed dependency with that dependency: do not drop the restore of those links,
+ * and restore `enabled` and `enabledFeatures` after `omp plugin link`, which resets both.
  */
-function installPlugins(omp: string, specs: readonly string[]): PluginRefresh {
-	const refresh: PluginRefresh = { installed: [], upgraded: [], errors: [], changes: [] };
-	for (const spec of specs) {
-		const before = installedName(spec, installedPlugins());
-		const from = before === undefined ? null : (pluginVersions().get(before) ?? null);
-		const state = pluginResolutionState();
-		const result = spawnSync(omp, ["install", spec], { encoding: "utf8" });
-		if (result.status !== 0) {
-			refresh.errors.push(`omp install ${spec}: ${(result.stderr || result.stdout || result.error?.message || "").trim()}`);
-			continue;
+function refreshPlugins(omp: string, steps: readonly PluginStep[]): Omit<PluginRefresh, "notes"> {
+	const links = overlaidLinks(pluginRecords());
+	const installed: string[] = [];
+	const upgraded: string[] = [];
+	const errors: string[] = [];
+	const changes: PluginChange[] = [];
+	for (const step of steps) {
+		switch (step.kind) {
+			case "unrecognized":
+			case "linked":
+			case "pinned":
+				break;
+			case "missing": {
+				const error = runOmp(omp, ["install", step.spec]);
+				if (error !== undefined) {
+					errors.push(error);
+					break;
+				}
+				const name = installedName(step.spec);
+				installed.push(step.spec);
+				changes.push({ spec: step.spec, name, from: null, to: lockedVersion(name) });
+				break;
+			}
+			case "upgrade": {
+				const state = pluginResolutionState();
+				const error = runOmp(omp, ["plugin", "upgrade", step.name]);
+				if (error !== undefined) {
+					errors.push(error);
+					break;
+				}
+				if (pluginResolutionState() === state) break;
+				upgraded.push(step.spec);
+				changes.push({ spec: step.spec, name: step.name, from: step.from, to: lockedVersion(step.name) });
+				break;
+			}
+			case "reinstall": {
+				const state = pluginResolutionState();
+				const error = runOmp(omp, ["install", step.spec]);
+				if (error !== undefined) {
+					errors.push(error);
+					break;
+				}
+				const name = installedName(step.spec);
+				const restore = step.disabled ? runOmp(omp, ["plugin", "disable", name]) : undefined;
+				if (restore !== undefined) errors.push(restore);
+				if (pluginResolutionState() === state) break;
+				upgraded.push(step.spec);
+				changes.push({ spec: step.spec, name, from: step.from, to: lockedVersion(name) });
+				break;
+			}
+			default: {
+				const unreachable: never = step;
+				throw new Error(String(unreachable));
+			}
 		}
-		if (before !== undefined && pluginResolutionState() === state) continue;
-		const name = installedName(spec, installedPlugins()) ?? before ?? spec;
-		(before === undefined ? refresh.installed : refresh.upgraded).push(spec);
-		refresh.changes.push({ spec, name, from, to: pluginVersions().get(name) ?? null });
 	}
-	return refresh;
+	errors.push(...restoreLinks(omp, links));
+	return { installed, upgraded, errors, changes };
 }
 
 function syncPlugins(opts: ApplyOptions, report: ApplyReport, plugins: DeclaredPlugins): void {
-	const installed = installedPlugins();
-	const declared = [...plugins.required, ...plugins.optional.filter((spec) => installedName(spec, installed) !== undefined)];
-	const missing = plugins.required.filter((spec) => installedName(spec, installed) === undefined);
+	const steps = planPlugins(plugins);
+	const missing = steps.flatMap((step) => (step.kind === "missing" ? [step.spec] : []));
 	if (opts.check || !opts.plugins) {
 		report.pluginsMissing.push(...missing);
-		if (opts.check && opts.plugins && declared.length > 0)
+		if (opts.check && opts.plugins && steps.length > 0)
 			report.notes.push(
-				"plugins: apply runs omp install for every declared plugin (installs missing, upgrades installed); check runs none",
+				...unrecognizedNotes(steps),
+				"plugins: apply installs missing plugins, runs omp plugin upgrade on installed ones whose spec is unchanged, reinstalls changed specs keeping a disable, and leaves linked ones alone; check runs none",
 			);
 		return;
 	}
+	report.notes.push(...unrecognizedNotes(steps));
 	const omp = Bun.which("omp");
 	if (!omp) {
 		report.pluginsMissing.push(...missing);
 		report.errors.push("plugins not installed: omp is not on PATH");
 		return;
 	}
-	const refresh = installPlugins(omp, declared);
+	const refresh = refreshPlugins(omp, steps);
 	report.pluginsInstalled.push(...refresh.installed);
 	report.pluginsUpgraded.push(...refresh.upgraded);
 	report.pluginChanges.push(...refresh.changes);
@@ -1549,13 +1748,13 @@ function syncPlugins(opts: ApplyOptions, report: ApplyReport, plugins: DeclaredP
 }
 
 function refreshMovingPlugins(source: string): PluginRefresh {
-	const { required, optional } = declaredPlugins(source);
-	const installed = installedPlugins();
-	const specs = [...required, ...optional.filter((spec) => installedName(spec, installed) !== undefined)].filter(movesOnItsOwn);
-	if (specs.length === 0) return { installed: [], upgraded: [], errors: [], changes: [] };
+	const steps = planPlugins(declaredPlugins(source));
+	const notes = unrecognizedNotes(steps);
+	const moving = steps.filter((step) => step.kind !== "unrecognized" && movesOnItsOwn(step.spec));
+	if (moving.length === 0) return { installed: [], upgraded: [], errors: [], changes: [], notes };
 	const omp = Bun.which("omp");
-	if (!omp) return { installed: [], upgraded: [], errors: ["plugins not refreshed: omp is not on PATH"], changes: [] };
-	return installPlugins(omp, specs);
+	if (!omp) return { installed: [], upgraded: [], errors: ["plugins not refreshed: omp is not on PATH"], changes: [], notes };
+	return { ...refreshPlugins(omp, moving), notes };
 }
 
 interface SettingsPreflight {
@@ -2454,6 +2653,7 @@ async function main(argv: readonly string[]): Promise<number> {
 			const lines = [
 				`up-to-date ${result.commit}`,
 				...plugins.changes.map(pluginChangeLine),
+				...plugins.notes.map((note) => `note: ${note}`),
 				...plugins.errors.map((error) => `error: ${error}`),
 				...(scan.kind === "scanned"
 					? scan.conflicts.map((conflict) => `conflict (${conflict.reason}), local copy kept: ${conflict.id}`)

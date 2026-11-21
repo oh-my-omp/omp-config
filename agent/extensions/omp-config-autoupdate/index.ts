@@ -73,6 +73,7 @@ const pluginRefreshSchema = z.object({
 	upgraded: z.array(z.string()),
 	errors: z.array(z.string()),
 	changes: z.array(pluginChangeSchema).default(() => []),
+	notes: z.array(z.string()).default(() => []),
 });
 
 const autoResultSchema = z.union([
@@ -247,6 +248,7 @@ function detailedReport(outcome: RunOutcome<AutoResult>, agentDir: string): stri
 				`- **${tr("Restart needed", "需要重启")}:** ${changed > 0 ? tr("yes — plugins changed", "是 — 插件发生变化") : tr("no", "否")}`,
 				...section(tr("Errors", "错误"), [...plugins.errors, ...(result.scan.kind === "failed" ? [result.scan.error] : [])]),
 				...section(tr("Plugins", "插件"), pluginLines(plugins.changes)),
+				...section(tr("Notes", "备注"), plugins.notes),
 				...conflictSection(result.scan.kind === "scanned" ? result.scan.conflicts : []),
 			].join("\n");
 		}
