@@ -28,6 +28,7 @@
 - Documented in the `tool-topics` surfaces that `out://` is a write-only mid-turn reply channel (`read`) and that the shell runs in-process utilities ahead of PATH, handed back by `PI_DISABLE_UUTILS_BUILTINS` (`bash`)
 - Made `system-prompt-replace` send the edited system prompt itself at every prompt instead of a reminder that quotes each original passage and its replacement; the reminder is sent only after a tool call in a run that skipped the prompt hook after OMP rebuilt its prompt
 - Made `tool-topics` write each OMP tool's surface and `Topics` index into the system prompt in place of the native description at every prompt, instead of an `omp-config/tool-topics` reminder that was sent again after every compaction; the replaced descriptions no longer reach the model twice
+- Passed the watched session's `sessionId` and `cwd` into `watchdog-agent`'s chat reviewer prompt and matched the tool-usage instruction to whether `tools` grants action tools beyond read-only inspection
 
 ### Removed
 
@@ -43,6 +44,7 @@
 - Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
 - Skipped prompted judge candidates for five minutes after a 401/402/403/404 rejection instead of re-requesting them on every judgment
 - Pointed `install-plugins.sh` and the plugin docs at `oh-my-omp/omp-actual-terminal#release`, the terminal plugin's renamed repository; the old `omp-unified-exec` address returns 404, which failed the updater's apply
+- Returned the final assistant turn's text ahead of accumulated streamed deltas in `_shared/helper-session.ts` so multi-turn tool-using watchdogs that narrate before a tool call still resolve a final `PASS` verdict cleanly
 
 ## [1.2.1] - 2026-11-19
 
