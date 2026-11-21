@@ -8,7 +8,7 @@
 
 | 文件 / 扩展 | 作用域 | 内容与职责 |
 |---|---|---|
-| `agent/SYSTEM_TEMPLATE.md` | 主会话 + 子代理 | 基于 OMP 内置 `packages/coding-agent/src/prompts/system/system-prompt.md` 维护的 Handlebars 模板（纯文本 `SYSTEM.md` 不解析 Handlebars 表达式）。负责工作流规范、渲染当前工具/技能/规则列表，并通过 `{{#if subagent}}` 将第 4 步切换为主会话 `Verify` 或子代理 `Hand-off`。不重复打印单个工具的调用说明。唯一的工具路由段是 `# Code by Syntax Shape`，每一行只在会话有对应工具时渲染（`{{#has tools "ast_grep"}}`、`{{#has tools "ast_edit"}}`）：按参数找调用、找声明、import 或多行结构交给 `ast_grep` 而不是 `grep` 正则；同一处结构改动出现在多个位置时交给 `ast_edit` 而不是反复调用 `edit`。它放在模板里，是因为模型在读到任何设备说明之前就已决定用哪个工具。 |
+| `agent/SYSTEM_TEMPLATE.md` | 主会话 + 子代理 | 基于 OMP 内置 `packages/coding-agent/src/prompts/system/system-prompt.md` 维护的 Handlebars 模板（纯文本 `SYSTEM.md` 不解析 Handlebars 表达式）。负责工作流规范、渲染当前工具/技能/规则列表，并通过 `{{#if subagent}}` 将第 4 步切换为主会话 `Verify` 或子代理 `Hand-off`。不重复打印单个工具的调用说明。唯一的工具路由段是 `# Code by Syntax Shape`，每一行只在会话有对应工具时渲染（`{{#has tools "ast_grep"}}`、`{{#has tools "ast_edit"}}`）：按参数找调用、找声明、import 或多行结构交给 `ast_grep` 而不是 `grep` 正则；同一处结构改动出现在多个位置时交给 `ast_edit` 而不是反复调用 `edit`。它放在模板里，是因为模型在读到任何设备说明之前就已决定用哪个工具。本仓库拥有的措辞直接写在这里，包括用户报错规则（`NEVER rerun checks to doubt them`，为定位原因而复现与修复后验证仍然适用）与编译代码规则（`NEVER add avoidable allocation…`）；[system-prompt-replace](#system-prompt-replace) 规则只留给 OMP 拥有的文字。 |
 | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充 `# Personality` 下的 `{{personality}}`。前半部分保留 OMP `personality: default` 原文（`Evidence-first terse engineer`）；后半部分定义 `# Writing` 分析与研究写作规范：结论、数字或机制直接开篇，一句话写清时间、主体、动作、规模与来源，多项对象或指标合并进一张表且不在正文逐行复述，删去过程自述、重复解释、叠加免责声明与文末总结。 |
 | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理（子代理不含 AGENTS.md） | 以相对仓库根的路径投递工作目录的 `AGENTS.md` / `CLAUDE.md`，取代 OMP 原生的上下文文件注入；加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件；二者合为一条增量消息，并处理所有规则来源的 `paths` 按路径触发。 |
@@ -18,7 +18,7 @@
 | [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时把仓库下发的 `ARGON_PROMPT.md` 作为一条增量消息送达：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
 | [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理 | `TOPIC` frontmatter 的 `inject:` 规则在命中的只读工具调用后，把专题在每个真实上下文中投递一次；追加 developer 上下文，而不是扩大常驻工具说明。 |
 
-OMP 自带的 `systemPromptTemplates` 设置（`config.yml`，18.19.0 起）把模型选择子串映射到 Handlebars 模板文件，最长命中优先；选择键只有模型，命中的文件为该模型整份替换内置基础提示词。OMP 只在没有显式或已发现的提示词时读取它，而本仓库安装的 `agent/SYSTEM_TEMPLATE.md` 就是已发现的 `SYSTEM_TEMPLATE.md`，所以 omomp 会话里按模型选的模板文件从不被读取。采用它还意味着每个模型各维护一份完整模板，并在每次 OMP 升级后逐份对照内置模板。因此按会话或按模型增补的文字仍写成 [append-system-model](#append-system-model) 片段，措辞修改仍写成 [system-prompt-replace](#system-prompt-replace) 规则。
+OMP 自带的 `systemPromptTemplates` 设置（`config.yml`，18.19.0 起）把模型选择子串映射到 Handlebars 模板文件，最长命中优先；选择键只有模型，命中的文件为该模型整份替换内置基础提示词。OMP 只在没有显式或已发现的提示词时读取它，而本仓库安装的 `agent/SYSTEM_TEMPLATE.md` 就是已发现的 `SYSTEM_TEMPLATE.md`，所以 omomp 会话里按模型选的模板文件从不被读取。采用它还意味着每个模型各维护一份完整模板，并在每次 OMP 升级后逐份对照内置模板。因此按会话或按模型增补的文字仍写成 [append-system-model](#append-system-model) 片段，对 OMP 自己文字（内置工具说明与子代理段）的措辞修改仍写成 [system-prompt-replace](#system-prompt-replace) 规则。
 
 扩展不改写 OMP 发出的工具定义。system prompt 在每条 prompt 依次由 [tool-topics](extensions.zh-CN.md#tool-topics) 与 [system-prompt-replace](#system-prompt-replace) 改写，二者都把改写后的提示作为 `before_agent_start` 结果的 `systemPrompt` 返回，按加载顺序串联。OMP 在本轮发送该提示，并在之后把它保留为 agent 的提示：compaction 之后、以及不经过 `before_agent_start` 的 agent 发起轮次（IRC 唤醒、异步结果、`triggerTurn` 消息）都沿用它，直到 OMP 重建基础提示（换模型、memory 刷新、`/clear`、切换会话）；因此只由传入提示计算出的改写在每个请求里发出相同字节。其余每项定制是 `_shared/omomp-shared/context-delta.ts` 的一条增量流：一条隐藏的 `<system-reminder source="omp-config/<扩展>">` 消息，`attribution: "agent"`，在 prompt 开始时作为 `before_agent_start` 结果的 `message`，或在工具批次之后作为 `tool_result` 的 `additionalContext` 投递。每次投递前以活动叶节点的上下文为准（增量流读取 `buildSessionContext` 定义的同一投影：沿叶节点的 parent 链按投影边界反走，而不物化投影）：其中该来源最新的增量已是同一文本时不投递；文本变了就追加一条新增量，声明它取代较早的同源增量；定制不再适用时，追加一条声明较早增量不再适用的增量。已投递的消息从不修改，被 compaction 移出上下文的增量在下一个投递点重新投递。因此之前的对话在相邻请求之间逐字不变；输入变化后、下一个投递点之前的请求沿用上一份增量。
 
@@ -51,8 +51,6 @@ OMP 重建基础提示后，不经过 `before_agent_start` 的运行会发出 OM
 | 目标 | 修改内容 |
 |---|---|
 | 子代理 Todo 说明（`target: subagents`） | 声明原生子代理提示词中的 `"No TODO tracking, no progress updates."` 不适用，避免与子代理自身遵循的验证要求冲突。task 侧的句子（按各 agent 的定义文本选择 agent、显式 `agent`、并发写入隔离、删掉的 “skip build/lint/tests”）改由 [tool-topics](extensions.zh-CN.md#tool-topics) 的 `SURFACE-task.md` 承载。 |
-| 用户报错处理规则 | 补充说明“不重跑检查去质疑用户报错”不影响为定位原因而复现和修复后验证。 |
-| 编译代码规则 | 补上原句缺失的动词 `add`（`NEVER add avoidable allocation...`）。 |
 | `eval` 工具说明 | 禁止通过 `eval` 读取、列目录或搜索本地文件（统一使用 `read`、`glob`、`grep`）。 |
 | `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `tool://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。限定 `delegation: eager`，因为 OMP 只在当前模型的委派倾向为 `eager` 时才渲染原句。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
 | `xd://` 设备说明 | 说明 `xd://<tool>` 只能通过 `write` 写入 JSON 调用，不存在 `xd__<tool>` 或裸 `<tool>` 函数。 |
