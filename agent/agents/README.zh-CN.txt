@@ -136,7 +136,9 @@ prewalk 清空。调试派发问题时，先确认自己不在 plan mode，否�
 ----------------------------------------------------
 `task-completion-judge` 扩展只拦截 frontmatter 声明了 `completionJudge: true`
 的子代理的终止性结构化 `yield` 调用。宿主会忽略未知的 frontmatter 键，所以加这个键是
-安全的。没有它，子代理的 `yield` 直接放行，不做评判。仓库自带的 `task-free`、
+安全的。frontmatter 用 omp 自己的解析器读取：只有 `completionJudge`（或
+`completion-judge`）下的 YAML 布尔 `true` 算数；加引号的 `"true"`、其他大小写的键或
+解析失败的 frontmatter 都不算。没有它，子代理的 `yield` 直接放行，不做评判。仓库自带的 `task-free`、
 `task-mid`、`task-low` 声明了它；`task:high` 没有。
 
 
@@ -144,5 +146,6 @@ prewalk 清空。调试派发问题时，先确认自己不在 plan mode，否�
 ----------------------------------------------------------------------
 `task-split-check` 扩展的 `split` 检查只拦截主会话中 `agent` 定义文件的
 frontmatter 声明了 `splitCheck: true` 的派发项。宿主会忽略未知的
-frontmatter 键，所以加这个键是安全的。没有 `agent` 的项不做 split 检查。
+frontmatter 键，所以加这个键是安全的。与第 14 条相同，只有 `splitCheck`（或
+`split-check`）下的 YAML 布尔 `true` 算数。没有 `agent` 的项不做 split 检查。
 仓库自带的 `task-free`、`task-mid`、`task-low` 声明了它；`task:high` 没有。

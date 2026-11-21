@@ -471,7 +471,7 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 			.find((candidate) => candidate.sessionFile === sessionFile);
 		if (ref === undefined) return undefined;
 		const agentName = ref.displayName;
-		if (!(await declaresFlag(callerSession(ctx), ctx.sessionManager.getCwd(), agentName, "completionjudge"))) return undefined;
+		if (!(await declaresFlag(callerSession(ctx), ctx.sessionManager.getCwd(), agentName, "completionJudge"))) return undefined;
 
 		const transcript = readTranscript(ctx);
 		if (transcript === undefined) {
