@@ -42,6 +42,7 @@
 - Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
 - Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
 - Skipped prompted judge candidates for five minutes after a 401/402/403/404 rejection instead of re-requesting them on every judgment
+- Pointed `install-plugins.sh` and the plugin docs at `oh-my-omp/omp-actual-terminal#release`, the terminal plugin's renamed repository; the old `omp-unified-exec` address returns 404, which failed the updater's apply
 
 ## [1.2.1] - 2026-11-19
 
