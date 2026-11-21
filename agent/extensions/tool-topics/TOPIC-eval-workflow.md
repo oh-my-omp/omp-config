@@ -30,4 +30,4 @@ const byLabel = Object.groupBy(out.filter((o) => !(o instanceof Error)), (o) => 
 - `raiseErrors: false` (Python `raise_errors=False`) keeps a failure in its slot; resend only the failed items.
 - `agent` takes a predefined agent and runs on that agent's bound model: choose it as for `task`. Without `schema`, `.wait()` returns text.
 - Results you only read, never compute on: `tool.task` (`tool://task/batch`).
-- Signatures and handle methods: `xd://eval/judge`, `xd://eval/agents`.
+- Signatures and handle methods: `help://eval/judge`, `help://eval/agents`.

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { compareImages, snapshot, type TableCheck } from "./agentdb.ts";
-import { must, mustBytes, pipe } from "./docker.ts";
+import { must, mustBytes, pipe, run } from "./docker.ts";
 
 export const IMAGE = "oven/bun:latest";
 export const TARGET_IMAGE = "debian:stable-slim";
@@ -17,6 +17,16 @@ const AGENT_EXCLUDES = [
 	"agent/cache",
 	"agent/history.db*",
 	"agent/agent.db*",
+	"agent/models.db*",
+	"agent/transcripts.db*",
+	"agent/skill-descriptions.db*",
+	"agent/models.yml.bak*",
+	"agent/rules",
+	"agent/mcp.json*",
+	"agent/extensions",
+	"agent/extensions-last",
+	"agent/agents",
+	"agent/.omp-config-base/files",
 	"agent/*.lock",
 	"plugins/node_modules",
 ];
@@ -38,6 +48,17 @@ export async function copyOmpDir(container: string, home: string): Promise<void>
 		["tar", ...TAR_FLAGS, "-C", join(home, ".omp"), ...excludes, "-cf", "-", "agent", "plugins"],
 		["docker", "exec", "-i", container, "tar", "-xf", "-", "-C", join(home, ".omp")],
 	);
+	const statePath = join(home, ".omp", "agent", ".omp-config-base", "state.json");
+	await must([
+		"docker",
+		"exec",
+		container,
+		"bun",
+		"-e",
+		'import { existsSync, readFileSync, writeFileSync } from "node:fs"; const p = process.argv[1]; if (p && existsSync(p)) { const s = JSON.parse(readFileSync(p, "utf8")); if (typeof s === "object" && s !== null && !Array.isArray(s)) { s.unknownPlain = []; writeFileSync(p, JSON.stringify(s, null, 2) + "\\n"); } }',
+		"--",
+		statePath,
+	]);
 }
 
 export async function copyAgentDb(container: string, home: string): Promise<TableCheck[]> {
@@ -66,11 +87,55 @@ export async function copyRepo(container: string, repo: string): Promise<number>
 		["docker", "exec", "-i", container, "tar", "-xf", "-", "-C", "/repo"],
 		`${files.join("\0")}\0`,
 	);
+	await must([
+		"docker",
+		"exec",
+		container,
+		"sh",
+		"-c",
+		"git -C /repo init -q -b main && git -C /repo config user.email sandbox@local && git -C /repo config user.name sandbox && git -C /repo add -A && git -C /repo commit -q -m sandbox --allow-empty",
+	]);
 	return files.length;
 }
 
-export async function installOmp(container: string, home: string): Promise<{ readonly version: string; readonly autoupdate: string }> {
-	await must(["docker", "exec", "-w", join(home, ".omp", "plugins"), container, "bun", "install"]);
+async function linkPlugin(container: string, pluginDir: string): Promise<string> {
+	if (!existsSync(pluginDir)) throw new Error(`plugin directory does not exist: ${pluginDir}`);
+	const dest = join("/plugins", basename(pluginDir));
+	await must(["docker", "exec", container, "mkdir", "-p", dest]);
+	const listed = await run(["git", "-C", pluginDir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+	if (listed.code === 0) {
+		const files = listed.stdout.split("\0").filter((file) => file !== "" && existsSync(join(pluginDir, file)));
+		if (files.length > 0) {
+			await pipe(
+				["tar", ...TAR_FLAGS, "-C", pluginDir, "--null", "-T", "-", "-cf", "-"],
+				["docker", "exec", "-i", container, "tar", "-xf", "-", "-C", dest],
+				`${files.join("\0")}\0`,
+			);
+		}
+	} else {
+		await pipe(
+			["tar", ...TAR_FLAGS, "-C", pluginDir, "--exclude=node_modules", "--exclude=.git", "-cf", "-", "."],
+			["docker", "exec", "-i", container, "tar", "-xf", "-", "-C", dest],
+		);
+	}
+	if ((await run(["docker", "exec", container, "test", "-f", join(dest, "package.json")])).code === 0) {
+		await must(["docker", "exec", "-w", dest, container, "bun", "install"]);
+	}
+	await must(["docker", "exec", container, "omp", "plugin", "link", dest]);
+	return dest;
+}
+
+export async function installOmp(
+	container: string,
+	home: string,
+	plugins: readonly string[] = [],
+): Promise<{ readonly version: string; readonly autoupdate: string; readonly linked: readonly string[] }> {
+	const pluginsDir = join(home, ".omp", "plugins");
+	const installed = await run(["docker", "exec", "-w", pluginsDir, container, "bun", "install"]);
+	if (installed.code !== 0) {
+		await must(["docker", "exec", container, "rm", "-f", join(pluginsDir, "bun.lock")]);
+		await must(["docker", "exec", "-w", pluginsDir, container, "bun", "install"]);
+	}
 	await must(["docker", "exec", container, "bun", "install", "-g", "@oh-my-pi/pi-coding-agent"]);
 	await must([
 		"docker",
@@ -85,7 +150,9 @@ export async function installOmp(container: string, home: string): Promise<{ rea
 		"/repo",
 	]);
 	const autoupdate = (await must(["docker", "exec", container, "bun", "/sandbox/autoupdate-off.ts"])).trim();
-	return { version: (await must(["docker", "exec", container, "omp", "--version"])).trim(), autoupdate };
+	const linked: string[] = [];
+	for (const pluginDir of plugins) linked.push(await linkPlugin(container, pluginDir));
+	return { version: (await must(["docker", "exec", container, "omp", "--version"])).trim(), autoupdate, linked };
 }
 
 export async function setUpTarget(

@@ -42,7 +42,6 @@ export function pyLaunchAt(scan: PyScan, k: number): PyLaunch | null {
 	const kind = known ?? DISTINCTIVE_LAUNCH.get(nameToken.value) ?? null;
 	const needsArgs =
 		qualified === "tool.bash" ||
-		qualified === "tool.write" ||
 		qualified === "sh" ||
 		EXEC_EVAL.has(qualified) ||
 		qualified === "__import__" ||
@@ -54,7 +53,6 @@ export function pyLaunchAt(scan: PyScan, k: number): PyLaunch | null {
 	const imported = importCall(qualified, args);
 	if (imported?.kind === "opaque") return { kind: "opaque", api: qualified };
 	if (imported !== null) return null;
-	if (qualified === "tool.write") return toolWriteLaunch(args);
 	const launch = launchOf(nameToken.value, qualified, callee.renamed, args);
 	if (launch === null) return null;
 	return args.keywordSplat ? withUnknownPayload(launch) : launch;
@@ -91,30 +89,6 @@ function launchOf(name: string, qualified: string, renamed: boolean, args: CallA
 		return { kind: "argv", api: qualified, via, words };
 	}
 	return { kind: "argv", api: qualified, via, words: first === undefined ? null : argvWords(first) };
-}
-
-function toolWriteLaunch(args: CallArgs): PyLaunch | null {
-	if (args.keywordSplat) return { kind: "bridge", command: null };
-	const device = args.positional[0];
-	const fields = device?.kind === "dict" ? device.entries : new Map<string, Arg>();
-	const path = fields.get("path");
-	if (path?.kind !== "string" || !path.literal || path.value !== "xd://bash") return null;
-	return { kind: "bridge", command: bridgeCommandOf(fields.get("content")) };
-}
-
-function bridgeCommandOf(content: Arg | undefined): string | null {
-	if (content?.kind === "string") return content.literal ? bridgeCommand(content.value) : null;
-	if (content?.kind === "dumps") return content.payload.kind === "dict" ? literalSource(content.payload.entries.get("command")) : null;
-	return null;
-}
-
-function bridgeCommand(content: string): string | null {
-	try {
-		const payload: unknown = JSON.parse(content);
-		if (typeof payload === "object" && payload !== null && "command" in payload && typeof payload.command === "string")
-			return payload.command;
-	} catch {}
-	return null;
 }
 
 function withUnknownPayload(launch: PyLaunch): PyLaunch {
@@ -464,7 +438,6 @@ type Arg =
 	| { readonly kind: "string"; readonly value: string; readonly literal: boolean }
 	| { readonly kind: "seq"; readonly items: readonly Arg[] }
 	| { readonly kind: "dict"; readonly entries: ReadonlyMap<string, Arg> }
-	| { readonly kind: "dumps"; readonly payload: Arg }
 	| { readonly kind: "true" }
 	| { readonly kind: "false" }
 	| { readonly kind: "expr" };
@@ -575,17 +548,6 @@ function argOf(tokens: readonly Token[], from: number, to: number): Arg {
 			if (isOp(tokens[start + 1], ":") && key?.kind === "string" && key.literal) entries.set(key.value, argOf(tokens, start + 2, end));
 		}
 		return { kind: "dict", entries };
-	}
-	if (
-		first.kind === "name" &&
-		first.value === "json" &&
-		isOp(tokens[from + 1], ".") &&
-		nameAt(tokens, from + 2) === "dumps" &&
-		isOp(tokens[from + 3], "(") &&
-		closing(tokens, from + 3) === to - 1
-	) {
-		const [payload] = partRanges(tokens, from + 4, to - 1);
-		return { kind: "dumps", payload: payload === undefined ? argOf(tokens, 0, 0) : argOf(tokens, payload[0], payload[1]) };
 	}
 	return { kind: "expr" };
 }
@@ -736,7 +698,6 @@ const argvWords = (arg: Arg): LaunchWord[] | null => {
 				item.kind === "string" && item.literal ? { text: item.value, literal: true } : { text: "", literal: false },
 			);
 		case "dict":
-		case "dumps":
 		case "true":
 		case "false":
 		case "expr":

@@ -101,5 +101,5 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 
 	const answer = final.answer;
 	if (answer !== null && answer.stopReason === "error") return { kind: "provider-error", message: answer.errorMessage };
-	return { kind: "text", text: partial.trim() || (answer === null ? "" : answer.text.trim()) };
+	return { kind: "text", text: (answer === null ? "" : answer.text.trim()) || partial.trim() };
 }

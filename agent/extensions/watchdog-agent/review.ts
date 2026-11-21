@@ -167,12 +167,32 @@ function noteFormat(inject: InjectMode): string {
 	}
 }
 
-function buildReviewPrompt(guidance: string, transcript: string, inject: InjectMode): string {
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "glob", "ast_grep", "web_search"]);
+
+export type WatchedSession = {
+	readonly sessionId: string;
+	readonly cwd: string;
+};
+
+function toolGuidance(tools: readonly string[]): string {
+	if (tools.every((tool) => READ_ONLY_TOOLS.has(tool))) {
+		return "You may use your read-only tools to inspect the workspace and verify a concern before raising it. Investigate briefly; never rewrite the code.";
+	}
+	return `You may use your configured tools (${tools.join(", ")}) as instructed in your review priorities above, but never perform the primary agent's coding task.`;
+}
+
+export function buildReviewPrompt(
+	guidance: string,
+	transcript: string,
+	inject: InjectMode,
+	tools: readonly string[],
+	session: WatchedSession,
+): string {
 	return (
 		`You are a code-review WATCHDOG silently observing another AI coding agent ("the primary agent") as it works in this repository. ` +
 		`You are NOT the primary agent; do not perform its task.\n\n` +
 		`Your review priorities:\n${guidance || "(no specific priorities configured; apply general senior-engineer judgment)"}\n\n` +
-		`You may use your read-only tools to inspect the workspace and verify a concern before raising it. Investigate briefly; never rewrite the code.\n\n` +
+		`${toolGuidance(tools)}\n\n` +
 		`Below is the primary agent's transcript (oldest first, newest last). Judge only whether the LATEST work has a problem worth flagging.\n\n` +
 		`Reply format — obey EXACTLY:\n` +
 		`- If nothing is worth flagging, reply with the single word: PASS\n` +
@@ -180,6 +200,9 @@ function buildReviewPrompt(guidance: string, transcript: string, inject: InjectM
 		`SEVERITY: <nit|concern|blocker>\n` +
 		`${noteFormat(inject)}\n\n` +
 		`Do not restate the transcript. Do not add anything else.\n\n` +
+		`Watched session:\n` +
+		`- sessionId: ${session.sessionId}\n` +
+		`- cwd: ${session.cwd}\n\n` +
 		`TRANSCRIPT:\n"""\n${transcript}\n"""`
 	);
 }
@@ -217,7 +240,10 @@ export async function runReviewer(
 		}`,
 		model: reviewer.model,
 		thinkingLevel: reviewer.thinkingLevel,
-		prompt: buildReviewPrompt(spec.guidance, transcript, spec.inject),
+		prompt: buildReviewPrompt(spec.guidance, transcript, spec.inject, spec.tools, {
+			sessionId: ctx.sessionManager.getSessionId(),
+			cwd: ctx.sessionManager.getCwd(),
+		}),
 		systemPrompt: "default",
 		toolNames: spec.tools,
 		signal: AbortSignal.any([signal, AbortSignal.timeout(REVIEW_TIMEOUT_MS)]),

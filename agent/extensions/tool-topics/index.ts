@@ -75,6 +75,8 @@ function rewritePrompt(
 				else if (entry?.kind === "drift") report(pi, ctx, docs.tool, entry.reason);
 				break;
 			}
+			case "catalog":
+				break;
 			case "drift":
 				report(pi, ctx, docs.tool, rendered.reason);
 				break;

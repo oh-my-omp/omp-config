@@ -189,14 +189,10 @@ describe("tool_call hook", () => {
 		expect(result?.reason).not.toContain("`delete` tool");
 	});
 
-	test("judges writes to xd://bash and eval cells, and ignores other devices", async () => {
+	test("judges bash and eval cells, and ignores writes and plugin tools", async () => {
 		const { handler } = loadHook(["bash", "delete"]);
-		expect((await handler({ toolName: "write", input: { path: "xd://bash", content: JSON.stringify({ command: "rm f" }) } }))?.block).toBe(
-			true,
-		);
-		expect(
-			await handler({ toolName: "write", input: { path: "xd://exec_command", content: JSON.stringify({ cmd: "rm f" }) } }),
-		).toBeUndefined();
+		expect(await handler({ toolName: "write", input: { path: "foo.txt", content: "rm f" } })).toBeUndefined();
+		expect(await handler({ toolName: "exec_command", input: { cmd: "rm f" } })).toBeUndefined();
 		expect(await handler({ toolName: "bash", input: { command: "ls -la" } })).toBeUndefined();
 		expect((await handler({ toolName: "eval", input: { language: "py", code: "import shutil; shutil.rmtree('d')" } }))?.block).toBe(true);
 		expect((await handler({ toolName: "eval", input: { language: "js", code: "require('fs').rmSync('d')" } }))?.block).toBe(true);

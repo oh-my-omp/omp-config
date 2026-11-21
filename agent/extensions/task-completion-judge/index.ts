@@ -1,6 +1,9 @@
 /**
  * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise block the
  * yield.
+ *
+ * The host keeps a batch's shared `context` only in the subagent system prompt it renders under `⁂ Context`; no
+ * session entry stores it. Locating any other marker hands the judge `(none)` without a warning.
  */
 
 import { basename } from "node:path";
@@ -332,17 +335,20 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 	return { assignment, calls, callById, resultsByCallId };
 };
 
+// Locate the shared context only by the host subagent template's `⁂ Context` heading, ending at the next `⁂`
+// heading: no session entry stores the batch's `context`, so a marker the host does not render hands the judge
+// `(none)` silently, and a second marker matches the same words inside prompt text.
 const sharedContextOf = (ctx: ExtensionContext): string => {
 	const pieces = ctx.getSystemPrompt();
-	const marker = "§ Context\n";
-	const bodyEnd = "\n§ ";
+	const marker = "⁂ Context\n";
+	const bodyEnd = "\n⁂ ";
 	const bodyOf = (carry: string, restIndex: number): string => {
 		const headingInCarry = carry.indexOf(bodyEnd);
 		if (headingInCarry !== -1) return carry.slice(0, headingInCarry).trim();
 		let held = carry; // body prefixes consumed so far
 		for (let index = restIndex; index < pieces.length; index++) {
 			const piece = pieces[index] ?? "";
-			if (piece.startsWith("§ ")) return held.trim();
+			if (piece.startsWith("⁂ ")) return held.trim();
 			const inside = piece.indexOf(bodyEnd);
 			if (inside !== -1) return `${held}\n${piece.slice(0, inside)}`.trim();
 			held = `${held}\n${piece}`;
@@ -353,7 +359,7 @@ const sharedContextOf = (ctx: ExtensionContext): string => {
 		const piece = pieces[index] ?? "";
 		const at = piece.indexOf(marker);
 		if (at !== -1) return bodyOf(piece.slice(at + marker.length), index + 1);
-		if (index + 1 < pieces.length && piece.endsWith("§ Context")) return bodyOf(pieces[index + 1] ?? "", index + 2);
+		if (index + 1 < pieces.length && piece.endsWith("⁂ Context")) return bodyOf(pieces[index + 1] ?? "", index + 2);
 	}
 	return "";
 };

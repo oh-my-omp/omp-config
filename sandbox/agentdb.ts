@@ -6,12 +6,37 @@ export type TableCheck =
 	| { readonly kind: "equal"; readonly table: string; readonly rows: number }
 	| { readonly kind: "differ"; readonly table: string; readonly detail: string };
 
+export const PRUNED_TABLES = [
+	"cache",
+	"client_usage",
+	"command_usage",
+	"model_perf",
+	"model_usage",
+	"usage_cost_history",
+	"usage_history",
+] as const;
+
 export function snapshot(path: string): Uint8Array {
 	const db = new Database(path, { readonly: true });
+	let raw: Uint8Array;
 	try {
-		return asRollbackJournal(db.serialize());
+		raw = db.serialize();
 	} finally {
 		db.close();
+	}
+	const mem = Database.deserialize(asRollbackJournal(raw));
+	try {
+		const existing = new Set(tables(mem));
+		let pruned = false;
+		for (const table of PRUNED_TABLES) {
+			if (!existing.has(table)) continue;
+			mem.run(`DELETE FROM "${table.replaceAll('"', '""')}"`);
+			pruned = true;
+		}
+		if (pruned) mem.run("VACUUM");
+		return asRollbackJournal(mem.serialize());
+	} finally {
+		mem.close();
 	}
 }
 

@@ -65,7 +65,7 @@ Matching skill → MUST read `skill://<name>` first.
 {{/if}}
 
 # Internal URLs
-Most FS/bash tools resolve these; path selectors: `read` docs.{{#has tools "read"}} Further sub-paths, queries, limits: xd://read/urls.{{/has}}
+Most FS/bash tools resolve these; path selectors: `read` docs.{{#has tools "read"}} Further sub-paths, queries, limits: help://read/urls.{{/has}}
 {{#each internalUrls}}
 - {{this}}
 {{/each}}
@@ -81,10 +81,11 @@ Most FS/bash tools resolve these; path selectors: `read` docs.{{#has tools "read
 {{/if}}
 {{/if}}
 
-{{#if xdevTools.length}}
-# xd:// Tool Devices
-Write JSON args as `content` to `xd://<tool>` via `{{toolRefs.write}}`. Invalid args return schema in error → fix/retry.
-{{xdevDocs}}
+{{#if mountedCommands.length}}
+# Tool Commands
+Each listed tool is also a command in `{{toolRefs.bash}}`: run `<tool> <positional> [--flag value]`; `<tool> --help` prints usage derived from its schema.
+Raw JSON arguments object: `-j '<json>'`, `@file`, or `-` (stdin); bad arguments exit 2 with a usage hint.
+{{toolCommandDocs}}
 {{/if}}
 
 § Tool Policy
@@ -98,7 +99,7 @@ SHOULD resolve prerequisites, parallelize independent calls. Retry empty/partial
 {{#if resultShaping}}
 {{resultShaping}}
 {{/if}}
-{{#has tools "read"}}- A tool description ending in `Topics` (in the prompt, or in the full docs `xd://<tool>` returns for a device) lists call instructions kept out of the prompt, one line per topic with its exact URL. Before a call that matches a topic's condition, read that URL; read only the topics your call needs. A topic may also arrive after a call to a read-only tool; apply it to the next call.{{/has}}
+{{#has tools "read"}}- A tool description ending in `Topics` (in the prompt, or in `<tool> --help` for a command-mounted tool) lists call instructions kept out of the prompt, one line per topic with its exact URL. Before a call that matches a topic's condition, read that URL; read only the topics your call needs. A topic may also arrive after a call to a read-only tool; apply it to the next call.{{/has}}
 
 {{#if encourageEdits}}
 {{#has tools "edit"}}
@@ -115,11 +116,9 @@ File edits: MUST use `{{toolRefs.edit}}`{{#ifAny (includes tools "bash") (includ
 {{/ifAny}}
 
 {{#if autoQaEnabled}}
-{{#has tools "write"}}
 <critical>
-`{{toolRefs.write}} xd://report_issue`: automated QA. Any tool output inconsistent with described behavior for parameters → write plain `<tool>: <concise description>` to `xd://report_issue`. False positives fine.
+Automated QA: any tool output inconsistent with the described behavior for its parameters → run `report_issue '<tool>: <concise description>'`. False positives fine.
 </critical>
-{{/has}}
 {{/if}}
 
 {{#has tools "task"}}

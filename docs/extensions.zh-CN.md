@@ -145,7 +145,7 @@
 | `delivery` | `aside`（默认）、`steer`、`nextTurn`、`followUp` | 提醒发送方式；system 形式的 `aside`/`steer`/`followUp` 在会话空闲时开启新回合。`nextTurn` 等待下次用户输入或子代理 `before_agent_start`，并进入该回合的第一次模型调用：system 提醒作为钩子返回的自定义消息，user 提醒作为 prompt 准备期间排队的 steer |
 | `every`、`scope` | `every` 默认 `30`；`scope` 为 `full`（默认）或 `window` | 计数助手消息中的每次工具调用和每条非空文字回复各计 1 步；满 `every` 步后台审阅，终态 `agent_end` 或等待后台任务的 `agent_end`（`awaitingAsyncWork`）对剩余步数补跑一次。`window` 只读上次游标之后的新消息 |
 | `maxPerContext` | 正整数，默认不限 | 两次 compaction 之间最多注入几条提醒（compaction 重置封顶计数，不重置步数与 `window` 游标） |
-| `model`、`tools` | 聊天 reviewer 模式（默认） | 在禁加载扩展、`taskDepth: 1` 的内存会话中运行；`model` 未填时依次尝试 `@advisor`、`advisor`、`@slow`、当前会话模型；`tools` 默认 `[read, grep, glob]`（可加 `ast_grep, web_search, edit, write, bash, eval`）。首行以 `PASS`/`OK`/`LGTM`/`NONE` 开头视为通过，否则按 `inject` 形式注入 |
+| `model`、`tools` | 聊天 reviewer 模式（默认） | 在禁加载扩展、`taskDepth: 1` 的内存会话中运行；`model` 未填时依次尝试 `@advisor`、`advisor`、`@slow`、当前会话模型；`tools` 默认 `[read, grep, glob]`（可加 `ast_grep, web_search, edit, write, bash, eval`）。审阅提示词附带被监督会话的 `sessionId` 与 `cwd`，仅配置只读工具时按只读方式引导工具使用，授予动作类工具时按配置的优先级引导使用。首行以 `PASS`/`OK`/`LGTM`/`NONE` 开头视为通过，否则按 `inject` 形式注入 |
 | `instructions`、`option.<标签>[.prompt\|.delivery]` | JUDGE 模式（声明 $\ge 2$ 个 `option.*` 时启用） | 不能与 `model`/`tools`/`note` 同用；调 `openJudge` 从声明的小写标签选项中选一个，若带 `.prompt` 则注入该文本（无 `.prompt` 视为通过）。报错或 90 秒超时不回退聊天模式 |
 
 只监督领导 checkout 时，可使用如下 `WATCHDOG-LeaderScope.md`：

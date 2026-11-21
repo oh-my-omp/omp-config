@@ -2,7 +2,7 @@
 tool: read
 name: resources
 title: Other internal resources
-when: before reading `skill://`, `rule://`, `local://`, `cfg://`, `omp://`, `tool://`, `xd://`, `attachment://`, `conflict://`, `mcp://` or `memory://`
+when: before reading `skill://`, `rule://`, `local://`, `cfg://`, `omp://`, `tool://`, `help://`, `attachment://`, `conflict://`, `mcp://` or `memory://`
 upstream: pi-coding-agent@18.13.2 src/internal-urls/*-protocol.ts, omp://tools/read.md § Internal URLs; agent/extensions/tool-topics/registry.ts
 ---
 # Other internal resources
@@ -13,7 +13,7 @@ upstream: pi-coding-agent@18.13.2 src/internal-urls/*-protocol.ts, omp://tools/r
 - `cfg://` — OMP settings tree, `cfg://<ns>/<key>` value/type/default/source. Only when the user asks about settings.
 - `omp://` — bundled harness docs; only when asked about the harness.
 - `tool://` — tools with omp-config topics; `tool://<tool>` its topic list; `tool://<tool>/<topic>` one topic.
-- `xd://` — mounted devices; `xd://<tool>` a tool's docs and schema; `xd://<tool>/<topic>` one topic the tool itself serves. Reading never runs a device (that is `write xd://<device>`).
+- `help://` — read-only tool reference docs; `help://<tool>` lists a tool's doc topics; `help://<tool>/<topic>` reads one topic.
 - `attachment://<N>` — an image attached to this session; supports `?q=<question>`.
 - `<file>:conflicts` lists a file's merge-conflict blocks as `#N Lx-Ly`; `conflict://N` reads one block, `conflict://N/ours|theirs|base|both` one side (resolve with `write conflict://N`).
 - `mcp://<resource-uri>` — an MCP server resource; unknown URIs list what servers advertise.

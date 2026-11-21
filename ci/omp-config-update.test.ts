@@ -1344,3 +1344,105 @@ describe("legacy system replacement rule files", () => {
 		expect((await apply(src.dir, agentDir)).notes).not.toContain(note("section must contain only a replacements array"));
 	});
 });
+
+describe("unshipped extension directories", () => {
+	test("removes unshipped extension directories without a base and empty directories, while preserving app-managed, symlinked and top-level files", async () => {
+		const src = source();
+		const agentDir = temp("omp-ext-cleanup-");
+		const externalDir = temp("omp-ext-external-");
+		src.commit({
+			"agent/extensions/keep/index.ts": "export default function keep() {}\n",
+		});
+		writeTree(externalDir, { "index.ts": "export default function linked() {}\n" });
+		writeTree(agentDir, {
+			"extensions/keep/index.ts": "export default function keep() {}\n",
+			"extensions/task-tool-trim/index.ts": "export default function stale() {}\n",
+			"extensions/orca-ext/index.ts": "// @orca-managed-pi-extension\nexport default function orca() {}\n",
+			"extensions/otty-ext/index.ts": `// ${["marker:", "_otty"].join(" ")}\nexport default function otty() {}\n`,
+			"extensions/top-level.ts": "export default function localFile() {}\n",
+		});
+		mkdirSync(join(agentDir, "extensions/fork-task"), { recursive: true });
+		symlinkSync(externalDir, join(agentDir, "extensions/linked-ext"));
+
+		const dryRun = await apply(src.dir, agentDir, true);
+		expect(dryRun.errors).toEqual([]);
+		expect(dryRun.deleted).toContain(join(agentDir, "extensions/task-tool-trim/index.ts"));
+		expect(dryRun.deleted).toContain(join(agentDir, "extensions/task-tool-trim"));
+		expect(dryRun.deleted).toContain(join(agentDir, "extensions/fork-task"));
+		expect(existsSync(join(agentDir, "extensions/task-tool-trim/index.ts"))).toBe(true);
+		expect(existsSync(join(agentDir, "extensions/fork-task"))).toBe(true);
+
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.restartNeeded).toBe(true);
+		expect(existsSync(join(agentDir, "extensions/task-tool-trim"))).toBe(false);
+		expect(existsSync(join(agentDir, "extensions/fork-task"))).toBe(false);
+		expect(existsSync(join(agentDir, "extensions/keep/index.ts"))).toBe(true);
+		expect(existsSync(join(agentDir, "extensions/top-level.ts"))).toBe(true);
+		expect(existsSync(join(agentDir, "extensions/orca-ext/index.ts"))).toBe(true);
+		expect(existsSync(join(agentDir, "extensions/otty-ext/index.ts"))).toBe(true);
+		expect(lstatSync(join(agentDir, "extensions/linked-ext")).isSymbolicLink()).toBe(true);
+		expect(report.skipped).toEqual(
+			expect.arrayContaining([
+				{ path: join(agentDir, "extensions/orca-ext/index.ts"), reason: "app-managed" },
+				{ path: join(agentDir, "extensions/otty-ext/index.ts"), reason: "app-managed" },
+			]),
+		);
+	});
+
+	test("removes upstream-deleted extension directory and its empty folder after a previous apply recorded a base", async () => {
+		const src = source();
+		const agentDir = temp("omp-ext-upstream-drop-");
+		src.commit({
+			"agent/extensions/keep/index.ts": "export default 1;\n",
+			"agent/extensions/retired/index.ts": "export default 2;\n",
+		});
+		expect((await apply(src.dir, agentDir)).errors).toEqual([]);
+		expect(existsSync(join(agentDir, "extensions/retired/index.ts"))).toBe(true);
+
+		src.commit({ "agent/extensions/retired/index.ts": null });
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(existsSync(join(agentDir, "extensions/retired"))).toBe(false);
+		expect(existsSync(join(agentDir, "extensions/keep/index.ts"))).toBe(true);
+	});
+
+	test("removes an upstream-deleted extension directory without duplicate delete when upgrading from previousCommit with no base", async () => {
+		const src = source();
+		const agentDir = temp("omp-ext-prev-commit-");
+		src.commit({
+			"agent/extensions/keep/index.ts": "export default 1;\n",
+			"agent/extensions/old-ext/index.ts": "export default 2;\n",
+		});
+		const previousCommit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: src.dir, encoding: "utf8" }).stdout.trim();
+		src.commit({ "agent/extensions/old-ext/index.ts": null });
+		writeTree(agentDir, {
+			"extensions/keep/index.ts": "export default 1;\n",
+			"extensions/old-ext/index.ts": "export default 2;\n",
+		});
+
+		const report = await applySnapshot({ source: src.dir, agentDir, previousCommit, check: false, plugins: false });
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts).toEqual([]);
+		expect(report.deleted.filter((path) => path === join(agentDir, "extensions/old-ext/index.ts"))).toHaveLength(1);
+		expect(existsSync(join(agentDir, "extensions/old-ext"))).toBe(false);
+		expect(existsSync(join(agentDir, "extensions/keep/index.ts"))).toBe(true);
+	});
+
+	test("skips dotfiles inside an unshipped extension directory without reporting unknown-base conflicts", async () => {
+		const src = source();
+		const agentDir = temp("omp-ext-dotfile-");
+		src.commit({ "agent/extensions/keep/index.ts": "export default 1;\n" });
+		writeTree(agentDir, {
+			"extensions/keep/index.ts": "export default 1;\n",
+			"extensions/old-ext/index.ts": "export default 2;\n",
+			"extensions/old-ext/.DS_Store": "finder metadata",
+		});
+
+		const report = await apply(src.dir, agentDir);
+		expect(report.errors).toEqual([]);
+		expect(report.conflicts).toEqual([]);
+		expect(existsSync(join(agentDir, "extensions/old-ext/index.ts"))).toBe(false);
+		expect(existsSync(join(agentDir, "extensions/old-ext/.DS_Store"))).toBe(true);
+	});
+});

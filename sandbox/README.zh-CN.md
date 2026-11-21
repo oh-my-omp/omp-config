@@ -9,23 +9,24 @@
 ## 命令
 
 ```bash
-bun sandbox/sandbox.ts hold [--target] [--repo DIR]                          # 建好后保持，收到 SIGINT/SIGTERM 时删除
-bun sandbox/sandbox.ts run [--target] [--repo DIR] SCENARIO_JSON MODEL...   # 建好，对每个模型跑一遍场景，删除
-bun sandbox/sandbox.ts matrix RUN SCENARIO_JSON MODEL...                     # 在保持中的沙箱里跑场景
-bun sandbox/sandbox.ts cache RUN                                             # 立即导出保持中沙箱的提示缓存报告
-bun sandbox/sandbox.ts down RUN                                              # 删除持有进程被杀后遗留的运行
+bun sandbox/sandbox.ts hold [--target] [--repo DIR] [--plugin DIR]...                          # 建好后保持，收到 SIGINT/SIGTERM/SIGHUP 时删除
+bun sandbox/sandbox.ts run [--target] [--repo DIR] [--plugin DIR]... SCENARIO_JSON MODEL...   # 建好，对每个模型跑一遍场景，删除
+bun sandbox/sandbox.ts matrix RUN SCENARIO_JSON MODEL...                                      # 在保持中的沙箱里跑场景
+bun sandbox/sandbox.ts cache RUN                                                              # 立即导出保持中沙箱的提示缓存报告
+bun sandbox/sandbox.ts down RUN                                                               # 删除持有进程被杀后遗留的运行
+bun sandbox/sandbox.ts prune                                                                  # 清理全部遗留运行，不碰运行中的沙箱
 ```
 
-- `--repo` 默认是 `sandbox/` 所在的 checkout。`--target` 增加 ssh 目标机。
-- `hold` 打印运行 id 与接入命令，然后等待。omp 启动前先准备会话工作区：文件、仓库等测试素材经 `docker exec omp-sandbox-<run> sh -c '…'` 放到 `/work` 下。交互会话用 `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`；agent 经 `exec_command` 驱动这条命令。用 Ctrl-C 或 SIGTERM 结束持有进程并等它退出：清理需要几秒。持有进程跑在 `exec_command` 会话里时，发送 Ctrl-C（`write_stdin` 发 `\u0003`），不要用 `kill_session`：它 2 秒后升级为 SIGKILL，会打断清理。
-- `run` 在每个模型都通过或未测时退出 0，否则退出 1。`matrix` 相同。`cache` 在报告到达宿主机时退出 0，否则退出 1。
-- `down` 只用于没有走到 `finally` 就退出的持有进程（SIGKILL、宿主机崩溃），删除带该运行标签的全部资源。
+- `--repo` 默认是 `sandbox/` 所在的 checkout。`--target` 增加 ssh 目标机及其专用 bridge 网络。`--plugin DIR`（可重复）将本地插件目录复制到容器 `/plugins/<basename>`，存在 `package.json` 时运行 `bun install`，再用 `omp plugin link` 链接。
+- `hold` 打印运行 id 与接入命令，然后等待。omp 启动前先准备会话工作区：文件、仓库等测试素材经 `docker exec omp-sandbox-<run> sh -c '…'` 放到 `/work` 下。交互会话用 `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`；agent 经 `exec_command` 驱动这条命令。用 Ctrl-C、SIGTERM 或 SIGHUP 结束持有进程并等它退出：清理需要几秒。持有进程跑在 `exec_command` 会话里时，发送 Ctrl-C（`write_stdin` 发 `\u0003`），不要用 `kill_session`：它 2 秒后升级为 SIGKILL，会打断清理。
+- `run` 仅在每个模型都通过（`pass`）时退出 0，否则退出 1（包括 `untested`）。`matrix` 相同。`cache` 在报告到达宿主机时退出 0，否则退出 1。
+- `down` 用于单个没有走到 `finally` 就退出的持有进程（SIGKILL、宿主机崩溃），删除带该运行标签的全部资源。`prune` 汇总已退出的容器、残留网络与台账中状态为「进行中」的陈旧行，跳过当前仍在 Docker 中运行的沙箱，删除其余资源并在台账中改写为「已清理（prune）」。
 
 ## 一次运行包含什么
 
 | 资源 | 内容 |
 |---|---|
-| 网络 `omp-sandbox-<run>-net` | 最先创建、最后删除。用户自定义 bridge：容器可以出网，也能按名称互相访问。 |
+| 网络 `omp-sandbox-<run>-net`（`--target`） | 仅在传入 `--target` 时创建（最先创建、最后删除）。用户自定义 bridge：沙箱与 ssh 目标机可以出网，也能按名称互相访问。不传 `--target` 时容器使用 Docker 默认的 `bridge` 网络。 |
 | 容器 `omp-sandbox-<run>` | `oven/bun:latest` linux/arm64（每次运行都拉取，不钉版本），`--init`，`HOME` 与宿主机家目录路径相同，复制来的配置里的绝对路径因此原样有效。另装 `git`、`openssh-client`、`python3`、`zsh`、`jq`、`sqlite3`、`procps`。不发布端口，不挂卷、bind mount 或 docker socket。 |
 | 容器 `omp-sandbox-<run>-target`（`--target`） | `debian:stable-slim`，装 `openssh-server` 与 `python3`。沙箱每次运行在 `$HOME/.ssh` 下新生成 ed25519 密钥，目标机为 `root` 信任它；沙箱内的 `/etc/ssh/ssh_config.d/omp-sandbox-target.conf` 把目标机命名为 `target`：`ssh target …`（ssh 从 passwd 家目录 `/root` 读 `~/.ssh`，不看 `$HOME`）。 |
 
@@ -33,25 +34,26 @@ bun sandbox/sandbox.ts down RUN                                              # �
 
 内容以 tar 流或经 stdin 管道进入 `docker exec`，宿主机磁盘上不暂存任何含凭据的东西：
 
-- `~/.omp/agent`，不含 `sessions/`、`blobs/`、`terminal-sessions/`、`custom-session-files/`、`predict/`、`cache/`、`history.db*`、锁文件与 `agent.db*`。`~/.omp/logs` 不复制。
-- `agent.db`：对宿主机数据库的只读连接做 SQLite 序列化。序列化在同一个读事务内完成，因此包含尚未 checkpoint 的 WAL 帧。镜像被标成回滚日志库（头部第 18–19 字节），逐字节写入容器，在容器内改回 WAL，再执行 `integrity_check`。随后宿主机读回容器内的副本，在内存里与快照逐表、逐行、逐字段比较，任何差异都让构建失败。只打印表名、行数与「every field equal」，从不打印值或摘要。在这次比较之后，只有容器内的副本会删去 provider 没有记录代理目标的 `auth_credentials` 行（见下文「凭据」）；宿主机数据库不变。
-- `~/.omp/plugins`，包含锁文件，不含 `node_modules/`（为 macOS 构建）；容器内 `bun install` 按锁文件为 Linux 装同样的版本。
+- `~/.omp/agent`，不含 `sessions/`、`blobs/`、`terminal-sessions/`、`custom-session-files/`、`predict/`、`cache/`、`history.db*`、`agent.db*`、`models.db*`、`transcripts.db*`、`skill-descriptions.db*`、`models.yml.bak*`、`rules/`、`mcp.json*`、`extensions/`、`extensions-last/`、`agents/`、`.omp-config-base/files` 与锁文件。`~/.omp/logs` 不复制。副本中若存在 `.omp-config-base/state.json`，会将其 `unknownPlain` 清空并保留 `structured`，使 updater 完整写入 `/repo` 中的所有普通托管文件，同时仍对 `config.yml` 执行三路合并。
+- `agent.db`：对宿主机数据库的只读连接做 SQLite 序列化，在同一个读事务内完成，因此包含尚未 checkpoint 的 WAL 帧。随后在内存可写副本中清空 `PRUNED_TABLES` 列出的历史与缓存表（`cache`、`client_usage`、`command_usage`、`model_perf`、`model_usage`、`usage_cost_history`、`usage_history`）并压缩镜像，再标成回滚日志库（头部第 18–19 字节），逐字节写入容器，在容器内改回 WAL 并执行 `integrity_check`。宿主机随后读回容器内的副本，在内存里与裁剪后的快照逐表、逐行、逐字段比较，任何差异都让构建失败。只打印表名、行数与「every field equal」，从不打印值或摘要。在这次比较之后，只有容器内的副本会删去 provider 没有记录代理目标的 `auth_credentials` 行（见下文「凭据」）；宿主机数据库不变。
+- `~/.omp/plugins`，包含锁文件，不含 `node_modules/`（为 macOS 构建）；容器内 `bun install` 按锁文件为 Linux 装相同版本，若失败则删除容器内的 `bun.lock` 后重试 `bun install`。
 - `~/.claude/rules`、`~/.claude/skills`、`~/.claude/CLAUDE.md`，存在才复制。
-- 工作树放到 `/repo`：已跟踪与未跟踪的文件，含未提交改动，不含被忽略的文件。
+- 工作树放到 `/repo`：已跟踪与未跟踪的文件，含未提交改动，不含被忽略的文件，并在容器内初始化为 `main` 分支的 git 仓库并创建 `sandbox` 提交。
+- 每个 `--plugin DIR`：其未被忽略的 git 文件（非 git 目录时排除 `node_modules` 与 `.git` 打包）复制到 `/plugins/<basename>`。
 
-之后容器安装最新的 `@oh-my-pi/pi-coding-agent`，运行 `/repo` 里的 updater（`omp-config-update.ts apply --source /repo`，它会 link `omp-config` 插件并把复制来的 omomp 值迁移进插件设置），再把启动自动更新写进这些设置关掉：`sandbox/autoupdate-off.ts` 通过 `omp plugin config set` 把 `omp-config-autoupdate.enabled` 设为 `false`，并打印读回的值。容器 agent 目录中的扩展因此来自工作树，而不是宿主机上次应用的版本，并且在沙箱里每次启动 omp 后都保持如此：否则复制进来的宿主机开关会在首次启动时用 GitHub `release` 覆盖它们。宿主机自己的设置不受影响。
+之后容器安装最新的 `@oh-my-pi/pi-coding-agent`，运行 `/repo` 里的 updater（`omp-config-update.ts apply --source /repo`，它会 link `omp-config` 插件并把复制来的 omomp 值迁移进插件设置），把启动自动更新写进这些设置关掉（`sandbox/autoupdate-off.ts` 通过 `omp plugin config set` 把 `omp-config-autoupdate.enabled` 设为 `false` 并打印读回的值），并安装与链接所有 `--plugin` 目录。容器 agent 目录中的扩展与子代理因此来自工作树，而不是宿主机上次应用的版本，并且在沙箱里每次启动 omp 后都保持如此：否则复制进来的宿主机开关会在首次启动时用 GitHub `release` 覆盖它们。宿主机自己的设置不受影响。
 
 ### 凭据
 
-凭据副本原样使用：`apiKey` 与 `models.yml` 的其余字段和宿主机相同，模型绑定与宿主机配置相同。容器内的副本只有两处改动：各 provider 的 `baseUrl` 指向下面的记录代理；没有记录代理目标的 provider 的 `auth_credentials` 行从容器内的 `agent.db` 删除，因为这类 provider 的请求会绕过记录代理直达上游。删除之后构建会检查剩下的每一行的 provider 都有目标，否则失败。因此沙箱里没有 `baseUrl` 的 provider 没有凭据，它的模型记为未测。某个模型在沙箱里调用不成功时记为未测，沙箱不排查原因。若某个服务商会轮换 refresh token，沙箱内的会话刷新它之后，宿主机那份可能失效；沙箱不防范这一点。
+凭据副本原样使用：`apiKey` 与 `models.yml` 的其余字段和宿主机相同。仅对容器内的副本做以下调整以保证流量全部经过记录代理：`models.yml` 中各 provider 与模型级的 `baseUrl` 指向下面的记录代理；没有记录代理目标的 provider 的 `auth_credentials` 行从容器内的 `agent.db` 删除（删除之后构建会检查剩下的每一行的 provider 都有目标，否则失败）；updater 完成对 `config.yml` 的合并之后，`recorder.ts prune-config` 裁剪容器内的 `config.yml`，从 `modelRoles`、`task.agentModelOverrides` 与 `retry.fallbackChains` 中剔除未覆盖的 provider 与失效的 `@<role>` 引用（保留已覆盖的 provider、仍存在的 `@<role>` 引用与无 provider 前缀的选择器），并删除容器内不存在的 `exec.initFile`。因此沙箱里没有 `baseUrl` 的 provider 没有凭据，它的模型记为未测。某个模型在沙箱里调用不成功时记为未测，沙箱不排查原因。若某个服务商会轮换 refresh token，沙箱内的会话刷新它之后，宿主机那份可能失效；沙箱不防范这一点。
 
 ### 模型请求记录代理
 
-容器内每个 omp 会话发出的模型请求都经过一个在容器内运行的记录代理（`sandbox/recorder.ts`，由 `sandbox.ts` 在复制 `~/.omp/agent` 之后启动）。`setup` 为每个声明了 `baseUrl` 的 provider 在容器内的 `models.yml` 中指定一个回环地址（`http://127.0.0.1:9400`、`9401`……），并把映射写入 `/sandbox/recorder-targets.json`。它会重新解析改写后的文件，除 `baseUrl` 外任一 provider 与原文不一致则构建失败。没有 `baseUrl` 的 provider（例如只设置 `modelOverrides` 的）不被改动。
+容器内每个 omp 会话发出的模型请求都经过一个在容器内运行的记录代理（`sandbox/recorder.ts`，由 `sandbox.ts` 在复制 `~/.omp/agent` 之后启动）。`setup` 将容器内 `models.yml` 中每个 provider 的顶层 `baseUrl` 以及 `models[]`、`modelOverrides` 内的模型级 `baseUrl` 改写为回环地址（`http://127.0.0.1:9400`、`9401`……）：与 provider 上游 origin 相同的模型级 `baseUrl` 复用同一端口，不同 origin 则分配新目标，并把映射写入 `/sandbox/recorder-targets.json`。它会重新解析改写后的文件，除 `baseUrl` 外任一 provider、`models[]` 条目或 `modelOverrides` 条目与原文不一致则构建失败。没有任何 `baseUrl` 的 provider 不被改动。
 
 `serve` 监听各端口。每个请求先向证据文件追加一行，再把方法、路径、查询串、请求头和请求体原样转发到记录下来的上游，并把响应流式回传。证据行为 `{"seq", "provider", "tools", "body"}`：`tools` 取请求体 `tools[]` 每项的 `name`，缺则取 `function.name`；请求体没有 `tools` 时为 `[]`。请求头从不记录，因为它们携带凭据。若无法写入该行，请求得到 500 且不被转发，因此没有请求会在未被记录的情况下到达服务商。
 
-驱动在一次会话期间通过 `/sandbox/.requests-sink` 把当前场景的 `<name>.requests.jsonl` 告知记录代理，会话结束后清空该指针；驱动会话之外发出的请求（`hold`、交互式 `omp`）写入容器内的 `/evidence/interactive.requests.jsonl`，`matrix` 不复制它。`/sandbox/recorder.ready` 缺失时驱动拒绝启动会话。
+驱动在一次会话期间通过 `/sandbox/.requests-sink` 把当前场景的 `<name>.requests.jsonl` 告知记录代理，会话结束后清空该指针；驱动会话之外发出的请求（`hold`、交互式 `omp`）写入容器内的 `/evidence/interactive.requests.jsonl`。清理之前，`hold` 与 `run` 会将容器内存在的 `/evidence/interactive.requests.jsonl`、`/evidence/recorder.log` 与 `~/.omp/logs` 导出到宿主机的 `/tmp/omp-sandbox-<run>/evidence/`。`/sandbox/recorder.ready` 缺失时驱动拒绝启动会话。
 
 扩展内部创建的 helper 会话（例如不经 RPC 的 `runHelperPrompt`）使用同一批 provider，因此也出现在同一文件中。`seq` 计数记录代理收到的每个请求，所以序号的空缺意味着某个请求未被记录。
 
@@ -63,7 +65,7 @@ bun sandbox/sandbox.ts down RUN                                              # �
 |---|---|
 | `name` | `[a-z0-9][a-z0-9._-]*`；用作证据文件名 |
 | `init` | 会话前由驱动在会话工作目录里执行（不经 agent）的 sh 命令，须退出 0；每个模型前都重新执行 |
-| `prompt` | 唯一的一条用户消息 |
+| `prompt` / `prompts` | 单条用户消息字符串（`prompt`），或每轮完成后按序发送的非空用户消息数组（`prompts`） |
 | `finalAssertion` | 会话结束后在会话工作目录里执行的 sh 命令；退出 0 即通过 |
 | `calls.expect` | 必须按此顺序出现在工具调用中的匹配器（子序列） |
 | `calls.forbid` | 任何工具调用都不得满足的匹配器 |
@@ -80,30 +82,30 @@ bun sandbox/sandbox.ts down RUN                                              # �
 | `untested` | omp 不认识该模型（`Model "…" not found`），或所有助手回复都在服务商处失败且没有运行任何工具 |
 | `harness-error` | `init` 失败、omp 因其他原因在 ready 帧之前退出、prompt 被拒绝、会话超过 600 秒上限、omp 以非零退出，或 omp 没有报告会话文件 |
 
-证据写到 `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`。通常会生成 `<name>.driver.json` 报告（结果、每次工具调用的输入、`isError` 与结果前 400 字符、终态断言输出，以及最后一条回复的前 1,000 字符）。`<name>.events.jsonl`（每个 RPC 帧）在 RPC 会话启动时创建；只有 omp 报告了存在的会话文件时，才复制为 `<name>.session.jsonl`。`<name>.requests.jsonl` 每行对应会话的一个模型请求，包含 helper 会话（见上文记录代理）；驱动启动会话时即存在，无请求时为空。若 `init` 失败，只写驱动报告。宿主机对每个模型只复制实际存在的上述证据文件；`agent.db` 与 `models.yml` 不离开容器。事件、会话文件与请求体包含模型看到的一切，所以场景不得读取凭据文件。
+证据写到 `/tmp/omp-sandbox-<run>/evidence/<provider>_<model>/`。通常会生成 `<name>.driver.json` 报告（结果、每次工具调用的输入、`isError` 与结果前 4,000 字符、终态断言输出，以及最后一条回复的前 4,000 字符）。`<name>.events.jsonl`（每个 RPC 帧）在 RPC 会话启动时创建；只有 omp 报告了存在的会话文件时，才复制为 `<name>.session.jsonl`。`<name>.requests.jsonl` 每行对应会话的一个模型请求，包含 helper 会话（见上文记录代理）；驱动启动会话时即存在，无请求时为空。若 `init` 失败，只写驱动报告。宿主机对每个模型只复制实际存在的上述证据文件；`agent.db` 与 `models.yml` 不离开容器。事件、会话文件与请求体包含模型看到的一切，所以场景不得读取凭据文件。
 
 ## 提示缓存报告
 
-`hold` 与 `run` 在中间步骤之后、清理之前导出报告，所以报告覆盖本次运行启动的全部会话，包括交互会话；`cache RUN` 可随时从保持中的沙箱导出。每次导出覆盖宿主机上的 `/tmp/omp-sandbox-<run>/cache.json`，并以 Markdown 打印两张汇总表。导出失败时打印原因，不改变 `hold` 或 `run` 的退出码。
+`hold` 与 `run` 在中间步骤之后、清理之前导出报告，所以报告覆盖本次运行启动的全部会话，包括交互会话；`cache RUN` 可随时从保持中的沙箱导出。每次导出覆盖宿主机上的 `/tmp/omp-sandbox-<run>/cache.json`，并以 Markdown 打印汇总表。导出失败时打印原因，不改变 `hold` 或 `run` 的退出码。
 
 `sandbox/cache.ts` 在容器内读取 `~/.omp/agent/sessions` 下的全部 `*.jsonl`：主会话，以及嵌套在其目录里的子代理记录。复制 `~/.omp/agent` 时不含 `sessions/`，所以这个目录起始为空。一次模型调用是一条助手 `message` 条目（`source.kind` 为 `turn`，即 agent 循环的一轮）或一条 `model_usage` 条目（`aux`，附 omp 记下的 `purpose`，如 `job-caption`）。没有被任何记录写下的调用不在报告里。
 
 | `cache.json` 字段 | 内容 |
 |---|---|
 | `calls` | 按记录顺序每次调用一行：`transcript`（`sessions/` 下的路径）、`line`、`at`、`source`、`provider`、`model`、`stopReason`、`input`、`cacheRead`、`cacheWrite`、`output`、`hitRate` |
-| `byTranscript`、`byModel` | 按记录文件与按 `provider/model` 的汇总：`calls`、`callsWithRead`（`cacheRead` > 0 的调用数）、四项 token 之和，以及按 token 加权的 `hitRate` |
+| `byTranscript`、`byModel` | 按记录文件与按 `provider/model` 的汇总：`calls`、`callsWithRead`（`cacheRead` > 0 的调用数）、各项 token 之和，以及按 token 加权的 `hitRate` |
 | `skipped` | 不是 JSON 对象的行，例如仍在写入的会话被截断的最后一行 |
 
 token 数取 omp 归一化后的用量，其中 `input` 不含缓存 token。一次调用的提示是 `input + cacheRead + cacheWrite`，`hitRate` 是 `cacheRead / 提示`；提示为 0 时为 `null`，例如在服务商处失败的调用。报告只含数字、模型名、purpose 与时间戳，不含消息文本。
 
 ## 生命周期与台账
 
-OrbStack 台账是目录 `~/Ext/work/orbstack/`；沙箱运行在其中有自己的文件 `omp-sandbox.md`。`hold` 与 `run` 在创建任何资源之前写入本次运行的一行（状态「进行中」），台账目录不存在时拒绝启动。构建、场景或等待信号，以及随后的提示缓存导出，都在 `try` 中进行；`finally` 尝试删除本次运行的容器与网络，再用按 `name=omp-sandbox-<run>` 过滤的 `docker ps -a` 与 `docker network ls` 检查残留。随后原地改写同一行：「已完成、已清理」并附删除记录与空的列表结果，或「清理失败」并附残留或 Docker 命令失败详情，包括无法列出资源的情况（命令随后以 1 退出）。`down` 以同样方式改写该行。
+OrbStack 台账是目录 `~/Ext/work/orbstack/`；沙箱运行在其中有自己的文件 `omp-sandbox.md`。`hold` 与 `run` 在创建任何资源之前写入本次运行的一行（状态「进行中」），台账目录不存在时拒绝启动。构建、场景或等待 `SIGINT`/`SIGTERM`/`SIGHUP`、提示缓存导出以及容器证据与日志导出都在 `try` 中进行；`finally` 尝试删除本次运行的容器与网络，再用按 `name=omp-sandbox-<run>` 过滤的 `docker ps -a` 与 `docker network ls` 检查残留。随后原地改写同一行：「已完成、已清理」并附删除记录与空的列表结果，或「清理失败」并附残留或 Docker 命令失败详情，包括无法列出资源的情况（命令随后以 1 退出）。`down` 与 `prune` 以同样方式改写该行（「已清理（down）」与「已清理（prune）」）。
 
-被 SIGKILL 的持有进程会让该行停在「进行中」、资源留在原处；`down <run>` 删除它们。
+被 SIGKILL 的持有进程会让该行停在「进行中」、资源留在原处；`down <run>` 删除单次运行，`prune` 清理全部陈旧运行并保持运行中的沙箱不动。
 
 ## 规则
 
 - 容器隔离的是宿主机文件，不是远端服务：会话持有真实凭据并可以出网。不要写会作用于不该被改动的远端系统或账号的场景。
-- 一次运行一个沙箱，运行不复用。运行 id 是构建时间的 36 进制表示。
+- 一次运行一个沙箱，运行不复用。运行 id 由构建时间的 36 进制表示与随机后缀组成。
 - `sandbox/*.ts` 保持自包含：容器内的 `/sandbox` 是本目录的副本，`driver.ts`、`cache.ts`、`db.ts`、`autoupdate-off.ts` 与 `recorder.ts` 只靠 Bun 在那里运行。

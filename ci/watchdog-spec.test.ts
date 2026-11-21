@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { producerMatches, targetsSession } from "../agent/extensions/_shared/session-filter.ts";
+import { buildReviewPrompt } from "../agent/extensions/watchdog-agent/review.ts";
 import { parseWatchdogFile } from "../agent/extensions/watchdog-agent/spec.ts";
 
 const root = mkdtempSync("/tmp/omp-watchdog-spec-");
@@ -68,3 +69,26 @@ for (const backend of ["chat", "jev"] as const) {
 		}
 	});
 }
+
+describe("buildReviewPrompt", () => {
+	const session = { sessionId: "sess-abc-123", cwd: "/Users/mouriya/Ext/code/demo" };
+
+	test("includes watched session metadata and read-only tool framing for read-only tools", () => {
+		const prompt = buildReviewPrompt("Check error handling.", "USER: hi", "system", ["read", "grep", "glob"], session);
+		expect(prompt).toContain("Watched session:\n- sessionId: sess-abc-123\n- cwd: /Users/mouriya/Ext/code/demo\n\nTRANSCRIPT:");
+		expect(prompt).toContain(
+			"You may use your read-only tools to inspect the workspace and verify a concern before raising it. Investigate briefly; never rewrite the code.",
+		);
+		expect(prompt).toContain("- If nothing is worth flagging, reply with the single word: PASS");
+		expect(prompt).toContain("SEVERITY: <nit|concern|blocker>");
+	});
+
+	test("uses configured tool framing when action tools are granted", () => {
+		const prompt = buildReviewPrompt("Log decisions via CLI.", "USER: decide", "system", ["bash", "read", "grep", "glob"], session);
+		expect(prompt).toContain("Watched session:\n- sessionId: sess-abc-123\n- cwd: /Users/mouriya/Ext/code/demo\n\nTRANSCRIPT:");
+		expect(prompt).toContain(
+			"You may use your configured tools (bash, read, grep, glob) as instructed in your review priorities above, but never perform the primary agent's coding task.",
+		);
+		expect(prompt).not.toContain("You may use your read-only tools");
+	});
+});

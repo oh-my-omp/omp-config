@@ -106,7 +106,6 @@ describe("js cells", () => {
 		'Bun.spawn(["rm", "f"])',
 		'Bun.spawnSync({ cmd: ["rm", "-rf", "d"] })',
 		'require("child_process").spawn("rm f", { shell: true })',
-		'await tool.write({ path: "xd://bash", content: JSON.stringify({ command: "rm f" }) })',
 		'const fs = require("node:fs"); await fs.promises.rm("/tmp/omp-dg-c3/d/f")',
 		'import { promises as fsp } from "fs"; await fsp.rm("/tmp/omp-dg-c3/d/f")',
 		'const { promises: fsp } = require("fs"); await fsp.rm("/tmp/omp-dg-c3/d/f")',
@@ -142,7 +141,6 @@ describe("js cells", () => {
 		"const { execSync } = require('child_process'); execSync(...['rm -rf x'], 'ls')",
 		"const f = ['-delete']; Bun.spawn(['find', 'x', ...f])",
 		"const f = ['-delete']; require('child_process').spawnSync('find', ['x', ...g])",
-		"await tool.write({ path: 'xd://bash', content: JSON.stringify({ command: 'ls', command: 'rm -rf x' }) })",
 	])("blocks non-literal: %p", async (code) => {
 		expect(await jsRule(code)).toBe("nonLiteral");
 	});
@@ -181,8 +179,6 @@ describe("python cells: issue 151 bypasses", () => {
 		"%system rm -rf /tmp/omp-dg-c3/d",
 		"import subprocess\nsubprocess.Popen('rm -rf x', -1, None, None, None, None, None, True, True)",
 		"import subprocess\nsubprocess.call('rm -rf x', -1, None, None, None, None, None, True, True)",
-		"await tool.write({'path': 'xd://bash', 'content': '{\"command\": \"rm -rf x\"}'})",
-		"import json\nawait tool.write({'path': 'xd://bash', 'content': json.dumps({'command': 'rm -rf x'})})",
 		"exec(\"import subprocess\\nsubprocess.run('rm -rf x', shell=True)\")",
 		"exec(\"import os\\nos.system('rm -rf x')\")",
 		"eval(\"__import__('os').system('rm -rf x')\")",
@@ -197,8 +193,6 @@ describe("python cells: issue 151 bypasses", () => {
 		"import subprocess\nsubprocess.run('rm -rf x', **{'shell': True})",
 		"import subprocess\nsubprocess.run(['ls'], **opts)",
 		"await tool.bash(**kw)",
-		"await tool.write({'path': 'xd://bash', 'content': payload})",
-		"await tool.write({'path': 'xd://bash', 'content': 'not json'})",
 		"exec(code)",
 		'exec("print(1)", **kw)',
 		"name = 'subprocess'\n__import__(name).run(['rm', '-rf', 'x'])",
@@ -215,7 +209,6 @@ describe("python cells: issue 151 bypasses", () => {
 		"import subprocess\nsubprocess.call(['ls', 'd'], -1, None, None, None, None, None, True, None)",
 		"print(1 + 1)",
 		'exec("print(1 + 1)")',
-		"await tool.write({'path': 'xd://bash', 'content': '{\"command\": \"ls\"}'})",
 		"!echo ok\n!ls -la",
 		"%sx ls -la",
 		"s = '''\n!rm -rf x\n'''",

@@ -4,7 +4,7 @@ import { basename, join, resolve } from "node:path";
 import { copyAgentDb, copyClaude, copyOmpDir, copyRepo, IMAGE, installOmp, installTools, PLATFORM, setUpTarget } from "./content.ts";
 import { run as exec, must } from "./docker.ts";
 import { parseScenario } from "./driver.ts";
-import { ledgerEnd, ledgerStart } from "./ledger.ts";
+import { ledgerEnd, ledgerInProgress, ledgerStart } from "./ledger.ts";
 
 const HOME = homedir();
 const LABEL = "omp-sandbox.run";
@@ -21,6 +21,7 @@ interface Names {
 interface BuildOptions {
 	readonly target: boolean;
 	readonly repo: string;
+	readonly plugins: readonly string[];
 }
 
 type Command =
@@ -28,14 +29,16 @@ type Command =
 	| { readonly kind: "run"; readonly options: BuildOptions; readonly scenario: string; readonly models: readonly string[] }
 	| { readonly kind: "matrix"; readonly run: string; readonly scenario: string; readonly models: readonly string[] }
 	| { readonly kind: "cache"; readonly run: string }
-	| { readonly kind: "down"; readonly run: string };
+	| { readonly kind: "down"; readonly run: string }
+	| { readonly kind: "prune" };
 
 const USAGE = `usage:
-  sandbox.ts hold [--target] [--repo DIR]
-  sandbox.ts run [--target] [--repo DIR] SCENARIO_JSON MODEL...
+  sandbox.ts hold [--target] [--repo DIR] [--plugin DIR]...
+  sandbox.ts run [--target] [--repo DIR] [--plugin DIR]... SCENARIO_JSON MODEL...
   sandbox.ts matrix RUN SCENARIO_JSON MODEL...
   sandbox.ts cache RUN
-  sandbox.ts down RUN`;
+  sandbox.ts down RUN
+  sandbox.ts prune`;
 
 class UsageError extends Error {}
 class Interrupted extends Error {}
@@ -55,6 +58,7 @@ function parseCommand(argv: readonly string[]): Command {
 	const positional: string[] = [];
 	let target = false;
 	let repo = resolve(import.meta.dir, "..");
+	const plugins: string[] = [];
 	for (let index = 0; index < rest.length; index++) {
 		const arg = rest[index] ?? "";
 		if (arg === "--target") target = true;
@@ -62,10 +66,15 @@ function parseCommand(argv: readonly string[]): Command {
 			const value = rest[++index];
 			if (value === undefined) throw new UsageError("--repo needs a directory");
 			repo = resolve(value);
+		} else if (arg === "--plugin") {
+			const value = rest[++index];
+			if (value === undefined) throw new UsageError("--plugin needs a directory");
+			plugins.push(resolve(value));
 		} else if (arg.startsWith("--")) throw new UsageError(`unknown option ${arg}`);
 		else positional.push(arg);
 	}
-	const options = { target, repo };
+	if (verb !== "hold" && verb !== "run" && plugins.length > 0) throw new UsageError("--plugin is only valid for hold and run");
+	const options = { target, repo, plugins };
 	switch (verb) {
 		case "hold":
 			if (positional.length > 0) throw new UsageError("hold takes no positional arguments");
@@ -84,6 +93,9 @@ function parseCommand(argv: readonly string[]): Command {
 			return { kind: "cache", run: parseRunId(positional[0]) };
 		case "down":
 			return { kind: "down", run: parseRunId(positional[0]) };
+		case "prune":
+			if (positional.length > 0) throw new UsageError("prune takes no positional arguments");
+			return { kind: "prune" };
 		default:
 			throw new UsageError(verb === undefined ? "missing command" : `unknown command ${verb}`);
 	}
@@ -108,7 +120,9 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 	};
 	const labels = ["--label", `${LABEL}=${names.run}`];
 	await step(`pull ${IMAGE}`, () => must(["docker", "pull", "-q", "--platform", PLATFORM, IMAGE]));
-	await step(`network ${names.network}`, () => must(["docker", "network", "create", ...labels, names.network]));
+	if (options.target) {
+		await step(`network ${names.network}`, () => must(["docker", "network", "create", ...labels, names.network]));
+	}
 	await step(`container ${names.container}`, () =>
 		must([
 			"docker",
@@ -118,8 +132,7 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 			"--name",
 			names.container,
 			...labels,
-			"--network",
-			names.network,
+			...(options.target ? ["--network", names.network] : []),
 			"--platform",
 			PLATFORM,
 			"-e",
@@ -168,9 +181,13 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 	console.log(`  ${claude.length === 0 ? "nothing to copy" : claude.join(", ")}`);
 	const files = await step(`working tree ${options.repo} -> /repo`, () => copyRepo(names.container, options.repo));
 	console.log(`  ${files} files`);
-	const installed = await step("plugins, latest omp, updater apply from /repo, auto-update off", () => installOmp(names.container, HOME));
+	const installed = await step("plugins, latest omp, updater apply from /repo, auto-update off", () =>
+		installOmp(names.container, HOME, options.plugins),
+	);
 	console.log(`  ${installed.autoupdate}`);
 	console.log(`  ${installed.version}`);
+	if (installed.linked.length > 0) console.log(`  linked plugins: ${installed.linked.join(", ")}`);
+	await step("config outside the recorder", () => pruneSandboxConfig(names.container, HOME));
 	if (options.target)
 		await step(`ssh target ${names.target}`, () => setUpTarget(names.container, HOME, names.target, labels, names.network));
 }
@@ -184,6 +201,19 @@ async function pruneCredentials(container: string, home: string): Promise<void> 
 		"/sandbox/recorder.ts",
 		"prune-credentials",
 		join(home, ".omp", "agent", "agent.db"),
+	]);
+	console.log(`  ${out.trim()}`);
+}
+
+async function pruneSandboxConfig(container: string, home: string): Promise<void> {
+	const out = await must([
+		"docker",
+		"exec",
+		container,
+		"bun",
+		"/sandbox/recorder.ts",
+		"prune-config",
+		join(home, ".omp", "agent", "config.yml"),
 	]);
 	console.log(`  ${out.trim()}`);
 }
@@ -246,7 +276,7 @@ async function matrix(names: Names, scenarioPath: string, models: readonly strin
 	}
 	console.log(`evidence: ${join(names.out, "evidence")}`);
 	for (const result of results) console.log(`  ${result.kind.padEnd(13)} ${result.model}`);
-	return results.every((result) => result.kind === "pass" || result.kind === "untested") ? 0 : 1;
+	return results.every((result) => result.kind === "pass") ? 0 : 1;
 }
 
 function resultKind(driverJson: string): string {
@@ -284,23 +314,49 @@ async function exportCache(names: Names): Promise<boolean> {
 	return true;
 }
 
+async function exportEvidence(names: Names): Promise<void> {
+	const evidenceDir = join(names.out, "evidence");
+	mkdirSync(evidenceDir, { recursive: true });
+	for (const file of ["interactive.requests.jsonl", "recorder.log"]) {
+		const src = `/evidence/${file}`;
+		if ((await exec(["docker", "exec", names.container, "test", "-f", src])).code === 0) {
+			const copied = await exec(["docker", "cp", `${names.container}:${src}`, join(evidenceDir, file)]);
+			if (copied.code !== 0) console.error(`evidence export failed (${file}): ${copied.stderr.trim()}`);
+		}
+	}
+	const containerLogs = join(HOME, ".omp", "logs");
+	if ((await exec(["docker", "exec", names.container, "test", "-d", containerLogs])).code === 0) {
+		const logsDir = join(evidenceDir, "logs");
+		mkdirSync(logsDir, { recursive: true });
+		const copied = await exec(["docker", "cp", `${names.container}:${containerLogs}/.`, logsDir]);
+		if (copied.code !== 0) console.error(`evidence export failed (logs): ${copied.stderr.trim()}`);
+	}
+}
+
 async function withSandbox(
 	options: BuildOptions,
 	purpose: string,
 	middle: (names: Names, signal: AbortSignal) => Promise<number>,
 ): Promise<number> {
-	const names = namesOf(Date.now().toString(36));
+	const names = namesOf(`${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`);
 	mkdirSync(names.out, { recursive: true });
-	ledgerStart(names.run, new Date().toISOString(), `${purpose}；工作树 ${options.repo}${options.target ? "；含 ssh 目标机" : ""}`);
+	const pluginsNote = options.plugins.length > 0 ? `；插件 ${options.plugins.join(", ")}` : "";
+	ledgerStart(
+		names.run,
+		new Date().toISOString(),
+		`${purpose}；工作树 ${options.repo}${pluginsNote}${options.target ? "；含 ssh 目标机" : ""}`,
+	);
 	const controller = new AbortController();
 	const stop = (): void => controller.abort();
 	process.on("SIGINT", stop);
 	process.on("SIGTERM", stop);
+	process.on("SIGHUP", stop);
 	let code = 1;
 	try {
 		await build(names, options, controller.signal);
 		code = await middle(names, controller.signal);
 		await exportCache(names);
+		await exportEvidence(names);
 	} catch (error) {
 		console.error(`sandbox ${names.container}: ${error instanceof Error ? error.message : String(error)}`);
 		code = 1;
@@ -310,6 +366,7 @@ async function withSandbox(
 		if (!clean) code = 1;
 		process.off("SIGINT", stop);
 		process.off("SIGTERM", stop);
+		process.off("SIGHUP", stop);
 	}
 	return code;
 }
@@ -324,8 +381,48 @@ async function hold(names: Names, signal: AbortSignal): Promise<number> {
 	const { promise, resolve: stopped } = Promise.withResolvers<void>();
 	if (signal.aborted) stopped();
 	else signal.addEventListener("abort", () => stopped(), { once: true });
-	await promise;
+	const keepAlive = setInterval(() => {}, 60_000);
+	try {
+		await promise;
+	} finally {
+		clearInterval(keepAlive);
+	}
 	return 0;
+}
+
+async function prune(): Promise<number> {
+	const running = new Set(
+		(await must(["docker", "ps", "--filter", `label=${LABEL}`, "--filter", "status=running", "--format", `{{.Label "${LABEL}"}}`]))
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((id) => RUN_ID.test(id)),
+	);
+	const candidates = new Set<string>();
+	for (const argv of [
+		["docker", "ps", "-a", "--filter", `label=${LABEL}`, "--format", `{{.Label "${LABEL}"}}`],
+		["docker", "network", "ls", "--filter", `label=${LABEL}`, "--format", `{{.Label "${LABEL}"}}`],
+	]) {
+		for (const line of (await must(argv)).split("\n")) {
+			const id = line.trim();
+			if (RUN_ID.test(id)) candidates.add(id);
+		}
+	}
+	for (const id of ledgerInProgress()) {
+		if (RUN_ID.test(id)) candidates.add(id);
+	}
+	const stale = [...candidates].filter((id) => !running.has(id)).sort();
+	if (stale.length === 0) {
+		console.log("prune: nothing to clean");
+		return 0;
+	}
+	let ok = true;
+	for (const run of stale) {
+		const { clean, evidence } = await teardown(namesOf(run));
+		ledgerEnd(run, clean ? "已清理（prune）" : "清理失败", evidence);
+		if (!clean) ok = false;
+	}
+	console.log(`prune: cleaned ${stale.length} run(s) (${running.size} running untouched)`);
+	return ok ? 0 : 1;
 }
 
 async function main(argv: readonly string[]): Promise<number> {
@@ -353,6 +450,8 @@ async function main(argv: readonly string[]): Promise<number> {
 			ledgerEnd(names.run, clean ? "已清理（down）" : "清理失败", evidence);
 			return clean ? 0 : 1;
 		}
+		case "prune":
+			return prune();
 		default: {
 			const unreachable: never = command;
 			return unreachable;
