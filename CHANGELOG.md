@@ -29,6 +29,7 @@
 - Made `system-prompt-replace` send the edited system prompt itself at every prompt instead of a reminder that quotes each original passage and its replacement; the reminder is sent only after a tool call in a run that skipped the prompt hook after OMP rebuilt its prompt
 - Made `tool-topics` write each OMP tool's surface and `Topics` index into the system prompt in place of the native description at every prompt, instead of an `omp-config/tool-topics` reminder that was sent again after every compaction; the replaced descriptions no longer reach the model twice
 - Passed the watched session's `sessionId` and `cwd` into `watchdog-agent`'s chat reviewer prompt and matched the tool-usage instruction to whether `tools` grants action tools beyond read-only inspection
+- Aligned `agent/SYSTEM_TEMPLATE.md`, `agent/config.yml` (`tools.commandDocs: inline`), `REPLACE-SYSTEM-default.yml` and `extensions-last/README*.md` with OMP 19.1.0 tool commands (`{{toolCommandDocs}}`, `help://read/urls`, `help://eval/agents`, command form for `report_issue`) and removed the obsolete `xd://` device replacement rule
 
 ### Removed
 
