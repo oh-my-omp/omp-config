@@ -40,6 +40,8 @@
 ### Removed
 
 - Removed `task` guidance for consulting a past session with `agent: "seance"` and the rule that isolated items cannot use it
+- Removed the project agents `loop:scout`, `loop:worker`, `loop:worker-free`, `loop:guardian` and `loop:verifier` and their `.omp/config.yml` model bindings
+- Removed the project agent `consult:carbon`, its model binding, and the `hard-decisions-go-to-carbon` rule that routed hard decisions to it
 
 ### Fixed
 
@@ -48,6 +50,7 @@
 - Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
 - Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
 - Skipped rejected judge candidates: 401/402/403 and 451 rejections exclude the model for the process, while a 404 keeps the five-minute cooldown
+- Pointed `install-plugins.sh` and the plugin docs at `oh-my-omp/omp-actual-terminal#release`, the terminal plugin's renamed repository; the old `omp-unified-exec` address returns 404, which failed the updater's apply
 
 ## [1.2.1] - 2026-11-19
 
