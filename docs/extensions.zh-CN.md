@@ -49,7 +49,7 @@
 
 在 `tool_call` 阶段检查 `task`。整批共用 25 秒超时，各任务项并发判定，同一项的全部适用是非检查合在一次模型请求中提问，任一项不通过即拦截整次调用：
 
-- **判定模型**：先取 OMP 模型角色 `@task-split-check`（在 `/model` 中配置，保存在本机 `modelRoles`），再取 `default` 角色链，每次调用实时解析。角色条目未带 `:level` 后缀时使用 `medium` 推理强度；链中模型按顺序尝试，每次尝试的时限为剩余预算除以尚未尝试的模型数，provider 错误或模型挂起只消耗它自己的份额，判定随即换到下一个模型。
+- **判定模型**：先取 OMP 模型角色 `@task-split-check`（在 `/model` 中配置，保存在本机 `modelRoles`），再取 `default` 角色链，每次调用实时解析。角色条目未带 `:level` 后缀时使用 `medium` 推理强度；链中模型按顺序尝试，每次尝试的时限为剩余预算除以尚未尝试的模型数，provider 错误或模型挂起只消耗它自己的份额，判定随即换到下一个模型。每次尝试先经会话的花费上限准入（被拒时检查以该错误结束）；每次回复以 purpose `task-split-check` 和应答模型所属的角色记入会话账本，并记入遥测，方式同下文 `task-completion-judge`。
 - **split 覆盖范围**：`split` 检查覆盖 `task` 项中 `agent` 定义 frontmatter 声明 `splitCheck: true` 的项（仓库自带的 `task:low`、`task:free`、`task:mid` 定义声明了它；用与 task 工具派生预检相同的查找解析）。`report-limit` 检查与此无关，对所有 `task:*` 生效。
 - **失败处理**：没有可用模型或有效结论（包括请求报错、超时、以 `length` 截断或以 `toolUse` 结束的答案，以及答案无法解析）时放行。每次完成判定记一条 `task-split-check verdicts` 日志。
 
@@ -67,7 +67,7 @@
 在 frontmatter 声明 `completionJudge: true` 的子代理调用终止性结构化 `yield` 时运行（仓库自带的 `task:free`、`task:mid`、`task:low` 声明了该键；其他子代理、主会话、报错 `yield` 与增量提交不拦截）：
 
 - **输入内容（60k token 预算）**：读取当前分支最后一条 `session_init` 中的任务说明（忽略 `fork_task` 继承的前置历史）、system prompt 中的共享背景、子代理 Todo 的 `goal`、本次 `yield` 提交内容（最多 6,000 字符），以及 `session_init` 之后从最新一条往前能装入剩余预算的连续工具调用与结果（单条参数和结果各最多 800 字符，超长保留前 60% + 后 40%；按 ASCII 字符 1 token、非 ASCII 字符 2 token 估算）。
-- **判定模型与标准**：先取 `@task-completion-judge`，再取 `default` 角色链，每次判定实时解析，未带 `:level` 时使用 `low` 推理强度，超时 25 秒，provider 报错时换链中下一个模型。若子代理的 Todo `goal` 缩小了派工范围、`goal` 中声明的验证方式未在工具调用中出现，或未达到 `doneWhen`（包括报告 blocker），均判为 `NOT_DONE`。
+- **判定模型与标准**：先取 `@task-completion-judge`，再取 `default` 角色链，每次判定实时解析，未带 `:level` 时使用 `low` 推理强度，超时 25 秒，provider 报错或模型无凭据时换链中下一个模型。每次请求前检查会话的花费上限（`session.maxCost`），被拒时检查就此结束，不再试下一个模型。每次回复（含失败的）以 purpose `task-completion-judge` 和应答模型所属的角色（来自 `default` 链的模型记 `default`）记入调用方会话的账本（`omp stats`、会话用量），把花费计入会话，并产生一个对话遥测 span。若子代理的 Todo `goal` 缩小了派工范围、`goal` 中声明的验证方式未在工具调用中出现，或未达到 `doneWhen`（包括报告 blocker），均判为 `NOT_DONE`。
 - **判定词解析**：判定词是回复首行的开头词元——`DONE`、`NOT_DONE` 或 `NOT DONE`——经 trim、去掉首尾反引号与星号、大小写不敏感比较；词元之后须紧接行尾、空白或 `_` 以外的 Unicode 标点（`NOT_DONE: 缺测试`、`DONE — 全部完成` 算判定；`Verdict: DONE`、`NOT-DONE`、`NOT_DONE_X`、`DONEFOO` 不算）。回复其余部分作为原因。首行不符、无可用模型、超时或全部模型失败都判不出结论：只放行当次 `yield`，下一个终止性 `yield` 照常鉴定。
 - **退回规则**：
   1. 首次判为 `NOT_DONE` 时拦截 `yield` 并返回原因，要求子代理继续完成并验证。
@@ -94,10 +94,10 @@
 
 `turn-judge`、`tool-policy-nag` 的 `intent` 通道（`detector: jev` 时）、`watchdog-agent` 的选项模式与 `lang-nag` 以自身扩展名作为 purpose 调用 `agent/extensions/_shared/judge.ts` 中的 `openJudge`。purpose 既是用量记录的标签，也是该扩展自己的模型角色名（`@turn-judge`、`@tool-policy-nag`、`@watchdog-agent`、`@lang-nag`，登记在 `agent/config.yml` 的 `modelTags`）：
 
-1. `@<purpose>` 解析出聊天模型时（在 `/model` 中配置，保存在本机 `modelRoles`），按链顺序由这些模型以提示式判定（`TextJudge`）作答。模型以 401/402/403/404 拒绝后冷却 5 分钟，与 judge 角色链的候选一致。此时跳过 OMP 的 judge 角色链，该 purpose 不会由原生或本地判定模型作答。`judge` 模型答不好某个扩展的问题时绑定该角色，例如原生判定模型把英文回复判成中文时绑定 `@lang-nag`。
-2. 否则先走 OMP 的 judge 角色链（`resolveJudge`：`modelRoles.judge` → `retry.fallbackChains.judge` → OMP 内置默认链）。跳过无凭据候选，遇到 provider 错误换下一个（401/402/403/404 使该候选冷却 5 分钟，与第 1 条相同；网关 502 且上游凭据不可用时，OMP 也会使该候选冷却），遇到中止或超时立即停止。从链中第一个原生判定 API 模型起只保留原生候选，`openJudge` 不把当前会话模型加入链中。
+1. `@<purpose>` 解析出聊天模型时（在 `/model` 中配置，保存在本机 `modelRoles`），按链顺序由这些模型以提示式判定（`TextJudge`）作答。provider 拒绝账号（401/402/403）或地区不可用（451）的模型在本进程内不再尝试，以 404 作答的模型跳过 5 分钟，与 judge 角色链的候选一致。开启 `models.noJudge` 或 `models.offline` 时只留与会话模型同一 provider 的模型，一个都不剩时 `openJudge` 报 inactive。此时跳过 OMP 的 judge 角色链，该 purpose 不会由原生或本地判定模型作答。`judge` 模型答不好某个扩展的问题时绑定该角色，例如原生判定模型把英文回复判成中文时绑定 `@lang-nag`。
+2. 否则先走 OMP 的 judge 角色链（`resolveJudge`：`modelRoles.judge` → `retry.fallbackChains.judge` → OMP 内置默认链）。跳过无凭据候选，遇到 provider 错误换下一个（401/402/403/451 使该候选在本进程内不再尝试，404 使其冷却 5 分钟，与第 1 条相同；网关 502 且上游凭据不可用时，OMP 也会使该候选冷却），遇到中止或超时立即停止。从链中第一个原生判定 API 模型起只保留原生候选，`openJudge` 不把当前会话模型加入链中。
 3. 没有聊天回退：链解析不出任何模型时 `openJudge` 报 inactive，候选失败时判定失败，由调用方扩展自己的失败策略处理。聊天回退的表达方式是绑定 `@<purpose>` 本身。
-4. 提示式判定的概率为 one-hot（选中项为 1），低于 1 的阈值只看选中项。每次请求都以 purpose 记入会话用量账本，提示式请求另记作答模型所属的角色。相同的原生请求复用 OMP 判定缓存，提示式请求不复用。角色绑定在每次触发时重读。
+4. 提示式判定的概率为 one-hot（选中项为 1），低于 1 的阈值只看选中项。每次尝试先经会话的花费上限（`session.maxCost`）准入：被拒时判定就此结束，计费的尝试把花费计入会话。每次请求都以 purpose 记入会话用量账本并产生一个判定遥测 span，提示式请求另记作答模型所属的角色与请求耗时。相同的原生请求复用 OMP 判定缓存，提示式请求不复用。角色绑定在每次触发时重读。
 
 ### tool-policy-nag
 

@@ -14,6 +14,10 @@
 
 ### Changed
 
+- Gated every `task-split-check` and `task-completion-judge` model attempt on the session's spend cap (a refusal ends the check without trying the next model) and recorded each reply's usage in the calling session's ledger, its cost in the session's spend and a chat telemetry span
+- Made `task-split-check` and `task-completion-judge` skip a model without credentials and move on to the next one
+- Gated every `@<purpose>` prompted judgment attempt (`turn-judge`, `lang-nag`, `tool-policy-nag`, `watchdog-agent`) on the session's spend cap, adding each billed attempt's cost to the session's spend, its duration to the ledger entry and one judgment telemetry span; judgments through OMP's judge chain now pass the same cap
+- Restricted `@<purpose>` prompted judge models to the session model's provider when `models.noJudge` or `models.offline` is set, reporting the judge inactive when none remain
 - Counted only the YAML boolean `true` under `completionJudge` or `splitCheck` (or their hyphenated spellings) for the completion judge and split check; quoted `"true"`, other key casing, nested keys and unparseable frontmatter no longer count
 - Left agent definitions with unparseable frontmatter unchanged when adding `splitCheck: true`, reporting the parse error in the migration note instead of writing the key
 - Wrote the user-report rule (`NEVER rerun checks to doubt them`) and the compiled-code rule (`NEVER add avoidable allocation`) directly into `SYSTEM_TEMPLATE.md`, and removed the two `REPLACE-SYSTEM-default.yml` rules that rewrote these lines of this repository's own template
@@ -49,7 +53,7 @@
 - Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
 - Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended
 - Fixed timed-out `ask` submissions being counted as user decisions; a timeout now yields no answers
-- Skipped prompted judge candidates for five minutes after a 401/402/403/404 rejection instead of re-requesting them on every judgment
+- Skipped rejected judge candidates: 401/402/403 and 451 rejections exclude the model for the process, while a 404 keeps the five-minute cooldown
 - Pointed `install-plugins.sh` and the plugin docs at `oh-my-omp/omp-actual-terminal#release`, the terminal plugin's renamed repository; the old `omp-unified-exec` address returns 404, which failed the updater's apply
 
 ## [1.2.1] - 2026-11-19
