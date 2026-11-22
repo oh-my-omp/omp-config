@@ -14,6 +14,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { declaresFlag } from "../_shared/agent-definition.ts";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
+import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
 import { readTodos, type TodoReadResponse } from "../_shared/omomp-shared/todo-read.ts";
 import { completeRoleChain } from "../_shared/role-chain.ts";
 
@@ -456,6 +457,14 @@ const openTodoItems = (todo: ReviewTodo): string[] =>
 
 export default function taskCompletionJudge(pi: ExtensionAPI): void {
 	const rounds = new Map<string, Round>();
+	registerCompactHandoff(
+		pi,
+		defineStatelessNoiseGuard({
+			pluginId: "omp-config/task-completion-judge",
+			renderNoiseGuardDirective: () =>
+				"Subagent yield rejection bounces (`完成度鉴定：...yield 被退回`) from `task-completion-judge` are transient pre-yield checks — NEVER record them as user instructions or permanent constraints in the summary.",
+		}),
+	);
 
 	const review = async (
 		toolCallId: string,

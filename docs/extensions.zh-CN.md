@@ -41,7 +41,7 @@
 
 源码：`agent/extensions/isolation-nudge/`。
 
-在主会话与子代理的 `tool_call` 阶段检查 `task` 调用。当一次 `task` 调用会让 $\ge 2$ 个可写代理（`task:*`、内置 `task`、未填 `agent` 的项、`m1` 等，合并计算本次批次、同一 assistant message 中前序 `task` 调用已派发的共享写者——宿主先准备好整条 message 的所有调用再执行，这些写者尚无运行中的 job——与当前会话仍在运行的共享写入任务）在未设 `isolated: true` 的情况下共用同一工作目录，且其中有未显式填写 `isolated` 的项时，按该项 `task` 文本的 SHA-256 拦截一次，提示写入任务设 `isolated: true`、只读任务设 `isolated: false`；相同 `task` 文本再次调用时放行。
+在主会话与子代理的 `tool_call` 阶段检查 `task` 调用。当一次 `task` 调用会让 $\ge 2$ 个可写代理（`task:*`、内置 `task`、未填 `agent` 的项、`m1` 等，合并计算本次批次、同一 assistant message 中前序 `task` 调用已派发的共享写者——宿主先准备好整条 message 的所有调用再执行，这些写者尚无运行中的 job——与当前会话仍在运行的共享写入任务）在未设 `isolated: true` 的情况下共用同一工作目录，且其中有未显式填写 `isolated` 的项时，按该项 `task` 文本的 SHA-256 拦截一次，提示写入任务设 `isolated: true`、只读任务设 `isolated: false`；相同 `task` 文本再次调用时放行。它同时向 `_shared/omomp-shared/compact-handoff.ts` 注册 `StatelessNoiseGuard`，避免单次 `Not dispatched — a reminder, not a rule.` 提醒进入压缩摘要。
 
 ### task-split-check
 
@@ -72,7 +72,7 @@
 - **退回规则**：
   1. 首次判为 `NOT_DONE` 时拦截 `yield` 并返回原因，要求子代理继续完成并验证。
   2. 判为 `DONE` 后，同步触发 `omp-todo-more:read` 读取最新 Todo 列表；若仍有 `pending` 或 `in_progress` 项，再拦截一次并列出这些项的说明，要求先更新 Todo 状态。
-  3. 每种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；`yield` 通过后，该会话后续 `yield` 不再拦截。判定结论只写日志（`task-completion-judge verdict`），`yield` 数据保持 agent 的 `{ report }` schema。配置、模型或插件读取失败时记 warning 并放行。
+  3. 每种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；`yield` 通过后，该会话后续 `yield` 不再拦截。判定结论只写日志（`task-completion-judge verdict`），`yield` 数据保持 agent 的 `{ report }` schema。配置、模型或插件读取失败时记 warning 并放行。它同时向 `_shared/omomp-shared/compact-handoff.ts` 注册 `StatelessNoiseGuard`，避免交付前的退回提示进入压缩摘要。
 
 ### subagent-usage
 
@@ -98,6 +98,7 @@
 2. 否则先走 OMP 的 judge 角色链（`resolveJudge`：`modelRoles.judge` → `retry.fallbackChains.judge` → OMP 内置默认链）。跳过无凭据候选，遇到 provider 错误换下一个（401/402/403/451 使该候选在本进程内不再尝试，404 使其冷却 5 分钟，与第 1 条相同；网关 502 且上游凭据不可用时，OMP 也会使该候选冷却），遇到中止或超时立即停止。从链中第一个原生判定 API 模型起只保留原生候选，`openJudge` 不把当前会话模型加入链中。
 3. 没有聊天回退：链解析不出任何模型时 `openJudge` 报 inactive，候选失败时判定失败，由调用方扩展自己的失败策略处理。聊天回退的表达方式是绑定 `@<purpose>` 本身。
 4. 提示式判定的概率为 one-hot（选中项为 1），低于 1 的阈值只看选中项。每次尝试先经会话的花费上限（`session.maxCost`）准入：被拒时判定就此结束，计费的尝试把花费计入会话。每次请求都以 purpose 记入会话用量账本并产生一个判定遥测 span，提示式请求另记作答模型所属的角色与请求耗时。相同的原生请求复用 OMP 判定缓存，提示式请求不复用。角色绑定在每次触发时重读。
+5. 压缩交接：`tool-policy-nag`、`watchdog-agent`、`turn-judge` 与 `lang-nag` 均向 `_shared/omomp-shared/compact-handoff.ts` 注册 `StatelessNoiseGuard`，将各自的提醒与裸文本训斥排除出压缩摘要；在 `session_before_compact` 时，`tool-policy-nag` 清空待发延迟提醒与在途意向任务，`watchdog-agent` 中止在途审阅，`lang-nag` 取消在途语种检测，`turn-judge` 推进 epoch 并在发送提示前检查 `isCompacting`。
 
 ### tool-policy-nag
 

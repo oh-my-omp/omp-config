@@ -4,6 +4,7 @@ import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding
 import { errorText } from "../_shared/errors.ts";
 import { type JudgeOpen, openJudge } from "../_shared/judge.ts";
 import { textOf } from "../_shared/messages.ts";
+import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
 import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
 
 const DETECT_CHAR_LIMIT = 200; // code points of the last paragraph handed to the judge; never more.
@@ -141,6 +142,15 @@ export default function langNag(pi: ExtensionAPI): void {
 		detection = IDLE;
 	};
 
+	registerCompactHandoff(
+		pi,
+		defineStatelessNoiseGuard({
+			pluginId: "omp-config/lang-nag",
+			renderNoiseGuardDirective: () =>
+				"`lang-nag` language reminders prepended to user turns are transient per-turn corrections — NEVER record them as task goals or persistent constraints in the summary.",
+		}),
+	);
+
 	pi.on("session_start", async (_event, ctx) => {
 		try {
 			cancelDetection();
@@ -169,6 +179,9 @@ export default function langNag(pi: ExtensionAPI): void {
 		if (ctx.agent.kind === "main") cancelDetection();
 	});
 	pi.on("session_tree", (_event, ctx) => {
+		if (ctx.agent.kind === "main") cancelDetection();
+	});
+	pi.on("session_before_compact", (_event, ctx) => {
 		if (ctx.agent.kind === "main") cancelDetection();
 	});
 	pi.on("session_compact", (_event, ctx) => {

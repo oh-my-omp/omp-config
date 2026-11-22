@@ -19,6 +19,7 @@
 - Added optional result-shaping guidance to the system prompt
 - Warned once per process when the `input-polish` shortcut is also held by an omp keybinding, a reserved chord, or another extension, naming the holder while `input-polish` keeps the chord
 - Added a host-import check to `bun run check` (`ci/host-imports.ts`): a value import under `agent/` whose specifier is not a built-in, a relative path or a key of the omp binary's module table (taken from the installed host's `collectBundledPiEntries()`) fails the check with its file and specifier
+- Synced `compact-handoff.ts` from `oh-my-omp/shared@8f2c5e5` via `omomp-shared.json` and wired `repo-rules` (`StatefulHarnessHandoff`) plus `tool-policy-nag`, `turn-judge`, `watchdog-agent`, `lang-nag`, `isolation-nudge`, and `task-completion-judge` (`StatelessNoiseGuard` and `session_before_compact` cleanup / compaction-barrier guards) into the shared compaction handoff coordinator
 
 ### Changed
 

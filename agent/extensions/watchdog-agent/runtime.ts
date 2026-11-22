@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
+import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
 import { describeFilter, type InjectMode, producerMatches, type SessionFilter, targetsSession } from "../_shared/session-filter.ts";
 import {
 	buildAddPrompt,
@@ -753,6 +754,24 @@ function registerEvents(runtime: Runtime): void {
 			return { content: [...event.content, { type: "text", text: files.map((file) => fileStatus(runtime, file)).join("\n") }] };
 		} catch (error) {
 			runtime.pi.logger.warn(`watchdog ${"tool_result"} handler failed`, { error: errorText(error) });
+		}
+	});
+
+	registerCompactHandoff(
+		runtime.pi,
+		defineStatelessNoiseGuard({
+			pluginId: "omp-config/watchdog-agent",
+			renderNoiseGuardDirective: () =>
+				'`customType: "watchdog"` notes and `<watchdog ...>` blocks are automated periodic audit reminders — NEVER treat them as human user turns or permanent goals in the summary.',
+		}),
+	);
+
+	runtime.pi.on("session_before_compact", () => {
+		try {
+			abortReviews(runtime);
+			runtime.nextTurnQueue = [];
+		} catch (error) {
+			runtime.pi.logger.warn(`watchdog ${"session_before_compact"} handler failed`, { error: errorText(error) });
 		}
 	});
 

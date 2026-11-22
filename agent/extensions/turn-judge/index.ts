@@ -8,6 +8,7 @@ import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { openJudge } from "../_shared/judge.ts";
 import { textOf } from "../_shared/messages.ts";
+import { defineStatelessNoiseGuard, isCompacting, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
 import {
 	type FilterKeys,
 	type FilterProblem,
@@ -640,6 +641,15 @@ export default function turnJudge(pi: ExtensionAPI): void {
 	const admissions = createAdmissionWatcher(pi);
 	let epoch = 0;
 
+	registerCompactHandoff(
+		pi,
+		defineStatelessNoiseGuard({
+			pluginId: "omp-config/turn-judge",
+			renderNoiseGuardDirective: () =>
+				'`customType: "turn-judge"` prompts are automated single-turn judge nudges — NEVER record them as permanent user constraints or session rulings in the summary.',
+		}),
+	);
+
 	const settleMain = (ctx: ExtensionContext, judged: Judged, startedAt: number): Report => {
 		switch (judged.kind) {
 			case "failed":
@@ -647,12 +657,12 @@ export default function turnJudge(pi: ExtensionAPI): void {
 			case "info":
 				return { kind: "info", line: judged.line };
 			case "prompt":
-				if (epoch !== startedAt)
+				if (epoch !== startedAt || isCompacting(ctx.sessionManager))
 					return {
 						kind: "info",
 						line: tr(
-							`${judged.line}; new input arrived before the judgment returned, prompt not sent`,
-							`${judged.line}；判断返回前已有新输入，未发送提示`,
+							`${judged.line}; new input or compaction arrived before the judgment returned, prompt not sent`,
+							`${judged.line}；判断返回前已有新输入或正在压缩，未发送提示`,
 						),
 					};
 				pi.logger.info(`${judged.line} → prompt (${judged.inject})`);
@@ -717,6 +727,9 @@ export default function turnJudge(pi: ExtensionAPI): void {
 		epoch += 1;
 	});
 	pi.on("session_tree", () => {
+		epoch += 1;
+	});
+	pi.on("session_before_compact", () => {
 		epoch += 1;
 	});
 

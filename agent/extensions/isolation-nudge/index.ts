@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 
 import { errorText } from "../_shared/errors.ts";
+import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
 
 const isWriter = (agent: string | undefined): boolean => agent === undefined || /^task(?::|$)/.test(agent) || /^m\d+$/.test(agent);
 
@@ -80,6 +81,14 @@ type SessionState = {
 
 export default function isolationNudge(pi: ExtensionAPI): void {
 	const sessions = new Map<string, SessionState>();
+	registerCompactHandoff(
+		pi,
+		defineStatelessNoiseGuard({
+			pluginId: "omp-config/isolation-nudge",
+			renderNoiseGuardDirective: () =>
+				"Single-call `Not dispatched — a reminder, not a rule.` isolation nudges from `isolation-nudge` are ephemeral dispatch reminders — NEVER include them as user constraints or blockers in the summary.",
+		}),
+	);
 
 	const stateOf = (ctx: ExtensionContext): SessionState => {
 		const key = ctx.sessionManager.getSessionFile() ?? ctx.cwd;

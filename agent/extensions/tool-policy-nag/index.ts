@@ -14,6 +14,7 @@ import { cfgBashInterceptorEnabled } from "@oh-my-pi/pi-coding-agent/exec/settin
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { openJudge } from "../_shared/judge.ts";
+import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
 import { sessionSettings } from "../_shared/settings.ts";
 import { type WatchedCall, watchedCallOf } from "../_shared/tool-calls.ts";
 import { type FormLane, type IntentLane, type Lanes, type LaneWarning, loadLanes } from "./detector-config.ts";
@@ -558,10 +559,27 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
 		interceptorOff: null,
 	};
 
+	registerCompactHandoff(
+		pi,
+		defineStatelessNoiseGuard({
+			pluginId: "omp-config/tool-policy-nag",
+			renderNoiseGuardDirective: () =>
+				'Any `[Developer]` or bare unprefixed text turn matching "你为什么不遵守system prompt" / "反思自己以后继续" or `<system-reminder>` blocks about shell/tool-policy violations are automated lint nags from `tool-policy-nag` (whose counter resets on compaction) — NEVER treat them as human user instructions, unanswered questions, goals, constraints, or reflection/apology tasks.',
+		}),
+	);
+
 	pi.on("session_start", (_event, ctx) => onSessionMove(nag, "session_start", ctx));
 	pi.on("session_switch", (_event, ctx) => onSessionMove(nag, "session_switch", ctx));
 	pi.on("session_branch", (_event, ctx) => onSessionMove(nag, "session_branch", ctx));
 	pi.on("session_tree", (_event, ctx) => onSessionMove(nag, "session_tree", ctx));
+	pi.on("session_before_compact", (_event, ctx) =>
+		runForMainSession(nag.pi, ctx, () => {
+			nag.epoch += 1;
+			nag.lateReminders.length = 0;
+			nag.intentJobs.clear();
+			nag.pending = null;
+		}),
+	);
 	pi.on("session_compact", (_event, ctx) => onSessionCompact(nag, ctx));
 	pi.on("auto_compaction_end", (event, ctx) => onAutoCompactionEnd(nag, event, ctx));
 	pi.on("session_shutdown", (_event, ctx) => onSessionShutdown(nag, ctx));

@@ -96,7 +96,7 @@ OMP 的 `agents-md` 与 `claude-md` provider 把独立的 `AGENTS.md` / `CLAUDE.
 - **带 `paths` 的规则**：frontmatter 含 `paths`（YAML 列表或逗号分隔的 glob，支持 `{…}` 与 `[…]`）的规则，只在匹配文件被成功 `read`、`write`、`edit`，或被 `bash` 中读取单文件的纯 `cat`/`head`/`tail` 触及时才加载（含管道、命令串联或多文件的命令不计）。适用范围涵盖上述扫描目录和 OMP 原生发现的全部规则（项目/用户级 `.omp` 与 `.agents`、cursor/windsurf/cline/GitHub 规则、插件或扩展根目录下的 `rules/`）。相对路径 glob 的基准目录：用户级规则为 `cwd`，项目规则为点目录所在父目录，插件或扩展 `rules/` 为该插件或扩展根目录。OMP 原生发现的带 `paths` 规则留在 OMP 放置它的 `<generic-rules>` 或 `<domain-rules>` 中；增量逐条引出在其中找到的规则及其 `paths`，写明它只在处理匹配文件时适用。这些规则继续遵守 `ttsr.disabledRules` 与 `agents` 作用域。TTSR 规则（`condition`、`astCondition`、`question`）和 OMP 内置规则仍由 OMP 处理。命中的规则通过 `tool_result` 的 `additionalContext`（`<path-scoped-rule path="…">`）每个上下文注入一次，与增量同时到期时排在增量之后；若 compaction、resume 或切分支使该标记离开当前上下文，再次触及匹配文件时会重新注入。
 - **绝对路径 `paths` 模式**：以 `~/` 开头的模式与绝对路径模式（`/…`；Windows 上还有 `C:/…` 或 `C:\…`）直接匹配被触及文件的绝对路径（`~` 为家目录），可用于在 `~/.claude/rules` 中按目录名匹配任意位置的仓库（如 `/**/{omp,.omp,omp-*,*-omp,*-omp-*}/**`）。Windows 上以 `/` 开头的模式没有盘符，不匹配任何文件，应写成 `C:/**/…`。
 
-`repo-rules` 和条件专题注入共用 `_shared/context-delivery.ts`：是否已经投递由活动叶节点模型上下文中的持久 developer 标记决定；临时 turn 集合只覆盖宿主尚未持久化的工具批次窗口。
+`repo-rules` 和条件专题注入共用 `_shared/context-delivery.ts`：是否已经投递由活动叶节点模型上下文中的持久 developer 标记决定；临时 turn 集合只覆盖宿主尚未持久化的工具批次窗口。`repo-rules` 同时向 `_shared/omomp-shared/compact-handoff.ts` 注册 `plugin-managed` 类型的 `StatefulHarnessHandoff`，声明压缩后会自动重注非根 `AGENTS.md`/`CLAUDE.md`、无 `paths` 规则与 `<path-scoped-rules>`，避免摘要重复抄写这些静态规则。
 
 ---
 
@@ -104,6 +104,7 @@ OMP 的 `agents-md` 与 `claude-md` provider 把独立的 `AGENTS.md` / `CLAUDE.
 
 - **`task` 与 `fork_task`**：普通 `task` 新建空白子代理会话，只传入 `context` 与 `task` 文本，子代理的查找过程和工具输出留在其分支内，主会话只收最终 `yield` 结果。`fork_task` 由 [omp-subagent-more](https://github.com/oh-my-omp/omp-subagent-more#readme) 插件提供。
 - **压缩顺序与触发时机**：`agent/config.yml` 将 `compaction.methodOrder` 设为 `[remote, soft, snapcompact, handoff, shake]`，并将 `compaction.asyncEnabled` 设为 `false`。开启 `asyncEnabled` 时，OMP 会在阈值前最多 32k token 提前在后台请求摘要，拿到后一直存到阈值才替换，且 Anthropic 的摘要不会重新生成，这期间每次请求仍发送完整历史；关闭后只在到达阈值时执行压缩。
+- **共享压缩交接（`_shared/omomp-shared/compact-handoff.ts`）**：`repo-rules`、`tool-policy-nag`、`turn-judge`、`watchdog-agent`、`lang-nag`、`isolation-nudge` 与 `task-completion-judge` 统一向进程级共享压缩协调器（`Symbol.for("omomp.shared.compactRegistry")`）注册。在不修改 OMP 宿主代码且不改写压缩前历史消息（保全 KV Prompt Cache 命中）的前提下，协调器将 `<harness-provided>` 排除声明与 `<attribution-and-noise-guard>` 噪音防护聚合为单份 `session.compacting` 结果，在 `session_before_compact` 原地裁剪 `preparation.fileOps` 为近端仓库核心文件，并提供 `isCompacting` 屏障使在途监督钩子在压缩边界安全收敛。
 
 ### fork-task
 

@@ -4,6 +4,7 @@ import { ruleAppliesToAgent } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { cfgTtsr } from "@oh-my-pi/pi-coding-agent/export/ttsr-settings";
 import { createContextDelivery } from "../_shared/context-delivery.ts";
 import { errorText } from "../_shared/errors.ts";
+import { defineStatefulHarnessHandoff, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
 import { createDeltaStream, type Delta } from "../_shared/omomp-shared/context-delta.ts";
 import { sessionSettings } from "../_shared/settings.ts";
 import { type ContextFileScope, contextFileScope, type DeliveredContextFile, loadContextFiles } from "./context-files.ts";
@@ -223,6 +224,22 @@ export default function repoRules(pi: ExtensionAPI): void {
 	let view: PromptView | undefined;
 	const claimDeliveries = createContextDelivery(pi);
 	const deltas = createDeltaStream("omp-config/repo-rules");
+	registerCompactHandoff(
+		pi,
+		defineStatefulHarnessHandoff({
+			pluginId: "omp-config/repo-rules",
+			captureState: () => ({
+				scopedCount: catalog?.scoped.length ?? 0,
+				unscopedCount: catalog?.unscoped.length ?? 0,
+			}),
+			renderCompactPromptClaim: () =>
+				'Non-root `AGENTS.md`/`CLAUDE.md`, unscoped rule files, and `<path-scoped-rules>` are automatically re-delivered post-compaction by `repo-rules` (`createDeltaStream("repo-rules")` + `createContextDelivery`) — NEVER restate `AGENTS.md`, `CLAUDE.md`, or `<path-scoped-rules>` in the summary.',
+			renderPostCompactInjection: () => ({
+				source: "repo-rules",
+				delivery: "plugin-managed",
+			}),
+		}),
+	);
 	pi.on("turn_start", () => {
 		deltas.turnStarted();
 		view = undefined;
