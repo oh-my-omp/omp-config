@@ -1,96 +1,49 @@
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import {
-	type InternalResource,
-	type InternalUrl,
-	InternalUrlRouter,
-	type ProtocolHandler,
-	type SchemeSpec,
-	type UrlCompletion,
-} from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { type RegisterSchemeResult, registerInternalScheme } from "../_shared/omomp-shared/internal-url.ts";
+	type RegisterSchemeResult,
+	registerToolTopics,
+	type ToolTopicDoc,
+	type ToolTopicInjectRule,
+} from "../_shared/omomp-shared/internal-url.ts";
 import type { Topic } from "./catalog.ts";
 
-function target(url: InternalUrl): { readonly tool: string; readonly topic: string | undefined } {
-	const tool = url.rawHost || url.hostname;
-	const segments = (url.rawPathname ?? url.pathname).split("/").filter((segment) => segment.length > 0);
-	if (segments.length > 1 || (!tool && segments.length > 0) || url.search || url.hash) {
-		throw new Error(`Invalid tool:// URL: ${url.href}. Use tool://<tool> or tool://<tool>/<topic>.`);
-	}
-	return { tool, topic: segments[0] };
-}
-
-function markdown(url: string, content: string): InternalResource {
-	return { url, content, contentType: "text/markdown", size: Buffer.byteLength(content) };
-}
-
 const OWNER = "omp-config/tool-topics";
+const HUB_OWNER = "omomp-shared/tool-hub";
+const OWNER_BRAND = Symbol.for("omomp-shared/internal-url");
 
-class ToolTopicsHandler implements ProtocolHandler {
-	readonly scheme = "tool";
-	readonly spec: SchemeSpec = { backing: "virtual", selectors: "lines", immutable: true };
-	readonly #tools: ReadonlyMap<string, ReadonlyMap<string, Topic>>;
-
-	constructor(tools: ReadonlyMap<string, ReadonlyMap<string, Topic>>) {
-		this.#tools = tools;
-	}
-
-	promptDoc(): string {
-		return "`tool://<tool>/<topic>`: tool topics; `tool://` lists tools with topics, `tool://<tool>` lists their topics. Line selectors apply.";
-	}
-
-	#topics(tool: string): ReadonlyMap<string, Topic> {
-		const topics = this.#tools.get(tool);
-		if (!topics) throw new Error(`Tool '${tool}' has no tool:// topics. Tools with topics: ${[...this.#tools.keys()].join(", ")}.`);
-		return topics;
-	}
-
-	#topic(tool: string, name: string): Topic {
-		const topics = this.#topics(tool);
-		const topic = topics.get(name);
-		if (!topic) throw new Error(`Unknown topic '${name}' for ${tool}. Available: ${[...topics.keys()].join(", ")}.`);
-		return topic;
-	}
-
-	async resolve(url: InternalUrl): Promise<InternalResource> {
-		const { tool, topic } = target(url);
-		if (!tool) {
-			const rows = [...this.#tools.keys()].map((name) => `- [${name}](tool://${name})`);
-			return markdown(url.href, ["# tool://", "", "Tools with topics:", "", ...rows, ""].join("\n"));
-		}
-		if (topic === undefined) {
-			const rows = [...this.#topics(tool).values()].map(
-				(entry) => `- [${entry.name}](tool://${tool}/${entry.name}) — ${entry.title}. Read when: ${entry.when}`,
-			);
-			return markdown(
-				url.href,
-				[`# ${tool} topics`, "", `Read tool://${tool}/<topic> (line selectors apply).`, "", ...rows, ""].join("\n"),
-			);
-		}
-		return markdown(url.href, this.#topic(tool, topic).body);
-	}
-
-	async enumerate(url: InternalUrl): Promise<Array<{ url: string; content: string }>> {
-		const { tool, topic } = target(url);
-		const leaves: Array<{ url: string; content: string }> = [];
-		const names = tool ? [tool] : this.#tools.keys();
-		for (const name of names) {
-			const topics = topic === undefined ? this.#topics(name).values() : [this.#topic(name, topic)];
-			for (const entry of topics) leaves.push({ url: `tool://${name}/${entry.name}`, content: entry.body });
-		}
-		return leaves;
-	}
-
-	async complete(): Promise<UrlCompletion[]> {
-		const completions: UrlCompletion[] = [];
-		for (const [tool, topics] of this.#tools) {
-			completions.push({ value: tool });
-			for (const topic of topics.values()) completions.push({ value: `${tool}/${topic.name}`, description: topic.when });
-		}
-		return completions;
-	}
+function toHubInjectRule(rule: Topic["inject"][number]): ToolTopicInjectRule {
+	return {
+		...(rule.parameter !== undefined ? { param: rule.parameter } : {}),
+		...(rule.patternSource !== undefined ? { pattern: rule.patternSource } : {}),
+		...(rule.onError !== undefined ? { onError: rule.onError } : {}),
+		...(rule.resultPatternSource !== undefined ? { resultPattern: rule.resultPatternSource } : {}),
+	};
 }
 
 export function publishTopics(tools: ReadonlyMap<string, readonly Topic[]>): RegisterSchemeResult {
-	const byTool = new Map<string, ReadonlyMap<string, Topic>>();
-	for (const [tool, topics] of tools) byTool.set(tool, new Map(topics.map((topic) => [topic.name, topic])));
-	return registerInternalScheme(InternalUrlRouter.instance(), OWNER, new ToolTopicsHandler(byTool));
+	const router = InternalUrlRouter.instance();
+	if (router.isBuiltin("tool")) return { kind: "builtin", reason: "omp owns tool://" };
+	const docs: ToolTopicDoc[] = [];
+	for (const [tool, topics] of tools) {
+		for (const topic of topics) {
+			const inject = topic.inject.filter((rule) => rule.tool === tool).map(toHubInjectRule);
+			docs.push({
+				tool,
+				topic: topic.name,
+				title: topic.title,
+				when: topic.when,
+				body: topic.body,
+				...(topic.hiddenFromIndex ? { hiddenFromIndex: true } : {}),
+				...(inject.length > 0 ? { inject } : {}),
+			});
+		}
+	}
+	registerToolTopics(OWNER, docs);
+	const active = router.getHandler("tool");
+	const holder: unknown = active !== undefined ? Reflect.get(active, OWNER_BRAND) : undefined;
+	if (holder === HUB_OWNER) return { kind: "registered" };
+	if (typeof holder === "string") {
+		return { kind: "held", holder: { kind: "owner", id: holder }, reason: `${holder} already holds tool://` };
+	}
+	return { kind: "held", holder: { kind: "unbranded" }, reason: "a handler with no owner already holds tool://" };
 }

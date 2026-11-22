@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getAgentDir, z } from "@oh-my-pi/pi-coding-agent";
+import { z } from "@oh-my-pi/pi-coding-agent";
+import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 
 export function calibrationPath(): string {
 	return path.join(getAgentDir(), "subagent-usage", "calibration.json");

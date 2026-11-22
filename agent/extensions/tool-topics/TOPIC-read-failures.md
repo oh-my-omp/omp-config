@@ -4,6 +4,14 @@ name: failures
 title: Missing paths, binaries and partial results
 when: when a read failed, found nothing, returned a notice instead of content, or seems to show the wrong file
 upstream: pi-coding-agent@18.13.2 src/tools/read.ts, omp://tools/read.md § Flow, § Errors, § Outputs
+hiddenFromIndex: true
+inject:
+  - id: read-failures-error
+    tool: read
+    onError: true
+  - id: read-failures-notice
+    tool: read
+    resultPattern: '(?:Binary file|… \d+ more|truncated|artifact://)'
 ---
 # Missing paths, binaries and partial results
 

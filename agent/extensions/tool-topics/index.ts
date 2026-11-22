@@ -107,7 +107,7 @@ export default function toolTopics(pi: ExtensionAPI): void {
 	const names = docsList.map((docs) => docs.tool);
 	const covered: Covered = { docs: docsList, names, known: new Set(names) };
 
-	// Inject only when this extension serves tool://; another handler's topics must not go out under our marker.
+	// Inject only when the shared tool:// hub serves tool://; another handler's topics must not go out under our marker.
 	if (indexed) {
 		installToolTopicInjection(pi, {
 			owner: "omp-config/tool-topic-injection",

@@ -4,6 +4,14 @@ name: apply
 title: Previewing, applying and failures
 when: before resolving or rejecting an `ast_edit` proposal, or when it reported parse issues, overlaps or a stale preview
 upstream: pi-coding-agent@18.13.2 src/tools/ast-edit.ts, src/tools/resolve.ts, omp://tools/ast-edit.md § Outputs, § Errors, § Notes
+hiddenFromIndex: true
+inject:
+  - id: ast-edit-apply-error
+    tool: ast_edit
+    onError: true
+  - id: ast-edit-apply-preview
+    tool: ast_edit
+    resultPattern: '(?:applied: false|parseErrors|Overlapping replacements|resolve|stale)'
 ---
 # Previewing, applying and failures
 

@@ -1,4 +1,5 @@
-import { type ExtensionContext, InteractiveMode } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
 // Relies on omp internals (InteractiveMode's prototype, the extension UI context forwarding);

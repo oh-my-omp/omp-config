@@ -1,13 +1,9 @@
 import { readFileSync } from "node:fs";
-import {
-	type ExtensionAPI,
-	type ExtensionCommandContext,
-	type ExtensionContext,
-	getMarkdownTheme,
-	settings,
-} from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgStartupChangelogMode, cfgStartupQuiet } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { Container, Markdown, Text } from "@oh-my-pi/pi-tui";
+import { getMarkdownTheme } from "@oh-my-pi/pi-tui/theme";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { parseReleases } from "./changelog.ts";

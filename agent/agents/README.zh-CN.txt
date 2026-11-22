@@ -2,7 +2,7 @@ SUBAGENT 陷阱
 =============
 
 这里的 *.md 是自定义 agent 定义。下面每一条都是在本机实际观察到的，不是从文档推断的。
-harness 参考：omp://task-agent-discovery.md、omp://tools/task.md、omp://tools/wait.md
+harness 参考：omp://task-agent-discovery.md、omp://task.md、omp://wait.md
 
 本文件刻意用 .txt，见第 13 条。
 英文版：README.txt（条目相同，与本文件同步修改）。

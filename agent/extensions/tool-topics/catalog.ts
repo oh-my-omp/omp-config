@@ -6,8 +6,12 @@ import { errorText } from "../_shared/errors.ts";
 export interface InjectRule {
 	readonly id: string;
 	readonly tool: string;
-	readonly parameter: string;
-	readonly pattern: RegExp;
+	readonly parameter?: string;
+	readonly pattern?: RegExp;
+	readonly patternSource?: string;
+	readonly onError?: boolean;
+	readonly resultPattern?: RegExp;
+	readonly resultPatternSource?: string;
 }
 
 export interface Topic {
@@ -15,6 +19,7 @@ export interface Topic {
 	readonly title: string;
 	readonly when: string;
 	readonly body: string;
+	readonly hiddenFromIndex: boolean;
 	readonly inject: readonly InjectRule[];
 }
 
@@ -32,24 +37,32 @@ export interface Catalog {
 const NAME = /^[A-Za-z0-9_.-]+$/;
 const nameSchema = z.string().refine((value) => NAME.test(value), "Expected [A-Za-z0-9_.-]+");
 const textSchema = z.string().refine((value) => value.trim().length > 0 && !value.includes("\n"), "Expected one non-empty line");
+const regexSourceSchema = z.string().refine((value) => {
+	try {
+		new RegExp(value);
+		return true;
+	} catch {
+		return false;
+	}
+}, "Invalid regular expression");
 const injectEntry = z
 	.object({
 		id: z.string().min(1),
-		tool: z.string().min(1),
-		parameter: z.string().refine((value) => /^[A-Za-z_][\w]*(?:\.[\w]+)*$/.test(value), "Expected an argument name or dotted path"),
-		pattern: z
+		tool: z.string().min(1).optional(),
+		parameter: z
 			.string()
-			.refine((value) => {
-				try {
-					new RegExp(value);
-					return true;
-				} catch {
-					return false;
-				}
-			}, "Invalid regular expression")
-			.transform((source) => new RegExp(source)),
+			.refine((value) => /^[A-Za-z_][\w]*(?:\.[\w]+)*$/.test(value), "Expected an argument name or dotted path")
+			.optional(),
+		pattern: regexSourceSchema.optional(),
+		onError: z.boolean().optional(),
+		resultPattern: regexSourceSchema.optional(),
 	})
-	.strict();
+	.strict()
+	.refine((entry) => (entry.parameter === undefined) === (entry.pattern === undefined), "`parameter` and `pattern` must be set together")
+	.refine(
+		(entry) => entry.parameter !== undefined || entry.onError === true || entry.resultPattern !== undefined,
+		"Inject rule must set parameter/pattern, onError, or resultPattern",
+	);
 const topicHeader = z
 	.object({
 		tool: nameSchema,
@@ -57,6 +70,7 @@ const topicHeader = z
 		title: textSchema,
 		when: textSchema,
 		upstream: textSchema,
+		hiddenFromIndex: z.boolean().optional(),
 		inject: z.array(injectEntry).optional(),
 	})
 	.strict();
@@ -84,8 +98,18 @@ function parseEntry(file: string, text: string): Entry {
 	if (file.startsWith("TOPIC-")) {
 		const parsed = topicHeader.safeParse(header);
 		if (!parsed.success) return { kind: "invalid", reason: parsed.error.message };
-		const { tool, name, title, when, inject } = parsed.data;
-		return { kind: "topic", tool, topic: { name, title, when, body, inject: inject ?? [] } };
+		const { tool, name, title, when, hiddenFromIndex, inject } = parsed.data;
+		const rules: InjectRule[] = (inject ?? []).map((entry) => ({
+			id: entry.id,
+			tool: entry.tool ?? tool,
+			...(entry.parameter !== undefined ? { parameter: entry.parameter } : {}),
+			...(entry.pattern !== undefined ? { pattern: new RegExp(entry.pattern), patternSource: entry.pattern } : {}),
+			...(entry.onError !== undefined ? { onError: entry.onError } : {}),
+			...(entry.resultPattern !== undefined
+				? { resultPattern: new RegExp(entry.resultPattern), resultPatternSource: entry.resultPattern }
+				: {}),
+		}));
+		return { kind: "topic", tool, topic: { name, title, when, body, hiddenFromIndex: hiddenFromIndex === true, inject: rules } };
 	}
 	const parsed = surfaceHeader.safeParse(header);
 	if (!parsed.success) return { kind: "invalid", reason: parsed.error.message };

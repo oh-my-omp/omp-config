@@ -303,13 +303,14 @@ describe("structured files", () => {
 		expect(Bun.YAML.parse(host(agentDir, "config.yml"))).toEqual({ task: { eager: "default" } });
 	});
 
-	test("translator cutover leaves existing bytes alone with an old structured base and deletion history", async () => {
+	test("translator cutover retires deprecated thinking-translator.json cleanly with an old structured base and deletion history", async () => {
 		const src = source();
 		const original = '{\n  "enabled": true,\n  "trace": false\n}\n';
 		src.commit({ "agent/thinking-translator.json": original });
 		src.commit({ "agent/thinking-translator.json": null, "agent/config.yml": "lsp:\n  enabled: false\n" });
 		for (const content of [original, '{ "enabled": false, "custom": "本机" }\n']) {
 			const agentDir = temp("omp-translator-cutover-");
+			const target = join(agentDir, "thinking-translator.json");
 			writeTree(agentDir, {
 				"thinking-translator.json": content,
 				".omp-config-base/state.json": JSON.stringify({
@@ -318,18 +319,29 @@ describe("structured files", () => {
 					structured: { "agent/thinking-translator.json": { value: { trace: false }, unknown: [] } },
 				}),
 			});
-			for (const check of [true, false]) {
-				const report = await applySnapshot({
-					source: src.dir,
-					agentDir,
-					previousCommit: "HEAD~1",
-					check,
-					plugins: false,
-				});
-				expect(report.errors).toEqual([]);
-				expect(report.conflicts).toEqual([]);
-				expect(readFileSync(join(agentDir, "thinking-translator.json"))).toEqual(Buffer.from(content));
-			}
+			const checkReport = await applySnapshot({
+				source: src.dir,
+				agentDir,
+				previousCommit: "HEAD~1",
+				check: true,
+				plugins: false,
+			});
+			expect(checkReport.errors).toEqual([]);
+			expect(checkReport.conflicts).toEqual([]);
+			expect(checkReport.deleted).toContain(target);
+			expect(readFileSync(target)).toEqual(Buffer.from(content));
+
+			const applyReport = await applySnapshot({
+				source: src.dir,
+				agentDir,
+				previousCommit: "HEAD~1",
+				check: false,
+				plugins: false,
+			});
+			expect(applyReport.errors).toEqual([]);
+			expect(applyReport.conflicts).toEqual([]);
+			expect(applyReport.deleted).toContain(target);
+			expect(existsSync(target)).toBe(false);
 		}
 	});
 

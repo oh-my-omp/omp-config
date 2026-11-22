@@ -10,8 +10,6 @@ tools:
   - lsp
   - web_search
   - ast_grep
-spawns:
-  - scout
 output:
   properties:
     overall_correctness:

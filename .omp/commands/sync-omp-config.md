@@ -19,7 +19,7 @@ description: 把本机 ~/.omp/agent 配置同步进本仓库快照（单向）
 
 本机 `settings.json` 不在范围内：`config.yml` 存在时 OMP 不再把它的 `extensions` 当扩展包根目录，但其中的 TS/JS 扩展模块条目照样加载，属于本机。
 
-插件配置与状态不在范围内：`thinking-translator.json` 属于插件与本机，既不收回也不由更新器写入或删除；设置见 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme)。`pi-bansos` 的 `~/.pi/agent/pi-bansos-relay-state.json` 同样属于本机，不收回仓库。
+插件配置与状态不在范围内：翻译设置由 `omp-thinking-translator` 插件设置与 `config.yml` `modelRoles.omp-thinking-translator` 管理（旧 `thinking-translator.json` 由更新器自动清理，不收回仓库），见 [插件 README](https://github.com/oh-my-omp/omp-thinking-translator#readme)。`pi-bansos` 的运行状态文件同样属于本机，不收回仓库。
 
 不进仓库：
 - 运行时文件：`*.db*`、`*-wal`、`*-shm`、`*.lock`、`models.yml`、`models.yml.bak-*`、`last-changelog-version`、`sessions/`、`terminal-sessions/`、`blobs/`、`cache/`、`logs/`，以及更新器的记录 `.omp-config-applied` 和基准目录 `.omp-config-base/`。本机开关是 `omp-config` 插件的 `omp-config-autoupdate.enabled` 设置，同样不收回。

@@ -3,11 +3,9 @@ import { type WatchedCall, watchedCallOf } from "../agent/extensions/_shared/too
 
 describe("host tool call boundary", () => {
 	test("reads native shell and eval calls", () => {
-		const tools: readonly ("bash" | "bash_bg")[] = ["bash", "bash_bg"];
-		for (const tool of tools) {
-			const expected: WatchedCall = { kind: "shell", tool, command: "date" };
-			expect(watchedCallOf(tool, { command: "date" })).toEqual(expected);
-		}
+		const expected: WatchedCall = { kind: "shell", tool: "bash", command: "date" };
+		expect(watchedCallOf("bash", { command: "date" })).toEqual(expected);
+		expect(watchedCallOf("bash_bg", { command: "date" })).toBeNull();
 		expect(watchedCallOf("eval", { language: "py", code: "1 + 1" })).toEqual({ kind: "eval", language: "py", code: "1 + 1", reset: false });
 	});
 

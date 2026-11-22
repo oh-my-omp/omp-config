@@ -53,7 +53,9 @@ export interface PromptIndex {
 }
 
 const HEADING = /^(#{1,6}) (.+)$/;
-const NATIVE = /\{\{native:([^}]+)\}\}/g;
+const NATIVE = /\{\{native(\?)?:([^}]+)\}\}/g;
+const NATIVE_BULLET = /\{\{native-bullet\?:([^}]+)\}\}/g;
+const STANDALONE_OPTIONAL = /^\{\{(?:native\?:[^}]+|native-bullet\?:[^}]+)\}\}$/;
 const NAMESPACE_OPEN = "namespace functions {";
 const NAMESPACE_CLOSE = "} // namespace functions";
 const TOOL_COMMANDS_HEADING = "# Tool Commands";
@@ -194,17 +196,19 @@ export function indexPrompt(blocks: readonly string[], tools: readonly string[])
 	};
 }
 
-function nativeSection(description: Description, heading: string): string | undefined {
+type NativeLookup = { readonly kind: "found"; readonly text: string } | { readonly kind: "absent" } | { readonly kind: "duplicate" };
+
+function nativeSection(description: Description, heading: string): NativeLookup {
 	let start = -1;
 	let level = 0;
 	for (let index = 0; index < description.length; index++) {
 		const match = HEADING.exec(description.line(index));
 		if (match?.[2] !== heading) continue;
-		if (start >= 0) return undefined;
+		if (start >= 0) return { kind: "duplicate" };
 		start = index;
 		level = match[1]?.length ?? 0;
 	}
-	if (start < 0) return undefined;
+	if (start < 0) return { kind: "absent" };
 	const lines = [description.line(start)];
 	for (let index = start + 1; index < description.length; index++) {
 		const line = description.line(index);
@@ -213,15 +217,69 @@ function nativeSection(description: Description, heading: string): string | unde
 		lines.push(line);
 	}
 	while (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-	return lines.join("\n");
+	return { kind: "found", text: lines.join("\n") };
+}
+
+function nativeBullet(description: Description, name: string): NativeLookup {
+	const prefix = `- \`${name}\`:`;
+	let start = -1;
+	for (let index = 0; index < description.length; index++) {
+		if (!description.line(index).startsWith(prefix)) continue;
+		if (start >= 0) return { kind: "duplicate" };
+		start = index;
+	}
+	if (start < 0) return { kind: "absent" };
+	const lines = [description.line(start)];
+	for (let index = start + 1; index < description.length; index++) {
+		const line = description.line(index);
+		if (line === "" || line.startsWith("#") || line.startsWith("- ")) break;
+		lines.push(line);
+	}
+	return { kind: "found", text: lines.join("\n") };
+}
+
+function expandSurface(
+	description: Description,
+	template: string,
+): { readonly kind: "ok"; readonly lines: string[] } | { readonly kind: "drift"; readonly reason: string } {
+	const missing: string[] = [];
+	const out: string[] = [];
+	for (const rawLine of template.split("\n")) {
+		const standaloneOptional = STANDALONE_OPTIONAL.test(rawLine);
+		let line = rawLine.replace(NATIVE, (whole, optional: string | undefined, heading: string) => {
+			const lookup = nativeSection(description, heading);
+			if (lookup.kind === "found") return lookup.text;
+			if (lookup.kind === "absent" && optional === "?") return "";
+			missing.push(heading);
+			return whole;
+		});
+		line = line.replace(NATIVE_BULLET, (whole, name: string) => {
+			const lookup = nativeBullet(description, name);
+			if (lookup.kind === "found") return lookup.text;
+			if (lookup.kind === "absent") return "";
+			missing.push(`bullet:${name}`);
+			return whole;
+		});
+		if (standaloneOptional && line === "") continue;
+		out.push(...line.split("\n"));
+	}
+	if (missing.length > 0) return { kind: "drift", reason: `native section(s) not found exactly once: ${missing.join(", ")}` };
+	const compact: string[] = [];
+	for (const line of out) {
+		if (line === "" && (compact.length === 0 || compact[compact.length - 1] === "")) continue;
+		compact.push(line);
+	}
+	while (compact.length > 0 && compact[compact.length - 1] === "") compact.pop();
+	return { kind: "ok", lines: compact };
 }
 
 export function toolLines(description: Description, docs: ToolDocs, indexed: boolean): Entry | undefined {
+	const visibleTopics = docs.topics.filter((topic) => !topic.hiddenFromIndex);
 	const index =
-		indexed && docs.topics.length > 0
+		indexed && visibleTopics.length > 0
 			? [
 					"Topics — read the one a call needs before making it:",
-					...docs.topics.map((topic) => `- \`tool://${docs.tool}/${topic.name}\` — ${topic.when}`),
+					...visibleTopics.map((topic) => `- \`tool://${docs.tool}/${topic.name}\` — ${topic.when}`),
 				]
 			: undefined;
 	let body: string[];
@@ -229,14 +287,9 @@ export function toolLines(description: Description, docs: ToolDocs, indexed: boo
 		if (index === undefined) return undefined;
 		body = Array.from({ length: description.length }, (_, line) => description.line(line));
 	} else {
-		const missing: string[] = [];
-		const surface = docs.surface.replace(NATIVE, (whole, heading: string) => {
-			const section = nativeSection(description, heading);
-			if (section === undefined) missing.push(heading);
-			return section ?? whole;
-		});
-		if (missing.length > 0) return { kind: "drift", reason: `native section(s) not found exactly once: ${missing.join(", ")}` };
-		body = surface.split("\n");
+		const expanded = expandSurface(description, docs.surface);
+		if (expanded.kind === "drift") return expanded;
+		body = expanded.lines;
 	}
 	if (index === undefined) return { kind: "ok", lines: body };
 	return { kind: "ok", lines: body.length === 0 ? index : [...body, "", ...index] };

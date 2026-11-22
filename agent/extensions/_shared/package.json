@@ -11,7 +11,10 @@
 		"settings": {
 			"omomp-lang.language": {
 				"type": "enum",
-				"values": ["en", "zh"],
+				"values": [
+					"en",
+					"zh"
+				],
 				"default": "zh",
 				"description": "Language of person-facing text; exported as OMOMP_LANG at the next OMP start unless the launch environment sets it"
 			},
@@ -27,7 +30,10 @@
 			},
 			"input-polish.key": {
 				"type": "enum",
-				"values": ["ctrl+enter", "alt+enter"],
+				"values": [
+					"ctrl+enter",
+					"alt+enter"
+				],
 				"default": "ctrl+enter",
 				"description": "Shortcut that rewrites the input draft (next OMP start)"
 			},
@@ -38,7 +44,10 @@
 			},
 			"tool-policy-nag.detector": {
 				"type": "enum",
-				"values": ["heuristic", "jev"],
+				"values": [
+					"heuristic",
+					"jev"
+				],
 				"default": "heuristic",
 				"description": "heuristic: count built-in-tool operations in shell calls; jev: ask the judge about each watched call"
 			},
@@ -114,7 +123,10 @@
 			},
 			"omp-config-autoupdate.conflicts": {
 				"type": "enum",
-				"values": ["notify", "agent"],
+				"values": [
+					"notify",
+					"agent"
+				],
 				"default": "notify",
 				"description": "notify: report conflicts at start; agent: also start the adaptation after an update"
 			},

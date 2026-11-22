@@ -4,6 +4,14 @@ name: coverage
 title: What a find search covers
 when: before concluding behavior is absent, when hits look thin, or before searching a large tree or hidden files
 upstream: pi-coding-agent@18.22.0 src/tools/jfind/{index,cascade,tree,keywords}.ts, omp://tools/find.md § Outputs, § Flow, § Limits & Caps, § Errors
+hiddenFromIndex: true
+inject:
+  - id: find-coverage-error
+    tool: find
+    onError: true
+  - id: find-coverage-partial
+    tool: find
+    resultPattern: '(?:partial:|no hits for|truncated|unavailable)'
 ---
 # What a find search covers
 

@@ -53,7 +53,7 @@ OMP 重建基础提示后，不经过 `before_agent_start` 的运行会发出 OM
 | 子代理 Todo 说明（`target: subagents`） | 声明原生子代理提示词中的 `"No TODO tracking, no progress updates."` 不适用，避免与子代理自身遵循的验证要求冲突。task 侧的句子（按各 agent 的定义文本选择 agent、显式 `agent`、并发写入隔离、删掉的 “skip build/lint/tests”）改由 [tool-topics](extensions.zh-CN.md#tool-topics) 的 `SURFACE-task.md` 承载。 |
 | `eval` 工具说明 | 禁止通过 `eval` 读取、列目录或搜索本地文件（统一使用 `read`、`glob`、`grep`）。 |
 | `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `tool://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。限定 `delegation: eager`，因为 OMP 只在当前模型的委派倾向为 `eager` 时才渲染原句。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
-| `xd://` 设备说明 | 说明 `xd://<tool>` 只能通过 `write` 写入 JSON 调用，不存在 `xd__<tool>` 或裸 `<tool>` 函数。 |
+| 工具命令说明 | 按当前模式与委派层级调整工具命令与 eval 指引。 |
 
 [tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞处理 OMP 自己的工具（`read`、`bash`、`task`）的整段说明，上游改写措辞后仍然生效。
 
@@ -130,4 +130,4 @@ thresholdTokens: 150000
 
 [omp-todo-more](plugins-and-modes.zh-CN.md#todo-more) 插件拥有 `ctx` 与 `todo`；`agent/config.yml` 关闭原生 `todo`。更新器在安装插件前预检待退役本地 Todo/ctx 文件的归属；只有 OMP 确认插件就绪后才删除列出的 Todo 文件，且只有该就绪插件带有 `src/ctx` 时才删除列出的 ctx 文件。
 
-工具文档：`xd://ctx` 与 `xd://todo`。
+工具文档与状态 URL：`tool://todo/...` 与 `todo://`（以及 `omp-sessions` 提供的 `session://`）。

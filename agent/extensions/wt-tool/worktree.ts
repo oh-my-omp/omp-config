@@ -55,7 +55,7 @@ export function porcelainCount(raw: string): number {
 	return count;
 }
 
-function porcelainLists(raw: string): PorcelainLists {
+export function porcelainLists(raw: string): PorcelainLists {
 	const staged: string[] = [];
 	const unstaged: string[] = [];
 	const untracked: string[] = [];

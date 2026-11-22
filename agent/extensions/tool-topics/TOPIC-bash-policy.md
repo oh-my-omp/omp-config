@@ -4,6 +4,14 @@ name: policy
 title: Blocked commands, deletion and approval
 when: after a command returned `Blocked:` or a `delete-guard:` error, or before deleting files or running a destructive command
 upstream: pi-coding-agent@18.14.0 src/tools/bash.ts, src/tools/bash-interceptor.ts, src/tools/approval.ts, src/tools/settings.ts, src/exec/settings.ts; agent/config.yml bashInterceptor; agent/extensions/delete-guard
+hiddenFromIndex: true
+inject:
+  - id: bash-policy-blocked
+    tool: bash
+    resultPattern: '(?:Blocked:|delete-guard:)'
+  - id: eval-policy-blocked
+    tool: eval
+    resultPattern: 'delete-guard:'
 ---
 # Blocked commands, deletion and approval
 

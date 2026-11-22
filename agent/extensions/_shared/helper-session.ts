@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { type AgentSession, createAgentSession, type ExtensionContext, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { type AgentSession, createAgentSession, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { errorText } from "./errors.ts";
 import { lastAssistantText } from "./messages.ts";
 import type { Model, ThinkingLevel } from "./models.ts";

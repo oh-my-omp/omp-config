@@ -18,7 +18,7 @@ Independent plugins are installed into `~/.omp/plugins/` via `install-plugins.sh
 | Source in `install-plugins.sh` | Package name in `omp plugin list` | Status | omp-config integration |
 |---|---|---|---|
 | [`https://github.com/oh-my-omp/omp-todo-more#release`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | Required (GitHub) | Runs on top of native Todo, which stays on (`agent/config.yml` `todo.enabled: true`); see [todo-more](#todo-more). |
-| [`https://github.com/oh-my-omp/omp-actual-terminal#release`](https://github.com/oh-my-omp/omp-actual-terminal) | `omp-unified-exec` | Required (GitHub fork) | Native launch is disabled (`agent/config.yml` `launch.enabled: false`); the local bash surface routes to `xd://exec_command`. |
+| [`https://github.com/oh-my-omp/omp-actual-terminal#release`](https://github.com/oh-my-omp/omp-actual-terminal) | `omp-unified-exec` | Required (GitHub fork) | Native launch is disabled (`agent/config.yml` `launch.enabled: false`); the local bash surface routes to `tool://exec_command/pty-io`. |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | Required (GitHub fork) | — |
 | [`https://github.com/oh-my-omp/omp-thinking-translator#release`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | Required (GitHub) | Plugin-owned configuration is excluded from updater and sync writes; see [Thinking translation](#thinking-translation). |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | Required (npm) | — |
@@ -35,11 +35,11 @@ The plugin runs on top of native Todo, so `agent/config.yml` keeps it on (`todo.
 
 The updater checks ownership of the Todo, ctx and fork retirement targets before installing plugins. Once OMP's plugin catalog confirms `omp-todo-more` is enabled with `./index.ts` present, the updater retires the local Todo files listed by `TODO_RETIREMENTS` in `agent/extensions/omp-config-autoupdate/omp-config-update.ts`; it retires the files listed by `CTX_RETIREMENTS` only when the ready plugin also contains `src/ctx`. Once the catalog confirms `omp-subagent-more` is enabled with `./extensions/fork-task/index.ts` and `agents/fork-self.md` present, it retires the files listed by `FORK_RETIREMENTS`. `/sync-omp-config` excludes these same paths.
 
-Plugin tool documentation: `xd://todo` and `xd://ctx`.
+Plugin tool documentation and state URLs: `tool://todo/...` and `todo://`.
 
 ### Thinking translation
 
-Set up translation using the [omp-thinking-translator README](https://github.com/oh-my-omp/omp-thinking-translator#readme). Its configuration and model selection belong to the plugin and the machine, not this repository. The updater does not create, rewrite or delete `~/.omp/agent/thinking-translator.json`; `/sync-omp-config` excludes it.
+Set up translation using the [omp-thinking-translator README](https://github.com/oh-my-omp/omp-thinking-translator#readme). Its configuration lives in plugin settings and `config.yml` `modelRoles.omp-thinking-translator`, not in a separate JSON file; the updater retires legacy `~/.omp/agent/thinking-translator.json` automatically.
 
 ---
 

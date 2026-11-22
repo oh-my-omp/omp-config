@@ -12,7 +12,10 @@
 - Added `task` guidance for staged `steps` execution and its mutual exclusivity with `task`, gated on the `task.steps` setting
 - Added `delete-guard` inspection of eval `sh` helper commands (also `globalThis.sh`, tagged templates and names bound to the helper) as posix shell scripts on every platform, blocking non-literal commands
 - Added `sh` helper commands to `tool-policy-nag`'s terminal and open-ended detection when the helper is spelled under its own name
-- Added `xd://read/urls` guidance for further read sub-paths, queries and limits when the read tool is available
+- Added `help://read/urls` guidance for further read sub-paths, queries and limits when the read tool is available
+- Added `worktree://` conditional read-only internal URL in `wt-tool` (no global `promptDoc()`) reporting linked-worktree status, branch, `HEAD`, and dirty summary
+- Added `hiddenFromIndex` and error/result-driven `inject` rules (`onError`, `resultPattern`) in `tool-topics`, and connected `tool-topics` to the shared `omomp-shared/tool-hub` `tool://` bus (`registerToolTopics("omp-config/tool-topics", ...)` + `getToolTopicInjections()`)
+- Added automatic `tools.xdevDocs` → `tools.commandDocs` config migration and retirement of legacy `thinking-translator.json` and `extensions/{task-tool-trim,fork-task}` in `omp-config-update.ts`
 - Added optional result-shaping guidance to the system prompt
 - Warned once per process when the `input-polish` shortcut is also held by an omp keybinding, a reserved chord, or another extension, naming the holder while `input-polish` keeps the chord
 - Added a host-import check to `bun run check` (`ci/host-imports.ts`): a value import under `agent/` whose specifier is not a built-in, a relative path or a key of the omp binary's module table (taken from the installed host's `collectBundledPiEntries()`) fails the check with its file and specifier

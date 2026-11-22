@@ -4,6 +4,14 @@ name: results
 title: Reading and handling task results
 when: before relying on a delivered task result that looks truncated, failed, or was never delivered
 upstream: pi-coding-agent@18.22.0 omp://tools/task.md § Outputs, § Limits & Caps, § Errors; src/prompts/tools/task-async-contract.md; src/prompts/tools/task-spawn-feedback.md; src/async/job-manager.ts; src/async/job-control.ts
+hiddenFromIndex: true
+inject:
+  - id: task-results-error
+    tool: task
+    onError: true
+  - id: task-results-truncated
+    tool: task
+    resultPattern: '(?:Delivery:|truncated|agent://|failed to register)'
 ---
 # Reading and handling task results
 

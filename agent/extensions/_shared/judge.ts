@@ -11,11 +11,12 @@ import {
 	TextJudge,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
-import { type ExtensionContext, logger } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { cfgNoJudge, cfgOffline } from "@oh-my-pi/pi-coding-agent/config/auxiliary-model-policy";
 import { formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { type JudgeDeps, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "@oh-my-pi/pi-coding-agent/judgment";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 import { callerSession } from "./caller-session.ts";
 import { modelLabel, type RoleModel, roleModels } from "./roles.ts";
 

@@ -4,6 +4,11 @@ name: refusals
 title: Why a write was refused
 when: after a write was refused, or before overwriting a file you only read in part
 upstream: pi-coding-agent@18.13.2 src/tools/write.ts, src/tools/plan-mode-guard.ts, omp://tools/write.md § Flow, § Errors
+hiddenFromIndex: true
+inject:
+  - id: write-refusals-error
+    tool: write
+    onError: true
 ---
 # Why a write was refused
 

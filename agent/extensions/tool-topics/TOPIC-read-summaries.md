@@ -4,6 +4,11 @@ name: summaries
 title: Summarized code reads
 when: when a code read came back with elided `…` bodies, or before editing lines you have not seen in full
 upstream: pi-coding-agent@18.13.2 src/prompts/tools/read.md, omp://tools/read.md § Local text files
+hiddenFromIndex: true
+inject:
+  - id: read-summaries-folded
+    tool: read
+    resultPattern: '(?:\{ … \}|omitted|folded|structural summary)'
 ---
 # Summarized code reads
 

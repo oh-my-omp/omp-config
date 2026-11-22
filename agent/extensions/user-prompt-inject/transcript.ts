@@ -1,6 +1,7 @@
 import { closeSync, openSync, readSync, type Stats, statSync } from "node:fs";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { parseSessionContent, SESSION_TITLE_SLOT_BYTES, type SessionEntry, type SessionHeader } from "@oh-my-pi/pi-coding-agent";
+import { SESSION_TITLE_SLOT_BYTES, type SessionEntry, type SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { parseSessionContent } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { textOf } from "../_shared/messages.ts";
 

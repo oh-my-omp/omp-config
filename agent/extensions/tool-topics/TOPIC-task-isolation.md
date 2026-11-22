@@ -4,6 +4,11 @@ name: isolation
 title: Isolated workers
 when: 'before setting `isolated: true`, or after an isolated item failed to start or merge'
 upstream: pi-coding-agent@18.13.2 src/task/settings.ts, src/task/worktree.ts, src/task/isolation-runner.ts, omp://tools/task.md § Modes / Variants, § Errors
+hiddenFromIndex: true
+inject:
+  - id: task-isolation-result
+    tool: task
+    resultPattern: '(?:isolated|worktree|cherry-pick|patch artifact|uncommitted baseline)'
 ---
 # Isolated workers
 

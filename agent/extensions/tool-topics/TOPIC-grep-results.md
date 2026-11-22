@@ -4,6 +4,14 @@ name: results
 title: Result caps, paging and anchors
 when: before concluding something is absent, or when a result mentions caps, `skip`, `N+`, or cut lines
 upstream: pi-coding-agent@18.22.0 src/tools/grep.ts, pi-utils src/sanitize-text.ts, crates/pi-walker/src/grep/scan.rs, pi-tui src/tools/grouped-file-output.ts, omp://tools/grep.md § Outputs, § Modes / Variants, § Limits & Caps
+hiddenFromIndex: true
+inject:
+  - id: grep-results-error
+    tool: grep
+    onError: true
+  - id: grep-results-capped
+    tool: grep
+    resultPattern: '(?:Use skip=|\[col \d+\]|Binary files also match|No matches in text files|truncated|\d+\+ files)'
 ---
 # Result caps, paging and anchors
 

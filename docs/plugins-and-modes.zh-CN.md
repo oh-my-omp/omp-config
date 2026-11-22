@@ -18,7 +18,7 @@
 | `install-plugins.sh` 条目 | `omp plugin list` 包名 | 类别 | omp-config 集成关系 |
 |---|---|---|---|
 | [`https://github.com/oh-my-omp/omp-todo-more#release`](https://github.com/oh-my-omp/omp-todo-more) | `omp-todo-more` | 必装（GitHub） | 运行在原生 Todo 之上，原生 Todo 保持开启（`agent/config.yml` 中 `todo.enabled: true`）；见 [todo-more](#todo-more)。 |
-| [`https://github.com/oh-my-omp/omp-actual-terminal#release`](https://github.com/oh-my-omp/omp-actual-terminal) | `omp-unified-exec` | 必装（GitHub fork） | 原生 launch 已关闭（`agent/config.yml` 中 `launch.enabled: false`）；本地 bash 表层说明指向 `xd://exec_command`。 |
+| [`https://github.com/oh-my-omp/omp-actual-terminal#release`](https://github.com/oh-my-omp/omp-actual-terminal) | `omp-unified-exec` | 必装（GitHub fork） | 原生 launch 已关闭（`agent/config.yml` 中 `launch.enabled: false`）；本地 bash 表层说明指向 `tool://exec_command/pty-io`。 |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | 必装（GitHub fork） | — |
 | [`https://github.com/oh-my-omp/omp-thinking-translator#release`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | 必装（GitHub） | 插件拥有的配置不由更新器或同步操作写入；见 [思考翻译](#思考翻译)。 |
 | `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | 必装（npm） | — |
@@ -35,11 +35,11 @@
 
 更新器在安装插件之前，先检查 Todo、ctx 和 fork 清理目标的归属。OMP 插件目录确认 `omp-todo-more` 已启用且 `./index.ts` 存在后，更新器清理 `agent/extensions/omp-config-autoupdate/omp-config-update.ts` 中 `TODO_RETIREMENTS` 列出的本地 Todo 文件；只有就绪插件还包含 `src/ctx` 时，才会清理 `CTX_RETIREMENTS` 列出的文件。OMP 插件目录确认 `omp-subagent-more` 已启用且 `./extensions/fork-task/index.ts` 与 `agents/fork-self.md` 存在后，更新器清理 `FORK_RETIREMENTS` 列出的文件。`/sync-omp-config` 排除相同的路径。
 
-插件工具文档：`xd://todo` 与 `xd://ctx`。
+插件工具文档与状态 URL：`tool://todo/...` 与 `todo://`。
 
 ### 思考翻译
 
-翻译设置见 [omp-thinking-translator README](https://github.com/oh-my-omp/omp-thinking-translator#readme)。配置和模型选择由插件与本机管理，不属于本仓库。更新器不会创建、重写或删除 `~/.omp/agent/thinking-translator.json`；`/sync-omp-config` 也不收回该文件。
+翻译设置见 [omp-thinking-translator README](https://github.com/oh-my-omp/omp-thinking-translator#readme)。其配置通过插件设置与 `config.yml` `modelRoles.omp-thinking-translator` 管理；更新器会自动清理已废弃的 `~/.omp/agent/thinking-translator.json`。
 
 ---
 

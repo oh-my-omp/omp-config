@@ -53,7 +53,7 @@ Active rules in the shipped `REPLACE-SYSTEM-default.yml`, each limited to `mode:
 | Subagent Todo instruction (`target: subagents`) | States that `"No TODO tracking, no progress updates."` in the native child prompt does not apply, so it does not conflict with the verification rules workers follow. The task-side sentences (choosing agents by their definition text, explicit `agent`, concurrent writers, the removed "skip build/lint/tests" line) now live in [tool-topics](extensions.md#tool-topics)' `SURFACE-task.md`. |
 | `eval` tool description | Prohibits reading, listing, or searching local files through `eval` (`read`, `glob`, and `grep` handle file inspection). |
 | `eval` description: batch routing | Replaces "For 2+ independent items, use a named `workpool()`" with a split by situation: code that needs each item's model judgment, extraction or rewrite uses `judgeBatch`, or `completion`/`agent` with a schema per item, and points to `tool://eval/workflow`; subagent work whose results are only read stays on `workpool()`. Limited to `delegation: eager`, because OMP renders the original sentence only when the current model's delegation bias is `eager`. The `agent`/`workpool` namespace line also names per-item schema results. |
-| `xd://` device header | States that `xd://<tool>` devices are called only by writing JSON to `xd://<tool>`, not as `xd__<tool>` or `<tool>` functions. |
+| Tool commands header | Adjusts tool command / eval guidance for the active mode and delegation tier. |
 
 [tool-topics](extensions.md#tool-topics) handles whole descriptions for OMP's own tools (`read`, `bash`, `task`) by tool name rather than wording, so they survive upstream rewording.
 
@@ -131,4 +131,4 @@ Because a native `f<N>` threshold can switch a model between its standard and ex
 
 The [omp-todo-more](plugins-and-modes.md#todo-more) plugin owns `ctx` and `todo`; `agent/config.yml` disables native `todo`. The updater preflights ownership of the local Todo/ctx files it retires before installing plugins, removes the listed Todo files only after OMP confirms plugin readiness, and removes the listed ctx files only when that ready plugin carries `src/ctx`.
 
-Tool documentation: `xd://ctx` and `xd://todo`.
+Tool documentation and state URLs: `tool://todo/...` and `todo://` (plus `session://` from `omp-sessions`).

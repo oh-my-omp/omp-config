@@ -141,6 +141,10 @@ const FORK_RETIREMENTS: readonly string[] = [
 	"agents/fork-self.md",
 ];
 
+const LEGACY_RETIREMENTS: readonly string[] = ["thinking-translator.json", "extensions/task-tool-trim/index.ts"];
+
+const LEGACY_RETIRED_DIRS: readonly string[] = ["extensions/task-tool-trim", "extensions/fork-task"];
+
 function requiresForkPlugin(spec: string): boolean {
 	return spec.split("#", 1)[0] === FORK_PLUGIN_URL;
 }
@@ -765,7 +769,8 @@ function retiring(ctx: PlanContext, rel: string): boolean {
 	return (
 		(ctx.todoRequired && TODO_RETIREMENTS.includes(leaf)) ||
 		CTX_RETIREMENTS.includes(leaf) ||
-		(ctx.forkRequired && FORK_RETIREMENTS.includes(leaf))
+		(ctx.forkRequired && FORK_RETIREMENTS.includes(leaf)) ||
+		LEGACY_RETIREMENTS.includes(leaf)
 	);
 }
 
@@ -950,6 +955,18 @@ function structuredHistory(history: RepoHistory, item: Pick<StructuredItem, "rel
 	return versions;
 }
 
+function migrateConfigMapping(mapping: Mapping): { readonly value: Mapping; readonly migratedXdevDocs: boolean } {
+	if (!isMapping(mapping.tools) || !Object.hasOwn(mapping.tools, "xdevDocs")) {
+		return { value: mapping, migratedXdevDocs: false };
+	}
+	const nextTools: Mapping = { ...mapping.tools };
+	if (!Object.hasOwn(nextTools, "commandDocs")) {
+		nextTools.commandDocs = nextTools.xdevDocs;
+	}
+	delete nextTools.xdevDocs;
+	return { value: { ...mapping, tools: nextTools }, migratedXdevDocs: true };
+}
+
 function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]): Op[] {
 	const { opts, report } = ctx;
 	const ops: Op[] = [];
@@ -970,17 +987,27 @@ function planStructured(ctx: PlanContext, sources: readonly StructuredSource[]):
 				continue;
 			}
 		}
+		const canMigrateXdevDocs =
+			item.rel === CONFIG_REL &&
+			!fieldExcluded(item.rel, ["tools", "xdevDocs"], ctx.exclusions) &&
+			!fieldExcluded(item.rel, ["tools", "commandDocs"], ctx.exclusions);
+		const migratedHost = host !== undefined && canMigrateXdevDocs ? migrateConfigMapping(host) : undefined;
+		if (migratedHost?.migratedXdevDocs) {
+			report.notes.push("config.yml: migrated tools.xdevDocs to tools.commandDocs");
+		}
+		const effectiveHost = migratedHost ? migratedHost.value : host;
 		const recorded = ctx.base.structuredOf(item.rel);
+		const effectiveRecorded = recorded !== undefined && canMigrateXdevDocs ? migrateConfigMapping(recorded.value).value : recorded?.value;
 		const source: StructuredBaseSource =
-			recorded !== undefined
-				? { kind: "recorded", value: recorded.value, unknown: recorded.unknown }
-				: host === undefined || ctx.freshMachine
+			recorded !== undefined && effectiveRecorded !== undefined
+				? { kind: "recorded", value: effectiveRecorded, unknown: recorded.unknown }
+				: effectiveHost === undefined || ctx.freshMachine
 					? { kind: "empty" }
 					: { kind: "history", versions: structuredHistory(ctx.history, item) };
 		const fields = ctx.exclusions.fields.get(item.rel) ?? [];
 		const rules =
 			fields.length === 0 ? item.rules : { ...item.rules, local: [...item.rules.local, ...fields.map((field) => field.join("."))] };
-		const merged = mergeStructured(host, repo, source, rules);
+		const merged = mergeStructured(effectiveHost, repo, source, rules);
 		if (recorded !== undefined) {
 			for (const field of fields) {
 				setAt(merged.base, field, valueAt(recorded.value, field));
@@ -1067,6 +1094,24 @@ function planRetirements(ctx: PlanContext, leaves: readonly string[]): Op[] {
 				throw new Error(String(unreachable));
 			}
 		}
+	}
+	return ops;
+}
+
+function planRetiredDirs(ctx: PlanContext, dirs: readonly string[], existing: readonly Op[]): Op[] {
+	const { opts } = ctx;
+	const plannedDirs = new Set(existing.filter((op) => op.kind === "rmdir").map((op) => op.target));
+	const ops: Op[] = [];
+	for (const dir of dirs) {
+		const rel = `agent/${dir}`;
+		const target = join(opts.agentDir, dir);
+		if (plannedDirs.has(target) || !lexists(target) || skipExcluded(ctx, rel)) continue;
+		try {
+			if (!lstatSync(target).isDirectory()) continue;
+		} catch {
+			continue;
+		}
+		ops.push({ kind: "rmdir", rel, target });
 	}
 	return ops;
 }
@@ -2123,13 +2168,15 @@ function planApply(opts: ApplyOptions, report: ApplyReport): ApplyState | null {
 			replacementMigration,
 			exclusions,
 		};
-		const planned = [
+		const basePlanned = [
 			...planRelocations(ctx),
 			...planPlain(ctx),
 			...planStructured(ctx, sources),
 			...(todoRequired ? planRetirements(ctx, TODO_RETIREMENTS) : []),
 			...(forkRequired ? planRetirements(ctx, FORK_RETIREMENTS) : []),
+			...planRetirements(ctx, LEGACY_RETIREMENTS),
 		];
+		const planned = [...basePlanned, ...planRetiredDirs(ctx, LEGACY_RETIRED_DIRS, basePlanned)];
 		const ctxRetirements = todoRequired ? planRetirements(ctx, CTX_RETIREMENTS) : [];
 		report.notes.push(...history.notes);
 		if (opts.check || !opts.plugins) report.notes.push(...reportPendingSettings(opts, settings));
@@ -2229,7 +2276,8 @@ function runApplyOps(state: ApplyState): BaseChange[] {
 			op.kind === "delete" &&
 			((state.todoRequired && TODO_RETIREMENTS.includes(leaf)) ||
 				(state.ctxReady && CTX_RETIREMENTS.includes(leaf)) ||
-				(state.forkRequired && FORK_RETIREMENTS.includes(leaf)));
+				(state.forkRequired && FORK_RETIREMENTS.includes(leaf)) ||
+				LEGACY_RETIREMENTS.includes(leaf));
 		try {
 			applyOp(state, op, leaf, retirement, accepted);
 		} catch (error) {

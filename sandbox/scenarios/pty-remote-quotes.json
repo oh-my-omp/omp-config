@@ -7,11 +7,11 @@
 		"expect": [
 			{
 				"tool": [
-					"write",
+					"exec_command",
 					"eval"
 				],
 				"isError": false,
-				"inputPattern": "(?=.*(xd://exec_command|tool\\.exec_command\\())(?=.*target)",
+				"inputPattern": "(?=.*target)",
 				"resultIncludes": "exit_code: 0"
 			}
 		],
@@ -24,12 +24,7 @@
 			{
 				"tool": "eval",
 				"isError": false,
-				"inputPattern": "^(?!.*(xd://exec_command|xd://write_stdin|tool\\.exec_command\\(|tool\\.write_stdin\\())(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b))"
-			},
-			{
-				"tool": "write",
-				"isError": false,
-				"inputPattern": "(?=.*\"xd://bash\")(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b))"
+				"inputPattern": "^(?!.*(tool\\.exec_command\\(|tool\\.write_stdin\\())(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b))"
 			}
 		]
 	},

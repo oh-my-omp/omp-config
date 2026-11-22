@@ -38,7 +38,7 @@ Behavior is described where it lives; read the matching one before changing it:
 - **Machine-owned state stays on the machine:** host-only files and keys, the
   updater's `LOCAL_*` and `SEED_*` paths, machine entries of `config.yml`
   `extensions`, the base record `.omp-config-base/`, and plugin state under
-  `~/.pi/agent`.
+  `~/.omp`.
 - **App-managed files** (`// @orca-managed-pi-extension` or `marker: _otty`)
   are never overwritten; the marker, not the filename, decides. Never write the
   contiguous Otty marker literal in the updater: it would skip updating itself.
@@ -127,7 +127,7 @@ review.
   `attribution: "agent"`. Only `context` fires on every model call (IRC wakes
   included); `before_agent_start` does not.
 - **Tool registration:** tools register in the factory before any `await`.
-  A tool that is an `xd://` device or serves only some sessions registers
+  A tool that serves only some sessions registers
   `defaultInactive` and is activated on `session_start` / `session_switch`,
   never in `before_agent_start`. Every active-set change goes through
   `_shared/omomp-shared/active-tools.ts`, which lists tools in canonical order: built-in tools in registry order first, all others sorted by name.

@@ -4,6 +4,14 @@ name: output
 title: Output, exit codes and truncation
 when: when output was truncated or minimized, or before handling a non-zero exit, timeout or cancellation
 upstream: pi-coding-agent@18.13.2 src/tools/bash.ts, src/exec/bash-executor.ts, omp://tools/bash.md § Outputs, § Limits & Caps, § Notes
+hiddenFromIndex: true
+inject:
+  - id: bash-output-error
+    tool: bash
+    onError: true
+  - id: bash-output-truncated
+    tool: bash
+    resultPattern: '(?:artifact://|raw output: artifact://|truncated)'
 ---
 # Output, exit codes and truncation
 
@@ -13,5 +21,5 @@ upstream: pi-coding-agent@18.13.2 src/tools/bash.ts, src/exec/bash-executor.ts, 
 - Lines longer than 768 characters are cut in streaming previews only.
 - Non-zero exit: an error result ending `Command exited with code <n>`; `details.exitCode` holds it.
 - Timeout: an error result with `details.timedOut: true`, not a success. Reconsider the deadline rather than retrying unchanged; open-ended work is outside this tool's host-policy boundary.
-help://exec_command
+- For PTY sessions and interactive/open-ended commands, read `tool://exec_command/pty-io`.
 - Cancellation surfaces as an abort error; `Command failed: missing exit status` means the backend lost the process.

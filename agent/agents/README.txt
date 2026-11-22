@@ -2,8 +2,7 @@ SUBAGENT PITFALLS
 =================
 
 The *.md files here are custom agent definitions. Every item below was observed on
-this machine, not inferred from docs. Harness references: omp://task-agent-discovery.md,
-omp://tools/task.md, omp://tools/wait.md
+this machine, not inferred from docs. Harness references: omp://task-agent-discovery.md, omp://task.md, omp://wait.md
 
 This file is .txt on purpose. See item 13.
 Simplified Chinese version: README.zh-CN.txt (same items, kept in step with this file).

@@ -14,7 +14,7 @@ const evalSchema: zod.ZodLikeSchema<EvalCallInput> = z.object({
 	reset: z.boolean().optional(),
 });
 
-type ShellTool = "bash" | "bash_bg";
+type ShellTool = "bash";
 
 function shellCall(tool: ShellTool, input: unknown): WatchedCall | null {
 	const parsed = shellSchema.safeParse(input);
@@ -24,7 +24,6 @@ function shellCall(tool: ShellTool, input: unknown): WatchedCall | null {
 export function watchedCallOf(toolName: string, input: unknown): WatchedCall | null {
 	switch (toolName) {
 		case "bash":
-		case "bash_bg":
 			return shellCall(toolName, input);
 		case "eval": {
 			const parsed = evalSchema.safeParse(input);

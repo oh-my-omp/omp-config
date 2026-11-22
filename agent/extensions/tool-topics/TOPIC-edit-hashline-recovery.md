@@ -4,6 +4,11 @@ name: hashline-recovery
 title: Recovering from a rejected hashline edit
 when: (hashline mode) after an edit was rejected, reported no change, or landed only partly
 upstream: pi-coding-agent@18.13.2 omp://tools/edit.md § Limits and validation, § Output and side effects, § Common failures; src/edit/index.ts
+hiddenFromIndex: true
+inject:
+  - id: edit-hashline-error
+    tool: edit
+    onError: true
 ---
 # Recovering from a rejected hashline edit
 
