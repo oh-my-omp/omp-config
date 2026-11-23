@@ -64,10 +64,8 @@ export function trashUnavailable(platform: Platform): string | null {
 			return windowsPowershell() === null
 				? `powershell.exe was not found under %SystemRoot%\\System32, so nothing can be moved to the Recycle Bin; ${PERMANENT_ONLY_ON_REQUEST}`
 				: null;
-		default: {
-			const unreachable: never = platform;
-			return unreachable;
-		}
+		default:
+			return absurd(platform);
 	}
 }
 
@@ -233,10 +231,8 @@ function trashOne(platform: Platform, target: Target): Promise<Outcome> | Outcom
 			return linuxTrash(target);
 		case "win32":
 			return windowsTrash(target);
-		default: {
-			const unreachable: never = platform;
-			return unreachable;
-		}
+		default:
+			return absurd(platform);
 	}
 }
 
@@ -251,10 +247,8 @@ export async function runDeletion(platform: Platform, mode: Mode, targets: reado
 				case "trash":
 					outcomes.push(await trashOne(platform, target));
 					break;
-				default: {
-					const unreachable: never = mode;
-					return unreachable;
-				}
+				default:
+					return absurd(mode);
 			}
 		} catch (error) {
 			outcomes.push({ kind: "failed", given: target.given, error: errorText(error) });

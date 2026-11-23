@@ -539,9 +539,7 @@ export function classifyPosix(text: string, depth: number): Verdict {
 			return block("nonLiteral", text, `the command text cannot be parsed (${parsed.detail})`);
 		case "parsed":
 			return walkScript(parsed.script, depth);
-		default: {
-			const unreachable: never = parsed;
-			return unreachable;
-		}
+		default:
+			return absurd(parsed);
 	}
 }

@@ -89,10 +89,8 @@ function classifyShellInvocation(kind: ShellKind, name: ArgvWord, args: readonly
 			return classifyPowershellInvocation(args, depth, fragment);
 		case "cmd":
 			return classifyCmdInvocation(args, depth, fragment);
-		default: {
-			const unreachable: never = kind;
-			return unreachable;
-		}
+		default:
+			return absurd(kind);
 	}
 }
 

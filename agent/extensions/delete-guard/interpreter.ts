@@ -175,10 +175,8 @@ function classifyInline(env: Env, code: ArgvWord): Verdict {
 		case "perl":
 		case "ruby":
 			return scanNamedDeletes(code.text, env.fragment);
-		default: {
-			const unreachable: never = env.kind;
-			return unreachable;
-		}
+		default:
+			return absurd(env.kind);
 	}
 }
 
@@ -258,10 +256,8 @@ function walk(env: Env, spec: Spec, args: readonly ArgvWord[], start: number, co
 				if (flag.kind === "block") return flag;
 				return walk(env, spec, args, i + 2, inline, budget - 1);
 			}
-			default: {
-				const unreachable: never = step;
-				return unreachable;
-			}
+			default:
+				return absurd(step);
 		}
 	}
 }
@@ -320,9 +316,7 @@ export function classifyInterpreter(
 			return walk(env, RUBY, args, 0, [], AMBIGUITY_BUDGET);
 		case "deno":
 			return classifyDeno(env, args);
-		default: {
-			const unreachable: never = kind;
-			return unreachable;
-		}
+		default:
+			return absurd(kind);
 	}
 }

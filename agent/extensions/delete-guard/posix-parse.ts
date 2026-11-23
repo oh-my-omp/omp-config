@@ -17,10 +17,8 @@ export function stdinLabel(stdin: StdinSource | null): string {
 			return "a here-string";
 		case "heredoc":
 			return stdin.quoted ? "a quoted here-document" : "an unquoted here-document";
-		default: {
-			const unreachable: never = stdin;
-			return unreachable;
-		}
+		default:
+			return absurd(stdin);
 	}
 }
 
@@ -116,30 +114,14 @@ class Parser {
 	}
 
 	parseScript(closer: ")" | "}" | null): Script {
-		const builder: Builder = { commands: [], nested: [] };
-		let command: CommandBuilder | null = null;
-		let braces = 0;
-		let piped = false;
-		let groups = 0;
-		const cases: Case[] = [];
-		const finishCommand = (): void => {
-			if (command !== null && command.words.length > 0) {
-				builder.commands.push({
-					words: command.words,
-					stdin: command.stdin,
-					src: this.src,
-					start: command.start,
-					end: this.i,
-				});
-			}
-			command = null;
-		};
-		const open = (): CommandBuilder => {
-			if (command === null) {
-				command = { start: this.i, words: [], stdin: piped ? { kind: "pipe" } : null };
-				piped = false;
-			}
-			return command;
+		const state: ScriptState = {
+			closer,
+			builder: { commands: [], nested: [] },
+			command: null,
+			braces: 0,
+			piped: false,
+			groups: 0,
+			cases: [],
 		};
 		for (;;) {
 			this.skipBlanks();
