@@ -162,9 +162,11 @@ async function runCreate(pi: ExtensionAPI, mode: InteractiveModeContext, branch:
 }
 
 async function forceRemove(pi: ExtensionAPI, check: ConfirmedRemoval): Promise<string | undefined> {
+	const repository = vcs.requireGit(check.mainDir);
 	let failure: string | undefined;
 	try {
-		if (!(await vcs.requireGit(check.mainDir).worktreeRemove(check.worktree, true))) failure = "the removal was refused";
+		if (!(await repository.worktreeRemove(check.worktree, true))) failure = "the removal was refused";
+		else await repository.worktreePrune();
 	} catch (error) {
 		failure = errorText(error);
 	}
