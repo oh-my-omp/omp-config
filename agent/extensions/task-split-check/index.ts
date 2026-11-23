@@ -1,7 +1,3 @@
-/**
- * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise
- * block the call.
- */
 import { basename } from "node:path";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
 import { type ExtensionAPI, type ExtensionContext, type TaskItem, type TaskParams, z, type zod } from "@oh-my-pi/pi-coding-agent";
@@ -18,6 +14,7 @@ const EFFORT =
 	(() => {
 		throw new Error("task-split-check: host does not recognize medium reasoning effort");
 	})();
+// Keep under the harness's 30 s tool_call handler timeout, or the call is blocked.
 const DEADLINE_MS = 25_000;
 
 const taskItemShape = {
@@ -42,8 +39,6 @@ const batchShape = { context: z.string().optional(), tasks: z.array(taskItemSche
 const batchSchema: zod.ZodLikeSchema<Pick<TaskParams, "context"> & Required<Pick<TaskParams, "tasks">>> = z.object(batchShape);
 type TaskCall = { readonly context: string | undefined; readonly items: readonly TaskItem[] };
 
-const textOf = (item: TaskItem): string => item.steps?.join("\n") ?? item.task ?? "";
-
 const parseTaskCall = (input: unknown): TaskCall | null => {
 	const batch = batchSchema.safeParse(input);
 	if (batch.success) return { context: batch.data.context, items: batch.data.tasks };
@@ -61,8 +56,6 @@ type Memory = "pass-repeats" | "skip-clear";
 
 type Check = {
 	readonly id: string;
-	readonly tools: Readonly<Record<string, true>>;
-	readonly mainSessionOnly: boolean;
 	readonly covers: (ctx: ExtensionContext, agent: string | undefined) => Promise<boolean>;
 	readonly question: string;
 	readonly memory: Memory;
@@ -72,10 +65,10 @@ type Check = {
 const CHECKS: readonly Check[] = [
 	{
 		id: "split",
-		tools: { task: true },
-		mainSessionOnly: true,
 		covers: (ctx, agent) =>
-			agent === undefined ? Promise.resolve(false) : declaresFlag(callerSession(ctx), ctx.sessionManager.getCwd(), agent, SPLIT_CHECK_KEY),
+			ctx.agent.kind === "main" && agent !== undefined
+				? declaresFlag(callerSession(ctx), ctx.sessionManager.getCwd(), agent, SPLIT_CHECK_KEY)
+				: Promise.resolve(false),
 		question: [
 			"Does this one assignment cover more than one topic, so that it should have been split into separate assignments for separate workers?",
 			"A topic is one subject: one question to answer, one outcome to deliver, one area to investigate. The number of files, documents, steps, or edits does not matter: one change applied across many files, or several documents written about the same subject, is still one topic.",
@@ -90,8 +83,6 @@ const CHECKS: readonly Check[] = [
 	},
 	{
 		id: "report-limit",
-		tools: { task: true },
-		mainSessionOnly: false,
 		covers: (_ctx, agent) => Promise.resolve(agent === undefined || agent.startsWith("task:")),
 		question: [
 			"Does the dispatch limit the length of the report the worker returns: a cap on words, characters, lines, tokens, sentences, bullets or paragraphs, or an instruction to keep the report or answer short, brief or within some size?",
@@ -122,22 +113,14 @@ const parseAnswer = (text: string, check: Check): Verdict => {
 };
 
 const renderPrompt = (context: string | undefined, item: TaskItem): string =>
-	["<shared-context>", context?.trim() || "(none)", "</shared-context>", "<assignment>", textOf(item).trim(), "</assignment>"].join("\n");
-
-const memoryDigest = (context: string | undefined, item: TaskItem): string => {
-	const contextText = context?.trim() || "(none)";
-	const taskText = textOf(item).trim();
-	const hasher = new Bun.CryptoHasher("sha256");
-	hasher.update(`${contextText.length}:${taskText.length}\0`);
-	hasher.update(contextText);
-	hasher.update("\0");
-	hasher.update(taskText);
-	return hasher.digest("hex");
-};
-
-const memoryKey = (digest: string, check: Check): string => `${check.id}:${digest}`;
-
-const itemLabel = (item: TaskItem, index: number): string => `\`${item.name ?? `item ${index + 1}`}\``;
+	[
+		"<shared-context>",
+		context?.trim() || "(none)",
+		"</shared-context>",
+		"<assignment>",
+		(item.steps?.join("\n") ?? item.task ?? "").trim(),
+		"</assignment>",
+	].join("\n");
 
 const remembered = new Set<string>();
 
@@ -170,7 +153,7 @@ const memorize = (check: Check, key: string, verdict: Verdict): void => {
 	}
 };
 
-type Reply = { readonly kind: "text"; readonly text: string } | { readonly kind: "failed"; readonly why: string };
+type Reply = { readonly kind: "text"; readonly text: string } | Extract<Verdict, { kind: "unknown" }>;
 
 type ItemVerdicts = { readonly label: string; readonly verdicts: ReadonlyMap<Check, Verdict> };
 
@@ -197,15 +180,15 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 				pi.logger.info("task-split-check answered", { model: modelLabel(reply.model.model), failures: reply.failures });
 				return { kind: "text", text: reply.text };
 			case "no-model":
-				return { kind: "failed", why: `no model: assign @${ROLE} or the default role in /model` };
+				return { kind: "unknown", why: `no model: assign @${ROLE} or the default role in /model` };
 			case "deadline":
-				return { kind: "failed", why: "deadline" };
+				return { kind: "unknown", why: "deadline" };
 			case "aborted":
-				return { kind: "failed", why: "aborted" };
+				return { kind: "unknown", why: "aborted" };
 			case "all-failed":
-				return { kind: "failed", why: `every model failed: ${reply.failures.join("; ")}` };
+				return { kind: "unknown", why: `every model failed: ${reply.failures.join("; ")}` };
 			case "error":
-				return { kind: "failed", why: errorText(reply.error) };
+				return { kind: "unknown", why: errorText(reply.error) };
 			default: {
 				const unreachable: never = reply;
 				return unreachable;
@@ -222,8 +205,9 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		signal: AbortSignal,
 		budget: AttemptBudget,
 	): Promise<ReadonlyMap<Check, Verdict>> => {
-		const digest = memoryDigest(context, item);
-		const keyOf = (check: Check): string => memoryKey(digest, check);
+		const prompt = renderPrompt(context, item);
+		const scope = `${ctx.sessionManager.getSessionId()}:${new Bun.CryptoHasher("sha256").update(prompt).digest("hex")}`;
+		const keyOf = (check: Check): string => `${check.id}:${scope}`;
 		const verdicts = new Map<Check, Verdict>();
 		const pending: Check[] = [];
 		for (const check of checks) {
@@ -233,12 +217,11 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		}
 		if (pending.length === 0) return verdicts;
 
-		const prompt = renderPrompt(context, item);
 		const reply = await ask(ctx, renderSystemPrompt(pending), prompt, signal, budget);
 		for (const check of pending) {
-			const verdict: Verdict = reply.kind === "text" ? parseAnswer(reply.text, check) : { kind: "unknown", why: reply.why };
+			const verdict = reply.kind === "text" ? parseAnswer(reply.text, check) : reply;
 			if (verdict.kind === "unknown") {
-				pi.logger.warn("task-split-check check failed", { check: check.id, item: label, error: errorText(verdict.why) });
+				pi.logger.warn("task-split-check check failed", { check: check.id, item: label, error: verdict.why });
 			}
 			memorize(check, keyOf(check), verdict);
 			verdicts.set(check, verdict);
@@ -247,9 +230,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 	};
 
 	const inspect = async (toolName: string, input: unknown, ctx: ExtensionContext): Promise<string | null> => {
-		const main = ctx.agent.kind === "main";
-		const checks = CHECKS.filter((check) => Object.hasOwn(check.tools, toolName) && (main || !check.mainSessionOnly));
-		if (checks.length === 0) return null;
+		if (toolName !== "task") return null;
 		const call = parseTaskCall(input);
 		if (call === null) return null;
 		const deadline = AbortSignal.timeout(DEADLINE_MS);
@@ -257,10 +238,9 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 		const judged: ItemVerdicts[] = (
 			await Promise.all(
 				call.items.map(async (item, index): Promise<ItemVerdicts | undefined> => {
-					const flags = await Promise.all(checks.map((check) => check.covers(ctx, item.agent)));
-					const covered = checks.filter((_check, position) => flags[position] === true);
+					const covered = (await Promise.all(CHECKS.map(async (check) => ((await check.covers(ctx, item.agent)) ? [check] : [])))).flat();
 					if (covered.length === 0) return undefined;
-					const label = itemLabel(item, index);
+					const label = `\`${item.name ?? `item ${index + 1}`}\``;
 					return {
 						label,
 						verdicts: await judgeItem(ctx, covered, call.context, item, label, deadline, budget),
@@ -276,7 +256,7 @@ export default function taskSplitCheck(pi: ExtensionAPI): void {
 			})),
 		});
 
-		const reasons = checks.flatMap((check) => {
+		const reasons = CHECKS.flatMap((check) => {
 			const flagged = judged.filter(({ verdicts }) => verdicts.get(check)?.kind === "flagged").map(({ label }) => label);
 			return flagged.length === 0 ? [] : [check.reason(flagged.join("、"))];
 		});

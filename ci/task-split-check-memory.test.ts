@@ -85,7 +85,7 @@ const loadExtension = async (): Promise<{ handler: ToolCallHandler; pi: { logger
 
 const mainCtx = {
 	agent: { kind: "main", id: "Main", name: "main", depth: 0 },
-	sessionManager: { getCwd: () => "/repo", getSessionFile: () => undefined },
+	sessionManager: { getCwd: () => "/repo", getSessionId: () => "main-session", getSessionFile: () => undefined },
 	modelRegistry: { resolver: () => undefined },
 } as never;
 
