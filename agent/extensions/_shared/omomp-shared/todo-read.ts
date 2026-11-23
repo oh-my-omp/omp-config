@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
-export const TODO_READ_EVENT = "omp-todo-more:read";
+export const TODO_READ_EVENT = "omp-todo-ng:read";
 
 export const TODO_READ_STATUSES = ["pending", "in_progress", "completed", "abandoned"] as const;
 

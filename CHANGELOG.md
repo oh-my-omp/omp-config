@@ -22,6 +22,7 @@
 
 ### Changed
 
+- Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@e84938e.
 - Renamed the installed plugins `omp-todo-more`, `omp-ask-more` and `omp-subagent-more` to `omp-todo-ng`, `omp-ask-ng` and `omp-subagent-ng`: `install-plugins.sh` specs and the updater's readiness checks point at the new repositories, and task-completion-judge names omp-todo-ng in its messages
 - Simplified `tool-policy-nag`: the pty lane and the heuristic analyzers share one grammar-driven option parser, sudo/doas/run0 unwrapping and `-c` shell-string detection; the persisted nag state holds only the hit and reminder counts; the shell scanner is split into module-level steps
 - Made `tool-policy-nag`'s `form` fallback under `detector: jev` count and remind only while the intent lane cannot run, so judged calls no longer use up its reminder budget
