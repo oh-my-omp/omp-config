@@ -11,7 +11,7 @@ inject:
     onError: true
   - id: ast-edit-apply-preview
     tool: ast_edit
-    resultPattern: '(?:Staged as a proposal|Parse issues:|Limit reached; narrow paths\.)'
+    resultPattern: '(?:Staged as a proposal|Parse issues(?:\s*\(\d+\s*\/\s*\d+\))?:|Limit reached; narrow paths\.)'
 ---
 # Previewing, applying and failures
 
