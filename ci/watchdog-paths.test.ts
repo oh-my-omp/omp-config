@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { touchedWatchdogFiles } from "../agent/extensions/watchdog-agent/commands.ts";
+import { touchedWatchdogFiles } from "../agent/extensions/watchdog-agent/spec.ts";
 
 describe("watchdog filesystem writes", () => {
 	test("relative paths use the supplied live worktree directory", () => {
-		expect(touchedWatchdogFiles("write", { path: ".omp/WATCHDOG-LowTierScope.md" }, "/tmp/worktree")).toEqual([
+		expect(touchedWatchdogFiles("write", { path: ".omp/WATCHDOG-LowTierScope.md" }, undefined, "/tmp/worktree")).toEqual([
 			"/tmp/worktree/.omp/WATCHDOG-LowTierScope.md",
 		]);
 	});
@@ -14,8 +14,17 @@ describe("watchdog filesystem writes", () => {
 		}
 	});
 
-	test("edit headers and move destinations exclude resource URIs", () => {
-		const input = "*** Begin Patch\n[.omp/WATCHDOG-LowTierScope.md#ABCD]\nMV out://notes/WATCHDOG-Copy.md\n*** End Patch\n";
-		expect(touchedWatchdogFiles("edit", { input }, "/tmp/worktree")).toEqual(["/tmp/worktree/.omp/WATCHDOG-LowTierScope.md"]);
+	test("edits report every path the edit result names, whatever the patch grammar", () => {
+		const details = {
+			diff: "",
+			perFileResults: [
+				{ path: "/tmp/worktree/.omp/WATCHDOG-Renamed.md", sourcePath: "/tmp/worktree/.omp/WATCHDOG-Old.md", diff: "" },
+				{ path: "/tmp/worktree/src/index.ts", diff: "" },
+			],
+		};
+		expect(touchedWatchdogFiles("edit", { input: "*** Edit File: anything" }, details, "/tmp/worktree")).toEqual([
+			"/tmp/worktree/.omp/WATCHDOG-Renamed.md",
+			"/tmp/worktree/.omp/WATCHDOG-Old.md",
+		]);
 	});
 });

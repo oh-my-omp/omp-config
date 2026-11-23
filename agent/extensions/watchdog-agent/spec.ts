@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
-import { basename } from "node:path";
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
+import { type ExtensionAPI, z, type zod } from "@oh-my-pi/pi-coding-agent";
+import type { EditToolDetails, EditToolPerFileResult } from "@oh-my-pi/pi-tui/tools/edit";
 import { errorText } from "../_shared/errors.ts";
 import {
 	type FilterKeys,
@@ -11,23 +13,13 @@ import {
 	type SessionFilter,
 } from "../_shared/session-filter.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
-export const WATCHDOG_FILE_PATTERN = /^WATCHDOG-.+\.md$/i;
+const WATCHDOG_FILE_PATTERN = /^WATCHDOG-.+\.md$/i;
 export const WATCHDOG_FILTER_KEYS: FilterKeys = { target: "target", cwd: "cwd", model: "watchModel", provider: "watchProvider" };
 const DEFAULT_TOOLS: readonly string[] = ["read", "grep", "glob"];
-const GRANTABLE_TOOLS: Record<string, true> = {
-	read: true,
-	grep: true,
-	glob: true,
-	ast_grep: true,
-	web_search: true,
-	edit: true,
-	write: true,
-	bash: true,
-	eval: true,
-};
+const GRANTABLE_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "glob", "ast_grep", "web_search", "edit", "write", "bash", "eval"]);
 
-const DEFAULT_MAX_PER_CONTEXT = Number.POSITIVE_INFINITY; // advisories per watchdog per context; unlimited unless configured.
-const DEFAULT_EVERY = 30; // watched actions (tool calls + text replies) between runs.
+const DEFAULT_MAX_PER_CONTEXT = Number.POSITIVE_INFINITY;
+const DEFAULT_EVERY = 30;
 
 export type Scope = "full" | "window";
 
@@ -76,25 +68,16 @@ const DEFAULT_JEV_INSTRUCTIONS =
 	"Judge only the latest work in the supplied transcript against the configured guidance. Do not infer facts outside the supplied transcript.";
 const JEV_OPTION_KEY = /^option\.([a-z0-9_-]+)(?:\.(prompt|delivery))?$/;
 
-export function hasKey<K extends string>(value: unknown, key: K): value is Record<K, unknown> {
-	return typeof value === "object" && value !== null && key in value;
-}
-
 export function discoverWatchdogFiles(cwd: string): string[] {
 	return discoverSpecFiles(WATCHDOG_FILE_PATTERN, import.meta.dir, cwd);
 }
 
 function toList(value: string): string[] {
-	let s = value.trim();
-	if (s.startsWith("[") && s.endsWith("]")) s = s.slice(1, -1);
-	return s
+	const s = value.trim();
+	const inner = s.startsWith("[") && s.endsWith("]") ? s.slice(1, -1) : s;
+	return inner
 		.split(",")
-		.map((x) =>
-			x
-				.trim()
-				.replace(/^["']|["']$/g, "")
-				.trim(),
-		)
+		.map(unquote)
 		.filter((x) => x !== "");
 }
 
@@ -146,8 +129,8 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 	const inject = parseInjectMode(fields.inject);
 	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };
 
-	const rawTools = fields.tools ? toList(fields.tools) : [...DEFAULT_TOOLS];
-	const tools = rawTools.map((t) => t.toLowerCase()).filter((t) => GRANTABLE_TOOLS[t] === true);
+	const rawTools = fields.tools ? toList(fields.tools) : DEFAULT_TOOLS;
+	const tools = rawTools.map((t) => t.toLowerCase()).filter((t) => GRANTABLE_TOOLS.has(t));
 	const delivery = normalizeDelivery(fields.delivery);
 	const maxPerContext = parsePositiveInt(fields.maxpercontext, DEFAULT_MAX_PER_CONTEXT);
 	const fallbackName = basename(path)
@@ -192,7 +175,7 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 			...common,
 			kind: "chat",
 			model: fields.model ? unquote(fields.model) : undefined,
-			tools: tools.length > 0 ? tools : [...DEFAULT_TOOLS],
+			tools: tools.length > 0 ? tools : DEFAULT_TOOLS,
 		},
 	};
 }

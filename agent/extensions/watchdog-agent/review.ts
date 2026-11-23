@@ -119,7 +119,7 @@ function splitLevel(spec: string): { readonly base: string; readonly level: Thin
 	const trimmed = spec.trim();
 	const colon = trimmed.lastIndexOf(":");
 	if (colon > 0) {
-		const suffix = trimmed.slice(colon + 1);
+		const suffix = trimmed.slice(colon + 1).toLowerCase();
 		const level = suffix === "off" ? "off" : THINKING_EFFORTS.find((effort) => effort === suffix);
 		if (level !== undefined) return { base: trimmed.slice(0, colon), level };
 	}
@@ -127,7 +127,7 @@ function splitLevel(spec: string): { readonly base: string; readonly level: Thin
 }
 
 function findModel(ctx: ExtensionContext, base: string): Model | undefined {
-	const resolved = ctx.models?.resolve?.(base);
+	const resolved = ctx.models.resolve(base);
 	if (resolved) return resolved;
 	const available = ctx.modelRegistry.getAvailable();
 	return available.find((model) => `${model.provider}/${model.id}` === base) ?? available.find((model) => model.id === base);
@@ -135,10 +135,10 @@ function findModel(ctx: ExtensionContext, base: string): Model | undefined {
 
 export function defaultReviewerModel(ctx: ExtensionContext): Model | undefined {
 	for (const role of ["@advisor", "advisor", "@slow"]) {
-		const model = ctx.models?.resolve?.(role);
+		const model = ctx.models.resolve(role);
 		if (model) return model;
 	}
-	return ctx.models?.current?.();
+	return ctx.models.current();
 }
 
 function resolveReviewer(ctx: ExtensionContext, spec: ChatWatchdog): { model: Model; thinkingLevel: ThinkingLevel } | null {
@@ -146,7 +146,7 @@ function resolveReviewer(ctx: ExtensionContext, spec: ChatWatchdog): { model: Mo
 		const model = defaultReviewerModel(ctx);
 		return model ? { model, thinkingLevel: "off" } : null;
 	}
-	const { base, level } = splitLevel(spec.model.replace(/:(off|minimal|low|medium|high|xhigh|max)$/i, (suffix) => suffix.toLowerCase()));
+	const { base, level } = splitLevel(spec.model);
 	const model = findModel(ctx, base);
 	return model ? { model, thinkingLevel: level ?? "off" } : null;
 }
@@ -209,14 +209,13 @@ export function buildReviewPrompt(
 
 function interpretVerdict(answer: string, delivery: DeliverAs): Verdict | null {
 	const trimmed = answer.trim();
-	if (trimmed === "") return null;
 	const firstLine = trimmed.split(/\r?\n/, 1)[0]?.trim() ?? "";
 	if (/^(pass|ok|lgtm|none)\b/i.test(firstLine)) return { kind: "pass" };
-	const sev = trimmed.match(/severity\s*:\s*(nit|concern|blocker)/i);
-	const severity = sev?.[1]?.toLowerCase() ?? "concern";
-	let note = trimmed.replace(/^\s*severity\s*:\s*(nit|concern|blocker)\s*/i, "").trim();
-	if (note === "") note = trimmed;
-	return { kind: "advice", severity, note, delivery };
+	const match = /^\s*severity\s*:\s*(nit|concern|blocker)\b[\s:—-]*/im.exec(trimmed);
+	const severity = match?.[1];
+	if (!match || severity === undefined) return null;
+	const note = trimmed.slice(match.index + match[0].length).trim();
+	return note === "" ? null : { kind: "advice", severity: severity.toLowerCase(), note, delivery };
 }
 
 export async function runReviewer(
@@ -228,7 +227,7 @@ export async function runReviewer(
 ): Promise<Verdict | null> {
 	const reviewer = resolveReviewer(ctx, spec);
 	if (!reviewer) {
-		pi.logger?.warn?.(`watchdog "${spec.name}": no reviewer model resolved (model=${spec.model ?? "@advisor"}) — skipping`);
+		pi.logger.warn(`watchdog "${spec.name}": no reviewer model resolved (model=${spec.model ?? "@advisor"}) — skipping`);
 		return null;
 	}
 	const result = await runHelperPrompt(ctx, {
@@ -249,8 +248,11 @@ export async function runReviewer(
 		signal: AbortSignal.any([signal, AbortSignal.timeout(REVIEW_TIMEOUT_MS)]),
 	});
 	switch (result.kind) {
-		case "text":
-			return interpretVerdict(result.text, spec.delivery);
+		case "text": {
+			const verdict = interpretVerdict(result.text, spec.delivery);
+			if (verdict === null) pi.logger.warn(`watchdog "${spec.name}": reviewer reply has neither PASS nor a SEVERITY line — skipping`);
+			return verdict;
+		}
 		case "provider-error":
 			return null;
 		case "canceled":
@@ -287,7 +289,7 @@ export async function runJev(
 			},
 			{ signal: deadline },
 		);
-		pi.logger?.info?.(`watchdog "${spec.name}": judge usage`, {
+		pi.logger.info(`watchdog "${spec.name}": judge usage`, {
 			provider: result.provider,
 			model: result.model,
 			input: result.usage.input,
@@ -297,7 +299,7 @@ export async function runJev(
 		const choice = result.answers.review.choice;
 		const picked = spec.options.find((option) => option.label === choice);
 		if (!picked) {
-			pi.logger?.warn?.(`watchdog "${spec.name}": judge returned an unconfigured choice — skipping`);
+			pi.logger.warn(`watchdog "${spec.name}": judge returned an unconfigured choice — skipping`);
 			return null;
 		}
 		switch (picked.outcome.kind) {
@@ -311,7 +313,7 @@ export async function runJev(
 			}
 		}
 	} catch (error) {
-		pi.logger?.warn?.(`watchdog "${spec.name}": judge failed — skipping`, {
+		pi.logger.warn(`watchdog "${spec.name}": judge failed — skipping`, {
 			error: errorText(error),
 		});
 		return null;

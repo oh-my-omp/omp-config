@@ -62,6 +62,7 @@
 - Simplified `task-completion-judge`: tool-call arguments, results and the submission are serialized natively and cut to their limits (60% head + 40% tail) instead of streamed through a custom bounded JSON writer, the shared context is located in the joined system prompt, the worker's Todo list is read once per review, and the bounce decision is one exhaustive function
 - Updated `tool-topics` to index and rewrite OMP 19.1.0 command-mounted tool sections (`## <tool>` / `<tool> — …` / `Usage:`) while skipping catalog-only entries without drift warnings, migrated `SURFACE-*`/`TOPIC-*` docs and `tool-policy-nag/pty.ts` from `xd://` to `help://` and command forms, and removed dead `xd://bash` device-write channel branches and their obsolete tests
 - Made `subagent-usage` reuse a full calibration that is already running instead of running a second full calibration after it
+- Restructured `watchdog-agent`: one session lifecycle (unloaded, active, closed) owns the per-session state, session entries are parsed with schemas in their own module, `/watchdog` handlers live with the command parser and draft prompts in their own module
 
 ### Removed
 
@@ -73,6 +74,9 @@
 
 - Stopped `child-memory-warning` from repeating the same sampling-failure warning every 2 s when the failure happens after a successful process snapshot, and described `child-memory-warning.thresholdGiB` as phys_footprint instead of resident memory
 - Made `/subagent-usage on` and `recalibrate` warn when the calling session cannot be resolved instead of silently starting no calibration, and stopped `subagent-usage` from counting a dispatch whose resolved model has no `provider/` prefix under a truncated provider name
+- Stopped `watchdog-agent` from injecting a chat reviewer reply that has neither `PASS` nor a `SEVERITY:` line; the reply is logged and the same work is reviewed again
+- Made `watchdog-agent` abort running reviews on `session_start`, `session_branch` and `session_tree` as it already did on `session_switch`, instead of letting the discarded reviews run to their timeout
+- Made `watchdog-agent` find the `WATCHDOG-*.md` files an `edit` touched from the edit result's paths, so the recognition status is appended in every edit mode and for both ends of a move
 - Registered the `repo-rules` compaction handoff under its real `omp-config/repo-rules` source and stopped its summary claim from calling root `AGENTS.md`/`CLAUDE.md` "non-root" or naming internal helper calls
 - Made `input-polish` try the next model when a rewrite comes back empty or drops or changes an attachment/paste placeholder, instead of failing on the first model
 - Kept the `input-polish` preview box inside terminals narrower than 22 columns and sized it from the TUI's own terminal height
