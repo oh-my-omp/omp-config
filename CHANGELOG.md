@@ -22,6 +22,9 @@
 
 ### Changed
 
+- Moved model-compaction rules from one-rule `COMPACTION-*.md` files into an ordered `rules` list in `model-compaction.json`; the updater and main-session startup merge existing rules in filename order and delete the source files
+- Kept all rule files unchanged when `model-compaction.json` already exists or any `COMPACTION-*.md` file is invalid or app-managed, reporting the reason
+- Validated `model-compaction.json` and each rule with strict schemas, skipping only invalid entries and naming them as `<file> rules[index]`; unreadable files or a root without a `rules` array are skipped
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@e84938e.
 - Renamed the installed plugins `omp-todo-more`, `omp-ask-more` and `omp-subagent-more` to `omp-todo-ng`, `omp-ask-ng` and `omp-subagent-ng`: `install-plugins.sh` specs and the updater's readiness checks point at the new repositories, and task-completion-judge names omp-todo-ng in its messages
 - Simplified `tool-policy-nag`: the pty lane and the heuristic analyzers share one grammar-driven option parser, sudo/doas/run0 unwrapping and `-c` shell-string detection; the persisted nag state holds only the hit and reminder counts; the shell scanner is split into module-level steps
@@ -30,7 +33,7 @@
 - Moved the `wt` and `wt_remove` call flow (queueing until the turn ends, two-call `confirm`, what invalidates `confirm`, cancellation) from the tool descriptions into native `help://wt/lifecycle` and `help://wt_remove/lifecycle` topics, and made `wt-tool` read worktree status, branch and HEAD through the native git binding instead of `git` subprocesses
 - Made `user-prompt-inject` decide which root-session messages count as user requests and `ask` answers with one rule for both a root session in the same thread and one read from its transcript file, validate transcript records against OMP's message shapes, and read the transcript through a single file handle per model call
 - Detected `repo-rules` single-file `cat`/`head`/`tail` reads in `bash` with OMP's own shell lexer (`tools/shell-tokenize`) instead of a private tokenizer, and found the repository root for rule scanning with OMP's `findRepoRoot`
-- Made `model-compaction` refuse a rule whose `thresholdTokens` does not fit below the model's largest context window, deciding tier changes and fit with OMP's own `planModelCompactionPoint`, and name the rule file instead of a list index in refusal warnings
+- Made `model-compaction` refuse a rule whose `thresholdTokens` does not fit below the model's largest context window, deciding tier changes and fit with OMP's own `planModelCompactionPoint`, and name the rule as `<file> rules[index]` in refusal warnings
 - Simplified `child-memory-warning`: process start times and footprints are exact numbers instead of split 64-bit halves, each scan builds fresh process and ownership indexes instead of reusing aliased buffers, the libproc reader is one class with named offsets, and the non-Darwin log line reads `disabled (darwin only)`
 - Updated the shared copy of `compact-handoff.ts` to oh-my-omp/shared@db9dde4.
 - Simplified `tool-topics`: inject rules keep one source form and are compiled in one place for both catalog and shared-hub rules, the `help://` wrapper lists native topics of every tool through OMP's own `help://<tool>` listing instead of probing `read`/`eval`, and failures reading native topics are logged instead of dropped silently

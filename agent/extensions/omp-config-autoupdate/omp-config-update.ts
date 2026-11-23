@@ -21,6 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { errorText } from "../_shared/errors.ts";
 import { BASE_DIR, type BaseChange, BaseRecord, git, type PlainBase, RepoHistory, type StructuredRecord } from "./base.ts";
+import { settleCompactionRules } from "./compaction-rules.ts";
 import { conflictsText, type ResolveOutcome, resolveConflicts } from "./conflicts.ts";
 import { atomicWrite, errnoIs, isAppManaged, lexists } from "./files.ts";
 import { installLauncher } from "./launcher.ts";
@@ -944,6 +945,13 @@ function settleApply(state: ApplyState, accepted: readonly BaseChange[]): void {
 			} catch (error) {
 				report.errors.push(`settings: ${errorText(error)}`);
 			}
+		}
+	}
+	if (opts.check || report.errors.length === 0) {
+		try {
+			settleCompactionRules(opts, report, state.exclusions);
+		} catch (error) {
+			report.errors.push(`model-compaction rules: ${errorText(error)}`);
 		}
 	}
 	installLauncher(opts, report);
