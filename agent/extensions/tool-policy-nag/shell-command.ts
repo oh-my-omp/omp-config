@@ -49,49 +49,147 @@ export const valueOptions =
 		return flag === name ? (table[name] ?? 0) : 0;
 	};
 
+type OptionOrder = "interleaved" | "optionsFirst";
+
+export type OptionGrammar = { readonly arity: ValueArity; readonly valueLetters: string; readonly order: OptionOrder };
+
+export const grammar = (valueLetters: string, valueLongs: readonly string[], order: OptionOrder): OptionGrammar => ({
+	arity: valueOptions(Object.fromEntries(valueLongs.map((name) => [name, 1]))),
+	valueLetters,
+	order,
+});
+
+export const OPTIONS_FIRST = grammar("", [], "optionsFirst");
+
+export const INTERLEAVED = grammar("", [], "interleaved");
+
 export type ParsedArguments = {
 	readonly flags: readonly string[];
+	readonly letters: ReadonlySet<string>;
 	readonly operands: readonly string[];
 	readonly values: ReadonlyMap<string, string>;
 };
 
-export const parseArguments = (args: readonly string[], arity: ValueArity): ParsedArguments => {
+const isShortCluster = (flag: string): boolean => flag.length > 1 && flag.startsWith("-") && !flag.startsWith("--");
+
+function addClusterLetters(flag: string, valueLetters: string, letters: Set<string>): number {
+	for (let k = 1; k < flag.length; k++) {
+		const letter = flag.charAt(k);
+		letters.add(letter);
+		if (valueLetters.includes(letter)) return k === flag.length - 1 ? 1 : 0;
+	}
+	return 0;
+}
+
+export function parseOptions(args: readonly string[], spec: OptionGrammar): ParsedArguments {
 	const flags: string[] = [];
+	const letters = new Set<string>();
 	const operands: string[] = [];
 	const values = new Map<string, string>();
 	let options = true;
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === undefined) continue;
-		if (options && arg === "--") {
+		if (!options || !isFlag(arg)) {
+			operands.push(arg);
+			if (spec.order === "optionsFirst") options = false;
+			continue;
+		}
+		if (arg === "--") {
 			options = false;
 			continue;
 		}
-		if (options && isFlag(arg)) {
-			flags.push(arg);
-			const name = optionName(arg);
-			if (arg !== name) {
-				values.set(name, arg.slice(name.length + 1));
-				continue;
-			}
-			const count = arity(arg);
-			const value = args[i + 1];
-			if (count > 0 && value !== undefined) values.set(name, value);
-			i += count;
+		flags.push(arg);
+		const clustered = isShortCluster(arg) ? addClusterLetters(arg, spec.valueLetters, letters) : 0;
+		const name = optionName(arg);
+		if (arg !== name) {
+			values.set(name, arg.slice(name.length + 1));
 			continue;
 		}
-		operands.push(arg);
+		const count = Math.max(spec.arity(arg), clustered);
+		const value = args[i + 1];
+		if (count > 0 && value !== undefined) values.set(name, value);
+		i += count;
 	}
-	return { flags, operands, values };
-};
+	return { flags, letters, operands, values };
+}
 
-const isShortCluster = (flag: string): boolean => flag.length > 1 && flag.startsWith("-") && !flag.startsWith("--");
+export const parseArguments = (args: readonly string[], arity: ValueArity): ParsedArguments =>
+	parseOptions(args, { arity, valueLetters: "", order: "interleaved" });
 
 export const hasShortLetter = (flags: readonly string[], letter: string): boolean =>
 	flags.some((flag) => isShortCluster(flag) && flag.slice(1).includes(letter));
 
 export const hasOption = (flags: readonly string[], ...names: readonly string[]): boolean =>
 	flags.some((flag) => names.includes(optionName(flag)));
+
+export const hasAny = (parsed: ParsedArguments, letters: string, longs: readonly string[] = []): boolean =>
+	[...letters].some((letter) => parsed.letters.has(letter)) || hasOption(parsed.flags, ...longs);
+
+const SET_OPTION_WITH_NAME = /^[-+][A-Za-z]*[oO]$/;
+
+export function shellStringOperand(args: readonly string[]): number | null {
+	let runsString = false;
+	let index = 0;
+	while (index < args.length) {
+		const arg = args[index] ?? "";
+		if (!isFlag(arg) && !arg.startsWith("+")) break;
+		if (arg === "--") {
+			index++;
+			break;
+		}
+		const name = optionName(arg);
+		if (name === "--command") runsString = true;
+		else if (name === "--rcfile" || name === "--init-file") index++;
+		else if (isShortCluster(arg) && arg.includes("c")) runsString = true;
+		if (SET_OPTION_WITH_NAME.test(arg)) index++;
+		index++;
+	}
+	return runsString ? index : null;
+}
+
+const SUDO_OPTIONS = grammar(
+	"ugCDhpRrtTU",
+	[
+		"--user",
+		"--group",
+		"--close-from",
+		"--chdir",
+		"--host",
+		"--prompt",
+		"--chroot",
+		"--role",
+		"--type",
+		"--command-timeout",
+		"--other-user",
+	],
+	"optionsFirst",
+);
+const DOAS_OPTIONS = grammar("uC", [], "optionsFirst");
+const RUN0_OPTIONS = grammar(
+	"uDgM",
+	["--user", "--group", "--chdir", "--machine", "--unit", "--property", "--description", "--slice"],
+	"optionsFirst",
+);
+
+export type Elevation = { readonly prompts: boolean; readonly command: readonly string[] };
+
+export function elevation(program: string, args: readonly string[]): Elevation | null {
+	switch (program) {
+		case "sudo": {
+			const parsed = parseOptions(args, SUDO_OPTIONS);
+			return { prompts: !hasAny(parsed, "nS", ["--non-interactive", "--stdin"]), command: parsed.operands };
+		}
+		case "doas": {
+			const parsed = parseOptions(args, DOAS_OPTIONS);
+			return { prompts: !hasAny(parsed, "n"), command: parsed.operands };
+		}
+		case "run0":
+			return { prompts: !args.includes("--no-ask-password"), command: parseOptions(args, RUN0_OPTIONS).operands };
+		default:
+			return null;
+	}
+}
 
 export const fileOperands = (operands: readonly string[]): string[] => operands.filter((operand) => operand !== "-" && operand.length > 0);
 

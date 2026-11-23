@@ -11,6 +11,7 @@ import {
 	type ParsedArguments,
 	parseArguments,
 	type ShellWord,
+	shellStringOperand,
 	type ValueArity,
 	valueOptions,
 } from "./shell-command.ts";
@@ -439,11 +440,14 @@ function isReadOnlySqlite(sql: string): boolean {
 	return !/\b(?:load_extension|writefile|readfile|edit|fts3_tokenizer)\s*\(/i.test(text);
 }
 
-const analyzeSqlite: Analyzer = (invocation) => {
-	const parsed = parseArguments(
-		invocation.args.map((arg) => (arg.startsWith("--") && arg.length > 2 ? arg.slice(1) : arg)),
+export const sqliteArguments = (args: readonly string[]): ParsedArguments =>
+	parseArguments(
+		args.map((arg) => (arg.startsWith("--") && arg.length > 2 ? arg.slice(1) : arg)),
 		SQLITE_VALUES,
 	);
+
+const analyzeSqlite: Analyzer = (invocation) => {
+	const parsed = sqliteArguments(invocation.args);
 	const [database, sql, ...extra] = parsed.operands;
 	if (database === undefined || sql === undefined || extra.length > 0 || invocation.readInputs.length > 0) return analysis("other");
 	if (database === ":memory:" || hasOption(parsed.flags, "-cmd", "-init")) return analysis("other");
@@ -871,24 +875,9 @@ const analyzeInterpreter: Analyzer = (invocation) => {
 };
 
 const analyzeShellString: Analyzer = (invocation, context) => {
-	const words = invocation.words;
-	let index = 0;
-	let runsString = false;
-	while (index < words.length) {
-		const text = words[index]?.text ?? "";
-		if (!isFlag(text) && !text.startsWith("+")) break;
-		if (text === "--") {
-			index++;
-			break;
-		}
-		const name = optionName(text);
-		if (name === "--rcfile" || name === "--init-file") index++;
-		else if (!text.startsWith("--") && text.slice(1).includes("c")) runsString = true;
-		if (!text.startsWith("--") && /[oO]$/.test(text)) index++;
-		index++;
-	}
-	const script = words[index];
-	if (!runsString || script === undefined || script.dynamic) return analysis("other");
+	const index = shellStringOperand(invocation.args);
+	const script = index === null ? undefined : invocation.words[index];
+	if (script === undefined || script.dynamic) return analysis("other");
 	return analysis("other", [], context.shell(script.text));
 };
 

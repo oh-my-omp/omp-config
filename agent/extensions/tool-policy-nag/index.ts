@@ -208,7 +208,7 @@ async function ptyRefusalFor(pi: ExtensionAPI, lanes: Lanes, call: WatchedCall, 
 				return ptyRefusal(hit, call.tool);
 			}
 			case "eval": {
-				const hit = await ptyEvalHit(call.language, call.code);
+				const hit = ptyEvalHit(call.language, call.code);
 				if (hit === null) return null;
 				pi.logger.info("Tool-policy pty route refused", { tool: "eval", language: call.language, ...hit });
 				return ptyRefusal(hit, "eval");

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type PtyRuleId, ptyEvalHit, ptyRefusal, ptyShellHit } from "../agent/extensions/tool-policy-nag/pty.ts";
+import { type PtyHit, ptyEvalHit, ptyLineHit, ptyRefusal } from "../agent/extensions/tool-policy-nag/pty.ts";
+import { scanShell } from "../agent/extensions/tool-policy-nag/shell-parser.ts";
+
+type PtyRuleId = PtyHit["rule"];
+
+const ptyShellHit = (line: string) => ptyLineHit(scanShell(line));
 
 type Probe = { readonly shell: string } | { readonly py: string };
 
@@ -53,15 +58,15 @@ const FIXTURES: Record<PtyRuleId, { readonly hit: Probe; readonly miss: Probe }>
 	loopSleep: { hit: { shell: "until curl -fs localhost; do sleep 2; done" }, miss: { shell: "sleep 2 && curl -fs localhost" } },
 };
 
-const probe = (input: Probe) => ("shell" in input ? Promise.resolve(ptyShellHit(input.shell)) : ptyEvalHit("py", input.py));
+const probe = (input: Probe) => ("shell" in input ? ptyShellHit(input.shell) : ptyEvalHit("py", input.py));
 
 describe("pty rule registry", () => {
 	for (const [rule, { hit, miss }] of Object.entries(FIXTURES)) {
 		test(`${rule} refuses its hit`, async () => {
-			expect<string | undefined>((await probe(hit))?.rule).toBe(rule);
+			expect<string | undefined>(probe(hit)?.rule).toBe(rule);
 		});
 		test(`${rule} lets its miss through`, async () => {
-			expect(await probe(miss)).toBeNull();
+			expect(probe(miss)).toBeNull();
 		});
 	}
 });
@@ -138,42 +143,42 @@ describe("pty shell structure", () => {
 });
 
 describe("pty eval cells", () => {
-	const pyRule = async (code: string) => (await ptyEvalHit("py", code))?.rule ?? null;
-	const jsRule = async (code: string) => (await ptyEvalHit("js", code))?.rule ?? null;
+	const pyRule = (code: string) => ptyEvalHit("py", code)?.rule ?? null;
+	const jsRule = (code: string) => ptyEvalHit("js", code)?.rule ?? null;
 
 	test("py launches spelled under their own names with literal arguments", async () => {
-		expect(await pyRule('import subprocess\nsubprocess.run(["ssh", "host", "true"])\nprint(1)')).toBe("ssh");
-		expect(await pyRule('import subprocess\nsubprocess.check_output("tail -f log", shell=True)')).toBe("tailFollow");
-		expect(await pyRule('import os\nos.system("zsh -c true")')).toBe("shellString");
-		expect(await pyRule('from subprocess import Popen\nPopen(["python3"])')).toBe("repl");
-		expect(await pyRule("x = 1\n!ssh host true")).toBe("ssh");
-		expect(await pyRule("%%bash\nwatch date")).toBe("watch");
+		expect(pyRule('import subprocess\nsubprocess.run(["ssh", "host", "true"])\nprint(1)')).toBe("ssh");
+		expect(pyRule('import subprocess\nsubprocess.check_output("tail -f log", shell=True)')).toBe("tailFollow");
+		expect(pyRule('import os\nos.system("zsh -c true")')).toBe("shellString");
+		expect(pyRule('from subprocess import Popen\nPopen(["python3"])')).toBe("repl");
+		expect(pyRule("x = 1\n!ssh host true")).toBe("ssh");
+		expect(pyRule("%%bash\nwatch date")).toBe("watch");
 	});
 
 	test("py aliases, variables, f-strings and untokenizable cells pass", async () => {
-		expect(await pyRule('import subprocess as sp\nsp.run(["ssh", "host"])')).toBeNull();
-		expect(await pyRule('from os import system as sh\nsh("ssh host")')).toBeNull();
-		expect(await pyRule('import subprocess\ncmd = ["ssh", "h"]\nsubprocess.run(cmd)')).toBeNull();
-		expect(await pyRule('import subprocess\nh = "x"\nsubprocess.run(["ssh", h])')).toBeNull();
-		expect(await pyRule('import os\nh = "x"\nos.system(f"ssh {h}")')).toBeNull();
-		expect(await pyRule('import subprocess\nsubprocess.run(["ssh", "h"]')).toBeNull();
-		expect(await pyRule('tool.bash({"command": "ssh host"})')).toBeNull();
+		expect(pyRule('import subprocess as sp\nsp.run(["ssh", "host"])')).toBeNull();
+		expect(pyRule('from os import system as sh\nsh("ssh host")')).toBeNull();
+		expect(pyRule('import subprocess\ncmd = ["ssh", "h"]\nsubprocess.run(cmd)')).toBeNull();
+		expect(pyRule('import subprocess\nh = "x"\nsubprocess.run(["ssh", h])')).toBeNull();
+		expect(pyRule('import os\nh = "x"\nos.system(f"ssh {h}")')).toBeNull();
+		expect(pyRule('import subprocess\nsubprocess.run(["ssh", "h"]')).toBeNull();
+		expect(pyRule('tool.bash({"command": "ssh host"})')).toBeNull();
 	});
 
 	test("js launches spelled under their own names with literal arguments", async () => {
-		expect(await jsRule("await Bun.$`ssh host true`.nothrow();")).toBe("ssh");
-		expect(await jsRule('Bun.spawnSync(["kubectl", "logs", "-f", "p"]);')).toBe("kubectlLogsFollow");
-		expect(await jsRule('import { execSync } from "node:child_process";\nexecSync("docker exec app ls");')).toBe("containerExec");
-		expect(await jsRule('require("child_process").spawn("ssh", ["host"]);')).toBe("ssh");
-		expect(await jsRule('import { spawnSync } from "child_process";\nspawnSync("tail", ["-f", "x"], { shell: true });')).toBe("tailFollow");
+		expect(jsRule("await Bun.$`ssh host true`.nothrow();")).toBe("ssh");
+		expect(jsRule('Bun.spawnSync(["kubectl", "logs", "-f", "p"]);')).toBe("kubectlLogsFollow");
+		expect(jsRule('import { execSync } from "node:child_process";\nexecSync("docker exec app ls");')).toBe("containerExec");
+		expect(jsRule('require("child_process").spawn("ssh", ["host"]);')).toBe("ssh");
+		expect(jsRule('import { spawnSync } from "child_process";\nspawnSync("tail", ["-f", "x"], { shell: true });')).toBe("tailFollow");
 	});
 
 	test("js aliases, interpolation, bridges and unparsable cells pass", async () => {
-		expect(await jsRule('import { execSync as run } from "child_process";\nrun("ssh host");')).toBeNull();
-		expect(await jsRule('const cp = require("child_process");\ncp.execSync("ssh host");')).toBeNull();
-		expect(await jsRule("const h = 'x';\nawait Bun.$`ssh $" + "{h} true`;")).toBeNull();
-		expect(await jsRule('await tool.bash({ command: "ssh host" });')).toBeNull();
-		expect(await jsRule("Bun.$`ssh host`(")).toBeNull();
+		expect(jsRule('import { execSync as run } from "child_process";\nrun("ssh host");')).toBeNull();
+		expect(jsRule('const cp = require("child_process");\ncp.execSync("ssh host");')).toBeNull();
+		expect(jsRule("const h = 'x';\nawait Bun.$`ssh $" + "{h} true`;")).toBeNull();
+		expect(jsRule('await tool.bash({ command: "ssh host" });')).toBeNull();
+		expect(jsRule("Bun.$`ssh host`(")).toBeNull();
 	});
 });
 
