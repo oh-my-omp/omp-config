@@ -32,7 +32,6 @@ const LEGACY_SOURCES: Partial<Record<Section, readonly string[]>> = {
 	"tool-policy-nag": ["extensions/tool-policy-nag/tool-policy-nag.json", "extensions/tool-policy-nag.json"],
 	"task-completion-judge": ["extensions/task-completion-judge/task-completion-judge.json", "extensions/task-completion-judge.json"],
 	"doc-polish": ["extensions/doc-polish/doc-polish.json", "extensions/doc-polish.json"],
-	"model-compaction": ["extensions/model-compaction/model-compaction.json"],
 	"omp-config-autoupdate": ["extensions/omp-config-autoupdate/omp-config-autoupdate.json", "omp-config-autoupdate.json"],
 };
 
@@ -218,33 +217,31 @@ function policyLanes(value: Mapping): Mapping | string {
 	};
 }
 
-function compactionFile(rule: unknown, index: number, dir: string): PlannedFile | string {
+export function compactionRule(rule: unknown, label: string): Mapping | string {
 	if (!isMapping(rule) || Object.keys(rule).some((key) => !["provider", "model", "thresholdTokens"].includes(key)))
-		return `rule ${index + 1} has keys other than provider, model, thresholdTokens`;
-	const lines: string[] = [];
+		return `${label} has keys other than provider, model, thresholdTokens`;
+	const out: Mapping = {};
 	for (const field of ["provider", "model"] as const) {
 		const pattern = rule[field];
 		if (pattern === undefined) continue;
-		if (typeof pattern !== "string" || pattern.trim() === "" || pattern.includes("\n"))
-			return `rule ${index + 1}: ${field} must be a one-line regex`;
+		if (typeof pattern !== "string" || pattern === "") return `${label}: ${field} must be a regex string`;
 		try {
 			new RegExp(pattern);
 		} catch {
-			return `rule ${index + 1}: ${field} is not a valid regex`;
+			return `${label}: ${field} is not a valid regex`;
 		}
-		if (/^["']|["']$/.test(pattern.trim()) || pattern !== pattern.trim())
-			return `rule ${index + 1}: ${field} cannot be written as frontmatter`;
-		lines.push(`${field}: ${pattern}`);
+		out[field] = pattern;
 	}
-	if (lines.length === 0) return `rule ${index + 1} sets neither model nor provider`;
+	if (Object.keys(out).length === 0) return `${label} sets neither model nor provider`;
 	const tokens = rule.thresholdTokens;
 	if (typeof tokens !== "number" || !Number.isSafeInteger(tokens) || tokens <= 0)
-		return `rule ${index + 1}: thresholdTokens must be a positive integer`;
-	lines.push(`thresholdTokens: ${tokens}`);
-	return {
-		rel: `${dir}/COMPACTION-rule-${String(index + 1).padStart(2, "0")}.md`,
-		content: `---\n${lines.join("\n")}\n---\n`,
-	};
+		return `${label}: thresholdTokens must be a positive integer`;
+	out.thresholdTokens = tokens;
+	return out;
+}
+
+export function compactionRulesText(rules: readonly Mapping[]): string {
+	return `${JSON.stringify({ rules }, null, 2)}\n`;
 }
 
 export type TranslateScope =
@@ -297,11 +294,14 @@ function translate(section: Section, value: unknown, manifest: Manifest, scope: 
 		case "model-compaction": {
 			const { rules, ...unknown } = rest;
 			if (Object.keys(unknown).length > 0 || !Array.isArray(rules)) return invalid("expected only a rules list");
+			const checked: Mapping[] = [];
 			for (const [index, rule] of rules.entries()) {
-				const file = compactionFile(rule, index, scope.kind === "project" ? ".omp" : "agent/extensions/model-compaction");
-				if (typeof file === "string") return invalid(file);
-				files.push(file);
+				const out = compactionRule(rule, `rule ${index + 1}`);
+				if (typeof out === "string") return invalid(out);
+				checked.push(out);
 			}
+			const dir = scope.kind === "project" ? ".omp" : "agent/extensions/model-compaction";
+			files.push({ rel: `${dir}/model-compaction.json`, content: compactionRulesText(checked) });
 			return lists();
 		}
 		case "task-split-check": {

@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import type { Model } from "@oh-my-pi/pi-ai";
-import type { ExtensionAPI, ExtensionContext, Settings } from "@oh-my-pi/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type Settings, z } from "@oh-my-pi/pi-coding-agent";
 import { cfgCompactionModelThresholds } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { planModelCompactionPoint } from "@oh-my-pi/pi-coding-agent/session/model-compaction-threshold";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+import { discoverSpecFiles } from "../_shared/spec-files.ts";
 import { layerRuleFiles } from "./rule-files.ts";
 
 type MatchField = "provider" | "model";
@@ -17,7 +17,7 @@ interface Constraint {
 }
 
 interface Rule {
-	readonly file: string;
+	readonly source: string;
 	readonly constraints: readonly [Constraint, ...Constraint[]];
 	readonly thresholdTokens: number;
 }
@@ -44,9 +44,22 @@ interface Expansion {
 }
 
 type RuleParse = { readonly kind: "ok"; readonly rule: Rule } | { readonly kind: "invalid"; readonly reason: string };
+type FileParse = { readonly kind: "ok"; readonly rules: readonly unknown[] } | { readonly kind: "invalid"; readonly reason: string };
 
-const FILE_PATTERN = /^COMPACTION-.+\.md$/i;
-const KNOWN_KEYS: Readonly<Record<string, true>> = { provider: true, model: true, thresholdtokens: true };
+const FILE_PATTERN = /^model-compaction\.json$/;
+
+const fileSchema = z.object({ rules: z.array(z.unknown()) }).strict();
+const ruleSchema = z
+	.object({
+		provider: z.string().optional(),
+		model: z.string().optional(),
+		thresholdTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+	})
+	.strict();
+
+function issuesText(error: { readonly issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[] }): string {
+	return error.issues.map((issue) => (issue.path.length === 0 ? issue.message : `${issue.path.join(".")}: ${issue.message}`)).join("; ");
+}
 
 function compile(pattern: string): RegExp | null {
 	if (pattern === "") return null;
@@ -57,35 +70,32 @@ function compile(pattern: string): RegExp | null {
 	}
 }
 
-function parseRuleFile(file: string): RuleParse {
-	let raw: string;
+function parseRuleFile(file: string): FileParse {
+	let json: unknown;
 	try {
-		raw = readFileSync(file, "utf8");
+		json = JSON.parse(readFileSync(file, "utf8"));
 	} catch (error) {
 		return { kind: "invalid", reason: `unreadable: ${errorText(error)}` };
 	}
-	const parsed = parseFrontmatter(raw);
-	if (parsed === null) return { kind: "invalid", reason: "missing frontmatter" };
-	const { fields, body } = parsed;
-	const unknown = Object.keys(fields).find((key) => !Object.hasOwn(KNOWN_KEYS, key));
-	if (unknown !== undefined) return { kind: "invalid", reason: `unknown key ${unknown}` };
-	if (body.trim() !== "") return { kind: "invalid", reason: "body must be empty" };
+	const parsed = fileSchema.safeParse(json);
+	if (!parsed.success) return { kind: "invalid", reason: issuesText(parsed.error) };
+	return { kind: "ok", rules: parsed.data.rules };
+}
+
+function parseRule(source: string, raw: unknown): RuleParse {
+	const parsed = ruleSchema.safeParse(raw);
+	if (!parsed.success) return { kind: "invalid", reason: issuesText(parsed.error) };
 	const constraints: Constraint[] = [];
 	for (const field of ["provider", "model"] as const) {
-		const value = fields[field];
+		const value = parsed.data[field];
 		if (value === undefined) continue;
-		const pattern = compile(unquote(value));
+		const pattern = compile(value);
 		if (pattern === null) return { kind: "invalid", reason: `${field} is not a valid regex` };
 		constraints.push({ field, pattern });
 	}
 	const [first, ...rest] = constraints;
 	if (first === undefined) return { kind: "invalid", reason: "sets neither `model` nor `provider`" };
-	const threshold = fields.thresholdtokens;
-	if (threshold === undefined) return { kind: "invalid", reason: "missing thresholdTokens" };
-	const thresholdTokens = Number(unquote(threshold));
-	if (!Number.isSafeInteger(thresholdTokens) || thresholdTokens <= 0)
-		return { kind: "invalid", reason: "thresholdTokens is not a positive integer token count" };
-	return { kind: "ok", rule: { file, constraints: [first, ...rest], thresholdTokens } };
+	return { kind: "ok", rule: { source, constraints: [first, ...rest], thresholdTokens: parsed.data.thresholdTokens } };
 }
 
 function loadRules(cwd: string): LoadedRules {
@@ -93,17 +103,32 @@ function loadRules(cwd: string): LoadedRules {
 	const rules: Rule[] = [];
 	const problems: string[] = [];
 	for (const file of files) {
-		const parsed = parseRuleFile(file);
-		switch (parsed.kind) {
+		const parsedFile = parseRuleFile(file);
+		switch (parsedFile.kind) {
 			case "ok":
-				rules.push(parsed.rule);
 				break;
 			case "invalid":
-				problems.push(`${file}: ${parsed.reason}`);
-				break;
+				problems.push(`${file}: ${parsedFile.reason}`);
+				continue;
 			default: {
-				const unreachable: never = parsed;
-				throw new Error(`unexpected rule parse ${JSON.stringify(unreachable)}`);
+				const unreachable: never = parsedFile;
+				throw new Error(`unexpected rule file parse ${JSON.stringify(unreachable)}`);
+			}
+		}
+		for (const [index, raw] of parsedFile.rules.entries()) {
+			const source = `${file} rules[${index}]`;
+			const parsed = parseRule(source, raw);
+			switch (parsed.kind) {
+				case "ok":
+					rules.push(parsed.rule);
+					break;
+				case "invalid":
+					problems.push(`${source}: ${parsed.reason}`);
+					break;
+				default: {
+					const unreachable: never = parsed;
+					throw new Error(`unexpected rule parse ${JSON.stringify(unreachable)}`);
+				}
 			}
 		}
 	}
@@ -132,7 +157,7 @@ function expand(ctx: ExtensionContext, settings: Settings, rules: readonly Rule[
 		const key = `${model.provider}/${model.id}`;
 		const refused = refusal(ctx, settings, model, rule.thresholdTokens);
 		if (refused === null) entries[key] = `f${rule.thresholdTokens}`;
-		else refusals.push(`${rule.file} (thresholdTokens ${rule.thresholdTokens}) not applied to ${key}: it ${refused}`);
+		else refusals.push(`${rule.source} (thresholdTokens ${rule.thresholdTokens}) not applied to ${key}: it ${refused}`);
 	}
 	return { entries, refusals };
 }

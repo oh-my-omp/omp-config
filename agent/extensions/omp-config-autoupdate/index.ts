@@ -6,6 +6,7 @@ import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { defineSettings, readSettings, writeSetting } from "../_shared/plugin-settings.ts";
+import { applyCompactionRules, planCompactionRules, RULES_FILE } from "./compaction-rules.ts";
 import { type Kept, parseManifest } from "./omomp-migration.ts";
 import { migrateProject, planProject } from "./project-migration.ts";
 
@@ -704,6 +705,46 @@ function settleProject(pi: ExtensionAPI, ctx: ExtensionContext, warn: (ctx: Exte
 		);
 }
 
+const keptRuleProjects = new Set<string>();
+
+function settleProjectCompactionRules(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	warn: (ctx: ExtensionContext, en: string, zh: string) => void,
+): void {
+	const plan = planCompactionRules(join(ctx.cwd, ".omp"));
+	switch (plan.kind) {
+		case "none":
+			return;
+		case "kept":
+			if (keptRuleProjects.has(ctx.cwd)) return;
+			keptRuleProjects.add(ctx.cwd);
+			warn(
+				ctx,
+				`omp-config: this project's COMPACTION-*.md rules were not moved into ${RULES_FILE}: ${plan.reason}`,
+				`omp-config：本项目的 COMPACTION-*.md 规则未迁入 ${RULES_FILE}：${plan.reason}`,
+			);
+			return;
+		case "ready":
+			break;
+		default: {
+			const unreachable: never = plan;
+			throw new Error(`unknown compaction rules plan ${JSON.stringify(unreachable)}`);
+		}
+	}
+	const result = applyCompactionRules(plan);
+	const changed = [...result.written, ...result.deleted.map((path) => `${path} (deleted)`)];
+	pi.logger.info("omp-config: project COMPACTION-*.md rules moved", { changed });
+	if (ctx.hasUI)
+		ctx.ui.notify(
+			tr(
+				`omp-config: moved this project's COMPACTION-*.md rules into ${plan.target}; changed ${changed.join(", ")}; review and commit them (omp-config does not commit)`,
+				`omp-config：已把本项目的 COMPACTION-*.md 规则迁入 ${plan.target}；改动 ${changed.join("、")}；请检查并提交（omp-config 不会代为提交）`,
+			),
+			"info",
+		);
+}
+
 export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 	registerAutoupdateCommand(pi);
 
@@ -722,6 +763,15 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 					ctx,
 					`omp-config: moving this project's omomp sections failed: ${errorText(error)}`,
 					`omp-config：迁移本项目的 omomp 段失败：${errorText(error)}`,
+				);
+			}
+			try {
+				settleProjectCompactionRules(pi, ctx, warn);
+			} catch (error) {
+				warn(
+					ctx,
+					`omp-config: moving this project's COMPACTION-*.md rules failed: ${errorText(error)}`,
+					`omp-config：迁移本项目的 COMPACTION-*.md 规则失败：${errorText(error)}`,
 				);
 			}
 			if (started) return;

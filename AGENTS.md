@@ -101,7 +101,7 @@ review.
   `_shared/plugin-settings.ts` (`defineSettings` / `readSettings` /
   `writeSetting`). List data that describes another object lives with that
   object: an agent's flags in its frontmatter, a topic's `inject` rules in the
-  `TOPIC-*.md` frontmatter, a rule file of its own (`COMPACTION-*.md`). Files
+  `TOPIC-*.md` frontmatter, a rules file of its own (`model-compaction.json`). Files
   an extension owns sit beside it and are read via `import.meta.dir`, never
   via `getAgentDir()`.
 - **Models:** an extension that picks its own model uses the OMP role

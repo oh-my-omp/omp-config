@@ -183,7 +183,7 @@ const HOST_OMOMP = [
 const AGENT = "---\nname: task:free1\ndescription: worker\ncompletionJudge: true\n---\nBody.\n";
 
 describe("settings move", () => {
-	test("omp-config sections move into plugin settings, md files and unassigned roles; other owners' sections stay; a rerun changes nothing", () => {
+	test("omp-config sections move into plugin settings, their own files and unassigned roles; other owners' sections stay; a rerun changes nothing", () => {
 		const src = repo({ "agent/PERSONALITY.md": "repo\n" });
 		const agentDir = temp("omp-settings-agent-");
 		writeTree(agentDir, {
@@ -207,9 +207,9 @@ describe("settings move", () => {
 		expect(readFileSync(join(agentDir, "PERSONALITY.md"), "utf8")).toBe("mine\n");
 		expect(report.skipped).toContainEqual({ path: join(agentDir, "PERSONALITY.md"), reason: expect.stringContaining("exclude") });
 		expect(readFileSync(join(agentDir, "omomp.yml"), "utf8")).toBe("omp-actual-terminal:\n  stop: off\n");
-		expect(readFileSync(join(agentDir, "extensions/model-compaction/COMPACTION-rule-01.md"), "utf8")).toBe(
-			"---\nmodel: [gG][pP][tT]\nthresholdTokens: 650000\n---\n",
-		);
+		expect(JSON.parse(readFileSync(join(agentDir, "extensions/model-compaction/model-compaction.json"), "utf8"))).toEqual({
+			rules: [{ model: "[gG][pP][tT]", thresholdTokens: 650000 }],
+		});
 		expect(readFileSync(join(agentDir, "agents/free1.md"), "utf8")).toBe(
 			"---\nname: task:free1\ndescription: worker\ncompletionJudge: true\nsplitCheck: true\n---\nBody.\n",
 		);
@@ -384,7 +384,7 @@ describe("project sections move", () => {
 		"",
 	].join("\n");
 
-	test("scalars become project overrides and rules project COMPACTION files; sections with no project-level place stay", () => {
+	test("scalars become project overrides and rules the project's model-compaction.json; sections with no project-level place stay", () => {
 		const project = temp("omp-project-");
 		writeTree(project, {
 			".omp/omomp.yml": PROJECT_OMOMP,
@@ -393,9 +393,7 @@ describe("project sections move", () => {
 		const work = planProject(project, manifest);
 		if (work.kind !== "ready") throw new Error(`expected a ready plan, got ${work.kind}`);
 		expect(work.files.toSorted()).toEqual(
-			[".omp/COMPACTION-rule-01.md", ".omp/COMPACTION-rule-02.md", ".omp/omomp.yml", ".omp/plugin-overrides.json"].map((rel) =>
-				join(project, rel),
-			),
+			[".omp/model-compaction.json", ".omp/omomp.yml", ".omp/plugin-overrides.json"].map((rel) => join(project, rel)),
 		);
 		const result = migrateProject(work);
 		expect(result.kept.map((entry) => entry.section).toSorted()).toEqual(["input-polish", "omomp-lang"]);
@@ -403,8 +401,12 @@ describe("project sections move", () => {
 			disabled: ["other"],
 			settings: { "omp-config": { "lang-nag.language": "English", "lang-nag.instruction": "project voice" } },
 		});
-		expect(readFileSync(join(project, ".omp/COMPACTION-rule-01.md"), "utf8")).toBe("---\nmodel: argon\nthresholdTokens: 350000\n---\n");
-		expect(readFileSync(join(project, ".omp/COMPACTION-rule-02.md"), "utf8")).toBe("---\nmodel: .*\nthresholdTokens: 450000\n---\n");
+		expect(JSON.parse(readFileSync(join(project, ".omp/model-compaction.json"), "utf8"))).toEqual({
+			rules: [
+				{ model: "argon", thresholdTokens: 350000 },
+				{ model: ".*", thresholdTokens: 450000 },
+			],
+		});
 		expect(Bun.YAML.parse(readFileSync(join(project, ".omp/omomp.yml"), "utf8"))).toEqual({
 			"input-polish": { fallbackRole: "smol" },
 			"omomp-lang": { language: "en" },
@@ -465,12 +467,12 @@ describe("project sections move", () => {
 		writeTree(project, {
 			".omp/omomp.yml": `${rules}${LANG_ONLY}`,
 			".omp/plugin-overrides.json": "{ not json",
-			".omp/COMPACTION-rule-01.md": "---\nmodel: mine\nthresholdTokens: 1000\n---\n",
+			".omp/model-compaction.json": '{ "rules": [{ "model": "mine", "thresholdTokens": 1000 }] }\n',
 		});
 		const work = planProject(project, manifest);
 		if (work.kind !== "stuck") throw new Error(`expected a stuck plan, got ${work.kind}`);
 		expect(work.kept.map((entry) => entry.section)).toEqual(["lang-nag", "model-compaction"]);
-		expect(work.kept[1]?.reason).toBe(`${join(project, ".omp/COMPACTION-rule-01.md")} already exists with other content`);
+		expect(work.kept[1]?.reason).toBe(`${join(project, ".omp/model-compaction.json")} already exists with other content`);
 		expect(work.kept[0]?.reason).toStartWith(`${join(project, ".omp/plugin-overrides.json")}: `);
 	});
 });

@@ -114,19 +114,20 @@ OMP's `agents-md` and `claude-md` providers render the standalone `AGENTS.md` / 
 
 Source: `agent/extensions/model-compaction/`.
 
-OMP's `compaction.modelThresholds` only matches exact `provider/id` keys or `*` prefixes. On main-session `session_start`, `session_switch` and every `before_agent_start`, this extension re-discovers and re-reads `COMPACTION-<label>.md` files from the extension's own directory (machine rules) plus every directory between the session's cwd and the git root or the home directory, whichever comes first (only `cwd` when neither bounds the walk), and each one's `.omp/` (project rules). One file is one rule, `---`-fenced frontmatter with `provider` and/or `model` as JavaScript regexes (unanchored; `"model": ".*"` matches every model) and `thresholdTokens` as a positive integer:
+OMP's `compaction.modelThresholds` only matches exact `provider/id` keys or `*` prefixes. On main-session `session_start`, `session_switch` and every `before_agent_start`, this extension re-discovers and re-reads `model-compaction.json` files from the extension's own directory (machine rules) plus every directory between the session's cwd and the git root or the home directory, whichever comes first (only `cwd` when neither bounds the walk), and each one's `.omp/` (project rules). Each file is a JSON object whose `rules` list holds the rules in order; a rule has `provider` and/or `model` as JavaScript regexes (unanchored; `"model": ".*"` matches every model) and `thresholdTokens` as a positive integer:
 
-```markdown
----
-provider: ^anthropic$
-model: opus
-thresholdTokens: 150000
----
+```json
+{
+  "rules": [
+    { "provider": "^anthropic$", "model": "opus", "thresholdTokens": 150000 },
+    { "model": "^claude-haiku-(?!4-)", "thresholdTokens": 200000 }
+  ]
+}
 ```
 
-For each model in `ctx.models.list()`, the first matching valid rule — every project rule before every machine rule of the extension's directory, whatever the file names, and inside each layer the discovery order (cwd upward, filename order in each directory) — writes `"<provider>/<id>": "f<thresholdTokens>"` into the main session's runtime settings layer (`config.yml` on disk is not modified; `/model` switches, retry fallbacks, and subagents reading the main session's settings pick up their model's threshold). The runtime layer lives only in the omp process, so a resumed session gets its entries back from `session_start`; turns the agent starts itself (notices, continuations, IRC wakes) skip `before_agent_start`, and without that a session resumed and then driven only by such turns would compact at OMP's default threshold. The repository ships no rule files.
+For each model in `ctx.models.list()`, the first matching valid rule — every project rule before every machine rule of the extension's directory, and inside each layer the discovery order (cwd upward, each directory before its `.omp/`, list order inside a file) — writes `"<provider>/<id>": "f<thresholdTokens>"` into the main session's runtime settings layer (`config.yml` on disk is not modified; `/model` switches, retry fallbacks, and subagents reading the main session's settings pick up their model's threshold). The runtime layer lives only in the omp process, so a resumed session gets its entries back from `session_start`; turns the agent starts itself (notices, continuations, IRC wakes) skip `before_agent_start`, and without that a session resumed and then driven only by such turns would compact at OMP's default threshold. The repository ships no rule files.
 
-Because a native `f<N>` threshold can switch a model between its standard and extended context window, a rule whose `thresholdTokens` would change a model's current context-window tier, or does not fit below the model's largest window, is refused for that model with a warning naming the rule file; the check is OMP's own `planModelCompactionPoint`, the plan behind `/model`'s compaction-point preview. Unknown keys and a non-empty body are errors, so a misspelled key cannot widen a rule; an unreadable or invalid file is skipped with a warning and the other files still apply, and with no valid file no rules apply. Existing runtime entries from other sources are preserved and restored when no rules match or at `session_shutdown`; if another writer modifies the runtime map during the session, the extension warns once and stops updating it.
+Because a native `f<N>` threshold can switch a model between its standard and extended context window, a rule whose `thresholdTokens` would change a model's current context-window tier, or does not fit below the model's largest window, is refused for that model with a warning naming the rule as `<file> rules[<index>]`; the check is OMP's own `planModelCompactionPoint`, the plan behind `/model`'s compaction-point preview. Unknown keys are errors, so a misspelled key cannot widen a rule; a file that cannot be read or whose root is not `{ "rules": [...] }` is skipped with a warning, an invalid rule is skipped with a warning naming its index, the other rules still apply, and with no valid rule none apply. Existing runtime entries from other sources are preserved and restored when no rules match or at `session_shutdown`; if another writer modifies the runtime map during the session, the extension warns once and stops updating it.
 
 ### ctx
 
