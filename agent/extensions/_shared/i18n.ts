@@ -12,7 +12,8 @@ export const omompLangSetting = await readSettings(omompLangSection, { kind: "ma
 export { LANGUAGE_ENV };
 
 function language(): Language {
-	if (parseLanguage(process.env[LANGUAGE_ENV]) !== undefined) return languageFrom(process.env);
+	const launch = parseLanguage(process.env[LANGUAGE_ENV]);
+	if (launch !== undefined) return launch;
 	if (omompLangSetting.kind === "ok") return omompLangSetting.value.language;
 	return languageFrom(process.env);
 }

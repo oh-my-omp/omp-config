@@ -1,24 +1,22 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { LANGUAGE_ENV, omompLangSetting, tr } from "../_shared/i18n.ts";
-import { parseLanguage } from "../_shared/omomp-shared/i18n.ts";
+import { type Language, parseLanguage } from "../_shared/omomp-shared/i18n.ts";
 
-type Export =
-	| { readonly kind: "exported"; readonly language: string }
-	| { readonly kind: "launch-wins"; readonly launch: string; readonly configured: string }
+type Startup =
+	| { readonly kind: "exported"; readonly language: Language }
+	| { readonly kind: "launch-wins"; readonly launch: Language; readonly configured: Language }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-function exportConfigured(): Export {
+function decideStartup(): Startup {
 	switch (omompLangSetting.kind) {
 		case "invalid":
 			return { kind: "invalid", reason: omompLangSetting.reason };
 		case "ok": {
+			const configured = omompLangSetting.value.language;
 			const launch = parseLanguage(process.env[LANGUAGE_ENV]);
-			if (launch !== undefined) {
-				return { kind: "launch-wins", launch, configured: omompLangSetting.value.language };
-			}
-			process.env[LANGUAGE_ENV] = omompLangSetting.value.language;
-			return { kind: "exported", language: omompLangSetting.value.language };
+			if (launch === undefined || launch === configured) return { kind: "exported", language: configured };
+			return { kind: "launch-wins", launch, configured };
 		}
 		default: {
 			const unreachable: never = omompLangSetting;
@@ -27,13 +25,14 @@ function exportConfigured(): Export {
 	}
 }
 
-const startup = exportConfigured();
+const startup = decideStartup();
+if (startup.kind === "exported") process.env[LANGUAGE_ENV] = startup.language;
 
-let unreported = startup.kind === "invalid";
+let reported = false;
 
 function reportInvalid(pi: ExtensionAPI, ctx: ExtensionContext, reason: string): void {
-	if (!unreported) return;
-	unreported = false;
+	if (reported) return;
+	reported = true;
 	pi.logger.warn("omomp-lang: invalid omomp-lang.language setting", { reason });
 	if (ctx.hasUI) {
 		ctx.ui.notify(
