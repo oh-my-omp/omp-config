@@ -37,7 +37,7 @@
 - Counted only the YAML boolean `true` under `completionJudge` or `splitCheck` (or their hyphenated spellings) for the completion judge and split check; quoted `"true"`, other key casing, nested keys and unparseable frontmatter no longer count
 - Left agent definitions with unparseable frontmatter unchanged when adding `splitCheck: true`, reporting the parse error in the migration note instead of writing the key
 - Wrote the user-report rule (`NEVER rerun checks to doubt them`) and the compiled-code rule (`NEVER add avoidable allocation`) directly into `SYSTEM_TEMPLATE.md`, and removed the two `REPLACE-SYSTEM-default.yml` rules that rewrote these lines of this repository's own template
-- Moved `ast-top-level` onto OMP's tool-command partition for keeping `ast_grep` and `ast_edit` top-level, with the pin-failure warning now reporting that both stay bash tool commands
+- Moved `ast-top-level` onto OMP's tool-command partition for keeping `ast_grep` and `ast_edit` top-level, with the pin-failure warning telling a rejected pin write apart from a pin table OMP no longer honors and naming the tools that stay bash tool commands
 - Refreshed `bun.lock` to the `@oh-my-pi` 19.1.0 release and added the lockfile refresh to the after-upgrade steps in `docs/operations.md`
 - Rewrote the `AGENTS.md` Imports rule to the module-table criterion `bun run check` enforces, dropping the condition that a host subpath must have been loaded in a real omp session
 - Made sandbox `run` and `matrix` exit nonzero unless every model result is `pass`, so `untested` results now fail the command
