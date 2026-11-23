@@ -3,7 +3,7 @@ tool: read
 name: ssh
 title: Reading remote files over SSH
 when: before reading a file or directory on a remote host
-upstream: pi-coding-agent@18.13.2 src/internal-urls/ssh-protocol.ts, src/prompts/internal-urls/ssh.md, src/tools/read.ts
+upstream: pi-coding-agent@19.1.1 src/internal-urls/ssh-protocol.ts, src/prompts/internal-urls/ssh.md, src/tools/read.ts
 inject:
   - id: read-ssh
     tool: read

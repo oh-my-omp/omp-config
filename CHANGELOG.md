@@ -22,6 +22,7 @@
 
 ### Changed
 
+- Aligned `tool-topics` `read`, `write`, `edit`, `find`, and `grep` surface and topic docs with OMP 19.1.1: removed all `artifact://` references in favor of `local://<id>.log`, restored native `help://read/sources` and `help://read/urls` pointers and `security://` in `SURFACE-read.md`, fixed binary metadata vs explicit analysis views, web selector caching, single-column PK `WITHOUT ROWID` SQLite writes, `read-failures` / `find-coverage` / `read-summaries` trigger regexes, and updated `upstream:` headers to `pi-coding-agent@19.1.1`
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@e84938e.
 - Renamed the installed plugins `omp-todo-more`, `omp-ask-more` and `omp-subagent-more` to `omp-todo-ng`, `omp-ask-ng` and `omp-subagent-ng`: `install-plugins.sh` specs and the updater's readiness checks point at the new repositories, and task-completion-judge names omp-todo-ng in its messages
 - Simplified `tool-policy-nag`: the pty lane and the heuristic analyzers share one grammar-driven option parser, sudo/doas/run0 unwrapping and `-c` shell-string detection; the persisted nag state holds only the hit and reminder counts; the shell scanner is split into module-level steps
@@ -86,6 +87,7 @@
 
 ### Fixed
 
+- Fixed `tool-topics` cross-tool `inject[].tool` ownership (keeping local catalog injection rules out of the tool-filtered shared hub registration) and made `tool-topics/injection.ts` resolve hub topics directly and pass a session-backed `ResolveContext` (or skip safely when absent) when falling back to native `help://` topics
 - Fixed `harness_restart` starting a new agent turn after the user interrupted the turn that queued it: the cancellation notice now waits hidden for the user's next turn
 - Fixed `harness_restart` not telling the agent about a failed restart when recording the failure in the session threw
 - Fixed `tool-policy-nag` risk and masked-failure reminders breaking their quoted command when it contains a run of three or more backticks
