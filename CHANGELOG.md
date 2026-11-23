@@ -22,6 +22,9 @@
 
 ### Changed
 
+- Updated `tool-topics` surfaces and topics for `bash`, `task`, `ast_grep`, `ast_edit`, `eval`, `github`, `checkpoint`, and `debug` to `@oh-my-pi/pi-coding-agent@19.1.1`: replaced removed `artifact://` references with `local://<id>.log`, fixed `bash` URL redirect/reply and `eval` non-MCP timeout-pause docs, aligned `bash-output`, `ast_edit-apply`, `task-isolation`, and `task-results` `inject` patterns with real tool output text, reconciled `SURFACE-bash.md`, `SURFACE-task.md`, and `SURFACE-ast_edit.md` with `endTurn`, conditional `fork_task`, `m<N>`, mid-flight check suppression, and command/top-level `resolve`/`reject`, and aligned remaining topic docs with 19.1.1 capabilities and host-native `help://eval/*` topics.
+- Aligned `tool-topics` `read`, `write`, `edit`, `find`, and `grep` surface and topic docs with OMP 19.1.1: removed all `artifact://` references in favor of `local://<id>.log`, restored native `help://read/sources` and `help://read/urls` pointers and `security://` in `SURFACE-read.md`, fixed binary metadata vs explicit analysis views, web selector caching, single-column PK `WITHOUT ROWID` SQLite writes, `read-failures` / `find-coverage` / `read-summaries` trigger regexes, and updated `upstream:` headers to `pi-coding-agent@19.1.1`
+- Restored `{{intentGuidance}}` and compatible 19.1.1 workflow clauses in `agent/SYSTEM_TEMPLATE.md`, stripped the trailing space after `No TODO tracking, no progress updates.` in `REPLACE-SYSTEM-default.yml`, and aligned `agent/agents/README*.txt` and `docs/prompts-and-context*.md` with `reviewer.md` and `todo.enabled: true`
 - Moved model-compaction rules from one-rule `COMPACTION-*.md` files into an ordered `rules` list in `model-compaction.json`; the updater and main-session startup merge existing rules in filename order and delete the source files
 - Kept all rule files unchanged when `model-compaction.json` already exists or any `COMPACTION-*.md` file is invalid or app-managed, reporting the reason
 - Validated `model-compaction.json` and each rule with strict schemas, skipping only invalid entries and naming them as `<file> rules[index]`; unreadable files or a root without a `rules` array are skipped
@@ -48,6 +51,8 @@
 - Wrote the user-report rule (`NEVER rerun checks to doubt them`) and the compiled-code rule (`NEVER add avoidable allocation`) directly into `SYSTEM_TEMPLATE.md`, and removed the two `REPLACE-SYSTEM-default.yml` rules that rewrote these lines of this repository's own template
 - Moved `ast-top-level` onto OMP's tool-command partition for keeping `ast_grep` and `ast_edit` top-level, with the pin-failure warning telling a rejected pin write apart from a pin table OMP no longer honors and naming the tools that stay bash tool commands
 - Refreshed `bun.lock` to the `@oh-my-pi` 19.1.0 release and added the lockfile refresh to the after-upgrade steps in `docs/operations.md`
+- Refreshed `bun.lock` to the `@oh-my-pi` 19.1.1 release and updated all `// @upstream` markers across local extensions
+- Synced `agent/config.yml` `bashInterceptor.patterns` `read` and `write` rules with OMP 19.1.1 so `cat > file` and `cat >> file` redirect to `write` with the append hint instead of `read`
 - Rewrote the `AGENTS.md` Imports rule to the module-table criterion `bun run check` enforces, dropping the condition that a host subpath must have been loaded in a real omp session
 - Made sandbox `run` and `matrix` exit nonzero unless every model result is `pass`, so `untested` results now fail the command
 - Rewrote `baseUrl` in sandbox provider `models` and `modelOverrides` onto the local recorder port, sharing one target per upstream origin
@@ -89,6 +94,7 @@
 
 ### Fixed
 
+- Fixed `tool-topics` cross-tool `inject[].tool` ownership (keeping local catalog injection rules out of the tool-filtered shared hub registration) and made `tool-topics/injection.ts` resolve hub topics directly and pass a session-backed `ResolveContext` (or skip safely when absent) when falling back to native `help://` topics
 - Fixed `harness_restart` starting a new agent turn after the user interrupted the turn that queued it: the cancellation notice now waits hidden for the user's next turn
 - Fixed `harness_restart` not telling the agent about a failed restart when recording the failure in the session threw
 - Fixed `tool-policy-nag` risk and masked-failure reminders breaking their quoted command when it contains a run of three or more backticks
@@ -111,6 +117,7 @@
 - Kept the `input-polish` preview box inside terminals narrower than 22 columns and sized it from the TUI's own terminal height
 - Stopped a second `input-polish` session attach that raced the first from leaving an extra key handler subscribed
 - Compared repo-rules context-file boundaries case-insensitively on Windows so home and repo-root paths match regardless of casing
+- Cooled down `@<purpose>` prompted judge candidates in `_shared/judge.ts` for 5 minutes on gateway 502 `upstream_credentials_exhausted` rejections, matching OMP's `resolveJudge`
 - Kept the user's enabled state and feature selection of installed plugins across updater applies and startup auto-update: a plugin whose declared spec is unchanged is refreshed with `omp plugin upgrade` instead of `omp install`, a plugin whose spec changed is reinstalled and disabled again if it was disabled, an npm plugin pinned to the recorded exact version is left as is, and a locally linked plugin is no longer installed over; a link made over an installed dependency, which the host's bun install replaces whenever any plugin is installed or upgraded, is linked again with its enable state and features restored
 - Located the shared batch context for `task-completion-judge` by the host subagent template's `⁂ Context` heading instead of a `§ Context` marker the host no longer renders
 - Judged `task-completion-judge` data yields whose `error` is a filler such as `unused`, `n/a` or `none`; the host treats these as successful results, but the judge skipped them as error yields

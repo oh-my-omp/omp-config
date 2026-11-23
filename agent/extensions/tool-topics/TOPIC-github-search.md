@@ -3,7 +3,7 @@ tool: github
 name: search
 title: Searching GitHub
 when: before `search_issues`, `search_prs`, `search_code`, `search_commits` or `search_repos` beyond a plain keyword
-upstream: pi-coding-agent@18.13.2 src/tools/gh-search.ts, src/prompts/tools/github.md, omp://tools/github.md § Inputs
+upstream: pi-coding-agent@19.1.1 src/tools/gh-search.ts, src/prompts/tools/github.md, omp://tools/github.md § Inputs
 ---
 # Searching GitHub
 

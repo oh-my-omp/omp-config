@@ -130,6 +130,6 @@ OMP 原生的 `compaction.modelThresholds` 只支持精确 `provider/id` 或 `*`
 由于原生 `f<N>` 条目可能改变模型的上下文窗口档位（standard vs extended），会让某个模型切换当前窗口档位、或不小于该模型最大窗口的规则，对该模型拒绝并记一条以 `<file> rules[<index>]` 写明规则的 warning；判断用的是 OMP 自己的 `planModelCompactionPoint`，与 `/model` 压缩点预览依据的是同一份计划。未知键是错误，写错的键不会悄悄放宽规则；无法读取或根不是 `{ "rules": [...] }` 的文件跳过并记 warning，无效的规则跳过并记一条写明序号的 warning，其余规则仍生效，没有任何有效规则时不应用规则。其他来源已写入的运行时条目会被保留，并在无规则命中或 `session_shutdown` 时恢复；若运行期间有其他代码修改了这张映射表，扩展会记一次 warning 并停止更新。
 ### ctx
 
-[omp-todo-ng](plugins-and-modes.zh-CN.md#todo-ng) 插件拥有 `ctx` 与 `todo`；`agent/config.yml` 关闭原生 `todo`。更新器在安装插件前预检待退役本地 Todo/ctx 文件的归属；只有 OMP 确认插件就绪后才删除列出的 Todo 文件，且只有该就绪插件带有 `src/ctx` 时才删除列出的 ctx 文件。
+[omp-todo-ng](plugins-and-modes.zh-CN.md#todo-ng) 插件拥有 `ctx` 与 `todo`，运行在原生 `todo` 之上，`agent/config.yml` 保持原生 `todo` 开启（`todo.enabled: true`）以便插件的 `todo` 工具接管内置工具。更新器在安装插件前预检待退役本地 Todo/ctx 文件的归属；只有 OMP 确认插件就绪后才删除列出的 Todo 文件，且只有该就绪插件带有 `src/ctx` 时才删除列出的 ctx 文件。
 
 工具文档：`help://todo/lifecycle`（调用 `todo({})` 直接读取实时计划状态；`omp-sessions` 提供 `session://`）。

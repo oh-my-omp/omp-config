@@ -3,7 +3,7 @@ tool: bash
 name: output
 title: Output, exit codes and truncation
 when: when output was truncated or minimized, or before handling a non-zero exit, timeout or cancellation
-upstream: pi-coding-agent@18.13.2 src/tools/bash.ts, src/exec/bash-executor.ts, omp://tools/bash.md § Outputs, § Limits & Caps, § Notes
+upstream: pi-coding-agent@19.1.1 src/tools/bash.ts, src/exec/bash-executor.ts, omp://tools/bash.md § Outputs, § Limits & Caps, § Notes
 hiddenFromIndex: true
 inject:
   - id: bash-output-error
@@ -11,13 +11,13 @@ inject:
     onError: true
   - id: bash-output-truncated
     tool: bash
-    resultPattern: '(?:artifact://|raw output: artifact://|truncated)'
+    resultPattern: '(?:local://\d+\.log|\[raw output: local://|Showing (?:lines \d+-\d+ and \d+-\d+ of \d+|head and tail bytes of |line \d+ \(partial|(?:lines \d+-\d+ of \d+|\d+ of \d+ lines) \()|middle elided|Some lines truncated to|\(output truncated\)|Full output was not saved completely)'
 ---
 # Output, exit codes and truncation
 
-- stdout and stderr are merged. A command that printed nothing returns `(no output)`.
-- About 50 KiB is kept inline: past that, the result keeps the first and last ~20 KiB and links the full stream as `artifact://<id>`. Read the artifact (line selectors apply) instead of re-running with `head`/`tail`. If the artifact could not be saved, the result says the capture is incomplete.
-- Output may be minimized for known noisy programs; the footer `[raw output: artifact://<id>]` points to the lossless original.
+- stdout and stderr are merged. A command that printed nothing returns `(no output, exit code 0)` on success or `(no output)` otherwise.
+- About 50 KiB is kept inline: past that, the result keeps the first and last ~20 KiB and links the full stream as `local://<id>.log`. Read the spill file (`read local://<id>.log`, line selectors apply) instead of re-running with `head`/`tail`. If the spill could not be saved, the result says the capture is incomplete.
+- Output may be minimized for known noisy programs; the footer `[raw output: local://<id>.log]` points to the lossless original.
 - Lines longer than 768 characters are cut in streaming previews only.
 - Non-zero exit: an error result ending `Command exited with code <n>`; `details.exitCode` holds it.
 - Timeout: an error result with `details.timedOut: true`, not a success. Reconsider the deadline rather than retrying unchanged; open-ended work is outside this tool's host-policy boundary.

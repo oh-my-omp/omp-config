@@ -3,7 +3,7 @@ tool: ast_edit
 name: patterns
 title: Writing rewrite ops
 when: before writing `ops` or choosing `paths`, or when a rewrite matched nothing, fewer sites than expected, or reported parse issues
-upstream: pi-coding-agent@18.15.0 src/prompts/tools/ast-edit.md, omp://tools/ast-edit.md § Inputs, § Notes
+upstream: pi-coding-agent@19.1.1 src/prompts/tools/ast-edit.md, omp://tools/ast-edit.md § Inputs, § Notes
 ---
 # Writing rewrite ops
 

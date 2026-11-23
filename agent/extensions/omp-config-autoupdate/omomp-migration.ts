@@ -544,7 +544,7 @@ export function splitCheckEdit(
 
 // Must read agent definitions exactly as omp's parseFrontmatter with level "fatal" does: a looser reading marks
 // definitions omp ignores as set, or inserts a second splitCheck key over the user's own value.
-// @upstream adapted @oh-my-pi/pi-utils@19.1.0 src/frontmatter.ts#parseFrontmatter
+// @upstream adapted @oh-my-pi/pi-utils@19.1.1 src/frontmatter.ts#parseFrontmatter
 // The level "fatal" path with normalize and repair on, run by bare bun without host packages: a parse failure is the unreadable result instead of a logged FrontmatterError, and the body is not returned.
 function agentFrontmatter(
 	content: string,
