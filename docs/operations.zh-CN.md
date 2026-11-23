@@ -167,9 +167,9 @@ OMP 只在 `~/.omp/agent/extensions/` 下向下一层发现扩展：每个扩展
 
 ### 工具专题
 
-`tool://<tool>/<topic>` 只承载本仓库为不归它所有的工具（OMP 内置工具）编写的专题：[tool-topics](extensions.zh-CN.md#tool-topics) 加载自己的 `TOPIC-*.md` 文件，并把这个 scheme 挂到 OMP 的 URL router 上，其他扩展或插件都不往这里注册。
+`help://<tool>/<topic>` 统一承载 OMP 原生 `help://` 协议上的全部工具专题：[tool-topics](extensions.zh-CN.md#tool-topics) 加载自己的 `TOPIC-*.md` 文件，并包装 `InternalUrlRouter.instance()` 上原生的 `help` handler，将内置工具专题、宿主原生 `docTopics()`（`help://read/urls`、`help://read/sources`、`help://eval/*`）与独立插件通过 `registerToolTopics(owner, docs)` 注册的专题合并呈现。
 
-本仓库扩展或插件注册的工具，通过 `_shared/omomp-shared/internal-url.ts` 的 `registerToolTopics(owner, docs)` 将专题注册进共享 `tool://` 总线；所有内置工具与独立插件的专题统一共存于 `tool://` / `tool://<tool>` / `tool://<tool>/<topic>`，其 `inject` 规则（`param`/`pattern`、`onError`、`resultPattern`）由 `tool-topics` 的 `tool_result` 注入引擎统一执行。
+本仓库扩展或插件注册的工具，通过 `_shared/omomp-shared/internal-url.ts` 的 `registerToolTopics(owner, docs)` 与 `docTopics: toDocTopics(docs)` 暴露专题；所有内置工具与独立插件的专题统一共存于 `help://` / `help://<tool>` / `help://<tool>/<topic>`，其 `inject` 规则（`param`/`pattern`、`onError`、`resultPattern`）由 `tool-topics` 的 `tool_result` 注入引擎统一执行。
 
 ### 渐进式专题注入 API
 

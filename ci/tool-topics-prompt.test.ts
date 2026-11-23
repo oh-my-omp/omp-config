@@ -67,7 +67,7 @@ describe("tool-topics prompt indexing for 19.1.0 tool commands", () => {
 				"- MUST rewind before yielding.",
 				"",
 				"Topics — read the one a call needs before making it:",
-				"- `tool://checkpoint/rewind` — before calling rewind",
+				"- `help://checkpoint/rewind` — before calling rewind",
 				"",
 				"Usage:",
 			].join("\n"),
@@ -79,12 +79,12 @@ describe("tool-topics prompt indexing for 19.1.0 tool commands", () => {
 				"ast_edit — Rewrites code by syntax shape.",
 				"",
 				"Topics — read the one a call needs before making it:",
-				"- `tool://ast_edit/patterns` — before writing patterns",
+				"- `help://ast_edit/patterns` — before writing patterns",
 				"",
 				"Usage:",
 			].join("\n"),
 		);
-		expect(rewritten).not.toContain("tool://ast_edit/apply");
+		expect(rewritten).not.toContain("help://ast_edit/apply");
 	});
 
 	test("classifies catalog-only command-mounted tools as catalog without drift", () => {

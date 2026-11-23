@@ -4,36 +4,24 @@
 // re-verify in a real TUI after every omp upgrade.
 import * as fs from "node:fs/promises";
 import { type AgentEndEvent, type AgentToolResult, type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
-import {
-	type InternalResource,
-	type InternalUrl,
-	InternalUrlRouter,
-	type ProtocolHandler,
-	type SchemeSpec,
-} from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { cfgWorktreeCleanSource } from "@oh-my-pi/pi-coding-agent/task/settings";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { captureInteractiveMode, type InteractiveModeFailure } from "../_shared/interactive-mode.ts";
 import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";
-import { registerInternalScheme } from "../_shared/omomp-shared/internal-url.ts";
 import { describeShown, runSlashCommand } from "./interactive.ts";
-import { formatCheck, git, inspect, porcelainCount, porcelainLists, realpathOr, recheck, type WorktreeCheck } from "./worktree.ts";
+import { formatCheck, git, inspect, porcelainCount, realpathOr, recheck, type WorktreeCheck } from "./worktree.ts";
 
 const CREATE_TOOL = "wt";
 const REMOVE_TOOL = "wt_remove";
 const MESSAGE_TYPE = "wt-tool";
-const WORKTREE_URL_OWNER = "omp-config/wt-tool";
 const IDLE_POLL_MS = 50;
-const DIRTY_PREVIEW_LIMIT = 20;
 
 const CREATE_DESCRIPTION = [
 	"Create a new git worktree for this session and move the session into it: a new branch `branch` (default `wt/<yyyymmdd-hhmmss>`) at the current HEAD, uncommitted changes carried along; the session's cwd becomes the new worktree.",
-	"Read `worktree://` first to inspect whether this session is already in a linked worktree, its current HEAD, and dirty-file summary.",
 	"Use this tool for session worktrees; never create, switch to, or remove worktrees yourself with `git worktree` or by changing directories.",
 	"When the working tree holds changes you did not make (another agent, another person), propose this tool; ask the human first when unsure whether they are interference.",
 	"If the session is already in a worktree, nothing is created: you get that worktree's path, branch, HEAD, uncommitted changes, and a `confirm` value. Keep working there unless you really need another worktree branched from it; then call again with that `confirm` value.",
@@ -42,7 +30,6 @@ const CREATE_DESCRIPTION = [
 
 const REMOVE_DESCRIPTION = [
 	"Remove the worktree this session is in and move the session back to the repository's main checkout. The branch is kept.",
-	"Read `worktree://` for a quick read-only snapshot of linked-worktree status, current HEAD, and dirty files.",
 	"Use this tool to leave a session worktree; never remove or leave worktrees yourself with `git worktree` or by changing directories.",
 	"Call it twice. First without `confirm`: a dry run that changes nothing and reports whether removal is safe, the staged, unstaged, untracked and ignored entries it would delete (up to 50 per category, with the total), branch commits not in the main checkout, anything blocking removal, and a `confirm` value.",
 	"Read the report and decide. To remove, call again with that `confirm` value; it stops matching once files are added, removed or edited (by size or modification time), HEAD or the branch moves, or the ignored-entry list changes, and then you must check again.",
@@ -79,68 +66,8 @@ const requestLabel = (request: Request): string => (request.kind === "create" ? 
 
 const isEligible = (ctx: ExtensionContext): boolean => ctx.mode === "tui" && ctx.agent.kind === "main";
 
-type Runtime = { readonly pi: ExtensionAPI; state: State; cwd: string | undefined };
+type Runtime = { readonly pi: ExtensionAPI; state: State };
 type ToolResult = AgentToolResult<undefined>;
-
-async function renderWorktreeSnapshot(pi: ExtensionAPI, cwd: string): Promise<string> {
-	const resolvedCwd = await realpathOr(cwd);
-	const repo = vcs.git(resolvedCwd);
-	if (!repo) {
-		return ["# worktree://", "", `- Linked worktree: no (not inside a git repository)`, `- CWD: ${resolvedCwd}`, ""].join("\n");
-	}
-	const linked = repo.linkedWorktree();
-	const root = linked
-		? await realpathOr(linked.root)
-		: await realpathOr((await git(pi, resolvedCwd, ["rev-parse", "--show-toplevel"])).trim());
-	const mainDir = linked ? await realpathOr(linked.primaryRoot) : root;
-	const branch = (await git(pi, root, ["branch", "--show-current"])).trim() || "(detached HEAD)";
-	const head = await git(pi, root, ["log", "-1", "--format=%h %s"]).then(
-		(out) => out.trim() || "(no commits)",
-		() => "(no commits)",
-	);
-	const { staged, unstaged, untracked } = porcelainLists(await git(pi, root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
-	const totalDirty = staged.length + unstaged.length + untracked.length;
-	const lines = [
-		"# worktree://",
-		"",
-		`- Linked worktree: ${linked ? "yes" : "no (main checkout)"}`,
-		`- Path: ${root}`,
-		...(linked ? [`- Main checkout: ${mainDir}`] : []),
-		`- Branch: ${branch}`,
-		`- HEAD: ${head}`,
-		`- Dirty entries: ${totalDirty} (staged: ${staged.length}, unstaged: ${unstaged.length}, untracked: ${untracked.length})`,
-	];
-	const preview = [
-		...staged.map((item) => `staged: ${item}`),
-		...unstaged.map((item) => `unstaged: ${item}`),
-		...untracked.map((item) => `untracked: ${item}`),
-	];
-	if (preview.length > 0) {
-		lines.push("", "## Dirty summary");
-		for (const item of preview.slice(0, DIRTY_PREVIEW_LIMIT)) lines.push(`- ${item}`);
-		if (preview.length > DIRTY_PREVIEW_LIMIT) lines.push(`- … and ${preview.length - DIRTY_PREVIEW_LIMIT} more`);
-	}
-	lines.push("");
-	return lines.join("\n");
-}
-
-function createWorktreeUrlHandler(runtime: Runtime): ProtocolHandler {
-	const spec: SchemeSpec = { backing: "virtual", selectors: "lines", immutable: true, compactTranscript: true };
-	return {
-		scheme: "worktree",
-		spec,
-		async resolve(url: InternalUrl): Promise<InternalResource> {
-			const host = (url.rawHost || url.hostname).trim();
-			const segments = (url.rawPathname ?? url.pathname).split("/").filter((segment) => segment.length > 0);
-			const validHost = host === "" || host === "status";
-			if (!validHost || segments.length > 0 || url.search || url.hash) {
-				throw new ToolError(`Invalid worktree:// URL: ${url.href}. Use worktree:// to inspect current worktree status.`);
-			}
-			const content = await renderWorktreeSnapshot(runtime.pi, runtime.cwd ?? process.cwd());
-			return { url: url.href, content, contentType: "text/markdown", size: Buffer.byteLength(content, "utf-8") };
-		},
-	};
-}
 
 function unexpected(value: never): never {
 	throw new Error(`Unexpected wt state: ${String(value)}`);
@@ -341,12 +268,12 @@ async function create(runtime: Runtime, ctx: ExtensionContext, rawParams: unknow
 	if (current !== undefined && params.confirm?.trim() !== current.confirm) {
 		const mismatch = params.confirm === undefined ? "" : "The given confirm value does not match this worktree, so nothing was queued.\n";
 		return text(
-			`${mismatch}Nothing was created: this session is already in a linked worktree (inspect anytime with \`read worktree://\`).\n${current.report}\nUsually keep working here. To create a new worktree from this one anyway, call ${CREATE_TOOL} again with confirm="${current.confirm}".`,
+			`${mismatch}Nothing was created: this session is already in a linked worktree.\n${current.report}\nUsually keep working here. To create a new worktree from this one anyway, call ${CREATE_TOOL} again with confirm="${current.confirm}".`,
 		);
 	}
 	runtime.state = { kind: "queued", request: { kind: "create", sessionId: ctx.sessionManager.getSessionId(), branch } };
 	return text(
-		`Queued: a new worktree${branch ? ` on branch \`${branch}\`` : ""} is created once this turn ends. End your turn now without further tool calls; the outcome arrives as the next message (inspect live status anytime with \`read worktree://\`).`,
+		`Queued: a new worktree${branch ? ` on branch \`${branch}\`` : ""} is created once this turn ends. End your turn now without further tool calls; the outcome arrives as the next message.`,
 	);
 }
 
@@ -359,7 +286,7 @@ async function remove(runtime: Runtime, ctx: ExtensionContext, rawParams: unknow
 	const check = result.check;
 	if (confirm === undefined) {
 		return text(
-			`Check only; nothing changed (for quick status snapshots, use \`read worktree://\`).\n${formatCheck(check)}\nTo remove, call ${REMOVE_TOOL} again with confirm="${check.confirm}". The value stops matching once the worktree changes.`,
+			`Check only; nothing changed.\n${formatCheck(check)}\nTo remove, call ${REMOVE_TOOL} again with confirm="${check.confirm}". The value stops matching once the worktree changes.`,
 		);
 	}
 	if (confirm !== check.confirm) {
@@ -418,30 +345,14 @@ async function guardHook(pi: ExtensionAPI, label: string, handler: () => void | 
 }
 
 export default function wtTool(pi: ExtensionAPI): void {
-	const runtime: Runtime = { pi, state: { kind: "idle" }, cwd: undefined };
-	const syncCwd = (ctx: ExtensionContext): void => {
-		runtime.cwd = ctx.sessionManager.getCwd();
-	};
-	const schemeResult = registerInternalScheme(InternalUrlRouter.instance(), WORKTREE_URL_OWNER, createWorktreeUrlHandler(runtime));
-	if (schemeResult.kind !== "registered") {
-		pi.logger.warn("wt: worktree:// scheme not registered", { reason: schemeResult.reason });
-	}
-	pi.on("session_start", (_event, ctx) =>
-		guardHook(pi, "session_start", async () => {
-			syncCwd(ctx);
-			await activate(pi, ctx);
-		}),
-	);
+	const runtime: Runtime = { pi, state: { kind: "idle" } };
+	pi.on("session_start", (_event, ctx) => guardHook(pi, "session_start", () => activate(pi, ctx)));
 	pi.on("session_switch", (_event, ctx) =>
 		guardHook(pi, "session_switch", async () => {
-			syncCwd(ctx);
 			reset(runtime, ctx);
 			await activate(pi, ctx);
 		}),
 	);
-	pi.on("before_agent_start", (_event, ctx) => {
-		syncCwd(ctx);
-	});
 	pi.on("session_shutdown", (_event, ctx) => guardHook(pi, "session_shutdown", () => reset(runtime, ctx)));
 	pi.on("agent_start", (_event, ctx) => guardHook(pi, "agent_start", () => disarm(runtime, ctx)));
 	pi.on("agent_end", (event, ctx) => guardHook(pi, "agent_end", () => onAgentEnd(runtime, event, ctx)));

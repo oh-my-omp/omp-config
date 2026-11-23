@@ -21,7 +21,7 @@ for await (const [id, item] of b.drainIter({ timeout: 120 }))
 await b.close();
 ```
 
-- Keep each text short: a title, a row, one finding, a summary. The judge model has a small context; a long text goes to `completion(…, { schema })` or `agent(…, { schema })` (`tool://eval/workflow`), or is cut down to the part the question needs.
+- Keep each text short: a title, a row, one finding, a summary. The judge model has a small context; a long text goes to `completion(…, { schema })` or `agent(…, { schema })` (`help://eval/workflow`), or is cut down to the part the question needs.
 - The judge sees only the text you pass, no files, history or tools. Texts come from values already in the cell, such as `tool.<name>()` bridge results; `output(ids)` returns `{ id, content }` records, so pass `content`. Files still go through `read`.
 - Derive the labels from the decision you have to make. `bool` is a probability of yes, and the threshold is yours.
 - An answer sorts and filters; it is not evidence. Read what you act on.

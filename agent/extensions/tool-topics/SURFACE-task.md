@@ -3,6 +3,7 @@ tool: task
 upstream: pi-coding-agent@19.1.0 src/prompts/tools/task.md, src/prompts/tools/task-async-contract.md, src/task/types.ts, src/task/settings.ts
 ---
 Spawn `tasks[]` concurrently; IDs return immediately. Results auto-deliver; NEVER poll. Completely blocked? Call `wait`. Coordinate while peers run via `write agent://<id>` (`agent://all` broadcasts; main agent only).
+When a child needs the current session's full conversation context instead of starting blank, use `fork_task` (`help://fork_task/limits`): it shares the same `agent://<id>` results/messaging, `wait`, and structured output contracts.
 `completed`: the subagent yielded; claimed artifacts are unverified.
 
 {{native?:Results}}
@@ -16,11 +17,11 @@ Concurrent writers MUST use `isolated: true`, with non-overlapping file/state ow
 `name`: CamelCase ≤32, unique within the call, auto-generated if omitted; address the agent by name.
 `solutionSpace`: describe how open-ended the child's problem is: whether the fix or design is given, or which causes or designs remain open. Volume of work does not widen it; NEVER mention sibling agents or coordination. (`one fix: rename, names given`; `one fix: slice end in paginate`; `single-flight cache load; races easy to miss`; `several retry API shapes; error classes to choose`; `deadlock cause open, no repro`)
 `isolated`: own worktree; successful changes merge back into the parent.
-`tools`: names of tools you defined in an eval cell; the child may call them and they run in your kernel (`tool://eval/tools`).
+`tools`: names of tools you defined in an eval cell; the child may call them and they run in your kernel (`help://eval/tools`).
 {{native-bullet?:effort}}
 {{native-bullet?:model}}
 {{native-bullet?:schemaMode}}
-Children start blank: no conversation history. Large payloads via `local://<path>`, NEVER inline.
+Children spawned by `task` start blank (no conversation history; use `fork_task` to inherit full conversation context). Large payloads via `local://<path>`, NEVER inline.
 
 # Format
 `context`: shared (`# Goal`, `# Contract` interfaces); NEVER repeat per task.

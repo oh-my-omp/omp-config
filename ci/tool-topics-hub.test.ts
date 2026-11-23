@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent, ToolResultEventResult } from "@oh-my-pi/pi-coding-agent";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { InternalUrlRouter, type ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { clearToolTopics, registerToolTopics } from "../agent/extensions/_shared/omomp-shared/internal-url.ts";
 import type { Topic } from "../agent/extensions/tool-topics/catalog.ts";
 import { installToolTopicInjection } from "../agent/extensions/tool-topics/injection.ts";
@@ -8,6 +8,7 @@ import { publishTopics } from "../agent/extensions/tool-topics/registry.ts";
 
 afterEach(() => {
 	clearToolTopics();
+	InternalUrlRouter.resetForTests();
 });
 
 function fakePi() {
@@ -50,8 +51,8 @@ function fakePi() {
 	};
 }
 
-describe("tool-topics shared hub integration and auto-injection", () => {
-	test("coexists with external plugins registered on the shared tool:// hub", async () => {
+describe("tool-topics unified help:// integration and auto-injection", () => {
+	test("wraps native help:// without registering tool://, merging hub topics and native docTopics", async () => {
 		const ownTopics = new Map<string, readonly Topic[]>([
 			[
 				"read",
@@ -67,7 +68,7 @@ describe("tool-topics shared hub integration and auto-injection", () => {
 				],
 			],
 		]);
-		expect(publishTopics(ownTopics)).toEqual({ kind: "registered" });
+		expect(publishTopics(ownTopics, () => ["read", "ask", "native_only"])).toBe(true);
 		registerToolTopics("omp-ask-more", [
 			{
 				tool: "ask",
@@ -80,14 +81,40 @@ describe("tool-topics shared hub integration and auto-injection", () => {
 		]);
 
 		const router = InternalUrlRouter.instance();
-		const index = await router.resolve("tool://");
+		expect(router.getHandler("tool")).toBeUndefined();
+		expect(router.getHandler("help")?.promptReference?.()).toContain("help://<tool>/<topic>");
+
+		const nativeSession = {
+			getToolByName(name: string) {
+				if (name === "read") return { docTopics: () => ({ urls: "# Native read URLs", sources: "# Native read sources" }) };
+				if (name === "native_only") return { docTopics: () => ({ guide: "# Native guide" }) };
+				return undefined;
+			},
+		};
+		const resolveCtx = { session: nativeSession } as unknown as ResolveContext;
+
+		const index = await router.resolve("help://", resolveCtx);
 		expect(index.content).toContain("## read");
+		expect(index.content).toContain("help://read/urls");
 		expect(index.content).toContain("## ask");
-		expect((await router.resolve("tool://read/failures")).content).toBe("# Read failures body");
-		expect((await router.resolve("tool://ask/routing")).content).toBe("# Ask routing body");
+		expect(index.content).toContain("help://ask/routing");
+		expect(index.content).toContain("## native_only");
+		expect(index.content).toContain("help://native_only/guide");
+
+		const readList = await router.resolve("help://read", resolveCtx);
+		expect(readList.content).toContain("help://read/failures");
+		expect(readList.content).toContain("help://read/urls");
+
+		const nativeOnlyList = await router.resolve("help://native_only", resolveCtx);
+		expect(nativeOnlyList.content).toContain("help://native_only/guide");
+
+		expect((await router.resolve("help://read/failures", resolveCtx)).content).toBe("# Read failures body");
+		expect((await router.resolve("help://read/urls", resolveCtx)).content).toBe("# Native read URLs");
+		expect((await router.resolve("help://ask/routing", resolveCtx)).content).toBe("# Ask routing body");
+		expect((await router.resolve("help://native_only/guide", resolveCtx)).content).toBe("# Native guide");
 	});
 
-	test("injects onError, resultPattern, and external hub plugin rules once per context", async () => {
+	test("injects onError, resultPattern, and external hub plugin rules via help:// once per context", async () => {
 		const ownTopics = new Map<string, readonly Topic[]>([
 			[
 				"bash",
@@ -122,8 +149,8 @@ describe("tool-topics shared hub integration and auto-injection", () => {
 		installToolTopicInjection(pi, {
 			owner: "omp-config/tool-topic-injection",
 			rules: [
-				{ id: "bash-err", tool: "bash", onError: true, topic: "tool://bash/output" },
-				{ id: "bash-trunc", tool: "bash", resultPattern: /artifact:\/\//, topic: "tool://bash/output" },
+				{ id: "bash-err", tool: "bash", onError: true, topic: "help://bash/output" },
+				{ id: "bash-trunc", tool: "bash", resultPattern: /artifact:\/\//, topic: "help://bash/output" },
 			],
 		});
 
@@ -136,7 +163,7 @@ describe("tool-topics shared hub integration and auto-injection", () => {
 			isError: true,
 			content: [{ type: "text", text: "failed; full log at artifact://123" }],
 		});
-		expect(bashRes?.additionalContext).toContain('topic="tool://bash/output"');
+		expect(bashRes?.additionalContext).toContain('topic="help://bash/output"');
 		expect(bashRes?.additionalContext).toContain("# Bash output guidance");
 		expect(bashRes?.additionalContext?.match(/<tool-topic-injection /g)?.length).toBe(1);
 
@@ -153,7 +180,7 @@ describe("tool-topics shared hub integration and auto-injection", () => {
 			isError: true,
 			content: [{ type: "text", text: "SQLITE_ERROR: near syntax" }],
 		});
-		expect(sqlRes?.additionalContext).toContain('topic="tool://session_query/sql"');
+		expect(sqlRes?.additionalContext).toContain('topic="help://session_query/sql"');
 		expect(sqlRes?.additionalContext).toContain("# Session SQL guidance");
 	});
 });

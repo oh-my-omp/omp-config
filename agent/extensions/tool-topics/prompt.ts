@@ -279,7 +279,7 @@ export function toolLines(description: Description, docs: ToolDocs, indexed: boo
 		indexed && visibleTopics.length > 0
 			? [
 					"Topics — read the one a call needs before making it:",
-					...visibleTopics.map((topic) => `- \`tool://${docs.tool}/${topic.name}\` — ${topic.when}`),
+					...visibleTopics.map((topic) => `- \`help://${docs.tool}/${topic.name}\` — ${topic.when}`),
 				]
 			: undefined;
 	let body: string[];

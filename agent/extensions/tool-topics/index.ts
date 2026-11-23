@@ -24,19 +24,7 @@ function report(pi: ExtensionAPI, ctx: ExtensionContext, tool: string, reason: s
 
 function publish(pi: ExtensionAPI, catalog: Catalog): boolean {
 	const topics = new Map([...catalog.tools.values()].filter((docs) => docs.topics.length > 0).map((docs) => [docs.tool, docs.topics]));
-	const result = publishTopics(topics);
-	switch (result.kind) {
-		case "registered":
-			return true;
-		case "builtin":
-		case "held":
-			pi.logger.warn("tool-topics: topics not published", { reason: result.reason });
-			return false;
-		default: {
-			const unreachable: never = result;
-			throw new Error(`Unhandled publish result: ${unreachable}`);
-		}
-	}
+	return publishTopics(topics, () => pi.getAllTools().map((tool) => tool.name));
 }
 
 interface Covered {
@@ -107,12 +95,12 @@ export default function toolTopics(pi: ExtensionAPI): void {
 	const names = docsList.map((docs) => docs.tool);
 	const covered: Covered = { docs: docsList, names, known: new Set(names) };
 
-	// Inject only when the shared tool:// hub serves tool://; another handler's topics must not go out under our marker.
+	// Inject only when the unified help:// handler serves topics.
 	if (indexed) {
 		installToolTopicInjection(pi, {
 			owner: "omp-config/tool-topic-injection",
 			rules: docsList.flatMap((docs) =>
-				docs.topics.flatMap((topic) => topic.inject.map((rule) => ({ ...rule, topic: `tool://${docs.tool}/${topic.name}` }))),
+				docs.topics.flatMap((topic) => topic.inject.map((rule) => ({ ...rule, topic: `help://${docs.tool}/${topic.name}` }))),
 			),
 		});
 	}

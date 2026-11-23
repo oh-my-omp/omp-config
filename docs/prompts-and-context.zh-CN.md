@@ -12,7 +12,7 @@
 | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充 `# Personality` 下的 `{{personality}}`。前半部分保留 OMP `personality: default` 原文（`Evidence-first terse engineer`）；后半部分定义 `# Writing` 分析与研究写作规范：结论、数字或机制直接开篇，一句话写清时间、主体、动作、规模与来源，多项对象或指标合并进一张表且不在正文逐行复述，删去过程自述、重复解释、叠加免责声明与文末总结。 |
 | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理（子代理不含 AGENTS.md） | 以相对仓库根的路径投递工作目录的 `AGENTS.md` / `CLAUDE.md`，取代 OMP 原生的上下文文件注入；加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件；二者合为一条增量消息，并处理所有规则来源的 `paths` 按路径触发。 |
-| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 只把 system prompt 中 OMP 自己的工具实例的说明改写为 surface 加 `Topics` 索引；由插件或扩展注册的工具保留自己的说明与专题，包括以相同名称替换内置工具的情况，例如 `omp-ask-more` 的 `ask`。OMP 工具的详细调用说明按需读取 `tool://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
+| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 只把 system prompt 中 OMP 自己的工具实例的说明改写为 surface 加 `Topics` 索引；由插件或扩展注册的工具保留自己的说明与专题，包括以相同名称替换内置工具的情况，例如 `omp-ask-more` 的 `ask`。详细调用说明按需读取 `help://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
 | [system-prompt-replace](#system-prompt-replace) | 按规则（默认所有会话；完整与轻量模式） | 按 `REPLACE-SYSTEM-*.yml` 规则文件对渲染出的 system prompt 给出措辞级修改，直接发送修改好的 system prompt；每条规则可以全局生效，也可以限定会话、cwd、模型、provider、当前模型的委派倾向（delegation bias）或模式，并用 `exclude.*` 写明何时不生效。 |
 | [append-system-model](#append-system-model) | 按片段（默认仅主会话） | 把 frontmatter 条件（会话、cwd、模型、provider、当前模型的委派倾向、完整/轻量模式，以及表示何时不注入的 `exclude.*`）命中的 `APPEND-SYSTEM-*.md` 片段作为一条增量消息送达。仓库自带 `APPEND-SYSTEM-decision-support.md`：完整模式的主会话中，重大决策询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`；主模型为 `claude-opus-5-5` 时不注入。 |
 | [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时把仓库下发的 `ARGON_PROMPT.md` 作为一条增量消息送达：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
@@ -52,7 +52,7 @@ OMP 重建基础提示后，不经过 `before_agent_start` 的运行会发出 OM
 |---|---|
 | 子代理 Todo 说明（`target: subagents`） | 声明原生子代理提示词中的 `"No TODO tracking, no progress updates."` 不适用，避免与子代理自身遵循的验证要求冲突。task 侧的句子（按各 agent 的定义文本选择 agent、显式 `agent`、并发写入隔离、删掉的 “skip build/lint/tests”）改由 [tool-topics](extensions.zh-CN.md#tool-topics) 的 `SURFACE-task.md` 承载。 |
 | `eval` 工具说明 | 禁止通过 `eval` 读取、列目录或搜索本地文件（统一使用 `read`、`glob`、`grep`）。 |
-| `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `tool://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。限定 `delegation: eager`，因为 OMP 只在当前模型的委派倾向为 `eager` 时才渲染原句。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
+| `eval` 说明：批量分流 | 把 “For 2+ independent items, use a named `workpool()`” 改为按场景分流：代码需要模型逐条判断、抽取或改写时，用 `judgeBatch`，或逐条用带 schema 的 `completion`/`agent`，并指向 `help://eval/workflow`；结果只需阅读的子代理工作仍用 `workpool()`。限定 `delegation: eager`，因为 OMP 只在当前模型的委派倾向为 `eager` 时才渲染原句。`agent`/`workpool` 的命名空间说明也补上逐条 schema 结果。 |
 | 工具命令说明 | 按当前模式与委派层级调整工具命令与 eval 指引。 |
 
 [tool-topics](extensions.zh-CN.md#tool-topics) 按工具名而非原文措辞处理 OMP 自己的工具（`read`、`bash`、`task`）的整段说明，上游改写措辞后仍然生效。
@@ -131,4 +131,4 @@ thresholdTokens: 150000
 
 [omp-todo-more](plugins-and-modes.zh-CN.md#todo-more) 插件拥有 `ctx` 与 `todo`；`agent/config.yml` 关闭原生 `todo`。更新器在安装插件前预检待退役本地 Todo/ctx 文件的归属；只有 OMP 确认插件就绪后才删除列出的 Todo 文件，且只有该就绪插件带有 `src/ctx` 时才删除列出的 ctx 文件。
 
-工具文档与状态 URL：`tool://todo/...` 与 `todo://`（以及 `omp-sessions` 提供的 `session://`）。
+工具文档：`help://todo/lifecycle`（调用 `todo({})` 直接读取实时计划状态；`omp-sessions` 提供 `session://`）。

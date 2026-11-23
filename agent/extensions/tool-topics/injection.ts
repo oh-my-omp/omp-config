@@ -46,7 +46,7 @@ function hubRules(
 ): ToolTopicInjectionRule[] {
 	const rules: ToolTopicInjectionRule[] = [];
 	for (const doc of docs) {
-		const topic = `tool://${doc.tool}/${doc.topic}`;
+		const topic = `help://${doc.tool}/${doc.topic}`;
 		if (ownedTopics.has(topic) || !doc.inject || doc.inject.length === 0) continue;
 		for (const [index, raw] of doc.inject.entries()) {
 			const compiled = compileHubRule(doc.tool, topic, index, raw, cache, warnInvalid);
@@ -78,7 +78,7 @@ function compileHubRule(
 	const onError = raw.onError === true ? true : undefined;
 	if (raw.param === undefined && onError === undefined && resultPattern === undefined) return undefined;
 	return {
-		id: `hub/${tool}/${topic.slice(`tool://${tool}/`.length)}/${index}`,
+		id: `hub/${tool}/${topic.slice(`help://${tool}/`.length)}/${index}`,
 		tool,
 		...(raw.param !== undefined ? { parameter: raw.param } : {}),
 		...(pattern !== undefined ? { pattern } : {}),

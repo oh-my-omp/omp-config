@@ -13,8 +13,7 @@
 - Added `delete-guard` inspection of eval `sh` helper commands (also `globalThis.sh`, tagged templates and names bound to the helper) as posix shell scripts on every platform, blocking non-literal commands
 - Added `sh` helper commands to `tool-policy-nag`'s terminal and open-ended detection when the helper is spelled under its own name
 - Added `help://read/urls` guidance for further read sub-paths, queries and limits when the read tool is available
-- Added `worktree://` conditional read-only internal URL in `wt-tool` (no global `promptDoc()`) reporting linked-worktree status, branch, `HEAD`, and dirty summary
-- Added `hiddenFromIndex` and error/result-driven `inject` rules (`onError`, `resultPattern`) in `tool-topics`, and connected `tool-topics` to the shared `omomp-shared/tool-hub` `tool://` bus (`registerToolTopics("omp-config/tool-topics", ...)` + `getToolTopicInjections()`)
+- Unified `tool-topics` onto OMP's native `help://` scheme (wrapping the built-in `help` handler to merge `omp-config` catalog, shared `omomp-shared/tool-hub` plugin topics, and native `docTopics()`), added `hiddenFromIndex` and error/result-driven `inject` rules (`onError`, `resultPattern`), and integrated `exec_command`/`term://` and `fork_task` seamlessly into `SURFACE-bash.md` and `SURFACE-task.md`
 - Added automatic `tools.xdevDocs` → `tools.commandDocs` config migration and retirement of legacy `thinking-translator.json` and `extensions/{task-tool-trim,fork-task}` in `omp-config-update.ts`
 - Added optional result-shaping guidance to the system prompt
 - Warned once per process when the `input-polish` shortcut is also held by an omp keybinding, a reserved chord, or another extension, naming the holder while `input-polish` keeps the chord

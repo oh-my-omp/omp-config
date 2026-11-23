@@ -125,8 +125,8 @@ function applyCli(
 }
 
 const SHIPPED_RULES =
-	"tool-topic-injection:\n  rules:\n    - id: read-ssh\n      tool: read\n      parameter: path\n      pattern: '^ssh://'\n      topic: tool://read/ssh\n";
-const HOST_RULES = `tool-topic-injection:\n  rules:\n    - id: read-ssh\n      tool: read\n      parameter: path\n      pattern: ^ssh://\n      topic: tool://read/ssh\n`;
+	"tool-topic-injection:\n  rules:\n    - id: read-ssh\n      tool: read\n      parameter: path\n      pattern: '^ssh://'\n      topic: help://read/ssh\n";
+const HOST_RULES = `tool-topic-injection:\n  rules:\n    - id: read-ssh\n      tool: read\n      parameter: path\n      pattern: ^ssh://\n      topic: help://read/ssh\n`;
 
 const repo = (extra: Record<string, string | null> = {}): string =>
 	source(

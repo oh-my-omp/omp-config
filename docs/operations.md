@@ -166,9 +166,9 @@ Code rules checked by `bun run check` (`biome check . && tsc --noEmit && bun ci/
 
 ### Tool Topics
 
-`tool://<tool>/<topic>` holds only the topics this repository writes for tools it does not own (OMP's built-in tools): [tool-topics](extensions.md#tool-topics) loads its `TOPIC-*.md` files and puts the scheme on OMP's URL router, and nothing else registers there.
+`help://<tool>/<topic>` unifies all tool documentation on OMP's native `help://` scheme: [tool-topics](extensions.md#tool-topics) loads its `TOPIC-*.md` files, wraps the built-in `help` handler on `InternalUrlRouter.instance()`, and merges them with native `docTopics()` (such as `help://read/urls`, `help://read/sources`, `help://eval/*`) and plugin topics registered via `registerToolTopics(owner, docs)`.
 
-A tool registered by an extension of this repository or by a plugin registers its topics into the shared `tool://` hub via `registerToolTopics(owner, docs)` from `_shared/omomp-shared/internal-url.ts`. All built-in and plugin topics coexist under `tool://` / `tool://<tool>` / `tool://<tool>/<topic>`, and `inject` rules (`param`/`pattern`, `onError`, `resultPattern`) are picked up by `tool-topics`'s `tool_result` injection engine.
+A tool registered by an extension of this repository or by a plugin registers its topics via `registerToolTopics(owner, docs)` and `docTopics: toDocTopics(docs)` from `_shared/omomp-shared/internal-url.ts`. All built-in and plugin topics coexist under `help://` / `help://<tool>` / `help://<tool>/<topic>`, and `inject` rules (`param`/`pattern`, `onError`, `resultPattern`) are picked up by `tool-topics`'s `tool_result` injection engine.
 
 ### Progressive Topic Injection API
 
