@@ -1,9 +1,16 @@
-import type { ExtensionAPI, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
+import { InternalUrlRouter, type ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { parseHelpUrl } from "@oh-my-pi/pi-coding-agent/tools/doc-topics";
 import { createContextDelivery } from "../_shared/context-delivery.ts";
 import { errorText } from "../_shared/errors.ts";
 import { textOf } from "../_shared/messages.ts";
-import { getToolTopicInjections, type ToolTopicInjectRule } from "../_shared/omomp-shared/internal-url.ts";
+import {
+	getToolTopicInjections,
+	listToolTopics,
+	resolveToolTopic,
+	type ToolTopicInjectRule,
+} from "../_shared/omomp-shared/internal-url.ts";
 
 const OWNER = "omp-config/tool-topic-injection";
 
@@ -24,6 +31,76 @@ interface CompiledRule {
 }
 
 type Regex = (source: string) => RegExp | undefined;
+
+type TopicResolution = { readonly kind: "ok"; readonly content: string } | { readonly kind: "unavailable"; readonly reason: string };
+
+type ToolSessionRef = NonNullable<ResolveContext["session"]>;
+
+function isToolSession(candidate: unknown): candidate is ToolSessionRef {
+	return typeof candidate === "object" && candidate !== null && typeof Reflect.get(candidate, "getToolByName") === "function";
+}
+
+function readOptionalString(target: object, method: string): string | undefined {
+	const fn: unknown = Reflect.get(target, method);
+	if (typeof fn !== "function") return undefined;
+	const value: unknown = fn.call(target);
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function findToolSession(ctx: ExtensionContext): ToolSessionRef | undefined {
+	const registry = AgentRegistry.global();
+	const sessionId = readOptionalString(ctx.sessionManager, "getSessionId");
+	if (sessionId !== undefined) {
+		for (const ref of registry.list()) {
+			if (ref.session && ref.session.sessionManager.getSessionId() === sessionId && isToolSession(ref.session)) {
+				return ref.session;
+			}
+		}
+	}
+	const agentId = ctx.agent?.id;
+	if (agentId) {
+		const ref = registry.get(agentId);
+		if (ref?.session && isToolSession(ref.session)) return ref.session;
+	}
+	return undefined;
+}
+
+function buildResolveContext(ctx: ExtensionContext): ResolveContext {
+	const session = findToolSession(ctx);
+	const sessionId = readOptionalString(ctx.sessionManager, "getSessionId");
+	const sessionFile = readOptionalString(ctx.sessionManager, "getSessionFile");
+	return {
+		cwd: ctx.cwd,
+		...(sessionId !== undefined ? { sessionId } : {}),
+		...(sessionFile !== undefined ? { sessionFile } : {}),
+		...(ctx.localProtocolOptions !== undefined ? { localProtocolOptions: ctx.localProtocolOptions } : {}),
+		...(session !== undefined ? { session } : {}),
+	};
+}
+
+async function resolveTopic(topic: string, ctx: ExtensionContext): Promise<TopicResolution> {
+	const help = parseHelpUrl(topic);
+	if (help?.tool && help.topic) {
+		const hub = resolveToolTopic(help.tool, help.topic);
+		if (hub !== undefined) {
+			return hub.content.trim() ? { kind: "ok", content: hub.content } : { kind: "unavailable", reason: `Topic '${topic}' is empty` };
+		}
+	}
+	const resolveContext = buildResolveContext(ctx);
+	// Do not fall through to native HelpProtocolHandler without a tool session; it throws when context.session is absent.
+	if (help !== null && resolveContext.session === undefined) {
+		const needsSession = help.tool !== null && (help.topic !== null || listToolTopics(help.tool, { includeHidden: true }).length === 0);
+		if (needsSession) return { kind: "unavailable", reason: `Topic '${topic}' requires a tool session` };
+	}
+	try {
+		const resource = await InternalUrlRouter.instance().resolve(topic, resolveContext);
+		if (typeof resource.content !== "string") return { kind: "unavailable", reason: `Topic '${topic}' is binary` };
+		if (!resource.content.trim()) return { kind: "unavailable", reason: `Topic '${topic}' is empty` };
+		return { kind: "ok", content: resource.content };
+	} catch (error) {
+		return { kind: "unavailable", reason: errorText(error) };
+	}
+}
 
 function compileRule(rule: InjectionRule, regex: Regex): CompiledRule | undefined {
 	const { param, pattern, onError = false, resultPattern } = rule.match;
@@ -99,17 +176,27 @@ export function installToolTopicInjection(pi: ExtensionAPI, rules: readonly Inje
 			}
 			const ready: { readonly marker: string; readonly block: string }[] = [];
 			for (const rule of matched.values()) {
-				try {
-					const resource = await InternalUrlRouter.instance().resolve(rule.topic);
-					if (typeof resource.content !== "string") throw new Error(`Topic '${rule.topic}' is binary`);
-					if (!resource.content.trim()) throw new Error(`Topic '${rule.topic}' is empty`);
-					const attribute = `${encodeURIComponent(OWNER)}/${encodeURIComponent(rule.id)}`;
-					ready.push({
-						marker: `topic="${rule.topic}">`,
-						block: `<tool-topic-injection rule="${attribute}" topic="${rule.topic}">\n${resource.content}\n</tool-topic-injection>`,
-					});
-				} catch (error) {
-					pi.logger.warn("tool-topic-injection: topic unavailable", { rule: rule.id, error: errorText(error) });
+				const resolved = await resolveTopic(rule.topic, ctx);
+				switch (resolved.kind) {
+					case "ok": {
+						const attribute = `${encodeURIComponent(OWNER)}/${encodeURIComponent(rule.id)}`;
+						ready.push({
+							marker: `topic="${rule.topic}">`,
+							block: `<tool-topic-injection rule="${attribute}" topic="${rule.topic}">\n${resolved.content}\n</tool-topic-injection>`,
+						});
+						break;
+					}
+					case "unavailable":
+						pi.logger.warn("tool-topic-injection: topic unavailable", {
+							rule: rule.id,
+							topic: rule.topic,
+							error: resolved.reason,
+						});
+						break;
+					default: {
+						const unreachable: never = resolved;
+						return unreachable;
+					}
 				}
 			}
 			// Claim only after every topic loaded: a claimed marker counts as delivered even if its block is never returned.

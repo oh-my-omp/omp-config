@@ -3,7 +3,7 @@ tool: edit
 name: hashline-moves
 title: Moving code, files and registers
 when: (hashline mode) before moving code between places or files, renaming or deleting a file with `edit`
-upstream: pi-coding-agent@18.13.2 omp://tools/edit.md § Canonical patch language, § Output and side effects; src/edit/index.ts
+upstream: pi-coding-agent@19.1.1 omp://tools/edit.md § Canonical patch language, § Output and side effects; src/edit/index.ts
 ---
 # Moving code, files and registers
 
