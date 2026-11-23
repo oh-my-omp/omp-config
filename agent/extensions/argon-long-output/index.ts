@@ -1,6 +1,3 @@
-// It replaces `model.compat` with a copy instead of writing into it, because the catalog
-// shares one compat object across rows.
-
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
@@ -19,6 +16,8 @@ function isArgon(model: Model<Api>): model is ArgonModel {
 	return model.api === API && ARGON_ID.test(model.id);
 }
 
+// Never write into model.compat: catalog rows share one compat object, so a write leaks into other models.
+// Never drop the compatConfig fallback: Google compat resolution discards models.yml timeout values.
 function applyTimeoutDefault(model: ArgonModel): void {
 	let next: ArgonModel["compat"] | undefined;
 	for (const field of TIMEOUT_FIELDS) {
@@ -49,6 +48,15 @@ function readPrompt(): PromptRead {
 	}
 }
 
+function guard<T>(pi: ExtensionAPI, action: string, run: () => T): T | undefined {
+	try {
+		return run();
+	} catch (error) {
+		pi.logger.warn(`argon-long-output: cannot ${action}`, { error: errorText(error) });
+		return undefined;
+	}
+}
+
 export default function argonLongOutput(pi: ExtensionAPI): void {
 	let warnedReason: string | null = null;
 
@@ -73,21 +81,19 @@ export default function argonLongOutput(pi: ExtensionAPI): void {
 		}
 	};
 
+	const deliver = <R>(ctx: ExtensionContext, send: (delta: Delta) => R): R | undefined =>
+		guard(pi, "deliver argon prompt", () => {
+			const delta = promptDelta(ctx);
+			return delta === undefined ? undefined : send(delta);
+		});
+
 	const sweepHook = (_event: unknown, ctx: ExtensionContext): void => {
-		try {
-			sweep(ctx);
-		} catch (error) {
-			pi.logger.warn("argon-long-output: cannot apply timeout defaults", { error: errorText(error) });
-		}
+		guard(pi, "apply timeout defaults", () => sweep(ctx));
 	};
 	pi.on("session_start", sweepHook);
 	pi.on("session.compacting", sweepHook);
 	pi.on("context", (_event, ctx) => {
-		try {
-			patchModel(ctx.model);
-		} catch (error) {
-			pi.logger.warn("argon-long-output: cannot apply timeout defaults", { error: errorText(error) });
-		}
+		guard(pi, "apply timeout defaults", () => patchModel(ctx.model));
 	});
 
 	const deltas = createDeltaStream("omp-config/argon-long-output");
@@ -97,19 +103,7 @@ export default function argonLongOutput(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", (event, ctx) => {
 		sweepHook(event, ctx);
 		if (event.reason === "revive") return;
-		try {
-			const delta = promptDelta(ctx);
-			return delta === undefined ? undefined : deltas.atPrompt(ctx, delta);
-		} catch (error) {
-			pi.logger.warn("argon-long-output: cannot deliver argon prompt", { error: errorText(error) });
-		}
+		return deliver(ctx, (delta) => deltas.atPrompt(ctx, delta));
 	});
-	pi.on("tool_result", (_event, ctx) => {
-		try {
-			const delta = promptDelta(ctx);
-			return delta === undefined ? undefined : deltas.afterTools(ctx, delta);
-		} catch (error) {
-			pi.logger.warn("argon-long-output: cannot deliver argon prompt", { error: errorText(error) });
-		}
-	});
+	pi.on("tool_result", (_event, ctx) => deliver(ctx, (delta) => deltas.afterTools(ctx, delta)));
 }
