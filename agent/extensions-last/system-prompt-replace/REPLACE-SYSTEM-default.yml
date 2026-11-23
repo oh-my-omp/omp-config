@@ -1,4 +1,4 @@
-- regex: "No TODO tracking, no progress updates\\."
+- regex: "No TODO tracking, no progress updates\\. ?"
   replace: ""
   target: "subagents"
   mode: "full"

@@ -39,9 +39,10 @@ worker that spawns other workers, lists `task:mid` (the default worker tier) fir
 3. Names in `task.disabledAgents` fail even when allowlisted
 -------------------------------------------------------------
 Currently disabled: task, scout, sonic, security-reviewer. Listing one in `spawns`
-does not revive it: `reviewer.md` keeps the bundled `spawns: scout`, and that spawn
-fails preflight. Ordinary `task` calls must name `agent` explicitly; relying on the
-default walks into item 2.
+does not revive it — any attempt to spawn a disabled agent (such as bundled
+definitions with `spawns: scout`) fails preflight; this repo's `reviewer.md` omits
+`spawns` and `task` altogether. Ordinary `task` calls must name `agent` explicitly;
+relying on the default walks into item 2.
 
 
 4. Recursion depth 2: grandchildren are leaves
@@ -64,8 +65,8 @@ Observed: a depth-2 `task:free` child had no `task` tool in its tool list.
 must finish through it: the `yield` payload is the result its parent receives. Every
 definition here except `reviewer.md` declares the same `output` schema,
 `{ report: string }`; `reviewer.md` keeps the bundled verdict schema. Without one a
-structured run accepts any object and each child picks its own shape. On OMP 18.16 a
-child without structured mode gets no `yield` at all, so do not turn the setting off
+structured run accepts any object and each child picks its own shape. Without
+structured mode a child gets no `yield` tool at all, so do not turn the setting off
 while these definitions require `yield`.
 
 `mentor-default.md` declares `tools: []`, so `yield` is its only tool. Observed failure

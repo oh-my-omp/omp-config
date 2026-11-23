@@ -37,8 +37,9 @@ prompt 的措辞无法绕过这一点。
 3. `task.disabledAgents` 里的名字即使列进 allowlist 也会失败
 -------------------------------------------------------------
 目前禁用：task、scout、sonic、security-reviewer。把其中一个写进 `spawns` 不会让它复活：
-`reviewer.md` 保留了内置的 `spawns: scout`，这次派生会在 preflight 被拒。普通 `task` 必须
-显式写 `agent`，否则会掉进第 2 条。
+任何派生禁用 agent 的尝试（例如带 `spawns: scout` 的内置定义）都会在 preflight 被拒；
+本仓库的 `reviewer.md` 已去掉 `spawns` 与 `task` 工具。普通 `task` 必须显式写 `agent`，否则
+会掉进第 2 条。
 
 
 4. 递归深度 2：孙代是叶子
@@ -58,8 +59,8 @@ prompt 的措辞无法绕过这一点。
 `config.yml` 设置了 `task.structured: true`，所以每个 task 子代都有 `yield` 工具，并且必须用它
 结束：`yield` 的载荷就是父会话收到的结果。这里除 `reviewer.md` 外每个定义都声明同一个
 `output` schema `{ report: string }`；`reviewer.md` 保留内置的裁决 schema。不声明时
-结构化运行接受任意对象，每个子代自己决定形状。OMP 18.16 上，非结构化运行的子代根本没有
-`yield`，所以在这些定义仍要求 `yield` 时，不要关掉这个设置。
+结构化运行接受任意对象，每个子代自己决定形状。非结构化运行的子代根本没有 `yield` 工具，
+所以在这些定义仍要求 `yield` 时，不要关掉这个设置。
 
 `mentor-default.md` 声明 `tools: []`，所以 `yield` 是它唯一的工具。它改用纯文本回答时观察到的
 失败链：
