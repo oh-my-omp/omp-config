@@ -66,6 +66,9 @@
 
 ### Fixed
 
+- Made `input-polish` try the next model when a rewrite comes back empty or drops or changes an attachment/paste placeholder, instead of failing on the first model
+- Kept the `input-polish` preview box inside terminals narrower than 22 columns and sized it from the TUI's own terminal height
+- Stopped a second `input-polish` session attach that raced the first from leaving an extra key handler subscribed
 - Compared repo-rules context-file boundaries case-insensitively on Windows so home and repo-root paths match regardless of casing
 - Kept the user's enabled state and feature selection of installed plugins across updater applies and startup auto-update: a plugin whose declared spec is unchanged is refreshed with `omp plugin upgrade` instead of `omp install`, a plugin whose spec changed is reinstalled and disabled again if it was disabled, an npm plugin pinned to the recorded exact version is left as is, and a locally linked plugin is no longer installed over; a link made over an installed dependency, which the host's bun install replaces whenever any plugin is installed or upgraded, is linked again with its enable state and features restored
 - Located the shared batch context for `task-completion-judge` by the host subagent template's `⁂ Context` heading instead of a `§ Context` marker the host no longer renders

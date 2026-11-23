@@ -19,7 +19,7 @@ interface HelperPrompt {
 	readonly onText?: (partial: string) => void;
 }
 
-type HelperResult =
+export type HelperResult =
 	| { readonly kind: "text"; readonly text: string }
 	| { readonly kind: "canceled" }
 	| { readonly kind: "provider-error"; readonly message: string }
