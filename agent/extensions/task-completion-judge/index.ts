@@ -1,11 +1,3 @@
-/**
- * The deadline stays under the harness's 30 s `tool_call` handler timeout, which would otherwise block the
- * yield.
- *
- * The host keeps a batch's shared `context` only in the subagent system prompt it renders under `⁂ Context`; no
- * session entry stores it. Locating any other marker hands the judge `(none)` without a warning.
- */
-
 import { basename } from "node:path";
 import type { AssistantMessage, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog";
@@ -14,42 +6,22 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { declaresFlag } from "../_shared/agent-definition.ts";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
+import { textOf } from "../_shared/messages.ts";
 import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
-import { readTodos, type TodoReadResponse } from "../_shared/omomp-shared/todo-read.ts";
+import { readTodos, type TodoReadResult } from "../_shared/omomp-shared/todo-read.ts";
 import { completeRoleChain } from "../_shared/role-chain.ts";
 
 const ROLE = basename(import.meta.dir);
 
 const EFFORT = THINKING_EFFORTS.find((effort) => effort === "low");
 if (EFFORT === undefined) throw new Error("Host thinking efforts do not include low");
+// Must stay under the harness's 30 s `tool_call` handler timeout, or the yield blocks until the harness gives up.
 const DEADLINE_MS = 25_000;
 const JUDGE_CONTEXT_TOKENS = 64_000;
 const JUDGE_RESERVED_TOKENS = 4_000;
 const ARGS_CHAR_LIMIT = 800;
 const RESULT_CHAR_LIMIT = 800;
 const SUBMISSION_CHAR_LIMIT = 6_000;
-const SHORT_JSON_DEPTH = 64;
-const STRING_CHUNK = 4096;
-
-type ReviewTodo = Extract<TodoReadResponse, { kind: "ok" }>;
-
-function requireReviewTodo(pi: ExtensionAPI, agentId: string): ReviewTodo {
-	const result = readTodos(pi.events, agentId);
-	switch (result.kind) {
-		case "ok":
-			return result;
-		case "unavailable":
-			throw new Error("todo-more review state unavailable");
-		case "no_reply":
-			throw new Error("todo-more did not answer the read request");
-		case "malformed":
-			throw new Error(`todo-more replied out of protocol: ${result.reason}`);
-		default: {
-			const unreachable: never = result;
-			return unreachable;
-		}
-	}
-}
 
 const SYSTEM_PROMPT = [
 	"You audit whether a worker agent actually completed the assignment it was given.",
@@ -63,29 +35,33 @@ const SYSTEM_PROMPT = [
 	"Answer format: the first line is exactly `DONE` or `NOT_DONE`. The following lines give one short paragraph in Chinese with the concrete evidence; for NOT_DONE, name exactly what is missing.",
 ].join("\n");
 
-const yieldInputSchema = z
-	.object({
-		key: z.unknown().optional(),
-		error: z.string().nullable().optional(),
-		type: z
-			.union([z.string(), z.array(z.string())])
-			.nullable()
-			.optional(),
-		data: z.unknown().optional(),
-	})
-	.passthrough();
+const yieldInputSchema = z.object({
+	key: z.unknown().optional(),
+	error: z.string().nullable().optional(),
+	type: z
+		.union([z.string(), z.array(z.string())])
+		.nullable()
+		.optional(),
+	data: z.unknown().optional(),
+});
 type YieldInput = z.infer<typeof yieldInputSchema>;
 
-type Round = { readonly kind: "open"; readonly bounced: boolean; readonly todoPrompted: boolean } | { readonly kind: "settled" };
+type OpenRound = { readonly kind: "open"; readonly bounced: boolean; readonly todoPrompted: boolean };
+type Round = OpenRound | { readonly kind: "settled" };
 
-const FIRST_ROUND: Round = { kind: "open", bounced: false, todoPrompted: false };
+const FIRST_ROUND: OpenRound = { kind: "open", bounced: false, todoPrompted: false };
+const SETTLED: Round = { kind: "settled" };
 
 type Verdict =
 	| { readonly kind: "done"; readonly reason: string }
 	| { readonly kind: "not_done"; readonly reason: string }
 	| { readonly kind: "unknown"; readonly why: string };
 
+type Decision = { readonly kind: "pass"; readonly next: Round } | { readonly kind: "block"; readonly reason: string; readonly next: Round };
+
 type YieldCall = { readonly kind: "data" } | { readonly kind: "text" } | { readonly kind: "not_terminal" };
+
+type ReviewTodo = Extract<TodoReadResult, { kind: "ok" }>;
 
 type ToolCallRecord = {
 	readonly id: string;
@@ -94,12 +70,10 @@ type ToolCallRecord = {
 	readonly message: AssistantMessage;
 };
 type ResultsByCallId = ReadonlyMap<string, { readonly isError: boolean; readonly content: ToolResultMessage["content"] }>;
-type MessageContent = AssistantMessage["content"] | ToolResultMessage["content"];
 
 type Transcript = {
 	readonly assignment: string;
 	readonly calls: readonly ToolCallRecord[];
-	readonly callById: ReadonlyMap<string, ToolCallRecord>;
 	readonly resultsByCallId: ResultsByCallId;
 };
 
@@ -110,177 +84,6 @@ const truncate = (text: string, limit: number): string => {
 	return `${text.slice(0, head)}\n…[${text.length - limit} chars omitted]…\n${text.slice(text.length - tail)}`;
 };
 
-const boundedText = (produce: (emit: (part: string) => void) => void, limit: number): string => {
-	const head = Math.ceil(limit * 0.6);
-	const tail = limit - head;
-	let seen = 0;
-	let held = "";
-	let tailParts: string[] = [];
-	let tailLength = 0;
-	const emit = (part: string): void => {
-		seen += part.length;
-		if (held.length < head) held += part.length + held.length <= head ? part : part.slice(0, head - held.length);
-		if (tail === 0) return;
-		if (part.length >= tail) {
-			tailParts = [part.slice(-tail)];
-			tailLength = tail;
-			return;
-		}
-		tailParts.push(part);
-		tailLength += part.length;
-		if (tailLength > 2 * tail) {
-			const merged = tailParts.join("").slice(-tail);
-			tailParts = [merged];
-			tailLength = merged.length;
-		}
-	};
-	produce(emit);
-	const trailing = tail === 0 ? "" : tailParts.join("").slice(-tail);
-	if (seen <= limit) return tail > 0 && seen > head ? held + trailing.slice(Math.max(0, head - (seen - trailing.length))) : held;
-	return `${held}\n…[${seen - limit} chars omitted]…\n${trailing}`;
-};
-
-const textWithin = (content: MessageContent, separator: string, limit: number): string =>
-	boundedText((emit) => {
-		let first = true;
-		for (const block of content) {
-			if (block.type !== "text") continue;
-			if (!first) emit(separator);
-			first = false;
-			emit(block.text);
-		}
-	}, limit);
-
-const estimateTokens = (text: string): number => {
-	let tokens = 0;
-	for (const char of text) tokens += char.charCodeAt(0) < 128 ? 1 : 2;
-	return tokens;
-};
-
-class NotJsonData {}
-
-type JsonRecord = Readonly<Record<string, unknown>>;
-
-const NEEDS_ESCAPE = /["\\]|[^ -\ud7ff\ue000-\uffff]/;
-
-const isJsonObject = (value: object): value is JsonRecord => {
-	if ("toJSON" in value) return false;
-	const proto: unknown = Object.getPrototypeOf(value);
-	return proto === Object.prototype || proto === null;
-};
-
-const isJsonArray = (value: object): boolean => !("toJSON" in value) && Object.getPrototypeOf(value) === Array.prototype;
-
-function isShortJson(value: unknown, depth: number): boolean {
-	if (value === null) return true;
-	switch (typeof value) {
-		case "boolean":
-		case "number":
-			return true;
-		case "string":
-			return value.length <= STRING_CHUNK;
-		case "object":
-			break;
-		case "undefined":
-		case "function":
-		case "symbol":
-		case "bigint":
-			return false;
-	}
-	if (depth === 0) return false;
-	if (Array.isArray(value)) {
-		if (!isJsonArray(value)) return false;
-		const items: readonly unknown[] = value;
-		for (let index = 0; index < items.length; index++) if (!isShortJson(items[index], depth - 1)) return false;
-		return true;
-	}
-	if (!isJsonObject(value)) return false;
-	for (const key in value) if (Object.hasOwn(value, key) && !isShortJson(value[key], depth - 1)) return false;
-	return true;
-}
-
-const writeString = (text: string, emit: (part: string) => void): void => {
-	if (text.length <= STRING_CHUNK) {
-		emit(JSON.stringify(text));
-		return;
-	}
-	emit('"');
-	let start = 0;
-	while (start < text.length) {
-		let end = Math.min(start + STRING_CHUNK, text.length);
-		const before = text.charCodeAt(end - 1);
-		const after = text.charCodeAt(end);
-		if (end < text.length && before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) end--;
-		const chunk = text.slice(start, end);
-		emit(NEEDS_ESCAPE.test(chunk) ? JSON.stringify(chunk).slice(1, -1) : chunk);
-		start = end;
-	}
-	emit('"');
-};
-
-function walkJson(value: unknown, emit: (part: string) => void, stack: object[]): void {
-	if (value === null) {
-		emit("null");
-		return;
-	}
-	switch (typeof value) {
-		case "boolean":
-			emit(value ? "true" : "false");
-			return;
-		case "number":
-			emit(Number.isFinite(value) ? String(value) : "null");
-			return;
-		case "string":
-			writeString(value, emit);
-			return;
-		case "object":
-			break;
-		case "undefined":
-		case "function":
-		case "symbol":
-		case "bigint":
-			throw new NotJsonData();
-	}
-	if (isShortJson(value, SHORT_JSON_DEPTH)) {
-		emit(JSON.stringify(value));
-		return;
-	}
-	if (Array.isArray(value)) {
-		if (!isJsonArray(value) || stack.includes(value)) throw new NotJsonData();
-		const items: readonly unknown[] = value;
-		stack.push(value);
-		emit("[");
-		let index = 0;
-		while (index < items.length) {
-			if (index > 0) emit(",");
-			let end = index;
-			while (end < items.length && isShortJson(items[end], SHORT_JSON_DEPTH)) end++;
-			if (end > index) {
-				emit(JSON.stringify(items.slice(index, end)).slice(1, -1));
-				index = end;
-			} else {
-				walkJson(items[index], emit, stack);
-				index++;
-			}
-		}
-		emit("]");
-	} else {
-		if (!isJsonObject(value) || stack.includes(value)) throw new NotJsonData();
-		stack.push(value);
-		emit("{");
-		let first = true;
-		for (const key in value) {
-			if (!Object.hasOwn(value, key)) continue;
-			if (!first) emit(",");
-			first = false;
-			emit(NEEDS_ESCAPE.test(key) ? `${JSON.stringify(key)}:` : `"${key}":`);
-			walkJson(value[key], emit, stack);
-		}
-		emit("}");
-	}
-	stack.pop();
-}
-
 const stringify = (value: unknown): string => {
 	try {
 		return JSON.stringify(value) ?? String(value);
@@ -289,33 +92,55 @@ const stringify = (value: unknown): string => {
 	}
 };
 
-const stringifyWithin = (value: unknown, limit: number): string => {
-	try {
-		return boundedText((emit) => walkJson(value, emit, []), limit);
-	} catch {
-		return truncate(stringify(value), limit);
+const estimateTokens = (text: string): number => {
+	let tokens = 0;
+	for (const char of text) tokens += char.charCodeAt(0) < 128 ? 1 : 2;
+	return tokens;
+};
+
+const todoFailure = (result: Exclude<TodoReadResult, ReviewTodo>): string => {
+	switch (result.kind) {
+		case "unavailable":
+			return "todo-more review state unavailable";
+		case "no_reply":
+			return "todo-more did not answer the read request";
+		case "malformed":
+			return `todo-more replied out of protocol: ${result.reason}`;
+		default: {
+			const unreachable: never = result;
+			return unreachable;
+		}
 	}
 };
+
+// @upstream verbatim @oh-my-pi/pi-coding-agent@19.1.0 src/tools/yield.ts#PLACEHOLDER_YIELD_ERRORS
+const PLACEHOLDER_YIELD_ERRORS = new Set([
+	"ignore",
+	"ignored",
+	"n/a",
+	"none",
+	"not applicable",
+	"null",
+	"placeholder",
+	"undefined",
+	"unused",
+]);
+// @upstream-end
+
 const classifyYield = (input: YieldInput): YieldCall => {
 	if (input.key !== undefined && input.key !== null) return { kind: "not_terminal" };
-	if (typeof input.error === "string" && input.error.trim() !== "") return { kind: "not_terminal" };
 	if (Array.isArray(input.type)) return { kind: "not_terminal" };
-	return input.data === undefined || input.data === null ? { kind: "text" } : { kind: "data" };
+	const hasData = input.data !== undefined && input.data !== null;
+	const error = input.error?.trim() ?? "";
+	if (error !== "" && !(hasData && PLACEHOLDER_YIELD_ERRORS.has(error.toLowerCase()))) return { kind: "not_terminal" };
+	return hasData ? { kind: "data" } : { kind: "text" };
 };
 
 const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 	const view = ctx.sessionManager.getBranch();
-	let start = -1;
-	let assignment = "";
-	for (let index = view.length - 1; index >= 0; index--) {
-		const entry = view[index];
-		if (entry?.type === "session_init") {
-			start = index;
-			assignment = entry.task;
-			break;
-		}
-	}
-	if (start === -1) return undefined;
+	const start = view.findLastIndex((entry) => entry.type === "session_init");
+	const init = view[start];
+	if (init?.type !== "session_init") return undefined;
 	const calls: ToolCallRecord[] = [];
 	const resultsByCallId = new Map<string, { readonly isError: boolean; readonly content: ToolResultMessage["content"] }>();
 	for (let index = start + 1; index < view.length; index++) {
@@ -324,45 +149,27 @@ const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
 		const message = entry.message;
 		if (message.role === "assistant") {
 			for (const block of message.content) {
-				if (block.type !== "toolCall") continue;
-				calls.push({ id: block.id, name: block.name, args: block.arguments, message });
+				if (block.type === "toolCall") calls.push({ id: block.id, name: block.name, args: block.arguments, message });
 			}
 		} else if (message.role === "toolResult") {
 			resultsByCallId.set(message.toolCallId, { isError: message.isError, content: message.content });
 		}
 	}
-	const callById = new Map<string, ToolCallRecord>();
-	for (const call of calls) callById.set(call.id, call);
-	return { assignment, calls, callById, resultsByCallId };
+	return { assignment: init.task, calls, resultsByCallId };
 };
+
+const CONTEXT_HEADING = "⁂ Context\n";
 
 // Locate the shared context only by the host subagent template's `⁂ Context` heading, ending at the next `⁂`
 // heading: no session entry stores the batch's `context`, so a marker the host does not render hands the judge
 // `(none)` silently, and a second marker matches the same words inside prompt text.
 const sharedContextOf = (ctx: ExtensionContext): string => {
-	const pieces = ctx.getSystemPrompt();
-	const marker = "⁂ Context\n";
-	const bodyEnd = "\n⁂ ";
-	const bodyOf = (carry: string, restIndex: number): string => {
-		const headingInCarry = carry.indexOf(bodyEnd);
-		if (headingInCarry !== -1) return carry.slice(0, headingInCarry).trim();
-		let held = carry; // body prefixes consumed so far
-		for (let index = restIndex; index < pieces.length; index++) {
-			const piece = pieces[index] ?? "";
-			if (piece.startsWith("⁂ ")) return held.trim();
-			const inside = piece.indexOf(bodyEnd);
-			if (inside !== -1) return `${held}\n${piece.slice(0, inside)}`.trim();
-			held = `${held}\n${piece}`;
-		}
-		return held.trim();
-	};
-	for (let index = 0; index < pieces.length; index++) {
-		const piece = pieces[index] ?? "";
-		const at = piece.indexOf(marker);
-		if (at !== -1) return bodyOf(piece.slice(at + marker.length), index + 1);
-		if (index + 1 < pieces.length && piece.endsWith("⁂ Context")) return bodyOf(pieces[index + 1] ?? "", index + 2);
-	}
-	return "";
+	const systemPrompt = ctx.getSystemPrompt().join("\n");
+	const at = systemPrompt.indexOf(CONTEXT_HEADING);
+	if (at === -1) return "";
+	const body = systemPrompt.slice(at + CONTEXT_HEADING.length);
+	const end = body.indexOf("\n⁂ ");
+	return (end === -1 ? body : body.slice(0, end)).trim();
 };
 
 const renderCall = (call: ToolCallRecord, n: number, results: ResultsByCallId): string => {
@@ -370,21 +177,21 @@ const renderCall = (call: ToolCallRecord, n: number, results: ResultsByCallId): 
 	const status = result === undefined ? "no result" : result.isError ? "error" : "ok";
 	return [
 		`<call n="${n}" tool="${call.name}" status="${status}">`,
-		`<args>${stringifyWithin(call.args, ARGS_CHAR_LIMIT)}</args>`,
-		`<result>${result === undefined ? "" : textWithin(result.content, "", RESULT_CHAR_LIMIT)}</result>`,
+		`<args>${truncate(stringify(call.args), ARGS_CHAR_LIMIT)}</args>`,
+		`<result>${result === undefined ? "" : truncate(textOf(result.content), RESULT_CHAR_LIMIT)}</result>`,
 		"</call>",
 	].join("\n");
 };
 
 const fitToolCalls = (prior: readonly ToolCallRecord[], results: ResultsByCallId, budget: number): readonly string[] => {
-	const newestFirst = prior.map((call, index) => ({ call, n: index + 1 })).reverse();
 	const kept: string[] = [];
 	let used = 0;
-	for (const { call, n } of newestFirst) {
-		const rendered = renderCall(call, n, results);
-		const tokens = estimateTokens(rendered);
-		if (used + tokens > budget) break;
-		used += tokens;
+	for (let index = prior.length - 1; index >= 0; index--) {
+		const call = prior[index];
+		if (call === undefined) break;
+		const rendered = renderCall(call, index + 1, results);
+		used += estimateTokens(rendered);
+		if (used > budget) break;
 		kept.push(rendered);
 	}
 	return kept.reverse();
@@ -392,29 +199,29 @@ const fitToolCalls = (prior: readonly ToolCallRecord[], results: ResultsByCallId
 
 const renderPrompt = (ctx: ExtensionContext, transcript: Transcript, yieldCallId: string, submission: string, todo: ReviewTodo): string => {
 	const prior = transcript.calls.filter((call) => call.id !== yieldCallId);
-	const frame = (calls: readonly string[], shown: number): string =>
+	const sharedContext = sharedContextOf(ctx) || "(none)";
+	const frame = (calls: readonly string[]): string =>
 		[
 			"<assignment>",
 			transcript.assignment.trim() || "(missing)",
 			"</assignment>",
 			"<shared-context>",
-			sharedContextOf(ctx) || "(none)",
+			sharedContext,
 			"</shared-context>",
 			"<worker-goal>",
 			todo.goal === null ? "(none)" : `Objective: ${todo.goal.objective}\nMeasure: ${todo.goal.measure}\nDone when: ${todo.goal.doneWhen}`,
 			"</worker-goal>",
-			`<tool-calls shown="${shown}" total="${prior.length}">`,
+			`<tool-calls shown="${calls.length}" total="${prior.length}">`,
 			...calls,
 			"</tool-calls>",
 			"<submitted-result>",
 			submission,
 			"</submitted-result>",
 		].join("\n");
-	const fixedTokens = estimateTokens(SYSTEM_PROMPT) + estimateTokens(frame([], 0));
-	const budget = JUDGE_CONTEXT_TOKENS - JUDGE_RESERVED_TOKENS - fixedTokens;
-	const calls = fitToolCalls(prior, transcript.resultsByCallId, budget);
-	return frame(calls, calls.length);
+	const fixedTokens = estimateTokens(SYSTEM_PROMPT) + estimateTokens(frame([]));
+	return frame(fitToolCalls(prior, transcript.resultsByCallId, JUDGE_CONTEXT_TOKENS - JUDGE_RESERVED_TOKENS - fixedTokens));
 };
+
 const VERDICT_HEAD = /^(NOT DONE|NOT_DONE|DONE)(?=$|(?!_)[\s\p{P}])/u;
 
 const parseAnswer = (text: string): Verdict => {
@@ -450,10 +257,44 @@ const judge = async (ctx: ExtensionContext, prompt: string, signal: AbortSignal)
 	}
 };
 
-const openTodoItems = (todo: ReviewTodo): string[] =>
-	todo.openItems.map(
-		({ phase, title, explanation }) => `${phase}: ${title} — ${explanation ?? "(no explanation yet: add one with op explain)"}`,
-	);
+const decide = (round: OpenRound, verdict: Verdict, todo: ReviewTodo): Decision => {
+	switch (verdict.kind) {
+		case "unknown":
+			return { kind: "pass", next: round };
+		case "not_done":
+			if (round.bounced) return { kind: "pass", next: SETTLED };
+			return {
+				kind: "block",
+				next: { ...round, bounced: true },
+				reason: [
+					"完成度鉴定：对照最初的任务和你最近的 tool call，这次任务还没有真正完成，yield 被退回。",
+					verdict.reason || "(鉴定未给出具体原因)",
+					"补完缺失的部分并实际验证后再 yield。之后不会再因完成度退回。",
+				].join("\n"),
+			};
+		case "done": {
+			const openItems = round.todoPrompted
+				? []
+				: todo.openItems.map(
+						({ phase, title, explanation }) => `${phase}: ${title} — ${explanation ?? "(no explanation yet: add one with op explain)"}`,
+					);
+			if (openItems.length === 0) return { kind: "pass", next: SETTLED };
+			return {
+				kind: "block",
+				next: { ...round, todoPrompted: true },
+				reason: [
+					"完成度鉴定：这次任务已经完成，但你的 todo 里还有未完成的项，yield 被退回：",
+					...openItems.map((item) => `- ${item}`),
+					"先维护 todo，让它反映真实进度，再调用 yield。",
+				].join("\n"),
+			};
+		}
+		default: {
+			const unreachable: never = verdict;
+			return unreachable;
+		}
+	}
+};
 
 export default function taskCompletionJudge(pi: ExtensionAPI): void {
 	const rounds = new Map<string, Round>();
@@ -491,13 +332,18 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 		const transcript = readTranscript(ctx);
 		if (transcript === undefined) {
 			pi.logger.info("task-completion-judge skipped: no session_init on branch", { agentName });
-			rounds.set(sessionFile, { kind: "settled" });
+			rounds.set(sessionFile, SETTLED);
 			return undefined;
 		}
-		const yieldContent = transcript.callById.get(toolCallId)?.message.content;
+		const todo = readTodos(pi.events, ctx.agent.id);
+		if (todo.kind !== "ok") {
+			pi.logger.warn("task-completion-judge skipped a yield", { agentName, error: todoFailure(todo) });
+			return undefined;
+		}
 		const submission =
-			call.kind === "text" ? textWithin(yieldContent ?? [], "", SUBMISSION_CHAR_LIMIT) : stringifyWithin(input.data, SUBMISSION_CHAR_LIMIT);
-		const todo = requireReviewTodo(pi, ctx.agent.id);
+			call.kind === "text"
+				? truncate(textOf(transcript.calls.find((record) => record.id === toolCallId)?.message.content ?? []), SUBMISSION_CHAR_LIMIT)
+				: truncate(stringify(input.data), SUBMISSION_CHAR_LIMIT);
 		const verdict = await judge(ctx, renderPrompt(ctx, transcript, toolCallId, submission, todo), AbortSignal.timeout(DEADLINE_MS));
 		pi.logger.info("task-completion-judge verdict", {
 			agent: basename(sessionFile, ".jsonl"),
@@ -507,40 +353,18 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
 			...verdict,
 		});
 
-		switch (verdict.kind) {
-			case "unknown":
+		const decision = decide(round, verdict, todo);
+		rounds.set(sessionFile, decision.next);
+		switch (decision.kind) {
+			case "pass":
 				return undefined;
-			case "not_done":
-				if (!round.bounced) {
-					rounds.set(sessionFile, { ...round, bounced: true });
-					const reason = [
-						"完成度鉴定：对照最初的任务和你最近的 tool call，这次任务还没有真正完成，yield 被退回。",
-						verdict.reason || "(鉴定未给出具体原因)",
-						"补完缺失的部分并实际验证后再 yield。之后不会再因完成度退回。",
-					].join("\n");
-					return { block: true, reason };
-				}
-				break;
-			case "done":
-				break;
+			case "block":
+				return { block: true, reason: decision.reason };
 			default: {
-				const unexpected: never = verdict;
-				throw new Error(`Unexpected completion verdict: ${unexpected}`);
+				const unreachable: never = decision;
+				return unreachable;
 			}
 		}
-		const currentTodo = requireReviewTodo(pi, ctx.agent.id);
-		const openItems = verdict.kind === "done" && !round.todoPrompted ? openTodoItems(currentTodo) : [];
-		if (openItems.length > 0) {
-			rounds.set(sessionFile, { ...round, todoPrompted: true });
-			const reason = [
-				"完成度鉴定：这次任务已经完成，但你的 todo 里还有未完成的项，yield 被退回：",
-				...openItems.map((item) => `- ${item}`),
-				"先维护 todo，让它反映真实进度，再调用 yield。",
-			].join("\n");
-			return { block: true, reason };
-		}
-		rounds.set(sessionFile, { kind: "settled" });
-		return undefined;
 	};
 
 	// A throwing tool_call handler blocks the tool, so every failure lets the yield run.
