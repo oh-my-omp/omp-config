@@ -468,6 +468,6 @@ const CATEGORY_TEXT: Record<PtyCategory, string> = {
 export function ptyRefusal(hit: PtyHit, tool: string): string {
 	return [
 		`pty 路由：这次 \`${tool}\` 调用没有执行：\`${hit.program}\` ${CATEGORY_TEXT[hit.category]}（${hit.category}，规则 \`${hit.rule}\`）。`,
-		"请改用 `exec_command` 执行，或先 `read help://exec_command/pty-io` 查看 PTY 会话用法。",
+		"help://bash/terminal",
 	].join("\n");
 }

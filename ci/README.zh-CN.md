@@ -165,7 +165,7 @@ CI_KEEP_ROOT=1 bun ci/check.ts       # 保留临时根目录以便排查
 - **退出码**：全部步骤通过为 0，否则（含准备失败）为 1。
 - **触发与权限**：`workflow_dispatch`，以及改动 `agent/extensions/delete-guard/`、上述脚本或该 workflow 的 `pull_request`，使改动在合并前得到验证。fork 的 PR 跳过该 job（拿不到 secret）。`contents: read`、`persist-credentials: false`、actions 按 commit SHA 固定；只报告，不拦截合并。
 - **Secret**：与配置检查（R4）不同，本节点使用仓库 secret `OPENCODE_API_KEY`，即操作员的 opencode-go key，只传给运行 `bun ci/windows-guard.ts` 的那一步。操作员决定（2026-10-30）：用其他 delete-guard 验收所用的同一模型取代 Kilo 免费模型，失败只归因于 guard，而非更弱的模型。代价：每次运行都计费到这个 key。
-- **不覆盖**：`exec_command` 退回 PowerShell 的情况；WSL；其他低档模型的矩阵。
+- **不覆盖**：`bash`（`pty: true`）退回 PowerShell 的情况；WSL；其他低档模型的矩阵。
 
 本地运行：无，本节点需要 Windows。workflow 进入 `main` 后用 `gh workflow run delete-guard-windows.yml --ref <branch>` 触发，或推送改动上述路径的 PR。
 

@@ -71,7 +71,7 @@ bashInterceptor:
   # OMP's defaults minus `cat <<` heredocs piped into a program and `tail -f`
   # (both stay shell), and minus the three rules that send services, watchers and
   # `nohup`/`&` to `bash` with `name`: `launch.enabled` is false, so that mode
-  # does not exist here; such work belongs to `exec_command`.
+  # does not exist here; such work belongs to `bash` with `pty: true`.
   patterns:
     - pattern: |-
         ^\s*(?:cat\s+(?!<<)|(?:head|less|more)\s+|tail\s+(?!(?:.*\s)?-[a-zA-Z]*[fF](?:\s|$)))

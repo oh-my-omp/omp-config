@@ -173,10 +173,10 @@ Slash commands: `README.md#commands`.
    (`Bun.YAML.parse` / `JSON.parse`).
 2. Extension, prompt or tool-topic changes are verified in the OrbStack
    sandbox (`sandbox/README.md`), never on this machine's `~/.omp`: start
-   `bun sandbox/sandbox.ts hold` in an `exec_command` session, prepare the
+   `bun sandbox/sandbox.ts hold` in a `bash` (`pty: true`) terminal, prepare the
    workspace under `/work` with `docker exec` before omp starts, then drive
    `docker exec -it -w /work omp-sandbox-<run> omp --model …` through
-   `exec_command`, trigger the changed path and observe its output and side
+   `bash` (`pty: true`), trigger the changed path and observe its output and side
    effects. Quit omp and stop the holder with Ctrl-C.
 3. Inside the sandbox: `omp config list --json`, `omp plugin list --json`;
    on the host: `git status --short`.

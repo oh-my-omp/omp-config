@@ -174,7 +174,7 @@ const HOST_OMOMP = [
 	"    - PERSONALITY.md",
 	"judge:",
 	"  fallbackRole: tiny",
-	"omp-unified-exec:",
+	"omp-actual-terminal:",
 	"  stop: off",
 	HOST_RULES.trimEnd(),
 	"",
@@ -206,7 +206,7 @@ describe("settings move", () => {
 		});
 		expect(readFileSync(join(agentDir, "PERSONALITY.md"), "utf8")).toBe("mine\n");
 		expect(report.skipped).toContainEqual({ path: join(agentDir, "PERSONALITY.md"), reason: expect.stringContaining("exclude") });
-		expect(readFileSync(join(agentDir, "omomp.yml"), "utf8")).toBe("omp-unified-exec:\n  stop: off\n");
+		expect(readFileSync(join(agentDir, "omomp.yml"), "utf8")).toBe("omp-actual-terminal:\n  stop: off\n");
 		expect(readFileSync(join(agentDir, "extensions/model-compaction/COMPACTION-rule-01.md"), "utf8")).toBe(
 			"---\nmodel: [gG][pP][tT]\nthresholdTokens: 650000\n---\n",
 		);

@@ -7,11 +7,11 @@
 		"expect": [
 			{
 				"tool": [
-					"exec_command",
+					"bash",
 					"eval"
 				],
 				"isError": false,
-				"inputPattern": "(?=.*target)",
+				"inputPattern": "(?=.*target)(?:(?=.*\"pty\":true)|(?=.*tool\\.bash\\([\\s\\S]*pty[\\s\\S]*[tT]rue))",
 				"resultIncludes": "exit_code: 0"
 			}
 		],
@@ -19,12 +19,12 @@
 			{
 				"tool": "bash",
 				"isError": false,
-				"inputPattern": "(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b)"
+				"inputPattern": "^(?!.*\"pty\":true).*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b)"
 			},
 			{
 				"tool": "eval",
 				"isError": false,
-				"inputPattern": "^(?!.*(tool\\.exec_command\\(|tool\\.write_stdin\\())(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b))"
+				"inputPattern": "^(?!.*(tool\\.bash\\([^)]*pty[\"'\\\\]*\\s*:\\s*[tT]rue|tool\\.write_stdin\\())(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?ssh(?![\\w.-])(?!\\s+-[GVO]\\b))"
 			}
 		]
 	},

@@ -165,7 +165,7 @@ This node checks `delete-guard` on Windows (issue #69) in real omp sessions: the
 - **Exit code**: 0 when every step passes, 1 otherwise, including setup failures.
 - **Triggers and permissions**: `workflow_dispatch`, and `pull_request` touching `agent/extensions/delete-guard/`, these scripts or the workflow, so a change is verified before it merges. Fork pull requests skip the job (they get no secrets). `contents: read`, `persist-credentials: false`, actions pinned by commit SHA; it reports only and does not block merges.
 - **Secret**: unlike the configuration check (R4), this node uses the repository secret `OPENCODE_API_KEY`, the operator's opencode-go key, passed only to the step that runs `bun ci/windows-guard.ts`. Operator decision, 2026-10-30: the free Kilo model was replaced by the same model the other delete-guard checks use, so a failure is the guard's and not a weaker model's. Cost: every run is billed to that key.
-- **Not covered**: `exec_command` falling back to PowerShell; WSL; the model matrix of other low-tier models.
+- **Not covered**: `bash` (`pty: true`) falling back to PowerShell; WSL; the model matrix of other low-tier models.
 
 Local run: none; the node needs Windows. Run it with `gh workflow run delete-guard-windows.yml --ref <branch>` once the workflow is on `main`, or by pushing to a pull request that touches the paths above.
 

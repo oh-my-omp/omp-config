@@ -203,10 +203,10 @@ function riskCheck(
 function ptyRefusalFor(pi: ExtensionAPI, lanes: Lanes, call: WatchedCall): string | null {
 	if (lanes.pty === null) return null;
 	try {
-		if (!pi.getActiveTools().includes("exec_command")) return null;
+		if (!pi.getActiveTools().includes("write_stdin")) return null;
 		switch (call.kind) {
 			case "shell": {
-				if (call.tool !== "bash") return null;
+				if (call.tool !== "bash" || call.pty) return null;
 				const hit = ptyLineHit(scanShell(call.command));
 				if (hit === null) return null;
 				pi.logger.info("Tool-policy pty route refused", { tool: call.tool, ...hit });

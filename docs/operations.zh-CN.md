@@ -33,7 +33,7 @@ flowchart LR
 | `agent/extensions/_shared/package.json`（`omp-config` 插件 manifest） | 仓库；保留本机修改 | 按上面文本文件的规则三方合并；`omp.settings` 是设置键、类型与默认值的唯一清单 | 与本机 `cmp` 比对，有改动时写回仓库 | 下次启动 OMP |
 | `extensions/_shared/CHANGELOG.md`（仓库根目录 `CHANGELOG.md` 的副本） | 仓库；保留本机修改 | 按上面文本文件的规则三方合并，来源是仓库根目录的 `CHANGELOG.md`；落在 manifest 旁边，manifest 的 `omomp` 声明指向它 | 不收回仓库（changelog 只由 lgit、PR 与发布运行写） | 下次启动 OMP（由 [omomp-changelog](extensions.zh-CN.md#omomp-changelog) 读取） |
 | `omp-config` 插件设置（`/settings → Plugins → omp-config`、`omp plugin config`；项目 `.omp/plugin-overrides.json` 覆盖机器值） | 本机 | 从不写入；apply 先 link 插件（`omp plugin link` 指向 `extensions/_shared`），再把本机 `omomp.*` 中 omp-config 拥有的段一次性迁入设置（见下方迁移） | 不收回仓库（仓库默认值在 manifest 里） | 按各扩展读取时机生效 |
-| `<agentDir>/omomp.*` | 各段各自的归属方 | 只有 omp-config 拥有的段迁出（见下方迁移）；其他归属方的段（如 `omp-unified-exec`）从不写入；内容清空后删除该文件 | 不收回仓库 | — |
+| `<agentDir>/omomp.*` | 各段各自的归属方 | 只有 omp-config 拥有的段迁出（见下方迁移）；其他归属方的段（如 `omp-actual-terminal`）从不写入；内容清空后删除该文件 | 不收回仓库 | — |
 | `<agentDir>/subagent-usage/calibration.json` | 本机（`subagent-usage` 扩展在 `/subagent-usage on` 之后写入） | 不写入也不删除；`/subagent-usage reset` 删除 | 不收回仓库 | 下次调用 `subagent_usage` |
 | `<agentDir>/omomp-changelog/seen.json` | 本机（`omomp-changelog` 扩展） | 更新器从不写入或删除 | 不收回仓库 | 下次启动 OMP |
 | `<agentDir>/thinking-translator.json` | 已废弃 | 由更新器自动清理（`omp-thinking-translator` 现已改用插件设置与 `modelRoles.omp-thinking-translator`） | 不进仓库 | — |

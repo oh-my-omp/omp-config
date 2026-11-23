@@ -7,11 +7,11 @@
 		"expect": [
 			{
 				"tool": [
-					"exec_command",
+					"bash",
 					"eval"
 				],
 				"isError": false,
-				"inputPattern": "cmd|command|tool\\.exec_command\\("
+				"inputPattern": "(?=.*\"pty\":true)(?=.*\"command\":)|tool\\.bash\\([^)]*pty[\"'\\\\]*\\s*:\\s*[tT]rue"
 			},
 			{
 				"tool": [
@@ -19,19 +19,19 @@
 					"eval"
 				],
 				"isError": false,
-				"inputPattern": "session_id|chars|tool\\.write_stdin\\("
+				"inputPattern": "job_id|chars|tool\\.write_stdin\\("
 			}
 		],
 		"forbid": [
 			{
 				"tool": "bash",
 				"isError": false,
-				"inputPattern": "(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?(?:ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-]))"
+				"inputPattern": "^(?!.*\"pty\":true).*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?(?:ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-]))"
 			},
 			{
 				"tool": "eval",
 				"isError": false,
-				"inputPattern": "^(?!.*(tool\\.exec_command\\(|tool\\.write_stdin\\())(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?(?:ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-])))"
+				"inputPattern": "^(?!.*(tool\\.bash\\([^)]*pty[\"'\\\\]*\\s*:\\s*[tT]rue|tool\\.write_stdin\\())(?=.*(?:\"command\":\"|command\\\\\":\\\\\"|[;&|(`]\\s*|\\\\n\\s*|\\[\\\\\"|\\(\\\\\")\\s*(?:(?:timeout\\s+\\S+|sudo(?:\\s+-\\S+)*|env(?:\\s+\\w+=\\S*)*|nohup|exec|command)\\s+)?(?:ssh(?![\\w.-])(?!\\s+-[GVO]\\b)|python3(?![\\w.-])))"
 			}
 		]
 	},

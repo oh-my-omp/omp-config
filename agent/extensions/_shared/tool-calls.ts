@@ -3,10 +3,10 @@ import type { BashToolInput } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import type { EvalToolParams } from "@oh-my-pi/pi-coding-agent/tools/eval";
 
 export type WatchedCall =
-	| { readonly kind: "shell"; readonly tool: ShellTool; readonly command: string }
+	| { readonly kind: "shell"; readonly tool: ShellTool; readonly command: string; readonly pty: boolean }
 	| { readonly kind: "eval"; readonly language: string; readonly code: string; readonly reset: boolean };
 
-const shellSchema: zod.ZodLikeSchema<BashToolInput> = z.object({ command: z.string() });
+const shellSchema: zod.ZodLikeSchema<BashToolInput> = z.object({ command: z.string(), pty: z.boolean().optional() });
 type EvalCallInput = Pick<EvalToolParams, "code" | "reset"> & { language: string };
 const evalSchema: zod.ZodLikeSchema<EvalCallInput> = z.object({
 	language: z.string(),
@@ -18,7 +18,7 @@ type ShellTool = "bash";
 
 function shellCall(tool: ShellTool, input: unknown): WatchedCall | null {
 	const parsed = shellSchema.safeParse(input);
-	return parsed.success ? { kind: "shell", tool, command: parsed.data.command } : null;
+	return parsed.success ? { kind: "shell", tool, command: parsed.data.command, pty: parsed.data.pty === true } : null;
 }
 
 export function watchedCallOf(toolName: string, input: unknown): WatchedCall | null {

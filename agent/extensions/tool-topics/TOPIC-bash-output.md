@@ -21,5 +21,5 @@ inject:
 - Lines longer than 768 characters are cut in streaming previews only.
 - Non-zero exit: an error result ending `Command exited with code <n>`; `details.exitCode` holds it.
 - Timeout: an error result with `details.timedOut: true`, not a success. Reconsider the deadline rather than retrying unchanged; open-ended work is outside this tool's host-policy boundary.
-- For PTY sessions and interactive/open-ended commands, read `help://exec_command/pty-io`.
+- For PTY sessions and interactive/open-ended commands, read `help://bash/terminal`.
 - Cancellation surfaces as an abort error; `Command failed: missing exit status` means the backend lost the process.

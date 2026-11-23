@@ -18,7 +18,7 @@ bun sandbox/sandbox.ts prune                                                    
 ```
 
 - `--repo` 默认是 `sandbox/` 所在的 checkout。`--target` 增加 ssh 目标机及其专用 bridge 网络。`--plugin DIR`（可重复）将本地插件目录复制到容器 `/plugins/<basename>`，存在 `package.json` 时运行 `bun install`，再用 `omp plugin link` 链接。
-- `hold` 打印运行 id 与接入命令，然后等待。omp 启动前先准备会话工作区：文件、仓库等测试素材经 `docker exec omp-sandbox-<run> sh -c '…'` 放到 `/work` 下。交互会话用 `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`；agent 经 `exec_command` 驱动这条命令。用 Ctrl-C、SIGTERM 或 SIGHUP 结束持有进程并等它退出：清理需要几秒。持有进程跑在 `exec_command` 会话里时，发送 Ctrl-C（`write_stdin` 发 `\u0003`），不要用 `kill_session`：它 2 秒后升级为 SIGKILL，会打断清理。
+- `hold` 打印运行 id 与接入命令，然后等待。omp 启动前先准备会话工作区：文件、仓库等测试素材经 `docker exec omp-sandbox-<run> sh -c '…'` 放到 `/work` 下。交互会话用 `docker exec -it -w /work omp-sandbox-<run> omp --model <provider>/<model>`；agent 经 `bash`（`pty: true`）驱动这条命令。用 Ctrl-C、SIGTERM 或 SIGHUP 结束持有进程并等它退出：清理需要几秒。持有进程跑在 `bash`（`pty: true`）终端里时，发送 Ctrl-C（`write_stdin` 发 `\u0003`），不要用 `kill_session`：它 2 秒后升级为 SIGKILL，会打断清理。
 - `run` 仅在每个模型都通过（`pass`）时退出 0，否则退出 1（包括 `untested`）。`matrix` 相同。`cache` 在报告到达宿主机时退出 0，否则退出 1。
 - `down` 用于单个没有走到 `finally` 就退出的持有进程（SIGKILL、宿主机崩溃），删除带该运行标签的全部资源。`prune` 汇总已退出的容器、残留网络与台账中状态为「进行中」的陈旧行，跳过当前仍在 Docker 中运行的沙箱，删除其余资源并在台账中改写为「已清理（prune）」。
 

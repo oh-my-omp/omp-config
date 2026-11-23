@@ -107,7 +107,7 @@
 			"tool-policy-nag.pty.enabled": {
 				"type": "boolean",
 				"default": true,
-				"description": "Refuse bash and eval calls that belong in an exec_command PTY session"
+				"description": "Refuse non-PTY bash and eval calls that need a bash (pty: true) terminal"
 			},
 			"child-memory-warning.thresholdGiB": {
 				"type": "number",

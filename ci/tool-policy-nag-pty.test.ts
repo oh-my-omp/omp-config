@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import toolPolicyNag from "../agent/extensions/tool-policy-nag/index.ts";
 import { type PtyHit, ptyEvalHit, ptyLineHit, ptyRefusal } from "../agent/extensions/tool-policy-nag/pty.ts";
 import { scanShell } from "../agent/extensions/tool-policy-nag/shell-parser.ts";
 
@@ -193,8 +197,65 @@ describe("pty refusal", () => {
 			expect(lines[0]).toContain(hit.category);
 			expect(lines[0]).toContain(`\`${hit.program}\``);
 			expect(lines[0]).toContain(hit.rule);
-			expect(lines[1]).toBe("请改用 `exec_command` 执行，或先 `read help://exec_command/pty-io` 查看 PTY 会话用法。");
+			expect(lines[1]).toBe("help://bash/terminal");
 			for (const recipe of ["write_stdin", "monitor", "kill_session", "heredoc", "cmd", "shell 参数"]) expect(shown).not.toContain(recipe);
 		}
+	});
+});
+
+describe("pty lane gating and pty: true pass-through", () => {
+	const temps: string[] = [];
+	afterAll(() => {
+		for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+	});
+
+	type ToolCallHandler = (
+		event: { toolName: string; toolCallId: string; input: unknown },
+		ctx: { cwd: string; agent: { kind: string } },
+	) => Promise<{ block?: boolean; reason?: string } | undefined>;
+
+	function loadPtyHook(activeTools: readonly string[]): { readonly handler: ToolCallHandler; readonly cwd: string } {
+		const cwd = mkdtempSync(join(tmpdir(), "omp-pty-hook-"));
+		temps.push(cwd);
+		mkdirSync(join(cwd, ".omp"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".omp/plugin-overrides.json"),
+			JSON.stringify({ settings: { "omp-config": { "tool-policy-nag.pty.enabled": true } } }),
+		);
+		let handler: ToolCallHandler | undefined;
+		const pi = {
+			on: (event: string, h: ToolCallHandler) => {
+				if (event === "tool_call") handler = h;
+			},
+			getActiveTools: () => [...activeTools],
+			logger: { info: () => {}, warn: () => {} },
+		};
+		toolPolicyNag(pi as unknown as Parameters<typeof toolPolicyNag>[0]);
+		if (handler === undefined) throw new Error("no tool_call handler registered");
+		return { handler, cwd };
+	}
+
+	test("blocks non-pty terminal bash calls and eval calls when write_stdin is active, and allows pty: true", async () => {
+		const { handler, cwd } = loadPtyHook(["bash", "eval", "write_stdin"]);
+		const ctx = { cwd, agent: { kind: "subagent" } };
+		for (const command of ["ssh host", "python3", "tail -f log"]) {
+			const blocked = await handler({ toolName: "bash", toolCallId: "t1", input: { command } }, ctx);
+			expect(blocked?.block).toBe(true);
+			expect(blocked?.reason?.split("\n").at(-1)).toBe("help://bash/terminal");
+			const allowed = await handler({ toolName: "bash", toolCallId: "t2", input: { command, pty: true } }, ctx);
+			expect(allowed).toBeUndefined();
+		}
+		const evalBlocked = await handler(
+			{ toolName: "eval", toolCallId: "t3", input: { language: "py", code: 'import subprocess\nsubprocess.run(["ssh", "host"])' } },
+			ctx,
+		);
+		expect(evalBlocked?.block).toBe(true);
+		expect(evalBlocked?.reason?.split("\n").at(-1)).toBe("help://bash/terminal");
+	});
+
+	test("does not run when write_stdin is absent", async () => {
+		const { handler, cwd } = loadPtyHook(["bash"]);
+		const ctx = { cwd, agent: { kind: "subagent" } };
+		expect(await handler({ toolName: "bash", toolCallId: "t1", input: { command: "ssh host" } }, ctx)).toBeUndefined();
 	});
 });
