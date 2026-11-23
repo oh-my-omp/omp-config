@@ -3,7 +3,7 @@ tool: eval
 name: tools
 title: Defining tools in a cell for subagents
 when: before giving subagents a fixed procedure, a shared store, or a guarded action they would otherwise improvise, or before passing `tools` to `agent()`, `workpool()` or a `task` item
-upstream: pi-coding-agent@18.18.0 src/task/eval-tools.ts, src/eval/py/prelude.py#_tool_schema, src/eval/js/shared/prelude.txt#registerTool, src/prompts/tools/eval-helpers.md, src/prompts/tools/eval-agents.md, src/prompts/tools/task.md
+upstream: pi-coding-agent@19.1.1 src/task/eval-tools.ts, src/eval/py/prelude.py#_tool_schema, src/eval/js/shared/prelude.txt#registerTool, src/task/workpool.ts, src/task/workpool-yield.ts, src/tools/eval-doc-topics.ts, src/prompts/tools/eval-helpers.md, src/prompts/tools/eval-agents.md, src/prompts/tools/task.md
 ---
 # Defining tools in a cell for subagents
 
@@ -34,7 +34,7 @@ def report(path: str, line: int, severity: Literal["low", "high"], note: str = "
 ```
 
 - `@tool(name=…, description=…)` overrides the function name and docstring. Names match `[A-Za-z_][A-Za-z0-9_]{0,63}`.
-- Annotations map to the schema: `str`, `int`, `float`, `bool`, `list[T]`, `dict[str, T]`, `Literal[…]` (enum), `T | None`. Unannotated or other types accept anything. A parameter without a default is required; a JSON-able default is shown. The schema allows no other arguments; positional-only parameters fail the definition; `*args`/`**kwargs` are not exposed.
+- Annotations map to the schema: `str`, `int`, `float`, `bool`, `list[T]`, `dict[str, T]`, `Literal[…]` (enum), `T | None`, and `Annotated[T, "description"]` (adds the field description). Unannotated or other types accept anything. A parameter without a default is required; a JSON-able default is shown. The schema allows no other arguments; positional-only parameters fail the definition; `*args`/`**kwargs` are not exposed.
 
 JavaScript, the function receives one object of arguments:
 
@@ -52,13 +52,16 @@ Always pass `parameters` in JS: without it the child sees an object with no prop
 
 ## Hand to children
 
-- `agent(prompt, tools=["report"])` / JS `agent(prompt, { tools: ["report"] })`, `workpool(agent, tools=[…])`, or `tools: […]` on a `task` item.
+- `agent(prompt, tools=["report"], model=…)` / JS `agent(prompt, { tools: ["report"], model })`, `workpool(agent, tools=[…], model=…)`, or `tools: […]` on a `task` item (`model` is accepted when `task.perCallModel` enables eval per-call models; in a workpool it applies to each worker's first turn).
+- Workpool workers reuse sessions across items by default; `eval.workpool.freshAgents: true` spawns a fresh agent per item instead. Workers report each batch item separately via `yield({ key, data })` or `yield({ key, error })`.
 - Each name must be defined when the child is spawned; otherwise the spawn fails and lists the defined names. Not available in plan mode.
 - Say in the prompt when the child must use the tool and what a result or error means; besides that, the child knows only the description and the schema.
 
 ## Calls and results
 
 - The function runs in your kernel with its working directory, files and state, also for an `isolated` child: it does not run in the child's worktree. Calls are served while your cell is blocked in the child's `.wait()`.
+- Async Python tools share one dedicated tool event loop (separate from the cell loop), so a module-level `asyncio.Lock()` serializes concurrent calls from multiple subagents; cancelling a caller cancels its async tool coroutine, while sync tools run to completion.
 - A string return reaches the child as is; any other value as JSON. A raised exception returns its message to the child as a tool error; your kernel keeps running, so raise with the correction you want the child to make.
 - The schema is fixed when the child starts; the body is looked up by name on each call, so redefining the function changes what running children get, and undefining it makes their calls fail.
 - Resetting the kernel, or a JS cell timeout (which resets the JS VM), removes every tool of that kernel; calls from running children then fail. After your session ends, calls report the tool unavailable.
+- Full signatures and host-native prelude docs live in `help://eval/helpers`, `help://eval/agents`, `help://eval/judge`, and enabled preludes such as `help://eval/dsm` and `help://eval/ratchet`.
