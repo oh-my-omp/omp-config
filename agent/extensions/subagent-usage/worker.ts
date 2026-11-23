@@ -3,11 +3,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import type { CustomEntry, ModelChangeEntry, ModelUsageEntry, SessionInitEntry, SessionMessageEntry } from "@oh-my-pi/pi-coding-agent";
+import { errorText } from "../_shared/errors.ts";
+import { HOUR_MS, modelKey } from "./keys.ts";
 import type { DispatchRecord, ScannedDispatch, ScanRequest, ScanResult } from "./records.ts";
 
 declare const self: Worker;
 
-const HOUR_MS = 3_600_000;
 const CHUNK = 1 << 20;
 const CACHE_VERSION = 4;
 
@@ -137,18 +138,14 @@ function tailMark(file: string, position: number): string {
 	return Bun.hash(tail.subarray(0, length)).toString(16);
 }
 
+type LineState = "start" | "undecided" | "wanted" | "skipping";
+
 function forEachWantedLine(file: string, offset: number, isWanted: (head: string) => boolean, onLine: (line: string) => void): number {
 	const fd = fs.openSync(file, "r");
 	try {
 		let position = offset;
+		let state: LineState = "start";
 		let carried = 0;
-		let wanted: boolean | undefined;
-		let skipping = false;
-		const reset = (): void => {
-			carried = 0;
-			wanted = undefined;
-			skipping = false;
-		};
 		const keep = (view: Buffer, start: number, end: number): void => {
 			const length = end - start;
 			if (carried + length > spill.length) {
@@ -161,11 +158,43 @@ function forEachWantedLine(file: string, offset: number, isWanted: (head: string
 			view.copy(spill, carried, start, end);
 			carried += length;
 		};
-		const judge = (): void => {
-			wanted = isWanted(spill.toString("utf8", 0, Math.min(carried, HEAD_BYTES)));
-			if (wanted) return;
+		const finish = (emit: boolean): LineState => {
+			if (emit) onLine(spill.toString("utf8", 0, carried));
 			carried = 0;
-			skipping = true;
+			return "start";
+		};
+		const step = (view: Buffer, start: number, end: number, whole: boolean): LineState => {
+			switch (state) {
+				case "skipping":
+					return whole ? "start" : "skipping";
+				case "wanted":
+					keep(view, start, end);
+					return whole ? finish(true) : "wanted";
+				case "undecided":
+					keep(view, start, end);
+					if (!whole && carried < HEAD_BYTES) return "undecided";
+					if (isWanted(spill.toString("utf8", 0, Math.min(carried, HEAD_BYTES)))) return whole ? finish(true) : "wanted";
+					carried = 0;
+					return whole ? "start" : "skipping";
+				case "start": {
+					const length = end - start;
+					if (!whole && length < HEAD_BYTES) {
+						keep(view, start, end);
+						return "undecided";
+					}
+					if (!isWanted(view.toString("utf8", start, start + Math.min(length, HEAD_BYTES)))) return whole ? "start" : "skipping";
+					if (whole) {
+						onLine(view.toString("utf8", start, end));
+						return "start";
+					}
+					keep(view, start, end);
+					return "wanted";
+				}
+				default: {
+					const never: never = state;
+					return never;
+				}
+			}
 		};
 		for (;;) {
 			const read = fs.readSync(fd, chunk, 0, CHUNK, position);
@@ -175,48 +204,12 @@ function forEachWantedLine(file: string, offset: number, isWanted: (head: string
 			let start = 0;
 			while (start < read) {
 				const newline = view.indexOf(NEWLINE, start);
-				const end = newline === -1 ? read : newline;
-				const length = end - start;
-				if (skipping) {
-					if (newline !== -1) {
-						skipping = false;
-						wanted = undefined;
-					}
-				} else if (carried > 0) {
-					if (length > 0) {
-						keep(view, start, end);
-						if (wanted === undefined && carried >= HEAD_BYTES) judge();
-					}
-					if (newline !== -1) {
-						if (wanted === undefined && !skipping) judge();
-						if (wanted === true) onLine(spill.toString("utf8", 0, carried));
-						reset();
-					}
-				} else if (length > 0) {
-					const whole = newline !== -1;
-					if (!whole && length < HEAD_BYTES) {
-						keep(view, start, end);
-					} else if (isWanted(view.toString("utf8", start, start + Math.min(length, HEAD_BYTES)))) {
-						wanted = true;
-						if (whole) {
-							onLine(view.toString("utf8", start, end));
-							reset();
-						} else {
-							keep(view, start, end);
-						}
-					} else if (!whole) {
-						skipping = true;
-					}
-				}
+				state = step(view, start, newline === -1 ? read : newline, newline !== -1);
 				if (newline === -1) break;
 				start = newline + 1;
 			}
 		}
-		if (carried > 0) {
-			if (wanted === undefined) judge();
-			if (wanted === true) onLine(spill.toString("utf8", 0, carried));
-			reset();
-		}
+		step(chunk, 0, 0, true);
 		return position;
 	} finally {
 		fs.closeSync(fd);
@@ -262,7 +255,7 @@ function charge(state: Aggregate, provider: string, model: string, timestamp: un
 	if (!(cost > 0)) return;
 	const at = typeof timestamp === "string" ? Date.parse(timestamp) : Number.NaN;
 	if (Number.isFinite(at)) {
-		const key = `${provider}/${model}\t${Math.floor(at / HOUR_MS)}`;
+		const key = `${modelKey({ provider, id: model })}\t${Math.floor(at / HOUR_MS)}`;
 		state.spend.set(key, (state.spend.get(key) ?? 0) + cost);
 	}
 	if (state.agent !== undefined) state.costByProvider[provider] = (state.costByProvider[provider] ?? 0) + cost;
@@ -277,7 +270,7 @@ function fold(line: string, state: Aggregate): void {
 			if (message.role !== "assistant") return;
 			const { provider, model } = message;
 			if (typeof provider !== "string" || typeof model !== "string") return;
-			if (state.agent !== undefined) state.models.add(`${provider}/${model}`);
+			if (state.agent !== undefined) state.models.add(modelKey({ provider, id: model }));
 			charge(state, provider, model, entry.timestamp, costOf(message.usage));
 			return;
 		}
@@ -393,7 +386,7 @@ function scan(request: ScanRequest): ScanResult {
 			const slot = String(hour);
 			series[slot] = (series[slot] ?? 0) + usd;
 		}
-		if (aggregate.dispatch !== null) dispatches.push(Object.assign(aggregate.dispatch, { file }));
+		if (aggregate.dispatch !== null) dispatches.push({ ...aggregate.dispatch, file });
 	}
 	return { kind: "done", spend, dispatches, files: transcripts.length, parsed };
 }
@@ -403,7 +396,7 @@ self.onmessage = (event: MessageEvent<ScanRequest>) => {
 	try {
 		result = scan(event.data);
 	} catch (error) {
-		result = { kind: "failed", reason: error instanceof Error ? error.message : String(error) };
+		result = { kind: "failed", reason: errorText(error) };
 	}
 	postMessage(result);
 };

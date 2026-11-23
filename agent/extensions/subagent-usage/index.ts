@@ -17,7 +17,6 @@ import { defineSettings, readSettings, writeSetting } from "../_shared/plugin-se
 import { availableAgents, bindAgent, rootSession } from "./agents.ts";
 import { type CalibrationOutcome, calibrate, QUOTA_MAX_AGE_MS, QUOTA_WINDOW_MS, scanTranscripts, stopCalibration } from "./calibrate.ts";
 import { channelsOf } from "./channels.ts";
-import type { ScanResult } from "./records.ts";
 import { formatReport } from "./report.ts";
 import { observedCosts, type Target } from "./samples.ts";
 import { type Calibration, calibrationPath, deleteStoredData, readCalibration } from "./store.ts";
@@ -28,6 +27,8 @@ const DESCRIPTION = [
 	"How many more times each available subagent can be dispatched before the provider quota of its first bound model runs out (the agent-side /usage).",
 	"Output groups agents into POOLs that share one quota: counts inside a pool are alternatives, never add them. PENDING, NOT TRACKED and NO ESTIMATE mean no number, not unlimited.",
 ].join("\n");
+
+const ENABLE_HINT = "Only a human can enable it with /subagent-usage on; do not retry.";
 
 const params = z.object({});
 const consentSection = defineSettings(import.meta.dir, z.object({ enabled: z.boolean() }).strict());
@@ -47,14 +48,15 @@ async function setToolActive(pi: ExtensionAPI, active: boolean): Promise<void> {
 	await applyActiveTools(pi, tools);
 }
 
-async function freshCalibration(session: AgentSession): Promise<CalibrationOutcome> {
+type Fresh = CalibrationOutcome | { readonly kind: "cached"; readonly calibration: Calibration };
+
+async function freshCalibration(session: AgentSession): Promise<Fresh> {
 	const stored = readCalibration();
 	switch (stored.kind) {
 		case "ready":
-			if (Date.now() - stored.calibration.quota.generatedAt < QUOTA_MAX_AGE_MS) {
-				return { kind: "ready", calibration: stored.calibration, files: 0, parsed: 0 };
-			}
-			return calibrate(session, "quota", consented);
+			return Date.now() - stored.calibration.quota.generatedAt < QUOTA_MAX_AGE_MS
+				? { kind: "cached", calibration: stored.calibration }
+				: calibrate(session, "quota", consented);
 		case "none":
 		case "invalid":
 			return calibrate(session, "full", consented);
@@ -65,30 +67,35 @@ async function freshCalibration(session: AgentSession): Promise<CalibrationOutco
 	}
 }
 
-function text(value: string, isError?: true): ToolResult {
-	return isError ? { content: [{ type: "text", text: value }], isError } : { content: [{ type: "text", text: value }] };
+function failure(value: string): ToolResult {
+	return { content: [{ type: "text", text: value }], isError: true };
+}
+
+async function projectSessionDirs(session: AgentSession): Promise<readonly string[] | undefined> {
+	const root = rootSession(session);
+	const rootFile = root.sessionManager.getSessionFile();
+	let sessionDir: string;
+	if (rootFile) sessionDir = dirname(rootFile);
+	else if (isLocalAgentSession(root)) sessionDir = root.sessionManager.getSessionDir();
+	else return undefined;
+	return [sessionDir, ...(await worktreeSessionDirs(root.sessionManager.getCwd(), sessionDir))];
 }
 
 async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
-	if (!(await consented())) {
-		return text("subagent_usage is disabled on this machine. Only a human can enable it with /subagent-usage on; do not retry.", true);
-	}
+	if (!(await consented())) return failure(`subagent_usage is disabled on this machine. ${ENABLE_HINT}`);
 	const session = callerSession(ctx);
-	if (!session) return text("subagent_usage: could not resolve the calling session in the agent registry.", true);
-	const outcome = await freshCalibration(session);
-	let calibration: Calibration;
-	let scanned: ScanResult | undefined;
-	switch (outcome.kind) {
+	if (!session) return failure("subagent_usage: could not resolve the calling session in the agent registry.");
+	const fresh = await freshCalibration(session);
+	switch (fresh.kind) {
+		case "cached":
 		case "ready":
-			calibration = outcome.calibration;
-			scanned = outcome.scan;
 			break;
 		case "declined":
-			return text("subagent_usage was disabled while calibrating. Only a human can enable it with /subagent-usage on; do not retry.", true);
+			return failure(`subagent_usage was disabled while calibrating. ${ENABLE_HINT}`);
 		case "failed":
-			return text(`subagent_usage: calibration failed (${outcome.reason}). Report this to the user; do not retry.`, true);
+			return failure(`subagent_usage: calibration failed (${fresh.reason}). Report this to the user; do not retry.`);
 		default: {
-			const never: never = outcome;
+			const never: never = fresh;
 			return never;
 		}
 	}
@@ -103,33 +110,26 @@ async function runTool(ctx: ExtensionContext): Promise<ToolResult> {
 			? [{ agent: binding.agent, provider: binding.model.provider, modelId: binding.model.id, thinking: binding.thinking }]
 			: [],
 	);
-	const root = rootSession(session);
-	const rootFile = root.sessionManager.getSessionFile();
-	const sessionDir = rootFile ? dirname(rootFile) : isLocalAgentSession(root) ? root.sessionManager.getSessionDir() : undefined;
-	if (sessionDir === undefined) {
-		return text(
+	const dirs = await projectSessionDirs(session);
+	if (dirs === undefined) {
+		return failure(
 			"subagent_usage: the root session runs in another OMP thread and has no persisted transcript. Report this to the user; do not retry.",
-			true,
 		);
 	}
-	const dirs = [sessionDir, ...(await worktreeSessionDirs(root.sessionManager.getCwd(), sessionDir))];
-	if (!(await consented())) {
-		return text("subagent_usage was disabled. Only a human can enable it with /subagent-usage on; do not retry.", true);
-	}
-	const [scan, reports] = await Promise.all([scanned ?? scanTranscripts(), session.fetchUsageReports()]);
+	if (!(await consented())) return failure(`subagent_usage was disabled. ${ENABLE_HINT}`);
+	const [scan, reports] = await Promise.all([fresh.kind === "ready" ? fresh.scan : scanTranscripts(), session.fetchUsageReports()]);
 	if (scan.kind === "failed")
-		return text(`subagent_usage: transcript scan failed (${scan.reason}). Report this to the user; do not retry.`, true);
+		return failure(`subagent_usage: transcript scan failed (${scan.reason}). Report this to the user; do not retry.`);
 	const now = Date.now();
-	const history = session.modelRegistry.authStorage.usage.history({ sinceMs: now - QUOTA_WINDOW_MS });
 	const report = formatReport({
 		now,
-		calibration,
+		calibration: fresh.calibration,
 		bindings,
 		costs: observedCosts(scan.dispatches, dirs, targets, now),
 		reports: reports ?? [],
-		history,
+		history: session.modelRegistry.authStorage.usage.history({ sinceMs: now - QUOTA_WINDOW_MS }),
 	});
-	return text(report);
+	return { content: [{ type: "text", text: report }] };
 }
 
 function outcomeMessage(outcome: CalibrationOutcome): { readonly message: string; readonly level: "info" | "warning" } {
@@ -139,8 +139,8 @@ function outcomeMessage(outcome: CalibrationOutcome): { readonly message: string
 			const missing = Object.keys(outcome.calibration.quota.missing).length;
 			return {
 				message: tr(
-					`subagent-usage: calibrated from ${outcome.files} transcripts (${outcome.parsed} read this time); ${constants} quota limits priced, ${missing} still pending.`,
-					`subagent-usage：已用 ${outcome.files} 个会话文件完成校准（本次读取 ${outcome.parsed} 个）；${constants} 个额度窗口可换算，${missing} 个暂缺数据。`,
+					`subagent-usage: calibrated from ${outcome.scan.files} transcripts (${outcome.scan.parsed} read this time); ${constants} quota limits priced, ${missing} still pending.`,
+					`subagent-usage：已用 ${outcome.scan.files} 个会话文件完成校准（本次读取 ${outcome.scan.parsed} 个）；${constants} 个额度窗口可换算，${missing} 个暂缺数据。`,
 				),
 				level: "info",
 			};
@@ -165,7 +165,18 @@ function outcomeMessage(outcome: CalibrationOutcome): { readonly message: string
 	}
 }
 
-function calibrateInBackground(pi: ExtensionAPI, ctx: ExtensionCommandContext, session: AgentSession): void {
+function calibrateInBackground(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
+	const session = callerSession(ctx);
+	if (!session) {
+		ctx.ui.notify(
+			tr(
+				"subagent-usage: could not resolve this session in the agent registry; calibration did not start.",
+				"subagent-usage：无法在 agent 注册表中找到当前会话，校准未启动。",
+			),
+			"warning",
+		);
+		return;
+	}
 	ctx.ui.notify(
 		tr(
 			"subagent-usage: calibrating from this machine's sessions and usage history in the background…",
@@ -215,8 +226,7 @@ async function handleCommand(pi: ExtensionAPI, args: string, ctx: ExtensionComma
 		case "on": {
 			await writeSetting("subagent-usage.enabled", true);
 			await setToolActive(pi, true);
-			const session = callerSession(ctx);
-			if (session) calibrateInBackground(pi, ctx, session);
+			calibrateInBackground(pi, ctx);
 			return;
 		}
 		case "off":
@@ -239,8 +249,7 @@ async function handleCommand(pi: ExtensionAPI, args: string, ctx: ExtensionComma
 				);
 				return;
 			}
-			const session = callerSession(ctx);
-			if (session) calibrateInBackground(pi, ctx, session);
+			calibrateInBackground(pi, ctx);
 			return;
 		}
 		case "reset":
@@ -282,7 +291,7 @@ export default function subagentUsage(pi: ExtensionAPI): void {
 				return await runTool(ctx);
 			} catch (error) {
 				pi.logger.warn("subagent-usage: tool failed", { error: errorText(error) });
-				return text(`subagent_usage failed: ${errorText(error)}`, true);
+				return failure(`subagent_usage failed: ${errorText(error)}`);
 			}
 		},
 	});

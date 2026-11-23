@@ -1,9 +1,13 @@
 import type { UsageHistoryEntry, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Binding } from "./agents.ts";
+import { QUOTA_WINDOW_DAYS } from "./calibrate.ts";
 import type { Channel } from "./channels.ts";
-import { type AccountQuota, accountKeysOf, historyByProvider, type Binding as LimitBinding, poolFor } from "./quota.ts";
+import { modelKey, priorAgentKey, priorModelKey } from "./keys.ts";
+import { type AccountQuota, accountKeysOf, historyByProvider, type LimitBinding, poolFor } from "./quota.ts";
 import { OBSERVED_WINDOW_DAYS } from "./samples.ts";
 import type { Calibration } from "./store.ts";
+
+const LOW_CONFIDENCE_SAMPLES = 3;
 
 type Estimate =
 	| { readonly kind: "observed"; readonly usd: number; readonly n: number }
@@ -21,10 +25,11 @@ function estimate(binding: Resolved, costs: readonly number[], dispatch: Calibra
 				: costs.reduce((sum, cost) => sum + cost, 0) / costs.length;
 		return { kind: "observed", usd, n: costs.length };
 	}
-	const modelKey = `${binding.model.provider}/${binding.model.id}|${binding.thinking ?? ""}`;
-	const byAgent = dispatch.byAgent[`${binding.agent}|${modelKey}`];
+	const model = modelKey(binding.model);
+	const thinking = binding.thinking ?? "";
+	const byAgent = dispatch.byAgent[priorAgentKey(binding.agent, model, thinking)];
 	if (byAgent) return { kind: "prior", usd: byAgent.usd, n: byAgent.n, basis: "agent" };
-	const byModel = dispatch.byModel[modelKey];
+	const byModel = dispatch.byModel[priorModelKey(model, thinking)];
 	if (byModel) return { kind: "prior", usd: byModel.usd, n: byModel.n, basis: "model" };
 	return { kind: "none" };
 }
@@ -50,14 +55,14 @@ function resetText(resetsAt: number | undefined, now: number): string {
 	return `resets in ${days > 0 ? `${days}d ` : ""}${hours}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-function day(at: number): string {
+function utcMinute(at: number): string {
 	return new Date(at).toISOString().slice(0, 16).replace("T", " ");
 }
 
 function costText(cost: Exclude<Estimate, { kind: "none" }>): string {
 	switch (cost.kind) {
 		case "observed":
-			return `${money(cost.usd)} per dispatch (average of ${cost.n} dispatch${cost.n === 1 ? "" : "es"} in this project in the last ${OBSERVED_WINDOW_DAYS} days${cost.n < 3 ? ", low confidence" : ""})`;
+			return `${money(cost.usd)} per dispatch (average of ${cost.n} dispatch${cost.n === 1 ? "" : "es"} in this project in the last ${OBSERVED_WINDOW_DAYS} days${cost.n < LOW_CONFIDENCE_SAMPLES ? ", low confidence" : ""})`;
 		case "prior":
 			return `${money(cost.usd)} per dispatch (no dispatch in this project in the last ${OBSERVED_WINDOW_DAYS} days; this machine's average over ${cost.n} dispatches of ${cost.basis === "agent" ? "this agent on this model" : "any agent on this model"})`;
 		default: {
@@ -67,15 +72,12 @@ function costText(cost: Exclude<Estimate, { kind: "none" }>): string {
 	}
 }
 
-function pooledLine(
-	label: string,
-	cost: Estimate,
-	accounts: readonly AccountQuota[],
-	now: number,
-): { readonly line: string } | { readonly pending: string } {
+type PooledLine = { readonly kind: "line"; readonly text: string } | { readonly kind: "pending"; readonly reason: string };
+
+function pooledLine(label: string, cost: Estimate, accounts: readonly AccountQuota[], now: number): PooledLine {
 	const priced = accounts.flatMap((account) => (account.kind === "priced" ? [account] : []));
 	const pending = accounts.flatMap((account) => (account.kind === "pending" ? [account.reason] : []));
-	if (priced.length === 0) return { pending: pending.join("; ") };
+	if (priced.length === 0) return { kind: "pending", reason: pending.join("; ") };
 	const left = priced.reduce((sum, account) => sum + account.usd, 0);
 	const tightest = priced.reduce<LimitBinding | undefined>(
 		(lowest, account) => (lowest === undefined || account.binding.remainingFraction < lowest.remainingFraction ? account.binding : lowest),
@@ -90,9 +92,9 @@ function pooledLine(
 	]
 		.filter((part) => part !== "")
 		.join("; ");
-	if (cost.kind === "none") return { line: `  - NO ESTIMATE ${label}: no local dispatch on this first model yet. ${quota}.` };
+	if (cost.kind === "none") return { kind: "line", text: `  - NO ESTIMATE ${label}: no local dispatch on this first model yet. ${quota}.` };
 	const count = cost.usd > 0 ? `about ${Math.floor(left / cost.usd)} dispatches` : "zero-priced model, count not computable";
-	return { line: `  - ${label}: ${count}. ${costText(cost)}. ${quota}.` };
+	return { kind: "line", text: `  - ${label}: ${count}. ${costText(cost)}. ${quota}.` };
 }
 
 export function formatReport(input: ReportInput): string {
@@ -118,14 +120,24 @@ export function formatReport(input: ReportInput): string {
 		}
 		const cost = estimate(binding, input.costs.get(binding.agent) ?? [], calibration.dispatch);
 		const line = pooledLine(label, cost, pool.accounts, now);
-		if ("pending" in line) {
-			pending.push(`  - ${label}: ${line.pending}`);
-			continue;
+		switch (line.kind) {
+			case "pending":
+				pending.push(`  - ${label}: ${line.reason}`);
+				break;
+			case "line": {
+				const lines = pools.get(binding.model.provider) ?? [];
+				lines.push(line.text);
+				pools.set(binding.model.provider, lines);
+				break;
+			}
+			default: {
+				const never: never = line;
+				return never;
+			}
 		}
-		pools.set(binding.model.provider, [...(pools.get(binding.model.provider) ?? []), line.line]);
 	}
 	const sections = [
-		`subagent_usage at ${day(now)} UTC. Per-dispatch averages from ${day(calibration.dispatch.generatedAt)}; quota conversion from ${day(calibration.quota.generatedAt)} over the preceding 21 days.`,
+		`subagent_usage at ${utcMinute(now)} UTC. Per-dispatch averages from ${utcMinute(calibration.dispatch.generatedAt)}; quota conversion from ${utcMinute(calibration.quota.generatedAt)} over the preceding ${QUOTA_WINDOW_DAYS} days.`,
 		"RULES:",
 		"- Agents under one POOL share one quota. Their counts are alternatives: never add them up.",
 		"- Each count assumes that pool's whole remaining quota goes to that one agent. Refills at window resets are not counted.",

@@ -82,10 +82,10 @@ function accountKeyOf(report: UsageReport, own: readonly UsageHistoryEntry[]): s
 	return onlyAccountKey(own, (entry) => entry.recordedAt === report.fetchedAt);
 }
 
-export type Binding = { readonly label: string; readonly remainingFraction: number; readonly resetsAt: number | undefined };
+export type LimitBinding = { readonly label: string; readonly remainingFraction: number; readonly resetsAt: number | undefined };
 
 export type AccountQuota =
-	| { readonly kind: "priced"; readonly usd: number; readonly binding: Binding }
+	| { readonly kind: "priced"; readonly usd: number; readonly binding: LimitBinding }
 	| { readonly kind: "pending"; readonly reason: string };
 
 type Pool = { readonly kind: "unreported" } | { readonly kind: "accounts"; readonly accounts: readonly AccountQuota[] };
@@ -99,7 +99,7 @@ function accountQuota(
 	now: number,
 ): AccountQuota {
 	if (accountKey === undefined) return { kind: "pending", reason: "account not matched to its usage history" };
-	let cheapest: { usd: number; binding: Binding } | undefined;
+	let cheapest: { usd: number; binding: LimitBinding } | undefined;
 	for (const limit of reserveUsageLimits(strategy, report, { modelId })) {
 		const resetsAt = limit.window?.resetsAt;
 		if (resetsAt !== undefined && resetsAt <= now && report.fetchedAt < resetsAt) continue;

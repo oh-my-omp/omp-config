@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "@oh-my-pi/pi-coding-agent";
 import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
+import { errorText } from "../_shared/errors.ts";
 
 export function calibrationPath(): string {
 	return path.join(getAgentDir(), "subagent-usage", "calibration.json");
@@ -49,7 +50,7 @@ export function readCalibration(): StoredCalibration {
 	try {
 		raw = JSON.parse(text);
 	} catch (error) {
-		return { kind: "invalid", reason: `not JSON: ${error instanceof Error ? error.message : String(error)}` };
+		return { kind: "invalid", reason: `not JSON: ${errorText(error)}` };
 	}
 	const parsed = calibrationSchema.safeParse(raw);
 	return parsed.success ? { kind: "ready", calibration: parsed.data } : { kind: "invalid", reason: parsed.error.message };

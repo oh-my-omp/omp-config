@@ -61,6 +61,7 @@
 - Aligned `agent/SYSTEM_TEMPLATE.md`, `agent/config.yml` (`tools.commandDocs: inline`), `REPLACE-SYSTEM-default.yml` and `extensions-last/README*.md` with OMP 19.1.0 tool commands (`{{toolCommandDocs}}`, `help://read/urls`, `help://eval/agents`, command form for `report_issue`) and removed the obsolete `xd://` device replacement rule
 - Simplified `task-completion-judge`: tool-call arguments, results and the submission are serialized natively and cut to their limits (60% head + 40% tail) instead of streamed through a custom bounded JSON writer, the shared context is located in the joined system prompt, the worker's Todo list is read once per review, and the bounce decision is one exhaustive function
 - Updated `tool-topics` to index and rewrite OMP 19.1.0 command-mounted tool sections (`## <tool>` / `<tool> — …` / `Usage:`) while skipping catalog-only entries without drift warnings, migrated `SURFACE-*`/`TOPIC-*` docs and `tool-policy-nag/pty.ts` from `xd://` to `help://` and command forms, and removed dead `xd://bash` device-write channel branches and their obsolete tests
+- Made `subagent-usage` reuse a full calibration that is already running instead of running a second full calibration after it
 
 ### Removed
 
@@ -71,6 +72,7 @@
 ### Fixed
 
 - Stopped `child-memory-warning` from repeating the same sampling-failure warning every 2 s when the failure happens after a successful process snapshot, and described `child-memory-warning.thresholdGiB` as phys_footprint instead of resident memory
+- Made `/subagent-usage on` and `recalibrate` warn when the calling session cannot be resolved instead of silently starting no calibration, and stopped `subagent-usage` from counting a dispatch whose resolved model has no `provider/` prefix under a truncated provider name
 - Registered the `repo-rules` compaction handoff under its real `omp-config/repo-rules` source and stopped its summary claim from calling root `AGENTS.md`/`CLAUDE.md` "non-root" or naming internal helper calls
 - Made `input-polish` try the next model when a rewrite comes back empty or drops or changes an attachment/paste placeholder, instead of failing on the first model
 - Kept the `input-polish` preview box inside terminals narrower than 22 columns and sized it from the TUI's own terminal height
