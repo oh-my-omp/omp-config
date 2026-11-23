@@ -22,6 +22,9 @@
 
 ### Changed
 
+- Simplified `tool-policy-nag`: the pty lane and the heuristic analyzers share one grammar-driven option parser, sudo/doas/run0 unwrapping and `-c` shell-string detection; the persisted nag state holds only the hit and reminder counts; the shell scanner is split into module-level steps
+- Made `tool-policy-nag`'s `form` fallback under `detector: jev` count and remind only while the intent lane cannot run, so judged calls no longer use up its reminder budget
+- Made `tool-policy-nag`'s untraced risk check count a step behind `timeout`/`env`/`nice`/`nohup`/`xargs` as the program it runs, count `sudo`/`doas`/`run0` together with the program they run, and stop counting shell keywords (`for`, `if`, `do`, `done`, `{`) as external programs
 - Moved the `wt` and `wt_remove` call flow (queueing until the turn ends, two-call `confirm`, what invalidates `confirm`, cancellation) from the tool descriptions into native `help://wt/lifecycle` and `help://wt_remove/lifecycle` topics, and made `wt-tool` read worktree status, branch and HEAD through the native git binding instead of `git` subprocesses
 - Made `user-prompt-inject` decide which root-session messages count as user requests and `ask` answers with one rule for both a root session in the same thread and one read from its transcript file, validate transcript records against OMP's message shapes, and read the transcript through a single file handle per model call
 - Detected `repo-rules` single-file `cat`/`head`/`tail` reads in `bash` with OMP's own shell lexer (`tools/shell-tokenize`) instead of a private tokenizer, and found the repository root for rule scanning with OMP's `findRepoRoot`
@@ -77,6 +80,7 @@
 
 ### Fixed
 
+- Fixed `tool-policy-nag` risk and masked-failure reminders breaking their quoted command when it contains a run of three or more backticks
 - Fixed `omomp-lang` logging that the launch environment overrides `omomp-lang.language` when an inherited `OMOMP_LANG` (for example in an `omp` started from an omp shell) names the configured language
 - Fixed `omp-config-autoupdate.exclude` entries not protecting the numbered `APPEND-SYSTEM-model-NN.md` targets when the updater splits a legacy `APPEND_SYSTEM_MODEL.md` on Windows, and made the updater's excluded-path safety check see move and split targets there
 - Fixed `wt_remove` treating a subagent working in a worktree subdirectory whose name starts with `..` as outside the worktree, and a finished queued `wt` request resetting a newer request queued by the next session to idle

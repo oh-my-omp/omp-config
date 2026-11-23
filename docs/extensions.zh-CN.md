@@ -115,7 +115,7 @@
 
   一行里任一简单命令命中即拒绝——管道每段、`$(…)`、`;`/`&&`/`||` 链与 shell 包装器后面的命令——类别取首个命中。eval 只检查自身名字与字面参数的启动：Python `subprocess.run`/`call`/`check_call`/`check_output`/`Popen`、`os.system`、`os.popen`、`!cmd`、`%sx`、`%system`、`%%bash`、`sh`；JS 不含 `${}` 的 `Bun.$`、`Bun.spawn`/`spawnSync`、`sh` 助手（`sh("…")`、`globalThis.sh`、模板标签）、child_process `exec`/`execSync`/`spawn`/`spawnSync`/`execFile`/`execFileSync`。读不出、非字面或改名的启动放行；本通道不检查 `xargs`、`find -exec`、`parallel` 与 shell `eval`。拒绝信息仅含简短原因（程序、类别、规则）与指向 `exec_command` / `help://exec_command/pty-io` 的引导，不含插件操作配方。被拒调用不进入其他通道，不计数、提醒、判定或记标记；所有通道都不解析或判定插件调用。闭合规则表是 `pty.ts` 的 `RULES`，命中与不命中样例见 `ci/tool-policy-nag-pty.test.ts`。轻量模式停用整个扩展。
 - **`detector: heuristic`**：使用 `form.*` 设置，忽略 `intent.*`（不发 JUDGE 请求，不读 `INTENT-policy.md`）。每次检查前在主会话运行时设置层写入 `bashInterceptor.enabled = false`（子代理透读主会话设置，同样关闭拦截器），切换 detector 或 `session_shutdown` 时清除该覆盖。
-- **`detector: jev`**：使用 `intent.*` 设置，保持 `config.yml` 的 `bashInterceptor.enabled`（拦截器开启时，`form`、`intent`、`risk` 跳过 `bash`，仍检查 `eval`；`pty` 先于该跳过运行）。`form.*` 设置同步计数，仅在 `intent` 无法运行时提醒（spec 缺失、无效、停用或没有判定模型）；判定失败或 90 秒超时只按原因警告一次，不触发 `form`。
+- **`detector: jev`**：使用 `intent.*` 设置，保持 `config.yml` 的 `bashInterceptor.enabled`（拦截器开启时，`form`、`intent`、`risk` 跳过 `bash`，仍检查 `eval`；`pty` 先于该跳过运行）。`form.*` 设置仅在 `intent` 无法运行时计数并提醒（spec 缺失、无效、停用或没有判定模型）；判定失败或 90 秒超时只按原因警告一次，不触发 `form`。
 - **提醒通道依据的事实**：执行到结束的前台 `bash` 调用带有 pi-shell 的执行轨迹（`details.trace`，omp 18.17.0 起；由 `trace.ts` 解析）。对这类调用，`form` 通道判定实际执行过的命令——展开后的 argv，包括函数体和 `eval` 内容，不包括被 `&&`/`||` 短路或未进入的分支——只有当它所在管道的输出到达了结果时，列目录、读文件、搜索才计数；重定向仍取自每条命令自己的源文本，因为轨迹不记录重定向。结束前就转到后台的调用（`async: true`、自动转后台、steer）、`eval` cell，以及没有完整轨迹的调用，仍按下面的文本规则判定。超时的调用由 `form` 按它留下的轨迹判定。
 - **`form` 通道（命令语法解析与计数）**：
   - 解析管道、`;`/`&&`/`||`、引号、heredoc、`$(…)`/反引号与重定向（含 `>|`、`&>`），剥离 `NAME=value` 前缀、保留字（`if`/`elif`/`while`/`until`/`do`/`then`/`else`/`!`/`{`）及包装命令（`timeout`、`env`、`nice`、`stdbuf`、`time`、`nohup`、`command`、`exec`、`builtin`、`xargs`）；跳过 `sudo`/`doas`/`su`/`ssh`，对字面量 `bash|sh|zsh|dash -c '…'`、`eval '…'` 与 `find -exec … ;` 的内部命令直接分析。
@@ -126,7 +126,7 @@
 - **`risk` 通道（仅检查 shell，不调模型）**：`risk.enabled` 开启时运行。
   - 对有轨迹的前台 `bash` 调用：至少执行了两步，且其中一步静默失败时提醒。静默失败指：退出码非零，且没有被任何东西检查（不是 `if`/`elif`/`while`/`until` 的条件，没有被 `!` 取反，不是 `&&`/`||` 的非末尾操作数，不在 `$(…)` 里，也没有被下一条命令以 `$?` 读取），不是管道非末段的 SIGPIPE（141），自己也没有任何输出。函数调用、`eval`、`source`、`.` 由其内部步骤代为判定。长度、程序数和写操作不再计入：任意长度的全成功链不算风险，`command -v x || echo missing`、`command -v x; echo "$?"`、`yes | head -1` 不算，`git status; command -v x; echo done` 算。提醒列出每个静默失败步骤展开后的 argv 和退出码。
   - 被截断的调用（超时、取消）不判定。
-  - 其他 shell 调用（转后台、无轨迹）沿用文本门槛：简单命令段数 $\ge$ `minCommands`（`4`）或总字符数 $\ge$ `minChars`（`600`）；排除 shell 内置命令（`cd`、`echo`、`printf`、`export`、`source`、`test`、`mkdir` 等）后调用的不同外部程序数 $\ge$ `minPrograms`（`3`）；且包含写入动作（重定向/`tee`/就地编辑，`rm`/`cp`/`mv`/`chmod`/`dd`/`tar -c|-x`/`rsync`/`scp`/`make`/`install`/`patch`，或 `git`、`gh`、`docker`、`kubectl`、`orb`、`npm`/`pnpm`/`yarn`/`bun`、`tofu`/`terraform`、`curl`、`wget` 的写子命令）。命中时发一条提醒列出段数、字符数、外部程序和写步骤。
+  - 其他 shell 调用（转后台、无轨迹）沿用文本门槛：简单命令段数 $\ge$ `minCommands`（`4`）或总字符数 $\ge$ `minChars`（`600`）；`timeout`/`env`/`nice`/`nohup`/`xargs` 等包装命令按其后实际运行的程序计，`sudo`/`doas`/`run0` 本身与其运行的程序都计入，排除 shell 关键字与内置命令（`for`、`if`、`done`、`cd`、`echo`、`printf`、`export`、`source`、`test`、`mkdir` 等）后调用的不同外部程序数 $\ge$ `minPrograms`（`3`）；且包含写入动作（重定向/`tee`/就地编辑，`rm`/`cp`/`mv`/`chmod`/`dd`/`tar -c|-x`/`rsync`/`scp`/`make`/`install`/`patch`，或 `git`、`gh`、`docker`、`kubectl`、`orb`、`npm`/`pnpm`/`yarn`/`bun`、`tofu`/`terraform`、`curl`、`wget` 的写子命令）。命中时发一条提醒列出段数、字符数、外部程序和写步骤。
 
 ### watchdog-agent
 
