@@ -19,6 +19,7 @@ import {
 } from "./rules.ts";
 import { touchedFiles } from "./touched.ts";
 
+const SOURCE = "omp-config/repo-rules";
 function renderContextFiles(files: readonly DeliveredContextFile[]): string[] {
 	if (files.length === 0) return [];
 	const parts = [
@@ -40,14 +41,19 @@ function blockInner(systemPrompt: readonly string[], tag: string): string | unde
 	return undefined;
 }
 
-function promptBlocks(systemPrompt: readonly string[]): { readonly generic: string | undefined; readonly domain: string | undefined } {
+interface PromptBlocks {
+	readonly generic: string | undefined;
+	readonly domain: string | undefined;
+}
+
+function promptBlocks(systemPrompt: readonly string[]): PromptBlocks {
 	return { generic: blockInner(systemPrompt, "generic-rules"), domain: blockInner(systemPrompt, "domain-rules") };
 }
 
 interface PromptView {
 	readonly parts: readonly string[];
 	readonly normalized: string;
-	readonly blocks: { readonly generic: string | undefined; readonly domain: string | undefined };
+	readonly blocks: PromptBlocks;
 }
 
 function promptView(previous: PromptView | undefined, systemPrompt: readonly string[]): PromptView {
@@ -63,57 +69,36 @@ function promptView(previous: PromptView | undefined, systemPrompt: readonly str
 
 function rulebookLine(domain: string, name: string): string | undefined {
 	const prefix = `- ${name} (`;
-	for (let start = 0; start < domain.length; ) {
-		if (domain.startsWith(prefix, start)) {
-			const end = domain.indexOf("\n", start);
-			return end < 0 ? domain.slice(start) : domain.slice(start, end);
-		}
-		const next = domain.indexOf("\n", start);
-		if (next < 0) return undefined;
-		start = next + 1;
-	}
-	return undefined;
+	return domain.split("\n").find((line) => line.startsWith(prefix));
 }
 
 function renderUnscoped(rules: readonly UnscopedRule[], prompt: string): string[] {
-	let always: UnscopedRule[] | undefined;
-	let listed: { readonly rule: UnscopedRule; readonly description: string }[] | undefined;
+	const always: UnscopedRule[] = [];
+	const listed: string[] = [];
 	for (const rule of rules) {
-		switch (rule.kind.kind) {
+		switch (rule.mode.kind) {
 			case "always":
-				if (prompt.includes(rule.kind.normalizedBody)) break;
-				if (always === undefined) always = [];
-				always.push(rule);
+				if (!prompt.includes(rule.mode.normalizedBody)) always.push(rule);
 				break;
 			case "catalog":
-				if (prompt.includes(`rule://${rule.name}`)) break;
-				if (listed === undefined) listed = [];
-				listed.push({ rule, description: rule.kind.description });
+				if (!prompt.includes(`rule://${rule.name}`)) listed.push(`- ${rule.name}: ${rule.mode.description} — \`${rule.displayPath}\``);
 				break;
 			default: {
-				const exhaustive: never = rule.kind;
-				throw new Error(`Unexpected rule kind: ${JSON.stringify(exhaustive)}`);
+				const exhaustive: never = rule.mode;
+				throw new Error(`Unexpected rule mode: ${JSON.stringify(exhaustive)}`);
 			}
 		}
 	}
-	if (always === undefined && listed === undefined) return [];
+	if (always.length === 0 && listed.length === 0) return [];
 	const parts = [
 		"Rule files discovered outside OMP's native rule directories; they apply in this session like the rules of the system prompt.",
 	];
-	for (const rule of always ?? []) {
-		parts.push(`<rule path="${escapeAttr(rule.displayPath)}">`, rule.body, "</rule>");
-	}
-	if (listed !== undefined) {
-		parts.push("Read these with the `read` tool when they become relevant:");
-		for (const { rule, description } of listed) parts.push(`- ${rule.name}: ${description} — \`${rule.displayPath}\``);
-	}
+	for (const rule of always) parts.push(`<rule path="${escapeAttr(rule.displayPath)}">`, rule.body, "</rule>");
+	if (listed.length > 0) parts.push("Read these with the `read` tool when they become relevant:", ...listed);
 	return [parts.join("\n")];
 }
 
-function renderNativeScopes(
-	rules: readonly ScopedRule[],
-	blocks: { readonly generic: string | undefined; readonly domain: string | undefined },
-): string[] {
+function renderNativeScopes(rules: readonly ScopedRule[], blocks: PromptBlocks): string[] {
 	const parts: string[] = [];
 	for (const rule of rules) {
 		if (rule.origin.kind !== "native") continue;
@@ -155,9 +140,11 @@ function rulesDelta(
 	scoped: readonly ScopedRule[],
 	prompt: PromptView,
 ): Delta {
-	const sections = renderContextFiles(files);
-	if (catalog.unscoped.length > 0) sections.push(...renderUnscoped(catalog.unscoped, prompt.normalized));
-	if (scoped.some((rule) => rule.origin.kind === "native")) sections.push(...renderNativeScopes(scoped, prompt.blocks));
+	const sections = [
+		...renderContextFiles(files),
+		...renderUnscoped(catalog.unscoped, prompt.normalized),
+		...renderNativeScopes(scoped, prompt.blocks),
+	];
 	return sections.length === 0 ? { kind: "none" } : { kind: "text", body: sections.join("\n\n") };
 }
 
@@ -202,13 +189,12 @@ function renderRules(rules: readonly ScopedRule[], files: readonly string[]): st
 }
 
 function pathScopedContext(
-	rules: RuleCatalog,
 	scoped: readonly ScopedRule[],
 	event: ToolResultEvent,
 	ctx: ExtensionContext,
 	claimDeliveries: (ctx: ExtensionContext, markers: readonly string[]) => boolean[],
 ): string | undefined {
-	if (rules.scoped.length === 0) return undefined;
+	if (scoped.length === 0) return undefined;
 	const files = touchedFiles(event, ctx.cwd);
 	if (files.length === 0) return undefined;
 	const targets = files.map(matchTarget);
@@ -223,21 +209,15 @@ export default function repoRules(pi: ExtensionAPI): void {
 	let scope: ContextFileScope | null = null;
 	let view: PromptView | undefined;
 	const claimDeliveries = createContextDelivery(pi);
-	const deltas = createDeltaStream("omp-config/repo-rules");
+	const deltas = createDeltaStream(SOURCE);
 	registerCompactHandoff(
 		pi,
 		defineStatefulHarnessHandoff({
-			pluginId: "omp-config/repo-rules",
-			captureState: () => ({
-				scopedCount: catalog?.scoped.length ?? 0,
-				unscopedCount: catalog?.unscoped.length ?? 0,
-			}),
+			pluginId: SOURCE,
+			captureState: (): true => true,
 			renderCompactPromptClaim: () =>
-				'Non-root `AGENTS.md`/`CLAUDE.md`, unscoped rule files, and `<path-scoped-rules>` are automatically re-delivered post-compaction by `repo-rules` (`createDeltaStream("repo-rules")` + `createContextDelivery`) — NEVER restate `AGENTS.md`, `CLAUDE.md`, or `<path-scoped-rules>` in the summary.',
-			renderPostCompactInjection: () => ({
-				source: "repo-rules",
-				delivery: "plugin-managed",
-			}),
+				"`AGENTS.md`/`CLAUDE.md` context files, unscoped rule files and `<path-scoped-rules>` are re-delivered by `repo-rules` after compaction — NEVER restate them in the summary.",
+			renderPostCompactInjection: () => ({ source: SOURCE, delivery: "plugin-managed" }),
 		}),
 	);
 	pi.on("turn_start", () => {
@@ -245,18 +225,25 @@ export default function repoRules(pi: ExtensionAPI): void {
 		view = undefined;
 	});
 
+	const promptFor = (systemPrompt: readonly string[]): PromptView => {
+		view = promptView(view, systemPrompt);
+		return view;
+	};
+
 	const contextFilesFor = async (ctx: ExtensionContext): Promise<DeliveredContextFile[]> => {
-		if (scope?.cwd !== path.resolve(ctx.cwd)) scope = await contextFileScope(ctx.cwd);
+		const cwd = path.resolve(ctx.cwd);
+		if (scope?.cwd !== cwd) scope = await contextFileScope(cwd);
 		return await loadContextFiles(scope, ctx.agent.kind);
 	};
 
 	const rulesFor = async (ctx: ExtensionContext): Promise<RuleCatalog> => {
-		if (catalog?.cwd === ctx.cwd) return catalog;
-		const collected = await collectRules(ctx.cwd);
+		const cwd = path.resolve(ctx.cwd);
+		if (catalog?.cwd === cwd) return catalog;
+		const collected = await collectRules(cwd);
 		catalog = collected.catalog;
 		const { unscoped, scoped } = collected.catalog;
 		if (unscoped.length + scoped.length > 0) {
-			pi.logger.info(`repo-rules: ${unscoped.length} unscoped and ${scoped.length} path-scoped rule file(s) for ${ctx.cwd}`);
+			pi.logger.info(`repo-rules: ${unscoped.length} unscoped and ${scoped.length} path-scoped rule file(s) for ${cwd}`);
 		}
 		if (collected.unbased.length > 0) {
 			pi.logger.warn("repo-rules: path-scoped rules without a base directory are not loaded", { files: collected.unbased });
@@ -276,9 +263,7 @@ export default function repoRules(pi: ExtensionAPI): void {
 		if (event.reason === "revive") return;
 		try {
 			const [rules, files] = await Promise.all([rulesFor(ctx), contextFilesFor(ctx)]);
-			const prompt = promptView(view, event.systemPrompt);
-			view = prompt;
-			return deltas.atPrompt(ctx, rulesDelta(rules, files, activeScoped(rules, ctx), prompt));
+			return deltas.atPrompt(ctx, rulesDelta(rules, files, activeScoped(rules, ctx), promptFor(event.systemPrompt)));
 		} catch (error) {
 			pi.logger.warn("repo-rules: cannot deliver rules", { error: errorText(error) });
 		}
@@ -287,30 +272,23 @@ export default function repoRules(pi: ExtensionAPI): void {
 	pi.on("tool_result", async (event, ctx) => {
 		let rules: RuleCatalog;
 		let files: DeliveredContextFile[];
+		let scoped: readonly ScopedRule[];
 		try {
 			[rules, files] = await Promise.all([rulesFor(ctx), contextFilesFor(ctx)]);
+			scoped = activeScoped(rules, ctx);
 		} catch (error) {
 			pi.logger.warn("repo-rules: failed to collect rules", { error: errorText(error) });
 			return;
 		}
-		let scoped: readonly ScopedRule[];
-		try {
-			scoped = activeScoped(rules, ctx);
-		} catch (error) {
-			pi.logger.warn("repo-rules: cannot deliver rules", { error: errorText(error) });
-			return;
-		}
 		const parts: string[] = [];
 		try {
-			const prompt = promptView(view, ctx.getSystemPrompt());
-			view = prompt;
-			const delta = deltas.afterTools(ctx, rulesDelta(rules, files, scoped, prompt));
+			const delta = deltas.afterTools(ctx, rulesDelta(rules, files, scoped, promptFor(ctx.getSystemPrompt())));
 			if (delta !== undefined) parts.push(delta.additionalContext);
 		} catch (error) {
 			pi.logger.warn("repo-rules: cannot deliver rules", { error: errorText(error) });
 		}
 		try {
-			const pathScoped = pathScopedContext(rules, scoped, event, ctx, claimDeliveries);
+			const pathScoped = pathScopedContext(scoped, event, ctx, claimDeliveries);
 			if (pathScoped !== undefined) parts.push(pathScoped);
 		} catch (error) {
 			pi.logger.warn("repo-rules: failed to load path-scoped rules", { error: errorText(error) });

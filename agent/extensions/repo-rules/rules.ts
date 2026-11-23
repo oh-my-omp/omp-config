@@ -3,12 +3,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { z } from "@oh-my-pi/pi-coding-agent";
 import { loadCapability } from "@oh-my-pi/pi-coding-agent/capability";
+import { findRepoRoot } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "@oh-my-pi/pi-coding-agent/capability/rule";
 
 const PROJECT_RULE_DIRS = [".claude/rules", ".agents/rules", ".pi/rules"] as const;
 const USER_RULE_DIR = path.join(os.homedir(), ".claude", "rules");
 
-type UnscopedKind =
+type UnscopedMode =
 	| { readonly kind: "always"; readonly normalizedBody: string }
 	| { readonly kind: "catalog"; readonly description: string };
 
@@ -21,7 +22,7 @@ export interface UnscopedRule {
 	readonly name: string;
 	readonly displayPath: string;
 	readonly body: string;
-	readonly kind: UnscopedKind;
+	readonly mode: UnscopedMode;
 }
 
 type NativePlacement = { readonly kind: "always"; readonly content: string } | { readonly kind: "rulebook" } | { readonly kind: "dropped" };
@@ -117,14 +118,8 @@ function realpathOr(filePath: string): string {
 	}
 }
 
-function repoRoot(cwd: string): string {
-	let dir = cwd;
-	for (;;) {
-		if (fs.existsSync(path.join(dir, ".git"))) return dir;
-		const parent = path.dirname(dir);
-		if (parent === dir) return cwd;
-		dir = parent;
-	}
+function toPosix(filePath: string): string {
+	return filePath.split(path.sep).join("/");
 }
 
 interface ScanDir {
@@ -132,8 +127,7 @@ interface ScanDir {
 	readonly base: string;
 }
 
-function scanDirs(cwd: string): ScanDir[] {
-	const root = repoRoot(cwd);
+function scanDirs(cwd: string, root: string): ScanDir[] {
 	const dirs: ScanDir[] = [];
 	let dir = cwd;
 	for (;;) {
@@ -192,9 +186,8 @@ function readText(filePath: string): string | null {
 }
 
 function compilePattern(pattern: string): PathGlob {
-	if (pattern.startsWith("~/"))
-		return { kind: "absolute", glob: new Bun.Glob(path.posix.join(os.homedir().split(path.sep).join("/"), pattern.slice(2))) };
-	if (path.isAbsolute(pattern)) return { kind: "absolute", glob: new Bun.Glob(pattern.split(path.sep).join("/")) };
+	if (pattern.startsWith("~/")) return { kind: "absolute", glob: new Bun.Glob(path.posix.join(toPosix(os.homedir()), pattern.slice(2))) };
+	if (path.isAbsolute(pattern)) return { kind: "absolute", glob: new Bun.Glob(toPosix(pattern)) };
 	return { kind: "relative", glob: new Bun.Glob(pattern) };
 }
 
@@ -202,7 +195,7 @@ function scopedRule(id: string, name: string, body: string, patterns: string[], 
 	return { id, name, body, patterns, globs: patterns.map(compilePattern), base, realBase: realpathOr(base), origin };
 }
 
-function classifyScanned(frontmatter: Frontmatter): { readonly kind: "scoped"; readonly patterns: string[] } | UnscopedKind {
+function classifyScanned(frontmatter: Frontmatter): { readonly kind: "scoped"; readonly patterns: string[] } | UnscopedMode {
 	switch (frontmatter.kind) {
 		case "absent":
 		case "invalid":
@@ -222,13 +215,13 @@ function classifyScanned(frontmatter: Frontmatter): { readonly kind: "scoped"; r
 	}
 }
 
-function collectScanned(cwd: string, unscoped: Map<string, UnscopedRule>, scoped: Map<string, ScopedRule>): void {
+function collectScanned(cwd: string, root: string, unscoped: Map<string, UnscopedRule>, scoped: Map<string, ScopedRule>): void {
 	const names = new Set<string>();
-	for (const { dir, base } of scanDirs(cwd)) {
+	for (const { dir, base } of scanDirs(cwd, root)) {
 		for (const filePath of markdownFiles(dir)) {
 			const id = realpathOr(filePath);
 			const name = path.basename(filePath).replace(/\.mdc?$/, "");
-			if (names.has(name) || scoped.has(id)) continue; // nearest directory wins
+			if (names.has(name) || scoped.has(id)) continue;
 			const raw = readText(filePath);
 			if (raw === null || raw.trim() === "") continue;
 			const frontmatter = parseFrontmatter(raw);
@@ -239,18 +232,15 @@ function collectScanned(cwd: string, unscoped: Map<string, UnscopedRule>, scoped
 				scoped.set(id, scopedRule(id, name, frontmatter.body, placement.patterns, base, { kind: "scan" }));
 				continue;
 			}
-			unscoped.set(name, { id, name, displayPath: path.relative(cwd, filePath) || filePath, body: frontmatter.body, kind: placement });
+			unscoped.set(name, { id, name, displayPath: path.relative(cwd, filePath) || filePath, body: frontmatter.body, mode: placement });
 		}
 	}
 }
 
 function nativeBase(rule: Rule, cwd: string): string | null {
 	if (rule._source.level !== "project") return cwd;
-	let dir = cwd;
-	for (;;) {
-		const rel = path.relative(dir, rule.path);
-		const first = rel.split(path.sep)[0] ?? "";
-		if (rel !== "" && !path.isAbsolute(rel) && first !== ".." && first.startsWith(".")) return dir;
+	for (let dir = cwd; ; ) {
+		if (relativeInside(dir, rule.path)?.startsWith(".") === true) return dir;
 		const parent = path.dirname(dir);
 		if (parent === dir) break;
 		dir = parent;
@@ -263,7 +253,8 @@ function nativeBase(rule: Rule, cwd: string): string | null {
 
 function nativeDefersToPaths(rule: Rule): boolean {
 	if (rule._source.provider === BUILTIN_DEFAULTS_PROVIDER_ID) return false;
-	return !((rule.condition?.length ?? 0) > 0 || (rule.astCondition?.length ?? 0) > 0 || rule.question !== undefined);
+	if ((rule.condition?.length ?? 0) > 0 || (rule.astCondition?.length ?? 0) > 0) return false;
+	return rule.question === undefined;
 }
 
 interface NativeCollection {
@@ -312,7 +303,7 @@ async function collectNative(cwd: string, scoped: Map<string, ScopedRule>): Prom
 export async function collectRules(cwd: string): Promise<{ readonly catalog: RuleCatalog; readonly unbased: readonly string[] }> {
 	const unscoped = new Map<string, UnscopedRule>();
 	const scoped = new Map<string, ScopedRule>();
-	collectScanned(cwd, unscoped, scoped);
+	collectScanned(cwd, (await findRepoRoot(cwd)) ?? cwd, unscoped, scoped);
 	const { placed, unbased } = await collectNative(cwd, scoped);
 	const catalog: RuleCatalog = {
 		cwd,
@@ -326,7 +317,7 @@ function relativeInside(base: string, file: string): string | null {
 	const rel = path.relative(base, file);
 	if (rel === "" || path.isAbsolute(rel)) return null;
 	if (rel.split(path.sep)[0] === "..") return null;
-	return rel.split(path.sep).join("/");
+	return toPosix(rel);
 }
 
 export interface MatchTarget {
@@ -345,27 +336,18 @@ export function ruleMatches(rule: ScopedRule, target: MatchTarget): boolean {
 }
 
 function matchesInside(rule: ScopedRule, base: string, target: string): boolean {
-	let relative: string | null = null;
-	let relativeKnown = false;
-	let absolute: string | undefined;
-	for (const { kind, glob } of rule.globs) {
+	const relative = relativeInside(base, target);
+	const absolute = toPosix(target);
+	return rule.globs.some(({ kind, glob }) => {
 		switch (kind) {
 			case "relative":
-				if (!relativeKnown) {
-					relative = relativeInside(base, target);
-					relativeKnown = true;
-				}
-				if (relative !== null && glob.match(relative)) return true;
-				break;
+				return relative !== null && glob.match(relative);
 			case "absolute":
-				absolute ??= target.split(path.sep).join("/");
-				if (glob.match(absolute)) return true;
-				break;
+				return glob.match(absolute);
 			default: {
 				const exhaustive: never = kind;
 				throw new Error(`Unexpected pattern kind: ${String(exhaustive)}`);
 			}
 		}
-	}
-	return false;
+	});
 }

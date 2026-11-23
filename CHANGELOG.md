@@ -22,6 +22,7 @@
 
 ### Changed
 
+- Detected `repo-rules` single-file `cat`/`head`/`tail` reads in `bash` with OMP's own shell lexer (`tools/shell-tokenize`) instead of a private tokenizer, and found the repository root for rule scanning with OMP's `findRepoRoot`
 - Made `model-compaction` refuse a rule whose `thresholdTokens` does not fit below the model's largest context window, deciding tier changes and fit with OMP's own `planModelCompactionPoint`, and name the rule file instead of a list index in refusal warnings
 - Updated the shared copy of `compact-handoff.ts` to oh-my-omp/shared@db9dde4.
 - Gated every `task-split-check` and `task-completion-judge` model attempt on the session's spend cap (a refusal ends the check without trying the next model) and recorded each reply's usage in the calling session's ledger, its cost in the session's spend and a chat telemetry span
@@ -67,6 +68,7 @@
 
 ### Fixed
 
+- Registered the `repo-rules` compaction handoff under its real `omp-config/repo-rules` source and stopped its summary claim from calling root `AGENTS.md`/`CLAUDE.md` "non-root" or naming internal helper calls
 - Made `input-polish` try the next model when a rewrite comes back empty or drops or changes an attachment/paste placeholder, instead of failing on the first model
 - Kept the `input-polish` preview box inside terminals narrower than 22 columns and sized it from the TUI's own terminal height
 - Stopped a second `input-polish` session attach that raced the first from leaving an extra key handler subscribed
