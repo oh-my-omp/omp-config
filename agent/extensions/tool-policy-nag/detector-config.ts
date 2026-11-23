@@ -29,6 +29,8 @@ export type Lanes = {
 };
 export type LaneWarning = { readonly en: string; readonly zh: string };
 
+export type LoadedLanes = { readonly lanes: Lanes; readonly warnings: readonly LaneWarning[] };
+
 const NO_LANES: Lanes = { tool: null, risk: null, pty: null };
 
 const positiveCount = (label: string) =>
@@ -73,7 +75,7 @@ function lanesOf(value: z.infer<typeof lanesSchema>): Lanes {
 	}
 }
 
-export async function loadLanes(cwd: string): Promise<{ readonly lanes: Lanes; readonly warnings: readonly LaneWarning[] }> {
+export async function loadLanes(cwd: string): Promise<LoadedLanes> {
 	const loaded = await readSettings(settingsSection, { kind: "project", cwd });
 	switch (loaded.kind) {
 		case "ok":

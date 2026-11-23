@@ -37,6 +37,8 @@ type EvalViolation = {
 	readonly target: string;
 };
 
+export type Violation = EvalViolation | ShellViolation;
+
 const XARGS_OPERAND = "<xargs>";
 
 type Stage = { readonly program: ShellProgram | null; readonly analysis: Analysis; readonly xargs: boolean };
@@ -137,7 +139,7 @@ export function detectCommandViolations(commands: readonly SimpleCommand[], reac
 	return violations;
 }
 
-export function detectShellViolations(command: string): ShellViolation[] {
+function detectShellViolations(command: string): ShellViolation[] {
 	return detectCommandViolations(splitSimpleCommands(command), () => true);
 }
 
