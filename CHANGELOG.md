@@ -88,6 +88,7 @@
 - Fixed `harness_restart` not telling the agent about a failed restart when recording the failure in the session threw
 - Fixed `tool-policy-nag` risk and masked-failure reminders breaking their quoted command when it contains a run of three or more backticks
 - Fixed `omomp-lang` logging that the launch environment overrides `omomp-lang.language` when an inherited `OMOMP_LANG` (for example in an `omp` started from an omp shell) names the configured language
+- Fixed `lang-nag` judging code instead of prose when a reply ends with a fenced code block: fenced blocks are dropped before the last paragraph is taken
 - Fixed `omp-config-autoupdate.exclude` entries not protecting the numbered `APPEND-SYSTEM-model-NN.md` targets when the updater splits a legacy `APPEND_SYSTEM_MODEL.md` on Windows, and made the updater's excluded-path safety check see move and split targets there
 - Fixed `wt_remove` leaving the removed worktree registered as `prunable` in `git worktree list`, treating a subagent working in a worktree subdirectory whose name starts with `..` as outside the worktree, and a finished queued `wt` request resetting a newer request queued by the next session to idle
 - Accepted a UTF-8 byte-order mark at the start of `APPEND-SYSTEM-*.md`, `PROMPT-INJECT-*.md`, `TURN-JUDGE-*.md`, `WATCHDOG-*.md` and `COMPACTION-*.md` files instead of rejecting them for missing frontmatter (`append-system-model` already did), and read their `enabled` flag through one shared check
