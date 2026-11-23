@@ -11,6 +11,7 @@ import {
 	TextJudge,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { isGatewayCredentialsExhausted } from "@oh-my-pi/pi-ai/judgment";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { cfgNoJudge, cfgOffline } from "@oh-my-pi/pi-coding-agent/config/auxiliary-model-policy";
 import { formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
@@ -61,7 +62,7 @@ export function openJudge(ctx: ExtensionContext, purpose: string): JudgeOpen {
 	};
 }
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@19.0.0 src/judgment/index.ts#allowedJudgeCandidates
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.1 src/judgment/index.ts#allowedJudgeCandidates
 // Filters the @<purpose> role models instead of the host's judge-role chain candidates.
 function allowedCandidates(models: readonly RoleModel[], settings: Settings, sessionModel: Model | undefined): RoleModel[] {
 	if (!cfgNoJudge.get(settings) && !cfgOffline.get(settings)) return [...models];
@@ -70,8 +71,8 @@ function allowedCandidates(models: readonly RoleModel[], settings: Settings, ses
 }
 // @upstream-end
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@19.0.0 src/judgment/index.ts#rejectionOf
-// Classifies the chat attempt's errorStatus (chatTextBackend's thrown error carries none); rejections live in a module WeakMap per registry (the host's registry key is private); the gateway 502 case is not ported.
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.1 src/judgment/index.ts#rejectionOf
+// Checks both thrown errors (isGatewayCredentialsExhausted / AIError.status) and the chat attempt's errorStatus/errorMessage (chatTextBackend throws ProviderResponseError without status/code on resolved error attempts); rejections live in a module WeakMap per registry (the host's registry key is private).
 const CANDIDATE_REJECTION_COOLDOWN_MS = 5 * 60 * 1000;
 
 interface CandidateRejection {
@@ -87,7 +88,20 @@ function rejectionsOf(registry: JudgeDeps["registry"]): Map<string, CandidateRej
 	return rejections;
 }
 
-function rejectionOf(status: number | undefined): { reason: string; cooldownMs: number } | undefined {
+function rejectionOf(
+	error: unknown,
+	attemptStatus?: number,
+	attemptErrorMessage?: string,
+): { reason: string; cooldownMs: number } | undefined {
+	const status = attemptStatus ?? AIError.status(error);
+	const gatewayExhausted =
+		isGatewayCredentialsExhausted(error) ||
+		(status === 502 &&
+			((attemptErrorMessage?.includes("upstream_credentials_exhausted") ?? false) ||
+				(error instanceof Error && error.message.includes("upstream_credentials_exhausted"))));
+	if (gatewayExhausted) {
+		return { reason: "had no usable gateway credentials", cooldownMs: CANDIDATE_REJECTION_COOLDOWN_MS };
+	}
 	switch (status) {
 		case 401:
 		case 402:
@@ -106,8 +120,8 @@ function rejectionOf(status: number | undefined): { reason: string; cooldownMs: 
 // Must not become resolveJudge({ leadModel }): the host chain then falls back to the `judge` role after the
 // @<purpose> models fail and journals the attempts under role `judge`, so a purpose bound to its own models
 // silently spends on the host judge instead of failing to the caller.
-// @upstream adapted @oh-my-pi/pi-coding-agent@19.0.0 src/judgment/index.ts#ChainJudge.#withCandidate
-// Chat candidates of @<purpose> only: no image, box or native judges, no per-attempt timeout skip, no rejection listeners; a failed @<purpose> chain goes to the caller, not the host judge chain.
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.1 src/judgment/index.ts#ChainJudge.#withCandidate
+// Chat candidates of @<purpose> only: no image, box or native judges, no per-attempt timeout or CANDIDATE_TIMEOUT_COOLDOWN_MS (30s) skip (host applies those only to native candidates with a configured fallback remaining), no rejection listeners; a failed @<purpose> chain goes to the caller, not the host judge chain.
 async function judgeWithChat<Q extends Questions>(
 	deps: JudgeDeps,
 	telemetry: AgentTelemetry | undefined,
@@ -134,6 +148,7 @@ async function judgeWithChat<Q extends Questions>(
 		// Must stay outside the try: a cost-cap refusal caught there would fall through to the next candidate.
 		deps.costGate?.admit();
 		let attemptStatus: number | undefined;
+		let attemptErrorMessage: string | undefined;
 		try {
 			if (!(await registry.getApiKey(model, sessionId, { signal }))) {
 				lastFailure = `no API key for ${modelLabel(model)}`;
@@ -148,6 +163,7 @@ async function judgeWithChat<Q extends Questions>(
 				metadata,
 				onAttempt: (attempt) => {
 					attemptStatus = attempt.stopReason === "error" ? attempt.errorStatus : undefined;
+					attemptErrorMessage = attempt.stopReason === "error" ? attempt.errorMessage : undefined;
 					reportAttempt(deps, telemetry, role, attempt);
 				},
 			});
@@ -156,14 +172,14 @@ async function judgeWithChat<Q extends Questions>(
 			if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new AIError.AbortError("judgment aborted");
 			if (isAbortOrTimeout(error)) throw error;
 			lastFailure = error instanceof Error ? error.message : String(error);
-			const rejected = rejectionOf(attemptStatus);
+			const rejected = rejectionOf(error, attemptStatus, attemptErrorMessage);
 			if (rejected !== undefined) {
 				rejections.set(identity, { until: Date.now() + rejected.cooldownMs, reason: rejected.reason });
 			}
 			logger.warn("judgment prompted candidate failed", {
 				role,
 				candidate: modelLabel(model),
-				status: attemptStatus,
+				status: attemptStatus ?? AIError.status(error),
 				error: lastFailure,
 				skippedForMs: rejected === undefined ? undefined : Number.isFinite(rejected.cooldownMs) ? rejected.cooldownMs : "session",
 			});
@@ -175,7 +191,7 @@ async function judgeWithChat<Q extends Questions>(
 }
 // @upstream-end
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@19.0.0 src/judgment/index.ts#ChainJudge.#report
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.1 src/judgment/index.ts#ChainJudge.#report
 // Records every attempt, since a chat attempt is never answered from the judgment cache; the usage entry carries the attempt's role and duration.
 function reportAttempt(deps: JudgeDeps, telemetry: AgentTelemetry | undefined, role: string, attempt: AssistantMessage): void {
 	deps.costGate?.record(attempt.usage.cost.total);
@@ -202,7 +218,7 @@ function reportAttempt(deps: JudgeDeps, telemetry: AgentTelemetry | undefined, r
 }
 // @upstream-end
 
-// @upstream verbatim @oh-my-pi/pi-coding-agent@19.0.0 src/judgment/index.ts#isAbortOrTimeout
+// @upstream verbatim @oh-my-pi/pi-coding-agent@19.1.1 src/judgment/index.ts#isAbortOrTimeout
 function isAbortOrTimeout(error: unknown): boolean {
 	if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) return true;
 	return AIError.is(AIError.classify(error), AIError.Flag.Abort);
