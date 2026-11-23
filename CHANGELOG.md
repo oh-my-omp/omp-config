@@ -23,6 +23,7 @@
 ### Changed
 
 - Aligned `tool-topics` `read`, `write`, `edit`, `find`, and `grep` surface and topic docs with OMP 19.1.1: removed all `artifact://` references in favor of `local://<id>.log`, restored native `help://read/sources` and `help://read/urls` pointers and `security://` in `SURFACE-read.md`, fixed binary metadata vs explicit analysis views, web selector caching, single-column PK `WITHOUT ROWID` SQLite writes, `read-failures` / `find-coverage` / `read-summaries` trigger regexes, and updated `upstream:` headers to `pi-coding-agent@19.1.1`
+- Restored `{{intentGuidance}}` and compatible 19.1.1 workflow clauses in `agent/SYSTEM_TEMPLATE.md`, stripped the trailing space after `No TODO tracking, no progress updates.` in `REPLACE-SYSTEM-default.yml`, and aligned `agent/agents/README*.txt` and `docs/prompts-and-context*.md` with `reviewer.md` and `todo.enabled: true`
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@e84938e.
 - Renamed the installed plugins `omp-todo-more`, `omp-ask-more` and `omp-subagent-more` to `omp-todo-ng`, `omp-ask-ng` and `omp-subagent-ng`: `install-plugins.sh` specs and the updater's readiness checks point at the new repositories, and task-completion-judge names omp-todo-ng in its messages
 - Simplified `tool-policy-nag`: the pty lane and the heuristic analyzers share one grammar-driven option parser, sudo/doas/run0 unwrapping and `-c` shell-string detection; the persisted nag state holds only the hit and reminder counts; the shell scanner is split into module-level steps
@@ -46,6 +47,8 @@
 - Wrote the user-report rule (`NEVER rerun checks to doubt them`) and the compiled-code rule (`NEVER add avoidable allocation`) directly into `SYSTEM_TEMPLATE.md`, and removed the two `REPLACE-SYSTEM-default.yml` rules that rewrote these lines of this repository's own template
 - Moved `ast-top-level` onto OMP's tool-command partition for keeping `ast_grep` and `ast_edit` top-level, with the pin-failure warning telling a rejected pin write apart from a pin table OMP no longer honors and naming the tools that stay bash tool commands
 - Refreshed `bun.lock` to the `@oh-my-pi` 19.1.0 release and added the lockfile refresh to the after-upgrade steps in `docs/operations.md`
+- Refreshed `bun.lock` to the `@oh-my-pi` 19.1.1 release and updated all `// @upstream` markers across local extensions
+- Synced `agent/config.yml` `bashInterceptor.patterns` `read` and `write` rules with OMP 19.1.1 so `cat > file` and `cat >> file` redirect to `write` with the append hint instead of `read`
 - Rewrote the `AGENTS.md` Imports rule to the module-table criterion `bun run check` enforces, dropping the condition that a host subpath must have been loaded in a real omp session
 - Made sandbox `run` and `matrix` exit nonzero unless every model result is `pass`, so `untested` results now fail the command
 - Rewrote `baseUrl` in sandbox provider `models` and `modelOverrides` onto the local recorder port, sharing one target per upstream origin
@@ -110,6 +113,7 @@
 - Kept the `input-polish` preview box inside terminals narrower than 22 columns and sized it from the TUI's own terminal height
 - Stopped a second `input-polish` session attach that raced the first from leaving an extra key handler subscribed
 - Compared repo-rules context-file boundaries case-insensitively on Windows so home and repo-root paths match regardless of casing
+- Cooled down `@<purpose>` prompted judge candidates in `_shared/judge.ts` for 5 minutes on gateway 502 `upstream_credentials_exhausted` rejections, matching OMP's `resolveJudge`
 - Kept the user's enabled state and feature selection of installed plugins across updater applies and startup auto-update: a plugin whose declared spec is unchanged is refreshed with `omp plugin upgrade` instead of `omp install`, a plugin whose spec changed is reinstalled and disabled again if it was disabled, an npm plugin pinned to the recorded exact version is left as is, and a locally linked plugin is no longer installed over; a link made over an installed dependency, which the host's bun install replaces whenever any plugin is installed or upgraded, is linked again with its enable state and features restored
 - Located the shared batch context for `task-completion-judge` by the host subagent template's `⁂ Context` heading instead of a `§ Context` marker the host no longer renders
 - Judged `task-completion-judge` data yields whose `error` is a filler such as `unused`, `n/a` or `none`; the host treats these as successful results, but the judge skipped them as error yields
