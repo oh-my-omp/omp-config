@@ -10,9 +10,8 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 import { createDeltaStream, type DeltaStream } from "./context-delta.ts";
 
-// Keep process-wide coordinator identity on `Symbol.for` so separate physical copies
-// synced via `omomp-shared.json` share one registry instead of clobbering `session.compacting`.
 export const COMPACT_REGISTRY_SYMBOL = Symbol.for("omomp.shared.compactRegistry");
+export const COMPACT_HANDOFF_REVISION = 2;
 export const OMP_SNAPCOMPACT_FILE_LIMIT = 20;
 
 export type CompactExtensionAPI = Pick<ExtensionAPI, "on"> & {
@@ -31,7 +30,7 @@ export interface CompactPluginContext {
 export type PostCompactInjectionSpec =
 	| {
 			readonly source: string;
-			readonly delivery: "delta-stream" | "session-compact-message";
+			readonly delivery: "delta-stream";
 			readonly content: string;
 	  }
 	| {
@@ -92,42 +91,35 @@ export interface CapturedNoiseGuardRecord {
 }
 
 export interface PreparedCompactHandoff {
-	readonly isUpdate: boolean;
-	readonly customInstructions?: string;
 	readonly fileOpsPruneReport: FileOpsPruneReport;
 	readonly activeHandoffs: readonly CapturedHandoffRecord[];
 	readonly inactiveStatefulPluginIds: readonly string[];
 	readonly noiseGuards: readonly CapturedNoiseGuardRecord[];
-	readonly harnessProvidedBlock: string;
-	readonly noiseGuardBlock: string;
 	readonly compactingResult: SessionCompactingResult;
-}
-
-export interface DeliveredPostCompactMessage {
-	readonly pluginId: string;
-	readonly source: string;
-	readonly delivery: "delta-stream" | "session-compact-message";
-	readonly customType: string;
-	readonly display: boolean;
-	readonly attribution: "agent" | "user";
-	readonly content: string;
 }
 
 export const CORE_HARNESS_PROVIDED_CLAIMS: readonly string[] = [
 	"`omp` Core System Prompt, `<project-context>` (`<workstation>`, root `AGENTS.md`/`CLAUDE.md`, git status), tool schemas, and `<skills>` — sent out-of-band on every turn; NEVER restate coding/tool-discipline rules.",
-	"`omp` Core `<files>` — deterministically rendered by `@oh-my-pi/snapcompact` from the pruned top-20 repo-scoped `preparation.fileOps`; NEVER write prose file inventories.",
+	`\`omp\` Core \`<files>\` — deterministically rendered by \`@oh-my-pi/snapcompact\` from the pruned top-${OMP_SNAPCOMPACT_FILE_LIMIT} repo-scoped \`preparation.fileOps\`; NEVER write prose file inventories.`,
 	"`omp` Core `<eval-state-context>` & approved `<plan>` (`plan-mode-reference.md`) — re-persisted/re-inlined by host commit hooks; NEVER dump eval kernel variables or copy approved plan bodies.",
-	"`omp` Core Kept Tail (`firstKeptEntryId..leaf`, ~20k tokens) — verbatim recent turns remain directly after the summary; NEVER re-summarize what is already visible in the kept tail.",
+	"`omp` Core Kept Tail (`firstKeptEntryId..leaf`) — verbatim recent turns remain directly after the summary; NEVER re-summarize what is already visible in the kept tail.",
 ];
 
-export const NEW_COMPACTION_BASE_PROMPT = `Write a high-density semantic handoff summary of the conversation prefix above so another instance of you can seamlessly resume work into the kept recent tail.
+export const COMPACTION_PROMPT = `Write a high-density semantic handoff summary of the conversation prefix above so another instance of you can seamlessly resume work into the kept recent tail.
+
+When a \`<previous-summary>\` block appears above, update that summary with the new conversation prefix instead of starting over:
+- Collapse newly merged/landed milestones to 1 line (\`<issue/PR> @ <sha> — <caveat>\`) and drop obsolete symbol-by-symbol inventories.
+- Drop any legacy sections from \`<previous-summary>\` that violate the 5-section schema (such as \`## Constraints & Preferences\`, \`## Additional Notes\`, Todo lists, Subagent rosters, PTY tables, or hook-nag reflections).
+- Preserve all still-valid human rulings (in their original wording), negative knowledge, code anchors, and active verification state.
+
+Every \`<additional-context>\` line that starts with \`harness-provided\` names state the harness and active plugins ALREADY own and programmatically re-inject immediately after compaction: do NOT summarize, mirror, or restate any of it. Every line that starts with \`noise-guard\` is an attribution rule: synthetic \`[Developer]\` / hook messages in the transcript are automated harness supervision, NOT human user input.
 
 <critical>
 - Do NOT call any tools.
 - Output ONLY the 5-section markdown summary directly — NO XML wrapper tags (\`<analysis>\`, \`<summary>\`), NO preamble, NO closing remarks. (Use your native reasoning channel for planning; your visible output is persisted verbatim.)
 - Use ONLY the 5 headings below (omit a heading only if genuinely empty).
 - NEVER add sections such as "## Constraints & Preferences", "## Additional Notes", "## Progress", or an unbounded "### Done" symbol-by-symbol inventory.
-- Obey every exclusion in \`<harness-provided>\` and every attribution rule in \`<attribution-and-noise-guard>\` inside \`<additional-context>\` above.
+- Obey every \`harness-provided\` exclusion and every \`noise-guard\` attribution rule listed in \`<additional-context>\` above.
 - Write in concise, imperative second-person register ("Fix X", "Verify Y") — never first person ("I tried...").
 - The compaction mechanism is invisible: NEVER mention compaction, context limits, watchdogs, turn-judges, tool-policy nags, or plans to apologize/reflect.
 - Strictly preserve exact file paths, symbol signatures, line anchors, commit SHAs, branch/worktree names, and unresolved error messages.
@@ -138,7 +130,7 @@ export const NEW_COMPACTION_BASE_PROMPT = `Write a high-density semantic handoff
 ## User Intent & Session Rulings
 - Strictly real human \`role: "user"\` turns, answered \`ask\` tool decisions, and human artifact comments.
 - Capture goal shifts, explicit overrides, non-goals, and any genuinely unanswered question posed to/by the human user — ALWAYS quote or preserve explicit user rulings in their original phrasing/language (e.g., \`"改md不要重采证据"\`) alongside their operational meaning.
-- STRICT ATTRIBUTION EXCLUSION: Every rule in \`<attribution-and-noise-guard>\` overrides how a turn looks in the transcript — NEVER include automated lint nags (even when serialized as bare unprefixed text!), static repo rules, skill protocols, or system-prompt tool rules.
+- STRICT ATTRIBUTION EXCLUSION: Every \`noise-guard\` rule overrides how a turn looks in the transcript — NEVER include automated lint nags (even when serialized as bare unprefixed text!), static repo rules, skill protocols, or system-prompt tool rules.
 
 ## Decisions & Ruled-Out Approaches
 - **[Decision / Ruled-Out Path]**: Why it was chosen OR why a hypothesis/approach failed (negative knowledge to prevent repeating dead ends).
@@ -153,23 +145,12 @@ export const NEW_COMPACTION_BASE_PROMPT = `Write a high-density semantic handoff
 - Verification/evidence pass/fail ledger (exact commands run, what passed vs. failed, and which evidence records are valid vs. invalidated).
 
 ## Handoff to Kept Tail
-- Concrete immediate next action(s) bridging this compacted prefix into the ~20k-token verbatim kept tail immediately following the summary.
+- Concrete immediate next action(s) bridging this compacted prefix into the verbatim kept tail immediately following the summary.
 - Unify state across split turns so completed earlier turns never contradict the active in-flight turn in the kept tail.
 </output-schema>`;
 
-export const NEW_COMPACTION_UPDATE_PREAMBLE = `Update the existing semantic summary in <previous-summary> using the new conversation prefix above.
-- Collapse newly merged/landed milestones to 1 line (\`<issue/PR> @ <sha> — <caveat>\`) and drop obsolete symbol-by-symbol inventories.
-- Drop any legacy sections from <previous-summary> that violate the 5-section schema (such as \`## Constraints & Preferences\`, \`## Additional Notes\`, Todo lists, Subagent rosters, PTY tables, or hook-nag reflections).
-- Preserve all still-valid human rulings (in their original wording), negative knowledge, code anchors, and active verification state.`;
-
-export function buildExternalCompactionPrompt(params: { readonly isUpdate: boolean; readonly customInstructions?: string }): string {
-	const parts: string[] = [];
-	if (params.isUpdate) parts.push(NEW_COMPACTION_UPDATE_PREAMBLE);
-	parts.push(NEW_COMPACTION_BASE_PROMPT);
-	if (params.customInstructions?.trim()) {
-		parts.push(`Additional focus: ${params.customInstructions.trim()}`);
-	}
-	return parts.join("\n\n");
+function contextLine(kind: "harness-provided" | "noise-guard", source: string, text: string): string {
+	return `${kind} [${source}] ${text.replace(/\s+/g, " ").trim()}`;
 }
 
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -365,14 +346,35 @@ function eraseContribution<TState>(contribution: CompactContribution<TState>): E
 	};
 }
 
+type BarrierKind = "auto" | "manual";
+
 interface SessionCompactionState {
-	compacting: boolean;
+	barrier: BarrierKind | null;
 	deferredCallbacks: Map<string, () => void>;
 	fileOpsPruneCount: number;
 	prepared?: PreparedCompactHandoff;
 	armedCompactionId?: string;
-	pendingContextInjections: DeliveredPostCompactMessage[];
 	pendingDeltaHandoffs: CapturedHandoffRecord[];
+}
+
+interface CompactHandoffStore {
+	readonly contributions: Map<string, ErasedContribution>;
+	readonly deltaStreams: Map<string, DeltaStream>;
+	readonly attachedEvents: WeakMap<object, Set<string>>;
+	readonly prunedPreparations: WeakSet<object>;
+	readonly sessionStates: WeakMap<object, SessionCompactionState>;
+	readonly runtimeFlagsBySession: WeakMap<object, Readonly<Record<string, unknown>>>;
+}
+
+function createStore(): CompactHandoffStore {
+	return {
+		contributions: new Map(),
+		deltaStreams: new Map(),
+		attachedEvents: new WeakMap(),
+		prunedPreparations: new WeakSet(),
+		sessionStates: new WeakMap(),
+		runtimeFlagsBySession: new WeakMap(),
+	};
 }
 
 const EMPTY_PRUNE_REPORT: FileOpsPruneReport = {
@@ -385,66 +387,64 @@ const EMPTY_PRUNE_REPORT: FileOpsPruneReport = {
 	selectedPaths: [],
 };
 
-function warnHookError(pi: CompactExtensionAPI, hookName: string, error: unknown): void {
-	pi.logger?.warn?.(`compact-handoff ${hookName} hook failed`, {
-		error: error instanceof Error ? error.message : String(error),
-	});
-}
-
-function hasCustomType(messages: readonly AgentMessage[], customType: string): boolean {
-	for (const msg of messages) {
-		if (msg.role === "custom" && msg.customType === customType) return true;
+function guarded<T>(pi: CompactExtensionAPI, hookName: string, run: () => T): T | undefined {
+	try {
+		return run();
+	} catch (error) {
+		pi.logger?.warn?.(`compact-handoff ${hookName} hook failed`, {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return undefined;
 	}
-	return false;
 }
 
 export class SharedCompactCoordinator {
-	readonly #contributions = new Map<string, ErasedContribution>();
-	readonly #deltaStreams = new Map<string, DeltaStream>();
-	readonly #attachedHosts = new WeakSet<object>();
-	readonly #prunedPreparations = new WeakSet<object>();
-	readonly #sessionStates = new WeakMap<object, SessionCompactionState>();
-	readonly #runtimeFlagsBySession = new WeakMap<object, Readonly<Record<string, unknown>>>();
+	readonly revision: number = COMPACT_HANDOFF_REVISION;
+	readonly store: CompactHandoffStore;
+
+	constructor(store: CompactHandoffStore) {
+		this.store = store;
+	}
 
 	register<TState>(contribution: CompactContribution<TState>): void {
-		this.#contributions.set(contribution.pluginId, eraseContribution(contribution));
+		this.store.contributions.set(contribution.pluginId, eraseContribution(contribution));
 	}
 
 	registerStrict<TState>(contribution: CompactContribution<TState>): void {
-		if (this.#contributions.has(contribution.pluginId)) {
+		if (this.store.contributions.has(contribution.pluginId)) {
 			throw new Error(`Duplicate CompactContribution registration for pluginId="${contribution.pluginId}"`);
 		}
 		this.register(contribution);
 	}
 
 	resetForTest(): void {
-		this.#contributions.clear();
-		this.#deltaStreams.clear();
+		this.store.contributions.clear();
+		this.store.deltaStreams.clear();
 	}
 
 	listPluginIds(): readonly string[] {
-		return [...this.#contributions.keys()];
+		return [...this.store.contributions.keys()];
 	}
 
 	setRuntimeFlags(sessionManager: object, flags: Readonly<Record<string, unknown>>): void {
-		this.#runtimeFlagsBySession.set(sessionManager, flags);
+		this.store.runtimeFlagsBySession.set(sessionManager, flags);
 	}
 
 	getLastPrepared(sessionManager: object): PreparedCompactHandoff | undefined {
-		return this.#sessionStates.get(sessionManager)?.prepared;
+		return this.store.sessionStates.get(sessionManager)?.prepared;
 	}
 
 	getFileOpsPruneCount(sessionManager: object): number {
-		return this.#sessionStates.get(sessionManager)?.fileOpsPruneCount ?? 0;
+		return this.store.sessionStates.get(sessionManager)?.fileOpsPruneCount ?? 0;
 	}
 
 	isCompacting(sessionManager: object): boolean {
-		return this.#sessionStates.get(sessionManager)?.compacting === true;
+		return (this.store.sessionStates.get(sessionManager)?.barrier ?? null) !== null;
 	}
 
-	enterCompactionBarrier(sessionManager: object, signal?: AbortSignal): void {
+	enterCompactionBarrier(sessionManager: object, signal?: AbortSignal, kind: BarrierKind = "manual"): void {
 		const st = this.#getSessionState(sessionManager);
-		st.compacting = true;
+		if (st.barrier !== "auto") st.barrier = kind;
 		if (!signal) return;
 		if (signal.aborted) {
 			this.releaseCompactionBarrier(sessionManager);
@@ -455,7 +455,7 @@ export class SharedCompactCoordinator {
 
 	deferDuringCompaction(sessionManager: object, key: string, fn: () => void): boolean {
 		const st = this.#getSessionState(sessionManager);
-		if (!st.compacting) {
+		if (st.barrier === null) {
 			fn();
 			return false;
 		}
@@ -464,9 +464,9 @@ export class SharedCompactCoordinator {
 	}
 
 	releaseCompactionBarrier(sessionManager: object): number {
-		const st = this.#sessionStates.get(sessionManager);
+		const st = this.store.sessionStates.get(sessionManager);
 		if (!st) return 0;
-		st.compacting = false;
+		st.barrier = null;
 		if (st.deferredCallbacks.size === 0) return 0;
 		const queued = [...st.deferredCallbacks.values()];
 		st.deferredCallbacks.clear();
@@ -475,37 +475,40 @@ export class SharedCompactCoordinator {
 	}
 
 	#getSessionState(sessionManager: object): SessionCompactionState {
-		let state = this.#sessionStates.get(sessionManager);
+		let state = this.store.sessionStates.get(sessionManager);
 		if (!state) {
 			state = {
-				compacting: false,
+				barrier: null,
 				deferredCallbacks: new Map(),
 				fileOpsPruneCount: 0,
-				pendingContextInjections: [],
 				pendingDeltaHandoffs: [],
 			};
-			this.#sessionStates.set(sessionManager, state);
+			this.store.sessionStates.set(sessionManager, state);
 		}
 		return state;
 	}
 
 	#getDeltaStream(source: string): DeltaStream {
-		let stream = this.#deltaStreams.get(source);
+		let stream = this.store.deltaStreams.get(source);
 		if (!stream) {
 			stream = createDeltaStream(source);
-			this.#deltaStreams.set(source, stream);
+			this.store.deltaStreams.set(source, stream);
 		}
 		return stream;
 	}
 
-	#handleBeforeCompact(event: SessionBeforeCompactEvent, ctx: ExtensionContext): undefined {
+	handleAutoCompactionStart(ctx: ExtensionContext): void {
+		this.enterCompactionBarrier(ctx.sessionManager, undefined, "auto");
+	}
+
+	handleBeforeCompact(event: SessionBeforeCompactEvent, ctx: ExtensionContext): undefined {
 		this.enterCompactionBarrier(ctx.sessionManager, event.signal);
 		const st = this.#getSessionState(ctx.sessionManager);
 		const prefixMessages = [...event.preparation.messagesToSummarize, ...event.preparation.turnPrefixMessages];
 
 		let fileOpsPruneReport: FileOpsPruneReport;
-		if (!this.#prunedPreparations.has(event.preparation)) {
-			this.#prunedPreparations.add(event.preparation);
+		if (!this.store.prunedPreparations.has(event.preparation)) {
+			this.store.prunedPreparations.add(event.preparation);
 			fileOpsPruneReport = prunePreparationFileOpsInPlace(event.preparation.fileOps, prefixMessages, ctx.cwd);
 			st.fileOpsPruneCount += 1;
 		} else {
@@ -518,83 +521,52 @@ export class SharedCompactCoordinator {
 				branchEntries: event.branchEntries,
 				messagesToSummarize: prefixMessages,
 				extensionCtx: ctx,
-				runtimeFlags: this.#runtimeFlagsBySession.get(ctx.sessionManager),
+				runtimeFlags: this.store.runtimeFlagsBySession.get(ctx.sessionManager),
 			},
-			{
-				isUpdate: Boolean(event.preparation.previousSummary),
-				customInstructions: event.customInstructions,
-				fileOpsPruneReport,
-			},
+			fileOpsPruneReport,
 		);
 		return undefined;
 	}
 
-	#handleCompacting(event: SessionCompactingEvent, ctx: ExtensionContext): SessionCompactingResult | undefined {
+	handleCompacting(event: SessionCompactingEvent, ctx: ExtensionContext): SessionCompactingResult {
 		this.enterCompactionBarrier(ctx.sessionManager);
 		const st = this.#getSessionState(ctx.sessionManager);
 		if (!st.prepared) {
-			const entries = ctx.sessionManager.getEntries();
-			const hasPriorCompaction = entries.some((entry) => entry.type === "compaction");
 			st.prepared = this.prepareSnapshot(
 				{
 					cwd: ctx.cwd,
-					branchEntries: entries,
+					branchEntries: ctx.sessionManager.getEntries(),
 					messagesToSummarize: event.messages,
 					extensionCtx: ctx,
-					runtimeFlags: this.#runtimeFlagsBySession.get(ctx.sessionManager),
+					runtimeFlags: this.store.runtimeFlagsBySession.get(ctx.sessionManager),
 				},
-				{ isUpdate: hasPriorCompaction, fileOpsPruneReport: EMPTY_PRUNE_REPORT },
+				EMPTY_PRUNE_REPORT,
 			);
 		}
 		return st.prepared.compactingResult;
 	}
 
-	#handleSessionCompact(event: SessionCompactEvent, ctx: ExtensionContext): void {
-		const st = this.#sessionStates.get(ctx.sessionManager);
+	handleSessionCompact(event: SessionCompactEvent, ctx: ExtensionContext): void {
+		const st = this.store.sessionStates.get(ctx.sessionManager);
 		if (st?.prepared && st.armedCompactionId !== event.compactionEntry.id) {
 			st.armedCompactionId = event.compactionEntry.id;
-			st.pendingContextInjections = [];
-			st.pendingDeltaHandoffs = [];
-			for (const handoff of st.prepared.activeHandoffs) {
-				if (handoff.injection.delivery === "session-compact-message") {
-					st.pendingContextInjections.push({
-						pluginId: handoff.pluginId,
-						source: handoff.injection.source,
-						delivery: "session-compact-message",
-						customType: handoff.injection.source,
-						display: false,
-						attribution: "agent",
-						content: `<system-reminder source="${handoff.injection.source}">\n${handoff.injection.content}\n</system-reminder>`,
-					});
-				} else if (handoff.injection.delivery === "delta-stream") {
-					st.pendingDeltaHandoffs.push(handoff);
-				}
-			}
+			st.pendingDeltaHandoffs = st.prepared.activeHandoffs.filter((handoff) => handoff.injection.delivery === "delta-stream");
 		}
 		this.releaseCompactionBarrier(ctx.sessionManager);
 	}
 
-	#handleContext(messages: readonly AgentMessage[], ctx: ExtensionContext): { messages: AgentMessage[] } | undefined {
-		const st = this.#sessionStates.get(ctx.sessionManager);
-		if (!st || st.pendingContextInjections.length === 0) return undefined;
-		const toInsert = st.pendingContextInjections.filter((msg) => !hasCustomType(messages, msg.customType));
-		if (toInsert.length === 0) return undefined;
-		const nextMessages = [...messages];
-		const insertAt = computeSafePostCompactInsertIndex(nextMessages);
-		const spliced: AgentMessage[] = toInsert.map((msg) => ({
-			role: "custom",
-			customType: msg.customType,
-			content: msg.content,
-			display: msg.display,
-			attribution: msg.attribution,
-			timestamp: Date.now(),
-		}));
-		nextMessages.splice(insertAt, 0, ...spliced);
-		return { messages: nextMessages };
+	handleAutoCompactionEnd(ctx: ExtensionContext): void {
+		this.releaseCompactionBarrier(ctx.sessionManager);
 	}
 
-	#handleBeforeAgentStart(ctx: ExtensionContext) {
-		const st = this.#sessionStates.get(ctx.sessionManager);
+	handleAgentStart(ctx: ExtensionContext): void {
+		if (this.store.sessionStates.get(ctx.sessionManager)?.barrier === "manual") {
+			this.releaseCompactionBarrier(ctx.sessionManager);
+		}
+	}
+
+	handleBeforeAgentStart(ctx: ExtensionContext) {
+		const st = this.store.sessionStates.get(ctx.sessionManager);
 		if (!st || st.pendingDeltaHandoffs.length === 0) return undefined;
 		const pending = st.pendingDeltaHandoffs;
 		st.pendingDeltaHandoffs = [];
@@ -619,77 +591,55 @@ export class SharedCompactCoordinator {
 
 	attachToHost(pi: CompactExtensionAPI, hostKey?: object): void {
 		const key = hostKey ?? (typeof pi.events === "object" && pi.events !== null ? pi.events : pi);
-		if (this.#attachedHosts.has(key)) return;
-		this.#attachedHosts.add(key);
+		const attached = this.store.attachedEvents.get(key) ?? new Set<string>();
+		this.store.attachedEvents.set(key, attached);
+		const claim = (event: string): boolean => {
+			if (attached.has(event)) return false;
+			attached.add(event);
+			return true;
+		};
 
-		pi.on("auto_compaction_start", (_event, ctx) => {
-			try {
-				this.enterCompactionBarrier(ctx.sessionManager);
-			} catch (error) {
-				warnHookError(pi, "auto_compaction_start", error);
-			}
-		});
-		pi.on("session_before_compact", (event, ctx) => {
-			try {
-				return this.#handleBeforeCompact(event, ctx);
-			} catch (error) {
-				warnHookError(pi, "session_before_compact", error);
-				return undefined;
-			}
-		});
-		pi.on("session.compacting", (event, ctx) => {
-			try {
-				return this.#handleCompacting(event, ctx);
-			} catch (error) {
-				warnHookError(pi, "session.compacting", error);
-				return undefined;
-			}
-		});
-		pi.on("session_compact", (event, ctx) => {
-			try {
-				this.#handleSessionCompact(event, ctx);
-			} catch (error) {
-				warnHookError(pi, "session_compact", error);
-			}
-		});
-		pi.on("auto_compaction_end", (_event, ctx) => {
-			try {
-				this.releaseCompactionBarrier(ctx.sessionManager);
-			} catch (error) {
-				warnHookError(pi, "auto_compaction_end", error);
-			}
-		});
-		pi.on("context", (event, ctx) => {
-			try {
-				return this.#handleContext(event.messages, ctx);
-			} catch (error) {
-				warnHookError(pi, "context", error);
-				return undefined;
-			}
-		});
-		pi.on("before_agent_start", (_event, ctx) => {
-			try {
-				return this.#handleBeforeAgentStart(ctx);
-			} catch (error) {
-				warnHookError(pi, "before_agent_start", error);
-				return undefined;
-			}
-		});
+		if (claim("auto_compaction_start")) {
+			pi.on("auto_compaction_start", (_event, ctx) =>
+				guarded(pi, "auto_compaction_start", () => getSharedCompactCoordinator().handleAutoCompactionStart(ctx)),
+			);
+		}
+		if (claim("session_before_compact")) {
+			pi.on("session_before_compact", (event, ctx) =>
+				guarded(pi, "session_before_compact", () => getSharedCompactCoordinator().handleBeforeCompact(event, ctx)),
+			);
+		}
+		if (claim("session.compacting")) {
+			pi.on("session.compacting", (event, ctx) =>
+				guarded(pi, "session.compacting", () => getSharedCompactCoordinator().handleCompacting(event, ctx)),
+			);
+		}
+		if (claim("session_compact")) {
+			pi.on("session_compact", (event, ctx) =>
+				guarded(pi, "session_compact", () => getSharedCompactCoordinator().handleSessionCompact(event, ctx)),
+			);
+		}
+		if (claim("auto_compaction_end")) {
+			pi.on("auto_compaction_end", (_event, ctx) =>
+				guarded(pi, "auto_compaction_end", () => getSharedCompactCoordinator().handleAutoCompactionEnd(ctx)),
+			);
+		}
+		if (claim("agent_start")) {
+			pi.on("agent_start", (_event, ctx) => guarded(pi, "agent_start", () => getSharedCompactCoordinator().handleAgentStart(ctx)));
+		}
+		if (claim("before_agent_start")) {
+			pi.on("before_agent_start", (_event, ctx) =>
+				guarded(pi, "before_agent_start", () => getSharedCompactCoordinator().handleBeforeAgentStart(ctx)),
+			);
+		}
 	}
 
-	prepareSnapshot(
-		ctx: CompactPluginContext,
-		meta: {
-			readonly isUpdate: boolean;
-			readonly customInstructions?: string;
-			readonly fileOpsPruneReport: FileOpsPruneReport;
-		},
-	): PreparedCompactHandoff {
+	prepareSnapshot(ctx: CompactPluginContext, fileOpsPruneReport: FileOpsPruneReport): PreparedCompactHandoff {
 		const activeHandoffs: CapturedHandoffRecord[] = [];
 		const inactiveStatefulPluginIds: string[] = [];
 		const noiseGuards: CapturedNoiseGuardRecord[] = [];
 
-		for (const entry of this.#contributions.values()) {
+		for (const entry of this.store.contributions.values()) {
 			if (entry.kind === "stateful-handoff") {
 				const captured = entry.evaluate(ctx);
 				if (captured === null) {
@@ -703,61 +653,38 @@ export class SharedCompactCoordinator {
 			}
 		}
 
-		const harnessProvidedBlock = [
-			"<harness-provided>",
-			"The harness and active plugins ALREADY own and programmatically re-inject the following state immediately after compaction. Do NOT summarize, mirror, or restate ANY of these items in your summary:",
-			...CORE_HARNESS_PROVIDED_CLAIMS.map((c) => `- [omp-core] ${c}`),
-			...activeHandoffs.map((h) => `- [${h.pluginId}] ${h.claim}`),
-			"</harness-provided>",
-		].join("\n");
-
-		const noiseGuardBlock =
-			noiseGuards.length > 0
-				? [
-						"<attribution-and-noise-guard>",
-						"Synthetic `[Developer]` / hook messages in the transcript are automated harness supervision, NOT human user input:",
-						...noiseGuards.map((g) => `- [${g.pluginId}] ${g.directive}`),
-						"</attribution-and-noise-guard>",
-					].join("\n")
-				: "";
-
-		const prompt = buildExternalCompactionPrompt({
-			isUpdate: meta.isUpdate,
-			customInstructions: meta.customInstructions,
-		});
-		const context = [harnessProvidedBlock, noiseGuardBlock].filter(Boolean);
+		const context = [
+			...CORE_HARNESS_PROVIDED_CLAIMS.map((claim) => contextLine("harness-provided", "omp-core", claim)),
+			...activeHandoffs.map((handoff) => contextLine("harness-provided", handoff.pluginId, handoff.claim)),
+			...noiseGuards.map((guard) => contextLine("noise-guard", guard.pluginId, guard.directive)),
+		];
 
 		return {
-			isUpdate: meta.isUpdate,
-			customInstructions: meta.customInstructions,
-			fileOpsPruneReport: meta.fileOpsPruneReport,
+			fileOpsPruneReport,
 			activeHandoffs,
 			inactiveStatefulPluginIds,
 			noiseGuards,
-			harnessProvidedBlock,
-			noiseGuardBlock,
-			compactingResult: { prompt, context },
+			compactingResult: { prompt: COMPACTION_PROMPT, context },
 		};
 	}
 }
 
-function isSharedCoordinator(value: unknown): value is SharedCompactCoordinator {
+function isRevisionedCoordinator(value: unknown): value is SharedCompactCoordinator {
 	return (
 		typeof value === "object" &&
 		value !== null &&
-		typeof Reflect.get(value, "register") === "function" &&
-		typeof Reflect.get(value, "attachToHost") === "function" &&
-		typeof Reflect.get(value, "isCompacting") === "function" &&
-		typeof Reflect.get(value, "deferDuringCompaction") === "function"
+		typeof Reflect.get(value, "revision") === "number" &&
+		typeof Reflect.get(value, "store") === "object"
 	);
 }
 
 export function getSharedCompactCoordinator(): SharedCompactCoordinator {
 	const existing: unknown = Reflect.get(globalThis, COMPACT_REGISTRY_SYMBOL);
-	if (isSharedCoordinator(existing)) return existing;
-	const created = new SharedCompactCoordinator();
-	Reflect.set(globalThis, COMPACT_REGISTRY_SYMBOL, created);
-	return created;
+	const current = isRevisionedCoordinator(existing) ? existing : undefined;
+	if (current && current.revision >= COMPACT_HANDOFF_REVISION) return current;
+	const coordinator = new SharedCompactCoordinator(current?.store ?? createStore());
+	Reflect.set(globalThis, COMPACT_REGISTRY_SYMBOL, coordinator);
+	return coordinator;
 }
 
 export function registerCompactHandoff<TState>(

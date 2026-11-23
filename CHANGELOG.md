@@ -22,6 +22,7 @@
 
 ### Changed
 
+- Updated the shared copy of `compact-handoff.ts` to oh-my-omp/shared@db9dde4.
 - Gated every `task-split-check` and `task-completion-judge` model attempt on the session's spend cap (a refusal ends the check without trying the next model) and recorded each reply's usage in the calling session's ledger, its cost in the session's spend and a chat telemetry span
 - Made `task-split-check` and `task-completion-judge` skip a model without credentials and move on to the next one
 - Gated every `@<purpose>` prompted judgment attempt (`turn-judge`, `lang-nag`, `tool-policy-nag`, `watchdog-agent`) on the session's spend cap, adding each billed attempt's cost to the session's spend, its duration to the ledger entry and one judgment telemetry span; judgments through OMP's judge chain now pass the same cap
