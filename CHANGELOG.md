@@ -22,6 +22,7 @@
 
 ### Changed
 
+- Moved the `wt` and `wt_remove` call flow (queueing until the turn ends, two-call `confirm`, what invalidates `confirm`, cancellation) from the tool descriptions into native `help://wt/lifecycle` and `help://wt_remove/lifecycle` topics, and made `wt-tool` read worktree status, branch and HEAD through the native git binding instead of `git` subprocesses
 - Made `user-prompt-inject` decide which root-session messages count as user requests and `ask` answers with one rule for both a root session in the same thread and one read from its transcript file, validate transcript records against OMP's message shapes, and read the transcript through a single file handle per model call
 - Detected `repo-rules` single-file `cat`/`head`/`tail` reads in `bash` with OMP's own shell lexer (`tools/shell-tokenize`) instead of a private tokenizer, and found the repository root for rule scanning with OMP's `findRepoRoot`
 - Made `model-compaction` refuse a rule whose `thresholdTokens` does not fit below the model's largest context window, deciding tier changes and fit with OMP's own `planModelCompactionPoint`, and name the rule file instead of a list index in refusal warnings
@@ -72,6 +73,7 @@
 
 ### Fixed
 
+- Fixed `wt_remove` treating a subagent working in a worktree subdirectory whose name starts with `..` as outside the worktree, and a finished queued `wt` request resetting a newer request queued by the next session to idle
 - Accepted a UTF-8 byte-order mark at the start of `APPEND-SYSTEM-*.md`, `PROMPT-INJECT-*.md`, `TURN-JUDGE-*.md`, `WATCHDOG-*.md` and `COMPACTION-*.md` files instead of rejecting them for missing frontmatter (`append-system-model` already did), and read their `enabled` flag through one shared check
 - Stopped `child-memory-warning` from repeating the same sampling-failure warning every 2 s when the failure happens after a successful process snapshot, and described `child-memory-warning.thresholdGiB` as phys_footprint instead of resident memory
 - Made `/subagent-usage on` and `recalibrate` warn when the calling session cannot be resolved instead of silently starting no calibration, and stopped `subagent-usage` from counting a dispatch whose resolved model has no `provider/` prefix under a truncated provider name
