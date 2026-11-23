@@ -2,16 +2,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
+import type { ToolTopicInjectRule } from "../_shared/omomp-shared/internal-url.ts";
 
 export interface InjectRule {
 	readonly id: string;
 	readonly tool: string;
-	readonly parameter?: string;
-	readonly pattern?: RegExp;
-	readonly patternSource?: string;
-	readonly onError?: boolean;
-	readonly resultPattern?: RegExp;
-	readonly resultPatternSource?: string;
+	readonly match: ToolTopicInjectRule;
 }
 
 export interface Topic {
@@ -99,16 +95,13 @@ function parseEntry(file: string, text: string): Entry {
 		const parsed = topicHeader.safeParse(header);
 		if (!parsed.success) return { kind: "invalid", reason: parsed.error.message };
 		const { tool, name, title, when, hiddenFromIndex, inject } = parsed.data;
-		const rules: InjectRule[] = (inject ?? []).map((entry) => ({
-			id: entry.id,
-			tool: entry.tool ?? tool,
-			...(entry.parameter !== undefined ? { parameter: entry.parameter } : {}),
-			...(entry.pattern !== undefined ? { pattern: new RegExp(entry.pattern), patternSource: entry.pattern } : {}),
-			...(entry.onError !== undefined ? { onError: entry.onError } : {}),
-			...(entry.resultPattern !== undefined
-				? { resultPattern: new RegExp(entry.resultPattern), resultPatternSource: entry.resultPattern }
-				: {}),
-		}));
+		const rules = (inject ?? []).map(
+			({ id, tool: target, parameter, pattern, onError, resultPattern }): InjectRule => ({
+				id,
+				tool: target ?? tool,
+				match: { param: parameter, pattern, onError, resultPattern },
+			}),
+		);
 		return { kind: "topic", tool, topic: { name, title, when, body, hiddenFromIndex: hiddenFromIndex === true, inject: rules } };
 	}
 	const parsed = surfaceHeader.safeParse(header);
@@ -142,15 +135,15 @@ export function loadCatalog(dir: string): Catalog {
 				break;
 			case "topic": {
 				const own = topics.get(entry.tool) ?? new Map<string, Topic>();
-				const ids = new Set<string>();
-				const duplicate = entry.topic.inject.find((rule) => ids.size === ids.add(rule.id).size || injectIds.has(rule.id));
-				if (duplicate !== undefined) problems.push(`${file}: duplicate inject id ${duplicate.id}`);
+				const ids = entry.topic.inject.map((rule) => rule.id);
+				const duplicate = ids.find((id, index) => injectIds.has(id) || ids.indexOf(id) !== index);
+				if (duplicate !== undefined) problems.push(`${file}: duplicate inject id ${duplicate}`);
 				else if (own.has(entry.topic.name)) problems.push(`${file}: duplicate topic ${entry.tool}/${entry.topic.name}`);
 				else {
-					for (const rule of entry.topic.inject) injectIds.add(rule.id);
+					for (const id of ids) injectIds.add(id);
 					own.set(entry.topic.name, entry.topic);
+					topics.set(entry.tool, own);
 				}
-				topics.set(entry.tool, own);
 				break;
 			}
 			default: {

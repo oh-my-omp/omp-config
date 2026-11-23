@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent, ToolResultEventResult } from "@oh-my-pi/pi-coding-agent";
 import { InternalUrlRouter, type ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { clearToolTopics, registerToolTopics } from "../agent/extensions/_shared/omomp-shared/internal-url.ts";
-import type { Topic } from "../agent/extensions/tool-topics/catalog.ts";
+import type { ToolDocs } from "../agent/extensions/tool-topics/catalog.ts";
 import { installToolTopicInjection } from "../agent/extensions/tool-topics/injection.ts";
 import { publishTopics } from "../agent/extensions/tool-topics/registry.ts";
+
+const noWarn = (): void => {};
 
 afterEach(() => {
 	clearToolTopics();
@@ -53,22 +55,23 @@ function fakePi() {
 
 describe("tool-topics unified help:// integration and auto-injection", () => {
 	test("wraps native help:// without registering tool://, merging hub topics and native docTopics", async () => {
-		const ownTopics = new Map<string, readonly Topic[]>([
-			[
-				"read",
-				[
+		const ownTopics: ToolDocs[] = [
+			{
+				tool: "read",
+				surface: undefined,
+				topics: [
 					{
 						name: "failures",
 						title: "Read failures",
 						when: "after a read fails",
 						body: "# Read failures body",
 						hiddenFromIndex: true,
-						inject: [{ id: "read-err", tool: "read", onError: true }],
+						inject: [{ id: "read-err", tool: "read", match: { onError: true } }],
 					},
 				],
-			],
-		]);
-		expect(publishTopics(ownTopics, () => ["read", "ask", "native_only"])).toBe(true);
+			},
+		];
+		publishTopics(ownTopics, () => ["read", "ask", "native_only"], noWarn);
 		registerToolTopics("omp-ask-more", [
 			{
 				tool: "ask",
@@ -115,10 +118,11 @@ describe("tool-topics unified help:// integration and auto-injection", () => {
 	});
 
 	test("injects onError, resultPattern, and external hub plugin rules via help:// once per context", async () => {
-		const ownTopics = new Map<string, readonly Topic[]>([
-			[
-				"bash",
-				[
+		const ownTopics: ToolDocs[] = [
+			{
+				tool: "bash",
+				surface: undefined,
+				topics: [
 					{
 						name: "output",
 						title: "Bash output",
@@ -126,14 +130,14 @@ describe("tool-topics unified help:// integration and auto-injection", () => {
 						body: "# Bash output guidance",
 						hiddenFromIndex: true,
 						inject: [
-							{ id: "bash-err", tool: "bash", onError: true },
-							{ id: "bash-trunc", tool: "bash", resultPattern: /artifact:\/\//, resultPatternSource: "artifact://" },
+							{ id: "bash-err", tool: "bash", match: { onError: true } },
+							{ id: "bash-trunc", tool: "bash", match: { resultPattern: "artifact://" } },
 						],
 					},
 				],
-			],
-		]);
-		publishTopics(ownTopics);
+			},
+		];
+		publishTopics(ownTopics, () => [], noWarn);
 		registerToolTopics("omp-sessions", [
 			{
 				tool: "session_query",
@@ -146,13 +150,10 @@ describe("tool-topics unified help:// integration and auto-injection", () => {
 		]);
 
 		const { pi, fireToolResult } = fakePi();
-		installToolTopicInjection(pi, {
-			owner: "omp-config/tool-topic-injection",
-			rules: [
-				{ id: "bash-err", tool: "bash", onError: true, topic: "help://bash/output" },
-				{ id: "bash-trunc", tool: "bash", resultPattern: /artifact:\/\//, topic: "help://bash/output" },
-			],
-		});
+		installToolTopicInjection(pi, [
+			{ id: "bash-err", tool: "bash", topic: "help://bash/output", match: { onError: true } },
+			{ id: "bash-trunc", tool: "bash", topic: "help://bash/output", match: { resultPattern: "artifact://" } },
+		]);
 
 		// Non-error, non-truncated bash result -> no injection.
 		expect(await fireToolResult({ toolName: "bash", isError: false, content: [{ type: "text", text: "ok" }] })).toBeUndefined();

@@ -1,10 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { type Catalog, loadCatalog, type ToolDocs } from "./catalog.ts";
+import { loadCatalog, type ToolDocs } from "./catalog.ts";
 import { installToolTopicInjection } from "./injection.ts";
 import { indexPrompt, type Rewrite, toolLines } from "./prompt.ts";
-import { publishTopics } from "./registry.ts";
+import { publishTopics, type Warn } from "./registry.ts";
 
 const reported = new Set<string>();
 
@@ -22,11 +22,6 @@ function report(pi: ExtensionAPI, ctx: ExtensionContext, tool: string, reason: s
 	else process.stderr.write(`${notice}\n`);
 }
 
-function publish(pi: ExtensionAPI, catalog: Catalog): boolean {
-	const topics = new Map([...catalog.tools.values()].filter((docs) => docs.topics.length > 0).map((docs) => [docs.tool, docs.topics]));
-	return publishTopics(topics, () => pi.getAllTools().map((tool) => tool.name));
-}
-
 interface Covered {
 	readonly docs: readonly ToolDocs[];
 	readonly names: readonly string[];
@@ -41,13 +36,7 @@ function fileRegistered(pi: ExtensionAPI, known: ReadonlySet<string>): ReadonlyS
 	return foreign;
 }
 
-function rewritePrompt(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	systemPrompt: readonly string[],
-	covered: Covered,
-	indexed: boolean,
-): string[] | undefined {
+function rewritePrompt(pi: ExtensionAPI, ctx: ExtensionContext, systemPrompt: readonly string[], covered: Covered): string[] | undefined {
 	const active = pi.getActiveTools();
 	if (!active.includes("read")) return undefined;
 	const prompt = indexPrompt(systemPrompt, covered.names);
@@ -58,7 +47,7 @@ function rewritePrompt(
 		const rendered = prompt.description(docs.tool);
 		switch (rendered.kind) {
 			case "found": {
-				const entry = toolLines(rendered.description, docs, indexed);
+				const entry = toolLines(rendered.description, docs);
 				if (entry?.kind === "ok") rewrites.push({ description: rendered.description, lines: entry.lines });
 				else if (entry?.kind === "drift") report(pi, ctx, docs.tool, entry.reason);
 				break;
@@ -81,37 +70,36 @@ function rewritePrompt(
 }
 
 export default function toolTopics(pi: ExtensionAPI): void {
-	let catalog: Catalog;
-	let indexed: boolean;
+	const warn: Warn = (message, error) => pi.logger.warn(`tool-topics: ${message}`, { error: errorText(error) });
+	let docsList: ToolDocs[];
 	try {
-		catalog = loadCatalog(import.meta.dir);
+		const catalog = loadCatalog(import.meta.dir);
 		for (const problem of catalog.problems) pi.logger.warn(`tool-topics: skipped ${problem}`);
-		indexed = publish(pi, catalog);
+		docsList = [...catalog.tools.values()];
+		publishTopics(docsList, () => pi.getAllTools().map((tool) => tool.name), warn);
 	} catch (error) {
-		pi.logger.warn("tool-topics: loading failed", { error: errorText(error) });
+		warn("loading failed", error);
 		return;
 	}
-	const docsList = [...catalog.tools.values()];
 	const names = docsList.map((docs) => docs.tool);
 	const covered: Covered = { docs: docsList, names, known: new Set(names) };
 
-	// Inject only when the unified help:// handler serves topics.
-	if (indexed) {
-		installToolTopicInjection(pi, {
-			owner: "omp-config/tool-topic-injection",
-			rules: docsList.flatMap((docs) =>
-				docs.topics.flatMap((topic) => topic.inject.map((rule) => ({ ...rule, topic: `help://${docs.tool}/${topic.name}` }))),
+	installToolTopicInjection(
+		pi,
+		docsList.flatMap((docs) =>
+			docs.topics.flatMap((topic) =>
+				topic.inject.map((rule) => ({ id: rule.id, tool: rule.tool, topic: `help://${docs.tool}/${topic.name}`, match: rule.match })),
 			),
-		});
-	}
+		),
+	);
 
 	pi.on("before_agent_start", (event, ctx) => {
 		if (event.reason === "revive") return;
 		try {
-			const systemPrompt = rewritePrompt(pi, ctx, event.systemPrompt, covered, indexed);
+			const systemPrompt = rewritePrompt(pi, ctx, event.systemPrompt, covered);
 			return systemPrompt === undefined ? undefined : { systemPrompt };
 		} catch (error) {
-			pi.logger.warn("tool-topics: cannot rewrite tool descriptions", { error: errorText(error) });
+			warn("cannot rewrite tool descriptions", error);
 		}
 	});
 }

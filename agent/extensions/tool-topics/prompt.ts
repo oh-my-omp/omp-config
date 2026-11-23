@@ -2,37 +2,30 @@ import type { ToolDocs } from "./catalog.ts";
 
 export type Entry = { readonly kind: "ok"; readonly lines: readonly string[] } | { readonly kind: "drift"; readonly reason: string };
 
-type Layout = "inline" | "command";
+type Layout = { readonly kind: "inline"; readonly examples: boolean } | { readonly kind: "command" };
 
-export class Description {
+export interface Description {
 	readonly block: number;
+	readonly lines: readonly string[];
 	readonly start: number;
 	readonly length: number;
 	readonly layout: Layout;
-	readonly examples: boolean;
 	readonly tool: string;
-	readonly #lines: readonly string[];
+}
 
-	constructor(block: number, lines: readonly string[], start: number, length: number, layout: Layout, examples: boolean, tool: string) {
-		this.block = block;
-		this.#lines = lines;
-		this.start = start;
-		this.length = length;
-		this.layout = layout;
-		this.examples = examples;
-		this.tool = tool;
-	}
-
-	line(index: number): string {
-		const raw = this.#lines[this.start + index] ?? "";
-		if (this.layout === "command") {
-			if (index === 0) {
-				const prefix = `${this.tool} — `;
-				return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
-			}
-			return raw;
+function lineAt(description: Description, index: number): string {
+	const raw = description.lines[description.start + index] ?? "";
+	switch (description.layout.kind) {
+		case "inline":
+			return raw.startsWith("// ") ? raw.slice(3) : raw.slice(2);
+		case "command": {
+			const prefix = `${description.tool} — `;
+			return index === 0 && raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
 		}
-		return raw.startsWith("// ") ? raw.slice(3) : raw.slice(2);
+		default: {
+			const unreachable: never = description.layout;
+			return unreachable;
+		}
 	}
 }
 
@@ -83,7 +76,10 @@ function inlineDescriptions(block: number, lines: readonly string[], tools: read
 				end = comment > start && lines[comment - 1] === "//" ? comment - 1 : comment;
 				break;
 			}
-			found.set(tool, { kind: "found", description: new Description(block, lines, start, end - start, "inline", examples, tool) });
+			found.set(tool, {
+				kind: "found",
+				description: { block, lines, start, length: end - start, layout: { kind: "inline", examples }, tool },
+			});
 		}
 	}
 	return found;
@@ -103,7 +99,10 @@ function commandSection(block: number, lines: readonly string[], heading: number
 	if (usage < heading + 4 || lines[heading + 1] !== "" || !(lines[heading + 2] ?? "").startsWith(prefix) || lines[usage - 1] !== "") {
 		return { kind: "drift", reason: COMMAND_DRIFT };
 	}
-	return { kind: "found", description: new Description(block, lines, heading + 2, usage - heading - 3, "command", false, tool) };
+	return {
+		kind: "found",
+		description: { block, lines, start: heading + 2, length: usage - heading - 3, layout: { kind: "command" }, tool },
+	};
 }
 
 function commandDescriptions(block: number, lines: readonly string[], tools: readonly string[]): Map<string, Rendered> {
@@ -137,10 +136,10 @@ function commandDescriptions(block: number, lines: readonly string[], tools: rea
 }
 
 function renderLines(description: Description, replacement: readonly string[]): string[] {
-	switch (description.layout) {
+	switch (description.layout.kind) {
 		case "inline": {
 			const rendered = replacement.map((line) => (line === "" ? "//" : `// ${line}`.trimEnd()));
-			if (description.examples && description.length === 0 && rendered.length > 0) rendered.push("//");
+			if (description.layout.examples && description.length === 0 && rendered.length > 0) rendered.push("//");
 			return rendered;
 		}
 		case "command": {
@@ -202,16 +201,16 @@ function nativeSection(description: Description, heading: string): NativeLookup 
 	let start = -1;
 	let level = 0;
 	for (let index = 0; index < description.length; index++) {
-		const match = HEADING.exec(description.line(index));
+		const match = HEADING.exec(lineAt(description, index));
 		if (match?.[2] !== heading) continue;
 		if (start >= 0) return { kind: "duplicate" };
 		start = index;
 		level = match[1]?.length ?? 0;
 	}
 	if (start < 0) return { kind: "absent" };
-	const lines = [description.line(start)];
+	const lines = [lineAt(description, start)];
 	for (let index = start + 1; index < description.length; index++) {
-		const line = description.line(index);
+		const line = lineAt(description, index);
 		const match = HEADING.exec(line);
 		if (match !== null && (match[1]?.length ?? 0) <= level) break;
 		lines.push(line);
@@ -224,14 +223,14 @@ function nativeBullet(description: Description, name: string): NativeLookup {
 	const prefix = `- \`${name}\`:`;
 	let start = -1;
 	for (let index = 0; index < description.length; index++) {
-		if (!description.line(index).startsWith(prefix)) continue;
+		if (!lineAt(description, index).startsWith(prefix)) continue;
 		if (start >= 0) return { kind: "duplicate" };
 		start = index;
 	}
 	if (start < 0) return { kind: "absent" };
-	const lines = [description.line(start)];
+	const lines = [lineAt(description, start)];
 	for (let index = start + 1; index < description.length; index++) {
-		const line = description.line(index);
+		const line = lineAt(description, index);
 		if (line === "" || line.startsWith("#") || line.startsWith("- ")) break;
 		lines.push(line);
 	}
@@ -273,24 +272,21 @@ function expandSurface(
 	return { kind: "ok", lines: compact };
 }
 
-export function toolLines(description: Description, docs: ToolDocs, indexed: boolean): Entry | undefined {
-	const visibleTopics = docs.topics.filter((topic) => !topic.hiddenFromIndex);
-	const index =
-		indexed && visibleTopics.length > 0
-			? [
-					"Topics — read the one a call needs before making it:",
-					...visibleTopics.map((topic) => `- \`help://${docs.tool}/${topic.name}\` — ${topic.when}`),
-				]
-			: undefined;
+export function toolLines(description: Description, docs: ToolDocs): Entry | undefined {
+	const index = docs.topics
+		.filter((topic) => !topic.hiddenFromIndex)
+		.map((topic) => `- \`help://${docs.tool}/${topic.name}\` — ${topic.when}`);
+	if (index.length > 0) index.unshift("Topics — read the one a call needs before making it:");
 	let body: string[];
-	if (docs.surface === undefined) {
-		if (index === undefined) return undefined;
-		body = Array.from({ length: description.length }, (_, line) => description.line(line));
-	} else {
+	if (docs.surface !== undefined) {
 		const expanded = expandSurface(description, docs.surface);
 		if (expanded.kind === "drift") return expanded;
 		body = expanded.lines;
+	} else if (index.length === 0) {
+		return undefined;
+	} else {
+		body = Array.from({ length: description.length }, (_, line) => lineAt(description, line));
 	}
-	if (index === undefined) return { kind: "ok", lines: body };
+	if (index.length === 0) return { kind: "ok", lines: body };
 	return { kind: "ok", lines: body.length === 0 ? index : [...body, "", ...index] };
 }

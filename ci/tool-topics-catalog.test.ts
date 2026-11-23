@@ -21,7 +21,7 @@ const SHIPPED_PARAM_RULES: Readonly<Record<string, { readonly tool: string; read
 	"read-forge": { tool: "read", parameter: "path", pattern: "^(issue|pr|mr)://" },
 	"read-runtime": { tool: "read", parameter: "path", pattern: "^(agent|history|proc|artifact)://" },
 	"read-web": { tool: "read", parameter: "path", pattern: "^(https?://|www\\.)" },
-	"grep-regex": { tool: "grep", parameter: "pattern", pattern: "\\(\\?[=!<]|\\\\[1-9]|\\\\n|\n" },
+	"grep-regex": { tool: "grep", parameter: "pattern", pattern: "\\(\\?[=!<]|\\\\[1-9]|\\\\n|\\n" },
 	"grep-scopes": { tool: "grep", parameter: "path", pattern: "(^|;)!|://|\\.(zip|jar|whl|tar|tgz|gz|zst):" },
 };
 
@@ -60,7 +60,7 @@ describe("tool-topics catalog inject entries", () => {
 				if (topic.hiddenFromIndex) {
 					hidden.push(`${docs.tool}/${topic.name}`);
 					expect(topic.inject.length).toBeGreaterThan(0);
-					expect(topic.inject.some((rule) => rule.onError === true || rule.resultPattern !== undefined)).toBe(true);
+					expect(topic.inject.some((rule) => rule.match.onError === true || rule.match.resultPattern !== undefined)).toBe(true);
 				}
 				for (const rule of topic.inject) rules.set(rule.id, rule);
 			}
@@ -69,9 +69,8 @@ describe("tool-topics catalog inject entries", () => {
 		for (const [id, expected] of Object.entries(SHIPPED_PARAM_RULES)) {
 			const rule = rules.get(id);
 			expect(rule?.tool).toBe(expected.tool);
-			expect(rule?.parameter).toBe(expected.parameter);
-			expect(rule?.pattern).toBeInstanceOf(RegExp);
-			expect(rule?.pattern?.source).toBe(new RegExp(expected.pattern).source);
+			expect(rule?.match.param).toBe(expected.parameter);
+			expect(rule?.match.pattern).toBe(expected.pattern);
 		}
 		// Retired dead/duplicate topics stay deleted.
 		expect(catalog.tools.get("ask")).toBeUndefined();
@@ -112,8 +111,7 @@ describe("tool-topics catalog inject entries", () => {
 		expect(topic?.hiddenFromIndex).toBe(true);
 		expect(topic?.inject).toHaveLength(2);
 		expect(topic?.inject[0]?.tool).toBe("read");
-		expect(topic?.inject[0]?.onError).toBe(true);
-		expect(topic?.inject[1]?.resultPattern).toBeInstanceOf(RegExp);
-		expect(topic?.inject[1]?.resultPattern?.source).toBe("truncated");
+		expect(topic?.inject[0]?.match.onError).toBe(true);
+		expect(topic?.inject[1]?.match.resultPattern).toBe("truncated");
 	});
 });

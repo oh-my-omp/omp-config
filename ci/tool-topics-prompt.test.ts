@@ -47,8 +47,8 @@ describe("tool-topics prompt indexing for 19.1.0 tool commands", () => {
 		expect(ae.kind).toBe("found");
 		if (cp.kind !== "found" || ae.kind !== "found") throw new Error("expected found");
 
-		const cpEntry = toolLines(cp.description, checkpointDocs, true);
-		const aeEntry = toolLines(ae.description, astEditDocs, true);
+		const cpEntry = toolLines(cp.description, checkpointDocs);
+		const aeEntry = toolLines(ae.description, astEditDocs);
 		expect(cpEntry?.kind).toBe("ok");
 		expect(aeEntry?.kind).toBe("ok");
 		if (cpEntry?.kind !== "ok" || aeEntry?.kind !== "ok") throw new Error("expected ok");
@@ -148,7 +148,7 @@ describe("tool-topics prompt indexing for 19.1.0 tool commands", () => {
 		const foundAll = indexPrompt([withAll], ["task"]).description("task");
 		expect(foundAll.kind).toBe("found");
 		if (foundAll.kind !== "found") throw new Error("expected found");
-		const renderedAll = toolLines(foundAll.description, taskDocs, false);
+		const renderedAll = toolLines(foundAll.description, taskDocs);
 		expect(renderedAll?.kind).toBe("ok");
 		if (renderedAll?.kind !== "ok") throw new Error("expected ok");
 		const joinedAll = renderedAll.lines.join("\n");
@@ -171,7 +171,7 @@ describe("tool-topics prompt indexing for 19.1.0 tool commands", () => {
 		const foundMin = indexPrompt([minimal], ["task"]).description("task");
 		expect(foundMin.kind).toBe("found");
 		if (foundMin.kind !== "found") throw new Error("expected found");
-		const renderedMin = toolLines(foundMin.description, taskDocs, false);
+		const renderedMin = toolLines(foundMin.description, taskDocs);
 		expect(renderedMin?.kind).toBe("ok");
 		if (renderedMin?.kind !== "ok") throw new Error("expected ok");
 		expect(renderedMin.lines.join("\n")).toBe(
@@ -188,6 +188,6 @@ describe("tool-topics prompt indexing for 19.1.0 tool commands", () => {
 		const block = ["namespace functions {", "// Search files.", "type find = (_: {}) => any;", "} // namespace functions"].join("\n");
 		const found = indexPrompt([block], ["find"]).description("find");
 		if (found.kind !== "found") throw new Error("expected found");
-		expect(toolLines(found.description, onlyHidden, true)).toBeUndefined();
+		expect(toolLines(found.description, onlyHidden)).toBeUndefined();
 	});
 });

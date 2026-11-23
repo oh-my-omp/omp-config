@@ -3,46 +3,35 @@ import {
 	type InternalUrl,
 	InternalUrlRouter,
 	type ProtocolHandler,
+	parseInternalUrl,
 	type ResolveContext,
-	type SchemeSpec,
 	type UrlCompletion,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import {
-	listToolTopics,
-	registerToolTopics,
-	resolveToolTopic,
-	type ToolTopicDoc,
-	type ToolTopicInjectRule,
-} from "../_shared/omomp-shared/internal-url.ts";
-import type { Topic } from "./catalog.ts";
+import { listToolTopics, registerToolTopics, resolveToolTopic, type ToolTopicDoc } from "../_shared/omomp-shared/internal-url.ts";
+import type { ToolDocs } from "./catalog.ts";
 
 const OWNER = "omp-config/tool-topics";
-const HELP_WRAPPER_BASE = Symbol.for("omp-config/help-wrapper-base");
-const DEFAULT_HELP_SPEC: SchemeSpec = {
-	backing: "virtual",
-	selectors: "lines",
-	immutable: true,
-	compactTranscript: true,
-};
-const NATIVE_HELP_PROBE_TOOLS = ["read", "eval"] as const;
+const HELP_WRAPPER_BASE: unique symbol = Symbol.for("omp-config/help-wrapper-base");
 
-function toHubInjectRule(rule: Topic["inject"][number]): ToolTopicInjectRule {
-	return {
-		...(rule.parameter !== undefined ? { param: rule.parameter } : {}),
-		...(rule.patternSource !== undefined ? { pattern: rule.patternSource } : {}),
-		...(rule.onError !== undefined ? { onError: rule.onError } : {}),
-		...(rule.resultPatternSource !== undefined ? { resultPattern: rule.resultPatternSource } : {}),
-	};
+type HelpWrapper = ProtocolHandler & { readonly [HELP_WRAPPER_BASE]: ProtocolHandler };
+
+export type Warn = (message: string, error: unknown) => void;
+
+interface Scope {
+	readonly base: ProtocolHandler;
+	readonly context: ResolveContext | undefined;
+	readonly warn: Warn;
 }
 
-function unwrapBaseHelpHandler(handler: ProtocolHandler | undefined): ProtocolHandler | undefined {
-	if (handler === undefined) return undefined;
-	if (Object.hasOwn(handler, HELP_WRAPPER_BASE)) {
-		const inner: unknown = Reflect.get(handler, HELP_WRAPPER_BASE);
-		return typeof inner === "object" && inner !== null ? (inner as ProtocolHandler) : undefined;
-	}
-	return handler;
+interface Listing {
+	readonly tool: string;
+	readonly hub: readonly ToolTopicDoc[];
+	readonly native: readonly string[];
+}
+
+function isHelpWrapper(handler: ProtocolHandler): handler is HelpWrapper {
+	return Object.hasOwn(handler, HELP_WRAPPER_BASE);
 }
 
 function parseHelpTarget(url: InternalUrl): { readonly tool: string; readonly topic: string | undefined } {
@@ -55,271 +44,173 @@ function parseHelpTarget(url: InternalUrl): { readonly tool: string; readonly to
 }
 
 function markdown(url: string, content: string): InternalResource {
-	return {
-		url,
-		content,
-		contentType: "text/markdown",
-		size: Buffer.byteLength(content, "utf-8"),
-	};
+	return { url, content, contentType: "text/markdown", size: Buffer.byteLength(content, "utf-8") };
 }
 
-function groupByTool(docs: readonly ToolTopicDoc[]): Map<string, ToolTopicDoc[]> {
-	const grouped = new Map<string, ToolTopicDoc[]>();
-	for (const doc of docs) {
-		const list = grouped.get(doc.tool);
-		if (list) list.push(doc);
-		else grouped.set(doc.tool, [doc]);
-	}
-	return grouped;
+function hubTopics(tool?: string): ToolTopicDoc[] {
+	return listToolTopics(tool, { includeHidden: true });
 }
 
-function formatTopicLine(doc: ToolTopicDoc, markHidden: boolean): string {
-	const suffix = markHidden && doc.hiddenFromIndex ? " [hidden]" : "";
-	return `- help://${doc.tool}/${doc.topic} — ${doc.title} (when: ${doc.when})${suffix}`;
-}
-
-function parseNativeListing(tool: string, content: string): string[] {
-	const prefix = `help://${tool}/`;
-	const names: string[] = [];
-	for (const raw of content.split("\n")) {
-		const line = raw.trim();
-		if (line.startsWith(prefix)) {
-			const topic = line.slice(prefix.length).trim();
-			if (topic && !topic.includes(" ")) names.push(topic);
-		}
-	}
-	return names;
-}
-
-function nativeTopicsForSessionTool(context: ResolveContext | undefined, tool: string): string[] {
-	const session = context?.session;
-	if (!session?.getToolByName) return [];
-	const found = session.getToolByName(tool) as { docTopics?: () => Readonly<Record<string, string>> } | undefined;
-	const topics = found?.docTopics?.();
-	return topics ? Object.keys(topics).sort() : [];
-}
-
-async function nativeTopicsViaBase(
-	base: ProtocolHandler | undefined,
-	tool: string,
-	url: InternalUrl,
-	context: ResolveContext | undefined,
-): Promise<string[]> {
-	const direct = nativeTopicsForSessionTool(context, tool);
-	if (direct.length > 0) return direct;
-	if (!base || !context?.session) return [];
+async function nativeTopics(scope: Scope, tool: string): Promise<string[]> {
+	if (scope.context?.session === undefined) return [];
 	try {
-		const res = await base.resolve(url, context);
-		return typeof res.content === "string" ? parseNativeListing(tool, res.content) : [];
-	} catch {
+		const listing = await scope.base.resolve(parseInternalUrl(`help://${tool}`), scope.context);
+		if (typeof listing.content !== "string") return [];
+		const prefix = `help://${tool}/`;
+		return listing.content.split("\n").flatMap((line) => (line.startsWith(prefix) ? [line.slice(prefix.length)] : []));
+	} catch (error) {
+		if (!(error instanceof ToolError)) scope.warn(`cannot list native help://${tool}`, error);
 		return [];
 	}
 }
 
-async function collectNativeToolMap(
-	base: ProtocolHandler | undefined,
-	context: ResolveContext | undefined,
-	knownTools: Iterable<string>,
-): Promise<Map<string, string[]>> {
-	const result = new Map<string, string[]>();
-	if (!context?.session) return result;
-	const candidates = new Set<string>([...NATIVE_HELP_PROBE_TOOLS, ...knownTools]);
-	for (const tool of [...candidates].sort()) {
-		const direct = nativeTopicsForSessionTool(context, tool);
-		if (direct.length > 0) {
-			result.set(tool, direct);
-			continue;
-		}
-		if (tool === "eval" && base) {
-			try {
-				const parsed = new URL("help://eval") as InternalUrl;
-				parsed.rawHost = "eval";
-				parsed.rawPathname = "";
-				const res = await base.resolve(parsed, context);
-				const topics = typeof res.content === "string" ? parseNativeListing("eval", res.content) : [];
-				if (topics.length > 0) result.set("eval", topics);
-			} catch {}
-		}
-	}
-	return result;
+async function listing(scope: Scope, tool: string, hub: readonly ToolTopicDoc[]): Promise<Listing> {
+	const hubNames = new Set(hub.map((doc) => doc.topic));
+	const native = (await nativeTopics(scope, tool)).filter((topic) => !hubNames.has(topic));
+	return { tool, hub, native };
 }
 
-function createAugmentedHelpHandler(base: ProtocolHandler | undefined, listToolNames?: () => readonly string[]): ProtocolHandler {
-	const handler: ProtocolHandler = {
+async function allListings(scope: Scope, toolNames: () => readonly string[]): Promise<Listing[]> {
+	const hubByTool = new Map<string, ToolTopicDoc[]>();
+	for (const doc of hubTopics()) {
+		const docs = hubByTool.get(doc.tool);
+		if (docs === undefined) hubByTool.set(doc.tool, [doc]);
+		else docs.push(doc);
+	}
+	const tools = [...new Set([...hubByTool.keys(), ...toolNames()])].sort();
+	const listings = await Promise.all(tools.map((tool) => listing(scope, tool, hubByTool.get(tool) ?? [])));
+	return listings.filter((entry) => entry.hub.length + entry.native.length > 0);
+}
+
+async function nativeTopic(scope: Scope, tool: string, topic: string): Promise<string | undefined> {
+	const resource = await scope.base.resolve(parseInternalUrl(`help://${tool}/${topic}`), scope.context);
+	return typeof resource.content === "string" ? resource.content : undefined;
+}
+
+function hubLine(doc: ToolTopicDoc, markHidden: boolean): string {
+	const suffix = markHidden && doc.hiddenFromIndex ? " [hidden]" : "";
+	return `- help://${doc.tool}/${doc.topic} — ${doc.title} (when: ${doc.when})${suffix}`;
+}
+
+function renderIndex(listings: readonly Listing[]): string {
+	if (listings.length === 0) return "# help://\n\nNo help topics registered.\n";
+	const lines = ["# help://", "", "Available tool help topics (read `help://<tool>` or `help://<tool>/<topic>`):", ""];
+	for (const { tool, hub, native } of listings) {
+		const visible = hub.filter((doc) => doc.hiddenFromIndex !== true);
+		const hidden = hub.length - visible.length;
+		lines.push(`## ${tool}`);
+		for (const doc of visible.length > 0 ? visible : hub) lines.push(hubLine(doc, visible.length === 0));
+		for (const topic of native) lines.push(`- help://${tool}/${topic}`);
+		if (visible.length > 0 && hidden > 0) {
+			lines.push(`- (${hidden} hidden topic${hidden === 1 ? "" : "s"}; read \`help://${tool}\` to list all)`);
+		}
+		lines.push("");
+	}
+	return lines.join("\n");
+}
+
+function renderTool({ tool, hub, native }: Listing): string {
+	return [
+		`# ${tool} help topics`,
+		"",
+		`Read \`help://${tool}/<topic>\` (line selectors apply).`,
+		"",
+		...hub.map((doc) => hubLine(doc, true)),
+		...native.map((topic) => `- help://${tool}/${topic}`),
+		"",
+	].join("\n");
+}
+
+async function listingContents(scope: Scope, listings: readonly Listing[]): Promise<Array<{ url: string; content: string }>> {
+	const results: Array<{ url: string; content: string }> = [];
+	for (const { tool, hub, native } of listings) {
+		for (const doc of hub) {
+			const resolved = resolveToolTopic(doc.tool, doc.topic);
+			if (resolved !== undefined) results.push({ url: `help://${doc.tool}/${doc.topic}`, content: resolved.content });
+		}
+		for (const topic of native) {
+			try {
+				const content = await nativeTopic(scope, tool, topic);
+				if (content !== undefined) results.push({ url: `help://${tool}/${topic}`, content });
+			} catch (error) {
+				scope.warn(`cannot read native help://${tool}/${topic}`, error);
+			}
+		}
+	}
+	return results.sort((a, b) => a.url.localeCompare(b.url));
+}
+
+function completions(listings: readonly Listing[]): UrlCompletion[] {
+	return listings.flatMap(({ tool, hub, native }) => {
+		const total = hub.length + native.length;
+		return [
+			{ value: tool, description: `${total} topic${total === 1 ? "" : "s"}` },
+			...hub.map((doc) => ({ value: `${tool}/${doc.topic}`, description: `${doc.title} — ${doc.when}` })),
+			...native.map((topic) => ({ value: `${tool}/${topic}` })),
+		];
+	});
+}
+
+function createHelpHandler(base: ProtocolHandler, toolNames: () => readonly string[], warn: Warn): HelpWrapper {
+	const scope = (context: ResolveContext | undefined): Scope => ({ base, context, warn });
+	return {
+		[HELP_WRAPPER_BASE]: base,
 		scheme: "help",
-		spec: base?.spec ?? DEFAULT_HELP_SPEC,
-		...(base?.promptDoc ? { promptDoc: (host) => base.promptDoc?.(host) } : {}),
-		...(base?.promptReference ? { promptReference: () => base.promptReference?.() } : {}),
-		async resolve(url: InternalUrl, context?: ResolveContext) {
+		spec: base.spec,
+		promptDoc: base.promptDoc?.bind(base),
+		promptReference: base.promptReference?.bind(base),
+		async resolve(url, context) {
 			const { tool, topic } = parseHelpTarget(url);
-			if (!tool) {
-				const hubDocs = listToolTopics(undefined, { includeHidden: true });
-				const grouped = groupByTool(hubDocs);
-				const nativeMap = await collectNativeToolMap(base, context, [...grouped.keys(), ...(listToolNames?.() ?? [])]);
-				const allTools = [...new Set([...grouped.keys(), ...nativeMap.keys()])].sort();
-				if (allTools.length === 0) {
-					return markdown(url.href, "# help://\n\nNo help topics registered.\n");
-				}
-				const lines: string[] = ["# help://", "", "Available tool help topics (read `help://<tool>` or `help://<tool>/<topic>`):", ""];
-				for (const name of allTools) {
-					const docs = grouped.get(name) ?? [];
-					const visible = docs.filter((doc) => doc.hiddenFromIndex !== true);
-					const listed = visible.length > 0 ? visible : docs;
-					const hubNames = new Set(docs.map((doc) => doc.topic));
-					const nativeExtras = (nativeMap.get(name) ?? []).filter((entry) => !hubNames.has(entry));
-					lines.push(`## ${name}`);
-					for (const doc of listed) {
-						lines.push(formatTopicLine(doc, visible.length === 0));
-					}
-					for (const extra of nativeExtras) {
-						lines.push(`- help://${name}/${extra}`);
-					}
-					if (visible.length > 0 && visible.length < docs.length) {
-						const hiddenCount = docs.length - visible.length;
-						lines.push(`- (${hiddenCount} hidden topic${hiddenCount === 1 ? "" : "s"}; read \`help://${name}\` to list all)`);
-					}
-					lines.push("");
-				}
-				return markdown(url.href, lines.join("\n"));
-			}
+			if (!tool) return markdown(url.href, renderIndex(await allListings(scope(context), toolNames)));
 			if (topic === undefined) {
-				const docs = listToolTopics(tool, { includeHidden: true });
-				if (docs.length === 0) {
-					if (base) return base.resolve(url, context);
-					const available = [...new Set(listToolTopics(undefined, { includeHidden: true }).map((doc) => doc.tool))].join(", ") || "none";
-					throw new ToolError(`Tool '${tool}' has no help:// topics. Tools with topics: ${available}.`);
-				}
-				const hubNames = new Set(docs.map((doc) => doc.topic));
-				const nativeExtras = (await nativeTopicsViaBase(base, tool, url, context)).filter((entry) => !hubNames.has(entry));
-				const lines = [
-					`# ${tool} help topics`,
-					"",
-					`Read \`help://${tool}/<topic>\` (line selectors apply).`,
-					"",
-					...docs.map((doc) => formatTopicLine(doc, true)),
-					...nativeExtras.map((extra) => `- help://${tool}/${extra}`),
-					"",
-				];
-				return markdown(url.href, lines.join("\n"));
+				const hub = hubTopics(tool);
+				if (hub.length === 0) return base.resolve(url, context);
+				return markdown(url.href, renderTool(await listing(scope(context), tool, hub)));
 			}
 			const resolved = resolveToolTopic(tool, topic);
-			if (resolved !== undefined) {
-				return markdown(url.href, resolved.content);
-			}
-			if (base) return base.resolve(url, context);
-			const available = listToolTopics(tool, { includeHidden: true })
-				.map((doc) => doc.topic)
-				.join(", ");
-			throw new ToolError(
-				available ? `Unknown topic '${topic}' for ${tool}. Available: ${available}.` : `Tool '${tool}' has no help:// topics.`,
-			);
+			return resolved === undefined ? base.resolve(url, context) : markdown(url.href, resolved.content);
 		},
-		async enumerate(url: InternalUrl, context?: ResolveContext): Promise<Array<{ url: string; content: string }>> {
+		async enumerate(url, context) {
 			const { tool, topic } = parseHelpTarget(url);
-			const results = new Map<string, string>();
-			if (!tool) {
-				for (const doc of listToolTopics(undefined, { includeHidden: true })) {
-					const resolved = resolveToolTopic(doc.tool, doc.topic);
-					if (resolved) results.set(`help://${doc.tool}/${doc.topic}`, resolved.content);
-				}
-				const nativeMap = await collectNativeToolMap(base, context, listToolNames?.() ?? []);
-				for (const [name, topics] of nativeMap) {
-					for (const entry of topics) {
-						const key = `help://${name}/${entry}`;
-						if (results.has(key) || !base) continue;
-						try {
-							const leafUrl = new URL(key) as InternalUrl;
-							leafUrl.rawHost = name;
-							leafUrl.rawPathname = `/${entry}`;
-							const res = await base.resolve(leafUrl, context);
-							if (typeof res.content === "string") results.set(key, res.content);
-						} catch {}
-					}
-				}
-				return [...results.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([href, content]) => ({ url: href, content }));
-			}
+			if (!tool) return listingContents(scope(context), await allListings(scope(context), toolNames));
 			if (topic === undefined) {
-				for (const doc of listToolTopics(tool, { includeHidden: true })) {
-					const resolved = resolveToolTopic(doc.tool, doc.topic);
-					if (resolved) results.set(`help://${doc.tool}/${doc.topic}`, resolved.content);
-				}
-				const nativeTopics = await nativeTopicsViaBase(base, tool, url, context);
-				for (const entry of nativeTopics) {
-					const key = `help://${tool}/${entry}`;
-					if (results.has(key) || !base) continue;
-					try {
-						const leafUrl = new URL(key) as InternalUrl;
-						leafUrl.rawHost = tool;
-						leafUrl.rawPathname = `/${entry}`;
-						const res = await base.resolve(leafUrl, context);
-						if (typeof res.content === "string") results.set(key, res.content);
-					} catch {}
-				}
-				if (results.size === 0 && base) {
-					await base.resolve(url, context);
-				}
-				return [...results.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([href, content]) => ({ url: href, content }));
+				const entry = await listing(scope(context), tool, hubTopics(tool));
+				if (entry.hub.length + entry.native.length === 0) await base.resolve(url, context);
+				return listingContents(scope(context), [entry]);
 			}
-			const resolved = resolveToolTopic(tool, topic);
-			if (resolved !== undefined) {
-				return [{ url: `help://${tool}/${topic}`, content: resolved.content }];
-			}
-			if (base) {
-				const res = await base.resolve(url, context);
-				return typeof res.content === "string" ? [{ url: `help://${tool}/${topic}`, content: res.content }] : [];
-			}
-			throw new ToolError(`Unknown topic '${topic}' for ${tool}.`);
+			const content = resolveToolTopic(tool, topic)?.content ?? (await nativeTopic(scope(context), tool, topic));
+			return content === undefined ? [] : [{ url: `help://${tool}/${topic}`, content }];
 		},
-		async complete(prefix = "", context?: ResolveContext): Promise<UrlCompletion[]> {
-			const hubDocs = listToolTopics(undefined, { includeHidden: true });
-			const grouped = groupByTool(hubDocs);
-			const nativeMap = await collectNativeToolMap(base, context, [...grouped.keys(), ...(listToolNames?.() ?? [])]);
-			const allTools = [...new Set([...grouped.keys(), ...nativeMap.keys()])].sort();
-			const completions: UrlCompletion[] = [];
-			for (const name of allTools) {
-				const docs = grouped.get(name) ?? [];
-				const hubNames = new Set(docs.map((doc) => doc.topic));
-				const nativeExtras = (nativeMap.get(name) ?? []).filter((entry) => !hubNames.has(entry));
-				const total = docs.length + nativeExtras.length;
-				completions.push({ value: name, description: `${total} topic${total === 1 ? "" : "s"}` });
-				for (const doc of docs) {
-					completions.push({ value: `${name}/${doc.topic}`, description: `${doc.title} — ${doc.when}` });
-				}
-				for (const extra of nativeExtras) {
-					completions.push({ value: `${name}/${extra}` });
-				}
-			}
+		async complete(prefix = "", context) {
+			const all = completions(await allListings(scope(context), toolNames));
 			const normalized = prefix
 				.trim()
 				.replace(/^help:\/\//i, "")
 				.toLowerCase();
-			if (!normalized) return completions;
-			return completions.filter((candidate) => candidate.value.toLowerCase().startsWith(normalized));
+			return normalized ? all.filter((candidate) => candidate.value.toLowerCase().startsWith(normalized)) : all;
 		},
 	};
-	Object.defineProperty(handler, HELP_WRAPPER_BASE, { value: base, enumerable: false, writable: false, configurable: false });
-	return handler;
 }
 
-export function publishTopics(tools: ReadonlyMap<string, readonly Topic[]>, listToolNames?: () => readonly string[]): boolean {
-	const docs: ToolTopicDoc[] = [];
-	for (const [tool, topics] of tools) {
-		for (const topic of topics) {
-			const inject = topic.inject.filter((rule) => rule.tool === tool).map(toHubInjectRule);
-			docs.push({
-				tool,
-				topic: topic.name,
-				title: topic.title,
-				when: topic.when,
-				body: topic.body,
-				...(topic.hiddenFromIndex ? { hiddenFromIndex: true } : {}),
-				...(inject.length > 0 ? { inject } : {}),
-			});
-		}
-	}
-	registerToolTopics(OWNER, docs);
+export function publishTopics(docs: readonly ToolDocs[], toolNames: () => readonly string[], warn: Warn): void {
+	registerToolTopics(
+		OWNER,
+		docs.flatMap(({ tool, topics }) =>
+			topics.map(
+				(topic): ToolTopicDoc => ({
+					tool,
+					topic: topic.name,
+					title: topic.title,
+					when: topic.when,
+					body: topic.body,
+					hiddenFromIndex: topic.hiddenFromIndex,
+					inject: topic.inject.filter((rule) => rule.tool === tool).map((rule) => rule.match),
+				}),
+			),
+		),
+	);
 	const router = InternalUrlRouter.instance();
-	const base = unwrapBaseHelpHandler(router.getHandler("help"));
-	router.register(createAugmentedHelpHandler(base, listToolNames));
-	return true;
+	const current = router.getHandler("help");
+	if (current === undefined) throw new Error("omp serves no help:// scheme");
+	router.register(createHelpHandler(isHelpWrapper(current) ? current[HELP_WRAPPER_BASE] : current, toolNames, warn));
 }
