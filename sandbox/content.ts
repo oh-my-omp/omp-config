@@ -38,6 +38,8 @@ const AGENT_EXCLUDES = [
 	"plugins/node_modules",
 ];
 
+const EXCLUDED_PLUGINS = ["omp-remote-build"];
+
 export async function installTools(container: string): Promise<void> {
 	await must([
 		"docker",
@@ -65,6 +67,17 @@ export async function copyOmpDir(container: string, home: string): Promise<void>
 		'import { existsSync, readFileSync, writeFileSync } from "node:fs"; const p = process.argv[1]; if (p && existsSync(p)) { const s = JSON.parse(readFileSync(p, "utf8")); if (typeof s === "object" && s !== null && !Array.isArray(s)) { s.unknownPlain = []; writeFileSync(p, JSON.stringify(s, null, 2) + "\\n"); } }',
 		"--",
 		statePath,
+	]);
+	await must([
+		"docker",
+		"exec",
+		container,
+		"bun",
+		"-e",
+		'import { existsSync, readFileSync, writeFileSync } from "node:fs"; const [dir, ...names] = process.argv.slice(1); for (const [file, key] of [["package.json", "dependencies"], ["omp-plugins.lock.json", "plugins"]]) { const p = dir + "/" + file; if (!existsSync(p)) continue; const j = JSON.parse(readFileSync(p, "utf8")); for (const name of names) delete j[key]?.[name]; writeFileSync(p, JSON.stringify(j, null, 2) + "\\n"); }',
+		"--",
+		join(home, ".omp", "plugins"),
+		...EXCLUDED_PLUGINS,
 	]);
 }
 
