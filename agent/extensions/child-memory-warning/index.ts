@@ -5,6 +5,7 @@ import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
 import { type ProcessRecord, type ProcessSource, ProcessTracker } from "./tracker.ts";
 
 const POLL_MS = 2_000;
+const GIB = 1024 ** 3;
 
 const configSchema = z
 	.object({
@@ -15,7 +16,7 @@ const settingsSection = defineSettings(import.meta.dir, configSchema);
 
 interface Threshold {
 	readonly gib: number;
-	readonly bytes: bigint;
+	readonly bytes: number;
 }
 
 type ThresholdLoad = { readonly kind: "found"; readonly threshold: Threshold } | { readonly kind: "invalid"; readonly problem: string };
@@ -25,7 +26,6 @@ interface Monitor {
 	ctx: ExtensionContext;
 	readonly source: ProcessSource;
 	readonly tracker: ProcessTracker;
-	readonly timer: Timer;
 	problem: string | null;
 	configProblem: string | null;
 	inFlight: boolean;
@@ -34,17 +34,13 @@ interface Monitor {
 type Lifetime =
 	| { kind: "not-started" }
 	| { kind: "starting"; pi: ExtensionAPI; ctx: ExtensionContext }
-	| { kind: "active"; monitor: Monitor }
+	| { kind: "active"; monitor: Monitor; timer: Timer }
 	| { kind: "stopped" };
 
 let lifetime: Lifetime = { kind: "not-started" };
 
 function warn(pi: ExtensionAPI, message: string, error: unknown): void {
-	try {
-		pi.logger.warn(`child-memory-warning: ${message}`, { error: errorText(error) });
-	} catch {
-		// A failing logger must not escape an observational hook or suppress the other delivery channel.
-	}
+	pi.logger.warn(`child-memory-warning: ${message}`, { error: errorText(error) });
 }
 
 async function loadThreshold(cwd: string): Promise<ThresholdLoad> {
@@ -52,7 +48,7 @@ async function loadThreshold(cwd: string): Promise<ThresholdLoad> {
 	switch (loaded.kind) {
 		case "ok": {
 			const gib = loaded.value.thresholdGiB;
-			return { kind: "found", threshold: { gib, bytes: BigInt(Math.round(gib * 1024 ** 3)) } };
+			return { kind: "found", threshold: { gib, bytes: Math.round(gib * GIB) } };
 		}
 		case "invalid":
 			return {
@@ -74,11 +70,7 @@ function reportConfigProblem(monitor: Monitor, problem: string | null): void {
 	monitor.configProblem = problem;
 	if (problem === null) return;
 	const text = tr(`child-memory-warning: ${problem}`, `child-memory-warning：${problem}`);
-	try {
-		monitor.pi.logger.warn(text);
-	} catch {
-		// A failing logger must not suppress the UI channel.
-	}
+	monitor.pi.logger.warn(text);
 	try {
 		monitor.ctx.ui.notify(text, "warning");
 	} catch (error) {
@@ -86,18 +78,18 @@ function reportConfigProblem(monitor: Monitor, problem: string | null): void {
 	}
 }
 
-function deliver(monitor: Monitor, current: ProcessRecord, bytes: bigint, command: string, threshold: Threshold): void {
+function deliver(monitor: Monitor, current: ProcessRecord, bytes: number, command: string, threshold: Threshold): void {
 	const { pi, ctx } = monitor;
-	const uiText = tr(
-		`Child process memory limit exceeded: PID ${current.pid}, PPID ${current.parentPid}, orphan: ${
-			current.parentPid === 1 ? "yes" : "no"
-		}; phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB (${bytes} bytes), threshold > ${threshold.gib} GiB.\nCommand: ${command}\nWarning only; process was not terminated.`,
-		`子进程内存超限：PID ${current.pid}，PPID ${current.parentPid}，孤儿：${current.parentPid === 1 ? "是" : "否"}；` +
-			`phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB（${bytes} bytes），阈值 > ${threshold.gib} GiB。\n命令：${command}\n仅告警，未结束该进程。`,
-	);
+	const orphan = current.parentPid === 1;
+	const gib = (bytes / GIB).toFixed(2);
 	const agentText =
-		`子进程内存超限：PID ${current.pid}，PPID ${current.parentPid}，孤儿：${current.parentPid === 1 ? "是" : "否"}；` +
-		`phys_footprint ${(Number(bytes) / 1024 ** 3).toFixed(2)} GiB（${bytes} bytes），阈值 > ${threshold.gib} GiB。\n命令：${command}\n仅告警，未结束该进程。`;
+		`子进程内存超限：PID ${current.pid}，PPID ${current.parentPid}，孤儿：${orphan ? "是" : "否"}；` +
+		`phys_footprint ${gib} GiB（${bytes} bytes），阈值 > ${threshold.gib} GiB。\n命令：${command}\n仅告警，未结束该进程。`;
+	const uiText = tr(
+		`Child process memory limit exceeded: PID ${current.pid}, PPID ${current.parentPid}, orphan: ${orphan ? "yes" : "no"}; ` +
+			`phys_footprint ${gib} GiB (${bytes} bytes), threshold > ${threshold.gib} GiB.\nCommand: ${command}\nWarning only; process was not terminated.`,
+		agentText,
+	);
 	try {
 		ctx.ui.notify(uiText, "warning");
 	} catch (error) {
@@ -118,40 +110,26 @@ async function sample(monitor: Monitor): Promise<void> {
 			monitor.problem = result.reason;
 			return;
 		}
-		monitor.problem = null;
-		// Ownership tracking must see every scan, even while alerts are paused by config.
+		// Observe before reading the config: ownership tracking must not skip a scan while alerts are paused.
 		const owned = monitor.tracker.observe(result.snapshot);
-		// owned aliases the tracker's reused result buffer; consume it synchronously here.
 		const config = await loadThreshold(monitor.ctx.cwd);
-		switch (lifetime.kind) {
-			case "active": {
-				if (lifetime.monitor !== monitor) return;
-				break;
-			}
-			case "not-started":
-			case "starting":
-			case "stopped": {
-				return;
-			}
-			default: {
-				const unreachable: never = lifetime;
-				return unreachable;
-			}
-		}
+		if (lifetime.kind !== "active" || lifetime.monitor !== monitor) return;
 		reportConfigProblem(monitor, config.kind === "invalid" ? config.problem : null);
-		if (config.kind === "invalid") return;
-		for (const tracked of owned) {
-			if (tracked.alerted) continue;
-			const { pid, startedAt } = tracked.identity;
-			const bytes = monitor.source.footprint(pid);
-			if (bytes === null || bytes <= config.threshold.bytes) continue;
-			const command = monitor.source.command(pid);
-			// A PID can exit/recycle while memory and argv are read.
-			const current = monitor.source.process(pid);
-			if (current === null || current.startedAt !== startedAt) continue;
-			tracked.alerted = true;
-			deliver(monitor, current, bytes, command, config.threshold);
+		if (config.kind === "found") {
+			for (const tracked of owned) {
+				if (tracked.alerted) continue;
+				const { pid, startedAt } = tracked.identity;
+				const bytes = monitor.source.footprint(pid);
+				if (bytes === null || bytes <= config.threshold.bytes) continue;
+				const command = monitor.source.command(pid);
+				// Never alert on a PID that exited or was reused while its memory and argv were read.
+				const current = monitor.source.process(pid);
+				if (current === null || current.startedAt !== startedAt) continue;
+				tracked.alerted = true;
+				deliver(monitor, current, bytes, command, config.threshold);
+			}
 		}
+		monitor.problem = null;
 	} catch (error) {
 		const problem = errorText(error);
 		if (monitor.problem !== problem) warn(monitor.pi, "sampling failed", error);
@@ -165,40 +143,42 @@ async function start(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	if (ctx.agent.kind !== "main" || lifetime.kind !== "not-started") return;
 	if (process.platform !== "darwin") {
 		lifetime = { kind: "stopped" };
-		pi.logger.info("child-memory-warning: 未启用（仅支持 darwin）");
+		pi.logger.info("child-memory-warning: disabled (darwin only)");
 		return;
 	}
 	const starting: Lifetime = { kind: "starting", pi, ctx };
 	lifetime = starting;
-	let source: ProcessSource | null = null;
 	try {
-		// Keep the Darwin-only FFI module outside unsupported-platform startup.
-		const native = await import("./native.ts");
+		// Never import the FFI module before the platform check: it binds a Darwin-only library.
+		const { DarwinProcesses } = await import("./native.ts");
 		if (lifetime !== starting) return;
-		source = native.openDarwinProcesses();
+		const source = new DarwinProcesses();
 		const root = source.process(process.pid);
 		if (root === null) {
+			source.close();
 			pi.logger.warn("child-memory-warning: cannot read omp process identity; monitoring not started");
 			return;
 		}
-		const tracker = new ProcessTracker(root);
-		let monitor: Monitor | undefined;
+		const monitor: Monitor = {
+			pi,
+			ctx: starting.ctx,
+			source,
+			tracker: new ProcessTracker(root),
+			problem: null,
+			configProblem: null,
+			inFlight: true,
+		};
 		const timer = ctx.setInterval(() => {
-			if (lifetime.kind !== "active" || lifetime.monitor.pi !== pi || monitor === undefined) return;
-			// Single-flight: a still-running sample owns the FFI buffers; skip this tick instead
-			// of holding a second full-table snapshot beside it.
-			if (lifetime.monitor.inFlight) return;
+			// A running sample owns the FFI buffers: never start a second one beside it.
+			if (lifetime.kind !== "active" || lifetime.monitor !== monitor || monitor.inFlight) return;
 			monitor.inFlight = true;
 			void sample(monitor);
 		}, POLL_MS);
-		monitor = { pi, ctx: starting.ctx, source, tracker, timer, problem: null, configProblem: null, inFlight: true };
-		lifetime = { kind: "active", monitor };
-		source = null; // Ownership moves to the active monitor before its first sample.
+		lifetime = { kind: "active", monitor, timer };
 		await sample(monitor);
 	} catch (error) {
 		warn(pi, "monitor initialization failed", error);
 	} finally {
-		if (source !== null) source.close();
 		if (lifetime === starting) lifetime = { kind: "stopped" };
 	}
 }
@@ -217,14 +197,14 @@ export default function childMemoryWarning(pi: ExtensionAPI): void {
 		else if (lifetime.kind === "starting" && lifetime.pi === pi) lifetime.ctx = ctx;
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
+		if (ctx.agent.kind !== "main") return;
 		try {
-			if (ctx.agent.kind !== "main") return;
 			if (lifetime.kind === "starting" && lifetime.pi === pi) lifetime = { kind: "stopped" };
 			else if (lifetime.kind === "active" && lifetime.monitor.pi === pi) {
-				const { monitor } = lifetime;
+				const { monitor, timer } = lifetime;
 				lifetime = { kind: "stopped" };
 				try {
-					monitor.ctx.clearTimer(monitor.timer);
+					monitor.ctx.clearTimer(timer);
 				} finally {
 					monitor.source.close();
 				}

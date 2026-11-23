@@ -226,7 +226,7 @@ Source: `agent/extensions/delete-guard/`. Main and sub sessions, full and light 
 
 Source: `agent/extensions/child-memory-warning/`. macOS (Darwin) only; enabled in both full and light mode.
 
-On the first main session's `session_start`, opens `libproc`/`sysctl` via Bun FFI and samples every 2 s (non-Darwin platforms log one `未启用` info entry; main shutdown clears the timer and closes the library):
+On the first main session's `session_start`, opens `libproc`/`sysctl` via Bun FFI and samples every 2 s (non-Darwin platforms log one `disabled (darwin only)` info entry; main shutdown clears the timer and closes the library):
 
 - Reads `ri_phys_footprint` from `proc_pid_rusage` and keys processes by `PID + kernel start time`. Tracks owned descendant OS processes of the OMP process and process groups created by observed descendants; reparented orphans (`PPID === 1`) stay tracked until exit. Subagents running in-process — on the main thread, or in a worker thread when more than 8 subagents run concurrently and `task.workerThreads` is greater than 0 — share the OMP process's memory and are not tracked here.
 - Reads the `child-memory-warning.thresholdGiB` setting (`omp-config`; manifest default `4`; a project `.omp/plugin-overrides.json` entry wins over the machine value) on every 2 s scan. If the value is unreadable or invalid, tracking continues while alerts pause and each new config problem warns once.

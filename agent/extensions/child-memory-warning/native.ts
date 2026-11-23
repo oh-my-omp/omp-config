@@ -1,10 +1,26 @@
 import { dlopen, FFIType, type Library, ptr } from "bun:ffi";
 import type { ProcessRecord, ProcessSource, SnapshotResult } from "./tracker.ts";
 
+const PROC_PIDTBSDINFO = 3;
 const BSD_INFO_SIZE = 136;
+const BSD_STATUS = 4;
+const BSD_PID = 12;
+const BSD_PPID = 16;
+const BSD_PGID = 100;
+const BSD_START_SEC = 120;
+const BSD_START_USEC = 128;
+const SZOMB = 5;
+const RUSAGE_INFO_V0 = 0;
 const RUSAGE_SIZE = 96;
-const ZOMBIE_STATUS = 5; // sys/proc.h: SZOMB; rusage can return terminal accounting for zombies.
-const HI_HALF_UNIT = 4294967296n; // 2^32: one u64 is kept as two u32 halves for allocation-free compare.
+const RUSAGE_PHYS_FOOTPRINT = 72;
+const CTL_KERN = 1;
+const KERN_ARGMAX = 8;
+const KERN_PROCARGS2 = 49;
+const ARGC_BYTES = 4;
+const PATH_BYTES = 4096;
+const MAX_COMMAND_CHARS = 240;
+const MAX_ARGUMENT_BYTES = MAX_COMMAND_CHARS * 4;
+const U32_RANGE = 2 ** 32;
 const decoder = new TextDecoder();
 
 const LIBPROC_ABI = {
@@ -17,200 +33,137 @@ const LIBPROC_ABI = {
 
 type NativeSymbols = Library<typeof LIBPROC_ABI>["symbols"];
 
-interface RawIdentity {
-	parentPid: number;
-	groupId: number;
-	startSecLo: number;
-	startSecHi: number;
-	startUsecLo: number;
-	startUsecHi: number;
+function readU64(view: DataView, offset: number): number {
+	return view.getUint32(offset + 4, true) * U32_RANGE + view.getUint32(offset, true);
 }
 
-function freshIdentity(): RawIdentity {
-	return { parentPid: 0, groupId: 0, startSecLo: 0, startSecHi: 0, startUsecLo: 0, startUsecHi: 0 };
+function sameProcess(a: ProcessRecord, b: ProcessRecord): boolean {
+	return a.parentPid === b.parentPid && a.groupId === b.groupId && a.startedAt === b.startedAt;
 }
 
-function readIdentityInto(symbols: NativeSymbols, bytes: Uint8Array, view: DataView, pid: number, out: RawIdentity): boolean {
-	if (symbols.proc_pidinfo(pid, 3, 0, ptr(bytes), BSD_INFO_SIZE) !== BSD_INFO_SIZE) return false;
-	if (view.getUint32(12, true) !== pid || view.getUint32(4, true) === ZOMBIE_STATUS) return false;
-	out.parentPid = view.getUint32(16, true);
-	out.groupId = view.getUint32(100, true);
-	out.startSecLo = view.getUint32(120, true);
-	out.startSecHi = view.getUint32(124, true);
-	out.startUsecLo = view.getUint32(128, true);
-	out.startUsecHi = view.getUint32(132, true);
-	return true;
+function truncate(text: string): string {
+	return text.length > MAX_COMMAND_CHARS ? `${text.slice(0, MAX_COMMAND_CHARS - 1)}…` : text;
 }
 
-function sameIdentity(a: RawIdentity, b: RawIdentity): boolean {
-	return (
-		a.parentPid === b.parentPid &&
-		a.groupId === b.groupId &&
-		a.startSecHi === b.startSecHi &&
-		a.startSecLo === b.startSecLo &&
-		a.startUsecHi === b.startUsecHi &&
-		a.startUsecLo === b.startUsecLo
-	);
-}
-
-function startedAtOf(raw: RawIdentity): bigint {
-	const sec = BigInt(raw.startSecHi) * HI_HALF_UNIT + BigInt(raw.startSecLo);
-	const usec = BigInt(raw.startUsecHi) * HI_HALF_UNIT + BigInt(raw.startUsecLo);
-	return sec * 1_000_000n + usec;
-}
-
-function readProcess(symbols: NativeSymbols, bytes: Uint8Array, view: DataView, pid: number, scratch: RawIdentity): ProcessRecord | null {
-	if (!readIdentityInto(symbols, bytes, view, pid, scratch)) return null;
-	return { pid, parentPid: scratch.parentPid, groupId: scratch.groupId, startedAt: startedAtOf(scratch) };
-}
-
-function argumentCapacity(symbols: NativeSymbols): number | null {
-	const mib = new Int32Array([1, 8]); // CTL_KERN, KERN_ARGMAX
+function argumentBuffer(symbols: NativeSymbols): Uint8Array | null {
+	const mib = new Int32Array([CTL_KERN, KERN_ARGMAX]);
 	const value = new Int32Array(1);
 	const length = new BigUint64Array([4n]);
 	if (symbols.sysctl(ptr(mib), mib.length, ptr(value), ptr(length), null, 0) !== 0 || length[0] !== 4n) return null;
 	const capacity = value[0];
-	return capacity !== undefined && capacity > 0 ? capacity + 4 : null;
+	return capacity !== undefined && capacity > 0 ? new Uint8Array(capacity + ARGC_BYTES) : null;
 }
 
 /** Never decode the environment. */
 function decodeCommand(bytes: Uint8Array, length: number): string | null {
-	if (length < 4) return null;
+	if (length < ARGC_BYTES) return null;
 	const argc = new DataView(bytes.buffer, bytes.byteOffset, length).getInt32(0, true);
-	if (argc <= 0 || argc > length - 4) return null;
-	let cursor = bytes.indexOf(0, 4);
+	if (argc <= 0 || argc > length - ARGC_BYTES) return null;
+	let cursor = bytes.indexOf(0, ARGC_BYTES);
 	if (cursor < 0 || cursor >= length) return null;
 	while (cursor < length && bytes[cursor] === 0) cursor++;
 	const args: string[] = [];
 	let characters = 0;
-	for (let index = 0; index < argc && cursor < length && characters < 240; index++) {
+	for (let index = 0; index < argc && cursor < length && characters < MAX_COMMAND_CHARS; index++) {
 		const end = bytes.indexOf(0, cursor);
 		if (end < cursor || end >= length) return null;
-		const argument = decoder.decode(bytes.subarray(cursor, Math.min(end, cursor + 960))).replace(/\p{Cc}/gu, " ");
+		const argument = decoder.decode(bytes.subarray(cursor, Math.min(end, cursor + MAX_ARGUMENT_BYTES))).replace(/\p{Cc}/gu, " ");
 		args.push(argument);
 		characters += argument.length + 1;
 		cursor = end + 1;
 	}
 	const command = args.join(" ");
-	return command.length === 0 ? null : command.length > 240 ? `${command.slice(0, 239)}…` : command;
+	return command.length === 0 ? null : truncate(command);
 }
 
-export function openDarwinProcesses(): ProcessSource {
-	const library = dlopen("/usr/lib/libproc.dylib", LIBPROC_ABI);
-	const symbols = library.symbols;
-	const info = new Uint8Array(BSD_INFO_SIZE);
-	const infoView = new DataView(info.buffer);
-	const usage = new Uint8Array(RUSAGE_SIZE);
-	const usageView = new DataView(usage.buffer);
-	const path = new Uint8Array(4096);
-	const capacity = argumentCapacity(symbols);
-	const args = capacity === null ? null : new Uint8Array(capacity);
-	const argsLength = new BigUint64Array(1);
-	const argsMib = new Int32Array([1, 49, 0]); // CTL_KERN, KERN_PROCARGS2, pid
-	let pidBuffer = new Int32Array(1024);
-	let current = new Map<number, ProcessRecord>();
-	let next = new Map<number, ProcessRecord>();
-	const birth = new Map<number, RawIdentity>();
-	const pids = new Set<number>();
-	const view: { processes: Map<number, ProcessRecord>; pids: Set<number> } = { processes: current, pids };
-	const scratch = freshIdentity();
-	const commandPre = freshIdentity();
+export class DarwinProcesses implements ProcessSource {
+	readonly #library = dlopen("/usr/lib/libproc.dylib", LIBPROC_ABI);
+	readonly #symbols = this.#library.symbols;
+	readonly #info = new Uint8Array(BSD_INFO_SIZE);
+	readonly #infoView = new DataView(this.#info.buffer);
+	readonly #usage = new Uint8Array(RUSAGE_SIZE);
+	readonly #usageView = new DataView(this.#usage.buffer);
+	readonly #path = new Uint8Array(PATH_BYTES);
+	readonly #args = argumentBuffer(this.#symbols);
+	readonly #argsLength = new BigUint64Array(1);
+	readonly #argsMib = new Int32Array([CTL_KERN, KERN_PROCARGS2, 0]);
+	#pidBuffer = new Int32Array(1024);
 
-	return {
-		snapshot(): SnapshotResult {
-			const needed = symbols.proc_listallpids(null, 0);
-			if (needed <= 0) return { kind: "unavailable", reason: "proc_listallpids sizing failed" };
-			if (needed >= pidBuffer.length) pidBuffer = new Int32Array(needed + 256);
-			let count = symbols.proc_listallpids(ptr(pidBuffer), pidBuffer.byteLength);
-			// The kernel can add PIDs between sizing and filling. A full buffer is not a complete snapshot.
-			while (count >= pidBuffer.length) {
-				pidBuffer = new Int32Array(pidBuffer.length * 2);
-				count = symbols.proc_listallpids(ptr(pidBuffer), pidBuffer.byteLength);
-			}
-			if (count <= 0) return { kind: "unavailable", reason: "proc_listallpids enumeration failed" };
-			pids.clear();
-			for (let index = 0; index < count; index++) {
-				const pid = pidBuffer[index];
-				if (pid !== undefined && pid > 0) pids.add(pid);
-			}
-			next.clear();
-			for (const pid of pids) {
-				if (!readIdentityInto(symbols, info, infoView, pid, scratch)) continue;
-				const kept = current.get(pid);
-				const known = kept === undefined ? undefined : birth.get(pid);
-				if (kept !== undefined && known !== undefined && sameIdentity(known, scratch)) {
-					next.set(pid, kept);
-				} else {
-					next.set(pid, {
-						pid,
-						parentPid: scratch.parentPid,
-						groupId: scratch.groupId,
-						startedAt: startedAtOf(scratch),
-					});
-					if (known !== undefined) {
-						known.parentPid = scratch.parentPid;
-						known.groupId = scratch.groupId;
-						known.startSecHi = scratch.startSecHi;
-						known.startSecLo = scratch.startSecLo;
-						known.startUsecHi = scratch.startUsecHi;
-						known.startUsecLo = scratch.startUsecLo;
-					} else {
-						birth.set(pid, { ...scratch });
-					}
-				}
-			}
-			// Recheck every candidate AFTER all relations were read.
-			// A reused PID or changed PPID/PGID must never authorize a new ownership edge.
-			for (const [pid, known] of birth) {
-				if (!next.has(pid)) continue;
-				if (!readIdentityInto(symbols, info, infoView, pid, scratch) || !sameIdentity(known, scratch)) {
-					next.delete(pid);
-					birth.delete(pid);
-				}
-			}
-			for (const pid of birth.keys()) if (!next.has(pid)) birth.delete(pid);
-			const previous = current;
-			current = next;
-			next = previous;
-			view.processes = current;
-			return { kind: "available", snapshot: view };
-		},
-		process(pid) {
-			return readProcess(symbols, info, infoView, pid, scratch);
-		},
-		footprint(pid) {
-			return symbols.proc_pid_rusage(pid, 0, ptr(usage)) === 0 ? usageView.getBigUint64(72, true) : null;
-		},
-		command(pid) {
-			if (args !== null) {
-				const preOk = readIdentityInto(symbols, info, infoView, pid, commandPre);
-				argsMib[2] = pid;
-				argsLength[0] = BigInt(args.byteLength);
-				try {
-					if (preOk && symbols.sysctl(ptr(argsMib), argsMib.length, ptr(args), ptr(argsLength), null, 0) === 0) {
-						const length = Number(argsLength[0]);
-						// TOCTOU recheck AFTER the argv read, BEFORE decode: a recycled PID's
-						// bytes must never decode, and foreign bytes must never be retained.
-						if (
-							length >= 4 &&
-							length <= args.byteLength &&
-							readIdentityInto(symbols, info, infoView, pid, scratch) &&
-							sameIdentity(commandPre, scratch)
-						) {
-							const command = decodeCommand(args, length);
-							if (command !== null) return command;
-						}
-					}
-				} finally {
-					// sysctl may also copy environment bytes; retain neither them nor the full argv.
-					args.fill(0);
-				}
-			}
-			const length = symbols.proc_pidpath(pid, ptr(path), path.byteLength);
-			return length > 0 ? decoder.decode(path.subarray(0, Math.min(length, 240))) : "(command unavailable)";
-		},
-		close() {
-			library.close();
-		},
-	};
+	snapshot(): SnapshotResult {
+		const symbols = this.#symbols;
+		const needed = symbols.proc_listallpids(null, 0);
+		if (needed <= 0) return { kind: "unavailable", reason: "proc_listallpids sizing failed" };
+		if (needed >= this.#pidBuffer.length) this.#pidBuffer = new Int32Array(needed + 256);
+		let count = symbols.proc_listallpids(ptr(this.#pidBuffer), this.#pidBuffer.byteLength);
+		// A full buffer is not a complete snapshot: the kernel can add PIDs between sizing and filling.
+		while (count >= this.#pidBuffer.length) {
+			this.#pidBuffer = new Int32Array(this.#pidBuffer.length * 2);
+			count = symbols.proc_listallpids(ptr(this.#pidBuffer), this.#pidBuffer.byteLength);
+		}
+		if (count <= 0) return { kind: "unavailable", reason: "proc_listallpids enumeration failed" };
+		const pids = new Set<number>();
+		for (const pid of this.#pidBuffer.subarray(0, count)) if (pid > 0) pids.add(pid);
+		const processes = new Map<number, ProcessRecord>();
+		for (const pid of pids) {
+			const record = this.process(pid);
+			if (record !== null) processes.set(pid, record);
+		}
+		// A reused PID or changed PPID/PGID must never authorize an ownership edge:
+		// keep only records that stayed unchanged until every relation was read.
+		for (const [pid, record] of processes) {
+			const again = this.process(pid);
+			if (again === null || !sameProcess(record, again)) processes.delete(pid);
+		}
+		return { kind: "available", snapshot: { processes, pids } };
+	}
+
+	process(pid: number): ProcessRecord | null {
+		const view = this.#infoView;
+		if (this.#symbols.proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, ptr(this.#info), BSD_INFO_SIZE) !== BSD_INFO_SIZE) return null;
+		if (view.getUint32(BSD_PID, true) !== pid || view.getUint32(BSD_STATUS, true) === SZOMB) return null;
+		return {
+			pid,
+			parentPid: view.getUint32(BSD_PPID, true),
+			groupId: view.getUint32(BSD_PGID, true),
+			startedAt: readU64(view, BSD_START_SEC) * 1_000_000 + readU64(view, BSD_START_USEC),
+		};
+	}
+
+	footprint(pid: number): number | null {
+		if (this.#symbols.proc_pid_rusage(pid, RUSAGE_INFO_V0, ptr(this.#usage)) !== 0) return null;
+		return readU64(this.#usageView, RUSAGE_PHYS_FOOTPRINT);
+	}
+
+	command(pid: number): string {
+		return this.#argv(pid) ?? this.#executablePath(pid) ?? "(command unavailable)";
+	}
+
+	close(): void {
+		this.#library.close();
+	}
+
+	#argv(pid: number): string | null {
+		const args = this.#args;
+		if (args === null) return null;
+		const before = this.process(pid);
+		if (before === null) return null;
+		this.#argsMib[2] = pid;
+		this.#argsLength[0] = BigInt(args.byteLength);
+		try {
+			if (this.#symbols.sysctl(ptr(this.#argsMib), this.#argsMib.length, ptr(args), ptr(this.#argsLength), null, 0) !== 0) return null;
+			const length = Number(this.#argsLength[0]);
+			const after = this.process(pid);
+			// A recycled PID's argv must never be decoded.
+			if (length > args.byteLength || after === null || !sameProcess(before, after)) return null;
+			return decodeCommand(args, length);
+		} finally {
+			// sysctl also copies environment bytes: never retain them or the full argv.
+			args.fill(0);
+		}
+	}
+
+	#executablePath(pid: number): string | null {
+		const length = this.#symbols.proc_pidpath(pid, ptr(this.#path), this.#path.byteLength);
+		return length > 0 ? truncate(decoder.decode(this.#path.subarray(0, length))) : null;
+	}
 }

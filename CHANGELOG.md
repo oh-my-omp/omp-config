@@ -24,6 +24,7 @@
 
 - Detected `repo-rules` single-file `cat`/`head`/`tail` reads in `bash` with OMP's own shell lexer (`tools/shell-tokenize`) instead of a private tokenizer, and found the repository root for rule scanning with OMP's `findRepoRoot`
 - Made `model-compaction` refuse a rule whose `thresholdTokens` does not fit below the model's largest context window, deciding tier changes and fit with OMP's own `planModelCompactionPoint`, and name the rule file instead of a list index in refusal warnings
+- Simplified `child-memory-warning`: process start times and footprints are exact numbers instead of split 64-bit halves, each scan builds fresh process and ownership indexes instead of reusing aliased buffers, the libproc reader is one class with named offsets, and the non-Darwin log line reads `disabled (darwin only)`
 - Updated the shared copy of `compact-handoff.ts` to oh-my-omp/shared@db9dde4.
 - Gated every `task-split-check` and `task-completion-judge` model attempt on the session's spend cap (a refusal ends the check without trying the next model) and recorded each reply's usage in the calling session's ledger, its cost in the session's spend and a chat telemetry span
 - Made `task-split-check` and `task-completion-judge` skip a model without credentials and move on to the next one
@@ -68,6 +69,7 @@
 
 ### Fixed
 
+- Stopped `child-memory-warning` from repeating the same sampling-failure warning every 2 s when the failure happens after a successful process snapshot, and described `child-memory-warning.thresholdGiB` as phys_footprint instead of resident memory
 - Registered the `repo-rules` compaction handoff under its real `omp-config/repo-rules` source and stopped its summary claim from calling root `AGENTS.md`/`CLAUDE.md` "non-root" or naming internal helper calls
 - Made `input-polish` try the next model when a rewrite comes back empty or drops or changes an attachment/paste placeholder, instead of failing on the first model
 - Kept the `input-polish` preview box inside terminals narrower than 22 columns and sized it from the TUI's own terminal height

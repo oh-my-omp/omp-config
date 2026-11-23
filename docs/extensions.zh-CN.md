@@ -226,7 +226,7 @@ cwd: /absolute/path/to/leader-checkout
 
 源码：`agent/extensions/child-memory-warning/`。仅 macOS（Darwin），完整模式与轻量模式均启用。
 
-首个主会话在 `session_start` 通过 Bun FFI 打开系统 `libproc`/`sysctl`，启动每 2 秒一次的采样定时器（非 Darwin 平台记一条 `未启用` info 日志；主会话关闭时先清定时器再关闭句柄）：
+首个主会话在 `session_start` 通过 Bun FFI 打开系统 `libproc`/`sysctl`，启动每 2 秒一次的采样定时器（非 Darwin 平台记一条 `disabled (darwin only)` info 日志；主会话关闭时先清定时器再关闭句柄）：
 
 - 读取 `proc_pid_rusage` 的 `ri_phys_footprint`（含压缩与换出内存），用 `PID + 内核启动时间` 标识进程。追踪当前 OMP 进程归属的后代 OS 子进程及由后代组长创建的进程组；父进程退出后变成孤儿（`PPID === 1`）的已观测后代继续追踪至退出。在进程内运行的子代理——主线程，或在并发子代理超过 8 个且 `task.workerThreads` 大于 0 时进入 worker 线程——与 OMP 进程共享内存，不在监控范围内。
 - 每次采样重读 `child-memory-warning.thresholdGiB` 设置（`omp-config`；manifest 默认 `4`；项目 `.omp/plugin-overrides.json` 的同名项优先于机器值）。值读不出或无效时继续追踪进程但暂停告警，每种新配置问题记一次 warning。
