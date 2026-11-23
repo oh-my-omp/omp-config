@@ -1,4 +1,6 @@
+import { quotedCall } from "./call-quote.ts";
 import { detectCommandViolations } from "./heuristic.ts";
+import { elevation, literalTokens, resolveCommand } from "./shell-command.ts";
 import type { SimpleCommand } from "./shell-parser.ts";
 import type { ExecutedTrace, TraceStep } from "./trace.ts";
 
@@ -27,6 +29,13 @@ const SHELL_PLUMBING: Record<string, true> = {
 	"[": true,
 	"[[": true,
 	mkdir: true,
+	for: true,
+	case: true,
+	exit: true,
+	fi: true,
+	done: true,
+	esac: true,
+	"}": true,
 };
 
 const WRITING_PROGRAMS: Record<string, true> = {
@@ -154,45 +163,30 @@ const WRITING_FLAGS: Record<string, RegExp> = {
 	tar: /(^|\s)-[a-z]*[cx]/,
 };
 
-const basename = (path: string): string => {
-	const slash = path.lastIndexOf("/");
-	return slash === -1 ? path : path.slice(slash + 1);
-};
-
-const isEnvAssignment = (text: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(text);
-
-type Step = { readonly program: string; readonly args: string };
+type Step = { readonly program: string; readonly args: readonly string[] };
 
 function stepsOf(commands: readonly SimpleCommand[]): Step[] {
 	const steps: Step[] = [];
 	for (const simple of commands) {
-		const words: string[] = [];
-		for (const token of simple.tokens) if (token.kind === "word") words.push(token.text);
-		let head = words.shift();
-		while (head !== undefined && isEnvAssignment(head)) head = words.shift();
-		if (head === undefined) continue;
-		steps.push({ program: basename(head), args: words.join(" ") });
+		const invocation = resolveCommand(simple.tokens, simple.piped, "none");
+		if (invocation === null) continue;
+		steps.push({ program: invocation.program, args: invocation.args });
+		const elevated = elevation(invocation.program, invocation.args);
+		const inner = elevated === null ? null : resolveCommand(literalTokens(elevated.command), false, "none");
+		if (inner !== null) steps.push({ program: inner.program, args: inner.args });
 	}
 	return steps;
 }
 
-const writesByJob = (step: Step): boolean => WRITING_PROGRAMS[step.program] === true;
-
-const subcommands = (args: string): string[] =>
-	args
-		.split(/\s+/)
-		.filter((word) => word !== "" && !word.startsWith("-"))
-		.slice(0, 2);
-
-const writesBySubcommand = (step: Step): boolean => {
+function writes(step: Step): boolean {
+	if (WRITING_PROGRAMS[step.program] === true) return true;
 	const verbs = WRITING_SUBCOMMANDS[step.program];
-	if (verbs === undefined) return false;
-	return subcommands(step.args).some((word) => verbs[word] === true);
-};
+	const subcommands = step.args.filter((word) => word !== "" && !word.startsWith("-")).slice(0, 2);
+	if (verbs !== undefined && subcommands.some((word) => verbs[word] === true)) return true;
+	return WRITING_FLAGS[step.program]?.test(step.args.join(" ")) === true;
+}
 
-const writesByFlag = (step: Step): boolean => WRITING_FLAGS[step.program]?.test(step.args) === true;
-
-export type RiskFinding = {
+type RiskFinding = {
 	readonly commands: number;
 	readonly chars: number;
 	readonly programs: readonly string[];
@@ -207,29 +201,26 @@ export function inspectRisk(commands: readonly SimpleCommand[], text: string, li
 	const programs = [...new Set(steps.map((step) => step.program))];
 	const foreign = programs.filter((program) => SHELL_PLUMBING[program] !== true);
 	if (foreign.length < limits.minPrograms) return null;
-	const writes = new Set<string>();
-	for (const step of steps) if (writesByJob(step) || writesBySubcommand(step) || writesByFlag(step)) writes.add(step.program);
+	const writing = new Set<string>();
+	for (const step of steps) if (writes(step)) writing.add(step.program);
 	for (const violation of detectCommandViolations(commands, () => true)) {
 		for (const category of violation.categories) {
-			if (category === "edit" || category === "write") writes.add(violation.program);
+			if (category === "edit" || category === "write") writing.add(violation.program);
 		}
 	}
-	if (writes.size === 0) return null;
-	return { commands: simple, chars, programs: foreign, writes: [...writes].sort() };
+	if (writing.size === 0) return null;
+	return { commands: simple, chars, programs: foreign, writes: [...writing].sort() };
 }
 
+const codeList = (programs: readonly string[]): string => programs.map((program) => `\`${program}\``).join("、");
+
 export function riskReminder(tool: string, command: string, finding: RiskFinding): string {
+	const programs = `${codeList(finding.programs.slice(0, 8))}${finding.programs.length > 8 ? "…" : ""}`;
 	return [
-		`你这次 \`${tool}\` 调用有 ${finding.commands} 段命令、${finding.chars} 字符，牵涉 ${finding.programs.length} 个外部程序（${finding.programs
-			.slice(0, 8)
-			.map((program) => `\`${program}\``)
-			.join(
-				"、",
-			)}${finding.programs.length > 8 ? "…" : ""}），其中 ${finding.writes.map((program) => `\`${program}\``).join("、")} 会写入。`,
+		`你这次 \`${tool}\` 调用有 ${finding.commands} 段命令、${finding.chars} 字符，牵涉 ${finding.programs.length} 个外部程序（${programs}），其中 ${codeList(finding.writes)} 会写入。`,
 		"它太长、牵涉太多别的软件，执行结果没法只从这一行看出来：拆成几条分开跑，或先确认它到底会改动什么。",
 		"",
-		"这次调用：",
-		`\`\`\`sh\n${command}\n\`\`\``,
+		quotedCall(command, "sh"),
 	].join("\n");
 }
 
@@ -257,7 +248,6 @@ export function maskedFailureReminder(tool: string, command: string, masked: rea
 		...masked.map((step) => `- \`${shown(step)}\` 退出码 ${step.status}，没有任何输出，也没有被 \`if\`/\`&&\`/\`||\`/\`!\` 检查。`),
 		"后面的步骤照常执行了，整条调用的输出不能说明每一步都成功。先确认这一步为什么失败、对后续步骤有没有影响：把它单独运行，或用 `&&` 串联让失败停住整条命令。",
 		"",
-		"这次调用：",
-		`\`\`\`sh\n${command}\n\`\`\``,
+		quotedCall(command, "sh"),
 	].join("\n");
 }

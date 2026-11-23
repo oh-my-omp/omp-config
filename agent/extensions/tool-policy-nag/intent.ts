@@ -4,8 +4,9 @@ import type { Judge, JudgmentState } from "@oh-my-pi/pi-ai";
 import { z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import type { WatchedCall } from "../_shared/tool-calls.ts";
+import { quotedCall } from "./call-quote.ts";
 
-const JUDGE_TIMEOUT_MS = 90_000;
+export const JUDGE_TIMEOUT_MS = 90_000;
 const SPEC_NAME = /^INTENT-.*\.md$/;
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
@@ -106,13 +107,6 @@ export async function judgeIntent(judge: Judge, spec: IntentSpec, call: WatchedC
 	}
 }
 
-function fenced(text: string, language: string): string {
-	let longest = 2;
-	for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
-	const marks = "`".repeat(longest + 1);
-	return `${marks}${language}\n${text}\n${marks}`;
-}
-
 export function intentViolation(call: WatchedCall, label: string): boolean {
 	switch (call.kind) {
 		case "shell":
@@ -131,9 +125,6 @@ export function intentReminder(call: WatchedCall, option: IntentOption): string 
 	return [
 		`你这次 \`${tool}\` 调用属于「${option.title}」，应该用 ${option.tool}，而不是这样绕出去。`,
 		"",
-		"这次调用：",
-		call.kind === "shell" ? fenced(call.command, "sh") : fenced(call.code, call.language),
+		call.kind === "shell" ? quotedCall(call.command, "sh") : quotedCall(call.code, call.language),
 	].join("\n");
 }
-
-export { JUDGE_TIMEOUT_MS };

@@ -6,6 +6,7 @@ import {
 	hasAny,
 	hasOption,
 	INTERLEAVED,
+	literalTokens,
 	OPTIONS_FIRST,
 	type OptionGrammar,
 	optionName,
@@ -323,8 +324,6 @@ function commandsOf(tokens: readonly CommandToken[], context: ShellContext): Com
 	if (elevated === null || elevated.prompts || elevated.command.length === 0) return [found];
 	return [found, ...commandsOf(literalTokens(elevated.command), { ...context, piped: found.stdinFed })];
 }
-
-const literalTokens = (words: readonly string[]): CommandToken[] => words.map((text) => ({ kind: "word", text, dynamic: false }));
 
 function commandHit(found: Command): PtyHit | null {
 	for (const rule of RULE_IDS) {

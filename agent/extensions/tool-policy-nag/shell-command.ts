@@ -193,6 +193,8 @@ export function elevation(program: string, args: readonly string[]): Elevation |
 
 export const fileOperands = (operands: readonly string[]): string[] => operands.filter((operand) => operand !== "-" && operand.length > 0);
 
+export const literalTokens = (words: readonly string[]): CommandToken[] => words.map((text) => ({ kind: "word", text, dynamic: false }));
+
 const EXEMPT_PROGRAMS: Readonly<Record<string, true>> = { sudo: true, doas: true, su: true, ssh: true };
 
 const RESERVED_WORDS: ReadonlySet<string> = new Set(["!", "{", "if", "then", "elif", "else", "do", "while", "until"]);
