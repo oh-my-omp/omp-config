@@ -12,7 +12,8 @@ import {
 	parseSessionFilter,
 	type SessionFilter,
 } from "../_shared/session-filter.ts";
-import { discoverSpecFiles, isEnabled, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+
 const WATCHDOG_FILE_PATTERN = /^WATCHDOG-.+\.md$/i;
 export const WATCHDOG_FILTER_KEYS: FilterKeys = { target: "target", cwd: "cwd", model: "watchModel", provider: "watchProvider" };
 const DEFAULT_TOOLS: readonly string[] = ["read", "grep", "glob"];
@@ -72,6 +73,35 @@ export function discoverWatchdogFiles(cwd: string): string[] {
 	return discoverSpecFiles(WATCHDOG_FILE_PATTERN, import.meta.dir, cwd);
 }
 
+type EditedPaths = Pick<EditToolDetails, "path" | "sourcePath"> & {
+	readonly perFileResults?: readonly Pick<EditToolPerFileResult, "path" | "sourcePath">[];
+};
+
+const editedPathsSchema: zod.ZodLikeSchema<EditedPaths> = z.object({
+	path: z.string().optional(),
+	sourcePath: z.string().optional(),
+	perFileResults: z.array(z.object({ path: z.string(), sourcePath: z.string().optional() })).optional(),
+});
+
+function editedPaths(details: unknown): string[] {
+	const parsed = editedPathsSchema.safeParse(details);
+	if (!parsed.success) return [];
+	const files = [parsed.data, ...(parsed.data.perFileResults ?? [])];
+	return files.flatMap((file) => [file.path, file.sourcePath].filter((path): path is string => path !== undefined));
+}
+
+export function touchedWatchdogFiles(toolName: string, input: Record<string, unknown>, details: unknown, cwd: string): string[] {
+	const raw = toolName === "write" && typeof input.path === "string" ? [input.path] : toolName === "edit" ? editedPaths(details) : [];
+	const files = new Set<string>();
+	for (const path of raw) {
+		if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) continue;
+		const expanded = path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
+		const absolute = resolve(cwd, expanded);
+		if (WATCHDOG_FILE_PATTERN.test(basename(absolute))) files.add(absolute);
+	}
+	return [...files];
+}
+
 function toList(value: string): string[] {
 	const s = value.trim();
 	const inner = s.startsWith("[") && s.endsWith("]") ? s.slice(1, -1) : s;
@@ -123,7 +153,7 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 		return { kind: "invalid", reason: `cannot read: ${errorText(error)}` };
 	}
 	const { fields, body } = parseFrontmatter(raw) ?? { fields: {}, body: raw };
-	const enabled = isEnabled(fields);
+	const enabled = fields.enabled === undefined || /^(true|yes|on|1)$/i.test(unquote(fields.enabled));
 	const filter = parseSessionFilter(fields, WATCHDOG_FILTER_KEYS, { kind: "required" }, "frontmatter");
 	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
 	const inject = parseInjectMode(fields.inject);

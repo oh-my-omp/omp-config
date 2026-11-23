@@ -5,7 +5,10 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { describeFilter } from "../_shared/session-filter.ts";
-import { WATCHDOG_FILE_PATTERN, WATCHDOG_FILTER_KEYS, type WatchdogSpec } from "./spec.ts";
+import { buildAddPrompt, buildEditPrompt, type DraftContext } from "./drafts.ts";
+import { defaultReviewerModel } from "./review.ts";
+import { setFrontmatterEnabled, WATCHDOG_FILTER_KEYS, type WatchdogSpec } from "./spec.ts";
+import { cwdOf, describe, effectiveEnabled, ensureActive, logActive, type Runtime, refresh, setOverride, targetsHere } from "./state.ts";
 
 type Toggle = "on" | "off";
 type ToggleScope = "session" | "global";
@@ -79,21 +82,14 @@ type CommandResult = { readonly kind: "info" | "error" | "prompt"; readonly text
 
 type Lookup = { readonly kind: "found"; readonly spec: WatchdogSpec } | { readonly kind: "error"; readonly text: string };
 
-export function touchedWatchdogFiles(toolName: string, input: Record<string, unknown>, cwd: string): string[] {
-	const raw: string[] = [];
-	if ((toolName === "write" || toolName === "edit") && typeof input.path === "string") raw.push(input.path);
-	if (toolName === "edit" && typeof input.input === "string" && WATCHDOG_MENTION.test(input.input)) {
-		for (const m of input.input.matchAll(EDIT_PATH_PATTERN)) {
-			const path = m[1] ?? m[2];
-			if (path !== undefined) raw.push(path);
-		}
-	}
-	const files = new Set<string>();
-	for (const path of raw) {
-		if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) continue;
-		const expanded = path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
-		const absolute = resolve(cwd, expanded);
-		if (WATCHDOG_FILE_PATTERN.test(basename(absolute))) files.add(absolute);
+function findByName(runtime: Runtime, name: string): Lookup {
+	const lower = name.toLowerCase();
+	const [spec, ...more] = runtime.roster.filter((candidate) => candidate.name.toLowerCase() === lower);
+	if (!spec) {
+		return {
+			kind: "error",
+			text: tr(`watchdog "${name}" not found (see /watchdog list)`, `未找到 watchdog“${name}”（参见 /watchdog list）`),
+		};
 	}
 	if (more.length === 0) return { kind: "found", spec };
 	const paths = [spec, ...more].map((s) => `  ${s.filePath}`).join("\n");
@@ -162,18 +158,90 @@ function draftPrompt(runtime: Runtime, command: Extract<WatchdogCommand, { kind:
 	}
 }
 
-${WATCHDOG_INTRO}
+async function remove(runtime: Runtime, name: string, ctx: ExtensionContext): Promise<CommandResult> {
+	const found = findByName(runtime, name);
+	if (found.kind === "error") return found;
+	const spec = found.spec;
+	const confirmed = await ctx.ui.confirm(
+		tr(`Delete watchdog "${spec.name}"?`, `删除 watchdog“${spec.name}”？`),
+		`${describe(runtime, spec, tr)}\n\n${tr("The file is deleted from disk.", "文件将从磁盘删除。")}`,
+	);
+	if (!confirmed) return { kind: "info", text: tr(`watchdog "${spec.name}" kept`, `已保留 watchdog“${spec.name}”`) };
+	try {
+		unlinkSync(spec.filePath);
+	} catch (error) {
+		return {
+			kind: "error",
+			text: tr(`cannot delete ${spec.filePath}: ${errorText(error)}`, `无法删除 ${spec.filePath}：${errorText(error)}`),
+		};
+	}
+	setOverride(runtime, spec.filePath, null);
+	refresh(runtime);
+	return {
+		kind: "info",
+		text: tr(`watchdog "${spec.name}" deleted (${spec.filePath})`, `已删除 watchdog“${spec.name}”（${spec.filePath}）`),
+	};
+}
 
-Settle the file with the user in chat rounds. ${NO_ASK}
+function writeGlobalEnabled(spec: WatchdogSpec, enabled: boolean): CommandResult | null {
+	const raw = readSpecFile(spec.filePath);
+	if (raw.kind !== "ok") return raw;
+	const updated = setFrontmatterEnabled(raw.text, enabled);
+	if (updated === null) return { kind: "error", text: tr(`${spec.filePath} has no frontmatter`, `${spec.filePath} 没有 frontmatter`) };
+	if (updated === raw.text) return null;
+	try {
+		writeFileSync(spec.filePath, updated);
+		return null;
+	} catch (error) {
+		return {
+			kind: "error",
+			text: tr(`cannot write ${spec.filePath}: ${errorText(error)}`, `无法写入 ${spec.filePath}：${errorText(error)}`),
+		};
+	}
+}
 
-1. Draft. Fill every setting below: take a value from the requirement when it states or clearly implies one, otherwise keep the default. Reply with, in this order:
-   - ${EXPECTED_BEHAVIOUR}
-   - A settings table with every setting: value, source (\`requirement\` or \`default\`), and a one-line effect, so the user can change any setting by name.
-   - The full file content and its absolute path.
-   - One closing line asking which settings to change, or for confirmation to write it.
-   Write nothing to disk in this round.
-2. Revise. When the user names changes, apply them and reply again in the shape of step 1, marking the changed values. A reply that only changes settings is not a confirmation.
-3. Write. Only after the user explicitly confirms the latest draft, create the file with \`write\`. Never overwrite an existing file; if the path exists, choose another label and say so. ${WRITE_STATUS} End with one short paragraph on what happens from now on and how to switch it off (\`/watchdog off <name>\` for this session, \`/watchdog off <name> global\` for good).
+function toggle(runtime: Runtime, command: Extract<WatchdogCommand, { kind: "toggle" }>): CommandResult {
+	const found = findByName(runtime, command.name);
+	if (found.kind === "error") return found;
+	const spec = found.spec;
+	const enabled = command.toggle === "on";
+	const toggleWord = enabled ? tr("on", "开启") : tr("off", "关闭");
+	switch (command.scope) {
+		case "session":
+			if (!targetsHere(runtime, spec)) {
+				return {
+					kind: "error",
+					text: tr(
+						`watchdog "${spec.name}" does not target this session (${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, "any")}); use \`global\``,
+						`watchdog“${spec.name}”未将本会话作为目标（${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, "不限")}）；请使用 \`global\``,
+					),
+				};
+			}
+			setOverride(runtime, spec.filePath, enabled);
+			refresh(runtime);
+			return {
+				kind: "info",
+				text: tr(`watchdog "${spec.name}" ${command.toggle} for this session`, `watchdog“${spec.name}”已在本会话${toggleWord}`),
+			};
+		case "global": {
+			const failure = writeGlobalEnabled(spec, enabled);
+			if (failure) return failure;
+			setOverride(runtime, spec.filePath, null);
+			refresh(runtime);
+			return {
+				kind: "info",
+				text: tr(
+					`watchdog "${spec.name}" ${command.toggle} globally (${spec.filePath})`,
+					`watchdog“${spec.name}”已全局${toggleWord}（${spec.filePath}）`,
+				),
+			};
+		}
+		default: {
+			const unreachable: never = command.scope;
+			return unreachable;
+		}
+	}
+}
 
 async function runCommand(runtime: Runtime, command: WatchdogCommand, ctx: ExtensionContext): Promise<CommandResult> {
 	refresh(runtime);

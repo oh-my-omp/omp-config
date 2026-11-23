@@ -10,7 +10,7 @@ describe("watchdog filesystem writes", () => {
 
 	test("resource URI writes do not fabricate filesystem watchdog paths", () => {
 		for (const scheme of ["out", "local", "agent", "xd", "file"]) {
-			expect(touchedWatchdogFiles("write", { path: `${scheme}://notes/WATCHDOG-LowTierScope.md` }, "/tmp/worktree")).toEqual([]);
+			expect(touchedWatchdogFiles("write", { path: `${scheme}://notes/WATCHDOG-LowTierScope.md` }, undefined, "/tmp/worktree")).toEqual([]);
 		}
 	});
 

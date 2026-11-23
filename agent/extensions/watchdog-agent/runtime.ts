@@ -89,8 +89,13 @@ function advanceCursor(runtime: Runtime, state: WatchdogState, reviewed: number)
 	writeCursor(runtime.pi, state.spec.filePath, reviewed);
 }
 
-function start(runtime: Runtime, state: WatchdogState, ctx: ExtensionContext, tail: AgentMessage | undefined): void {
-	if (runtime.closed) return;
+function start(
+	runtime: Runtime,
+	session: ActiveSession,
+	state: WatchdogState,
+	ctx: ExtensionContext,
+	tail: AgentMessage | undefined,
+): void {
 	const spec = state.spec;
 	state.pending = 0;
 	if (state.sent >= spec.maxPerContext) return;
