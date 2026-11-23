@@ -65,6 +65,7 @@
 - Updated `tool-topics` to index and rewrite OMP 19.1.0 command-mounted tool sections (`## <tool>` / `<tool> — …` / `Usage:`) while skipping catalog-only entries without drift warnings, migrated `SURFACE-*`/`TOPIC-*` docs and `tool-policy-nag/pty.ts` from `xd://` to `help://` and command forms, and removed dead `xd://bash` device-write channel branches and their obsolete tests
 - Made `subagent-usage` reuse a full calibration that is already running instead of running a second full calibration after it
 - Restructured `watchdog-agent`: one session lifecycle (unloaded, active, closed) owns the per-session state, session entries are parsed with schemas in their own module, `/watchdog` handlers live with the command parser and draft prompts in their own module
+- Split `omp-config-update.ts` into modules for files, paths and exclusions, the report shape, plugins, omomp settings migration, legacy migrations, the `omp-light` launcher and conflict adaptation; the entry script keeps its exports, owner lists and retirement lists, and the Todo and fork plugin prerequisites share one readiness check (an installed plugin missing a required file now reports `<plugin> is missing <file>`)
 
 ### Removed
 
@@ -74,6 +75,7 @@
 
 ### Fixed
 
+- Fixed `omp-config-autoupdate.exclude` entries not protecting the numbered `APPEND-SYSTEM-model-NN.md` targets when the updater splits a legacy `APPEND_SYSTEM_MODEL.md` on Windows, and made the updater's excluded-path safety check see move and split targets there
 - Fixed `wt_remove` treating a subagent working in a worktree subdirectory whose name starts with `..` as outside the worktree, and a finished queued `wt` request resetting a newer request queued by the next session to idle
 - Accepted a UTF-8 byte-order mark at the start of `APPEND-SYSTEM-*.md`, `PROMPT-INJECT-*.md`, `TURN-JUDGE-*.md`, `WATCHDOG-*.md` and `COMPACTION-*.md` files instead of rejecting them for missing frontmatter (`append-system-model` already did), and read their `enabled` flag through one shared check
 - Stopped `child-memory-warning` from repeating the same sampling-failure warning every 2 s when the failure happens after a successful process snapshot, and described `child-memory-warning.thresholdGiB` as phys_footprint instead of resident memory

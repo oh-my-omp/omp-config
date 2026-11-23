@@ -6,8 +6,8 @@ import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { defineSettings, readSettings, writeSetting } from "../_shared/plugin-settings.ts";
-import { parseManifest } from "./omomp-migration.ts";
-import { type Kept, migrateProject, planProject } from "./project-migration.ts";
+import { type Kept, parseManifest } from "./omomp-migration.ts";
+import { migrateProject, planProject } from "./project-migration.ts";
 
 const SCRIPT = "omp-config-update.ts";
 const REPORT_TYPE = "omp-config-update";
@@ -96,7 +96,7 @@ type RunOutcome<T> =
 	| { readonly kind: "no-result"; readonly code: number | null; readonly stderr: string }
 	| { readonly kind: "result"; readonly result: T };
 
-/** One automatic run per process: child sessions share this module and must not re-run it. */
+// Never run the automatic update once per session: child sessions share this module.
 let started = false;
 
 type Parser<T> = { safeParse(value: unknown): { success: true; data: T } | { success: false } };
@@ -143,14 +143,17 @@ function section(title: string, items: readonly string[]): string[] {
 	return items.length === 0 ? [] : ["", `## ${title} (${items.length})`, ...items.map((item) => `- \`${item}\``)];
 }
 
-function pluginVersionChange(change: PluginChange): string {
-	const to = change.to ?? "?";
-	if (change.from === null) return tr(`new ${to}`, `新增 ${to}`);
-	return change.from === change.to ? tr(`${to} (new commit)`, `${to}（新提交）`) : `${change.from} → ${to}`;
-}
+type Text = (en: string, zh: string) => string;
 
-const pluginLines = (changes: readonly PluginChange[]): string[] =>
-	changes.map((change) => `${change.name} ${pluginVersionChange(change)}`);
+const english: Text = (en) => en;
+
+function pluginLines(changes: readonly PluginChange[], text: Text): string[] {
+	return changes.map((change) => {
+		const to = change.to ?? "?";
+		if (change.from === null) return `${change.name} ${text(`new ${to}`, `新增 ${to}`)}`;
+		return `${change.name} ${change.from === change.to ? text(`${to} (new commit)`, `${to}（新提交）`) : `${change.from} → ${to}`}`;
+	});
+}
 
 function conflictSection(conflicts: readonly Conflict[]): string[] {
 	if (conflicts.length === 0) return [];
@@ -247,7 +250,7 @@ function detailedReport(outcome: RunOutcome<AutoResult>, agentDir: string): stri
 				`- **${tr("Commit", "提交")}:** \`${short(result.commit)}\` (\`${result.commit}\`)${tr(", nothing applied", "，未应用任何更改")}`,
 				`- **${tr("Restart needed", "需要重启")}:** ${changed > 0 ? tr("yes — plugins changed", "是 — 插件发生变化") : tr("no", "否")}`,
 				...section(tr("Errors", "错误"), [...plugins.errors, ...(result.scan.kind === "failed" ? [result.scan.error] : [])]),
-				...section(tr("Plugins", "插件"), pluginLines(plugins.changes)),
+				...section(tr("Plugins", "插件"), pluginLines(plugins.changes, tr)),
 				...section(tr("Notes", "备注"), plugins.notes),
 				...conflictSection(result.scan.kind === "scanned" ? result.scan.conflicts : []),
 			].join("\n");
@@ -286,7 +289,7 @@ function detailedReport(outcome: RunOutcome<AutoResult>, agentDir: string): stri
 					report.skipped.map((entry) => `${entry.path}\` — \`${entry.reason}`),
 				),
 				...section(tr("Customized code overwritten", "被覆盖的本机代码修改"), report.overwritten),
-				...section(tr("Plugins", "插件"), pluginLines(report.pluginChanges)),
+				...section(tr("Plugins", "插件"), pluginLines(report.pluginChanges, tr)),
 				...section(tr("Plugins still missing", "仍缺少的插件"), report.pluginsMissing),
 				...section(tr("Notes", "备注"), report.notes),
 				...conflictSection(report.conflicts),
@@ -511,15 +514,6 @@ type StartupOutcome =
 	| { readonly kind: "updated"; readonly config: ConfigMove | null; readonly plugins: readonly string[]; readonly restart: boolean }
 	| { readonly kind: "failed"; readonly en: string; readonly zh: string };
 
-function pluginVersionChangeEnglish(change: PluginChange): string {
-	const to = change.to ?? "?";
-	if (change.from === null) return `new ${to}`;
-	return change.from === change.to ? `${to} (new commit)` : `${change.from} → ${to}`;
-}
-
-const pluginLogLines = (changes: readonly PluginChange[]): string[] =>
-	changes.map((change) => `${change.name} ${pluginVersionChangeEnglish(change)}`);
-
 function startupOutcome(outcome: RunOutcome<AutoResult>): StartupOutcome {
 	if (outcome.kind !== "result") return { kind: "failed", ...notRun(outcome) };
 	const result = outcome.result;
@@ -543,7 +537,7 @@ function startupOutcome(outcome: RunOutcome<AutoResult>): StartupOutcome {
 					zh: `omp-config：刷新插件时遇到 ${plugins.errors.length} 个错误，将在下次启动时重试：${plugins.errors[0]}；运行 /omp-config-autoupdate run 可查看完整报告`,
 				};
 			if (plugins.changes.length === 0) return { kind: "quiet", log: `omp-config: up to date at ${short(result.commit)}, plugins current` };
-			return { kind: "updated", config: null, plugins: pluginLogLines(plugins.changes), restart: true };
+			return { kind: "updated", config: null, plugins: pluginLines(plugins.changes, english), restart: true };
 		}
 		case "applied": {
 			const { report } = result;
@@ -554,17 +548,16 @@ function startupOutcome(outcome: RunOutcome<AutoResult>): StartupOutcome {
 					zh: `omp-config：已应用 ${short(result.commit)}，但出现 ${report.errors.length} 个错误，将在下次启动时重试：${report.errors[0]}；运行 /omp-config-autoupdate run 可查看完整报告`,
 				};
 			const files = report.written.length + report.moved.length + report.deleted.length;
-			const plugins = pluginLogLines(report.pluginChanges);
+			const plugins = pluginLines(report.pluginChanges, english);
 			let config: ConfigMove | null = null;
 			if (files > 0) {
-				const previous = result.previous ? short(result.previous) : "new";
-				config = {
-					change: tr(
-						`${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
-						`${result.previous ? short(result.previous) : "新建"} → ${short(result.commit)}（${files} 个文件）`,
-					),
-					logChange: `${previous} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
-				};
+				const previous = result.previous ? short(result.previous) : undefined;
+				const describe = (text: Text): string =>
+					text(
+						`${previous ?? "new"} → ${short(result.commit)} (${files} file${files === 1 ? "" : "s"})`,
+						`${previous ?? "新建"} → ${short(result.commit)}（${files} 个文件）`,
+					);
+				config = { change: describe(tr), logChange: describe(english) };
 			}
 			if (config === null && plugins.length === 0)
 				return { kind: "quiet", log: `omp-config: ${short(result.commit)} applied, host already matched` };

@@ -5,6 +5,21 @@ export function isMapping(value: unknown): value is Mapping {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export type Format = "json" | "yaml";
+
+export function parseStructured(text: string, format: Format): Mapping {
+	const value: unknown = format === "json" ? JSON.parse(text) : Bun.YAML.parse(text);
+	if (!isMapping(value)) throw new Error("root is not a mapping");
+	return value;
+}
+
+export function serialize(value: Mapping, format: Format): string {
+	const text = format === "json" ? `${JSON.stringify(value, null, 2)}\n` : Bun.YAML.stringify(value, null, 2).replace(/:[ ]+$/gm, ":");
+	const back = parseStructured(text, format);
+	if (!Bun.deepEquals(back, value)) throw new Error("serialized form does not round-trip");
+	return text.endsWith("\n") ? text : `${text}\n`;
+}
+
 export type ConflictReason = "both-changed" | "unknown-base" | "deleted-locally" | "dropped-upstream";
 
 export interface PathRules {

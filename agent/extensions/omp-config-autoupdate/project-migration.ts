@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { errorText } from "../_shared/errors.ts";
+import { atomicWrite } from "./files.ts";
 import { isMapping, type Mapping } from "./merge.ts";
-import { type Manifest, PLUGIN_NAME, planProjectMigration, type Scalar, withoutSections } from "./omomp-migration.ts";
-
-export type Kept = { readonly section: string; readonly reason: string };
+import { type Kept, type Manifest, planProjectMigration, type Scalar, withoutSections } from "./omomp-migration.ts";
+import { PLUGIN_NAME } from "./paths.ts";
 
 type RuleFile = { readonly target: string; readonly content: string };
 
@@ -41,7 +42,7 @@ function readOverrides(path: string): Overrides {
 	try {
 		root = JSON.parse(readFileSync(path, "utf8"));
 	} catch (error) {
-		return { kind: "invalid", reason: `${path}: ${error instanceof Error ? error.message : String(error)}` };
+		return { kind: "invalid", reason: `${path}: ${errorText(error)}` };
 	}
 	if (!isMapping(root)) return { kind: "invalid", reason: `${path}: not a JSON object` };
 	if (root.settings === undefined) return { kind: "ok", root, own: {} };
@@ -117,23 +118,11 @@ export function planProject(projectDir: string, manifest: Manifest): ProjectWork
 	};
 }
 
-function writeAtomic(path: string, content: string): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = join(dirname(path), `.${basename(path)}.omp-config-${process.pid}.tmp`);
-	try {
-		writeFileSync(tmp, content);
-		renameSync(tmp, path);
-	} catch (error) {
-		rmSync(tmp, { force: true });
-		throw error;
-	}
-}
-
 export function migrateProject(work: Extract<ProjectWork, { kind: "ready" }>): ProjectResult {
 	const written: string[] = [];
 	const deleted: string[] = [];
 	if (work.overrides !== undefined) {
-		writeAtomic(work.overrides.path, work.overrides.content);
+		atomicWrite(work.overrides.path, work.overrides.content);
 		written.push(work.overrides.path);
 		const back = readOverrides(work.overrides.path);
 		const own = back.kind === "ok" ? back.own : {};
@@ -144,7 +133,7 @@ export function migrateProject(work: Extract<ProjectWork, { kind: "ready" }>): P
 		}
 	}
 	for (const { target, content } of work.ruleFiles) {
-		writeAtomic(target, content);
+		atomicWrite(target, content);
 		written.push(target);
 	}
 	switch (work.omomp.kind) {
@@ -153,7 +142,7 @@ export function migrateProject(work: Extract<ProjectWork, { kind: "ready" }>): P
 			deleted.push(work.path);
 			break;
 		case "rewrite":
-			writeAtomic(work.path, work.omomp.text);
+			atomicWrite(work.path, work.omomp.text);
 			written.push(work.path);
 			break;
 		default: {

@@ -1,11 +1,10 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { errorText } from "../_shared/errors.ts";
 import { parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 import { isMapping, type Mapping } from "./merge.ts";
+import { PLUGIN_NAME } from "./paths.ts";
 
-export const PLUGIN_NAME = "omp-config";
-export const PLUGIN_DIR = "extensions/_shared";
 export const OMOMP_FILES = ["omomp.yml", "omomp.yaml", "omomp.json", "omomp.toml"] as const;
 
 const SECTIONS = [
@@ -149,6 +148,23 @@ export type OmompFile = {
 	readonly root: Mapping;
 };
 
+export type Kept = { readonly section: string; readonly reason: string };
+
+function collect(section: Section, from: SectionMove["from"], translation: Translation, moves: SectionMove[], kept: Kept[]): void {
+	switch (translation.kind) {
+		case "invalid":
+			kept.push({ section, reason: translation.reason });
+			return;
+		case "ok":
+			moves.push({ section, from, ...translation });
+			return;
+		default: {
+			const unreachable: never = translation;
+			throw new Error(`unknown translation ${String(unreachable)}`);
+		}
+	}
+}
+
 export type OmompPlan =
 	| { readonly kind: "none" }
 	| { readonly kind: "blocked"; readonly reason: string; readonly pendingExclude: readonly string[] | undefined }
@@ -156,7 +172,7 @@ export type OmompPlan =
 			readonly kind: "ready";
 			readonly file: OmompFile | undefined;
 			readonly moves: readonly SectionMove[];
-			readonly kept: readonly { readonly section: string; readonly reason: string }[];
+			readonly kept: readonly Kept[];
 			readonly pendingExclude: readonly string[] | undefined;
 	  };
 
@@ -357,7 +373,7 @@ export function planOmompMigration(input: PlanInput): OmompPlan {
 			const root = parseOmomp(path, text);
 			if (holdsOwnedSection(root)) parsed.push({ path, text, root });
 		} catch (error) {
-			unreadable.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+			unreadable.push(`${path}: ${errorText(error)}`);
 		}
 	}
 	if (parsed.length > 1) {
@@ -381,7 +397,7 @@ export function planOmompMigration(input: PlanInput): OmompPlan {
 	const file: OmompFile | undefined =
 		holder === undefined ? undefined : { ...holder, format: holder.path.endsWith(".json") ? "json" : "yaml" };
 	const moves: SectionMove[] = [];
-	const kept: { section: string; reason: string }[] = [];
+	const kept: Kept[] = [];
 	let pendingExclude: readonly string[] | undefined;
 	for (const section of SECTIONS) {
 		let value: unknown;
@@ -400,25 +416,13 @@ export function planOmompMigration(input: PlanInput): OmompPlan {
 			try {
 				value = JSON.parse(readFileSync(path, "utf8"));
 			} catch (error) {
-				kept.push({ section, reason: `${path}: ${error instanceof Error ? error.message : String(error)}` });
+				kept.push({ section, reason: `${path}: ${errorText(error)}` });
 				continue;
 			}
 			from = { kind: "legacy", rel: `agent/${rel}` };
 		}
 		if (section === "omp-config-autoupdate") pendingExclude = excludeOf(value, from.kind === "omomp" ? (file?.path ?? "") : from.rel);
-		const translation = translate(section, value, input.manifest, { kind: "machine", shipped: input.shipped });
-		switch (translation.kind) {
-			case "invalid":
-				kept.push({ section, reason: translation.reason });
-				break;
-			case "ok":
-				moves.push({ section, from, ...translation });
-				break;
-			default: {
-				const unreachable: never = translation;
-				return unreachable;
-			}
-		}
+		collect(section, from, translate(section, value, input.manifest, { kind: "machine", shipped: input.shipped }), moves, kept);
 	}
 	if (file === undefined && moves.length === 0 && kept.length === 0) return { kind: "none" };
 	return { kind: "ready", file, moves, kept, pendingExclude };
@@ -431,7 +435,7 @@ export type ProjectPlan =
 			readonly kind: "ready";
 			readonly file: OmompFile;
 			readonly moves: readonly SectionMove[];
-			readonly kept: readonly { readonly section: string; readonly reason: string }[];
+			readonly kept: readonly Kept[];
 	  };
 
 export function planProjectMigration(projectDir: string, manifest: Manifest): ProjectPlan {
@@ -445,7 +449,7 @@ export function planProjectMigration(projectDir: string, manifest: Manifest): Pr
 		try {
 			root = parseOmomp(path, text);
 		} catch (error) {
-			return { kind: "blocked", reason: `${path}: ${error instanceof Error ? error.message : String(error)}` };
+			return { kind: "blocked", reason: `${path}: ${errorText(error)}` };
 		}
 		if (holdsOwnedSection(root)) holders.push({ path, text, root, format: path.endsWith(".json") ? "json" : "yaml" });
 	}
@@ -455,22 +459,10 @@ export function planProjectMigration(projectDir: string, manifest: Manifest): Pr
 	if (file === undefined) return { kind: "none" };
 	if (file.path.endsWith(".toml")) return { kind: "blocked", reason: `${file.path}: a TOML file cannot be rewritten here` };
 	const moves: SectionMove[] = [];
-	const kept: { section: string; reason: string }[] = [];
+	const kept: Kept[] = [];
 	for (const section of SECTIONS) {
-		if (!Object.hasOwn(file.root, section)) continue;
-		const translation = translate(section, file.root[section], manifest, { kind: "project" });
-		switch (translation.kind) {
-			case "invalid":
-				kept.push({ section, reason: translation.reason });
-				break;
-			case "ok":
-				moves.push({ section, from: { kind: "omomp" }, ...translation });
-				break;
-			default: {
-				const unreachable: never = translation;
-				return unreachable;
-			}
-		}
+		if (Object.hasOwn(file.root, section))
+			collect(section, { kind: "omomp" }, translate(section, file.root[section], manifest, { kind: "project" }), moves, kept);
 	}
 	return { kind: "ready", file, moves, kept };
 }
@@ -572,7 +564,7 @@ function agentFrontmatter(
 				return { kind: "parsed", fields: camelKeys(yamlRecord(quoted)) };
 			} catch {}
 		}
-		return { kind: "unreadable", reason: error instanceof Error ? error.message : String(error) };
+		return { kind: "unreadable", reason: errorText(error) };
 	}
 }
 
@@ -617,63 +609,3 @@ function camelValue(value: unknown): unknown {
 	return isMapping(value) ? camelKeys(value) : value;
 }
 // @upstream-end
-
-export type PluginState =
-	| { readonly kind: "registered"; readonly settings: Mapping }
-	| { readonly kind: "elsewhere"; readonly path: string; readonly settings: Mapping }
-	| { readonly kind: "unregistered" }
-	| { readonly kind: "failed"; readonly error: string };
-
-function runOmp(
-	omp: string,
-	args: readonly string[],
-): { readonly ok: true; readonly out: string } | { readonly ok: false; readonly error: string } {
-	const result = spawnSync(omp, args, { encoding: "utf8", cwd: "/" });
-	if (result.error) return { ok: false, error: result.error.message };
-	if (result.status !== 0) return { ok: false, error: `omp ${args.slice(0, 3).join(" ")}: ${(result.stderr || result.stdout).trim()}` };
-	return { ok: true, out: result.stdout };
-}
-
-function samePath(a: string, b: string): boolean {
-	try {
-		return realpathSync(a) === realpathSync(b);
-	} catch {
-		return false;
-	}
-}
-
-export function pluginState(omp: string, pluginDir: string): PluginState {
-	const listed = runOmp(omp, ["plugin", "list", "--json"]);
-	if (!listed.ok) return { kind: "failed", error: listed.error };
-	let entry: Mapping | undefined;
-	try {
-		const value: unknown = JSON.parse(listed.out);
-		if (!isMapping(value) || !Array.isArray(value.npm)) return { kind: "failed", error: "omp plugin list: unexpected output" };
-		entry = value.npm.find((item: unknown): item is Mapping => isMapping(item) && item.name === PLUGIN_NAME);
-	} catch (error) {
-		return { kind: "failed", error: `omp plugin list: ${error instanceof Error ? error.message : String(error)}` };
-	}
-	if (entry === undefined) return { kind: "unregistered" };
-	const config = runOmp(omp, ["plugin", "config", "list", PLUGIN_NAME, "--json"]);
-	if (!config.ok) return { kind: "failed", error: config.error };
-	let settings: Mapping;
-	try {
-		const value: unknown = JSON.parse(config.out);
-		if (!isMapping(value) || !isMapping(value.settings)) return { kind: "failed", error: "omp plugin config list: unexpected output" };
-		settings = value.settings;
-	} catch (error) {
-		return { kind: "failed", error: `omp plugin config list: ${error instanceof Error ? error.message : String(error)}` };
-	}
-	const path = typeof entry.path === "string" ? entry.path : "";
-	return samePath(path, pluginDir) ? { kind: "registered", settings } : { kind: "elsewhere", path, settings };
-}
-
-export function linkPlugin(omp: string, pluginDir: string): string | undefined {
-	const result = runOmp(omp, ["plugin", "link", pluginDir]);
-	return result.ok ? undefined : result.error;
-}
-
-export function setPluginSetting(omp: string, key: string, value: Scalar): string | undefined {
-	const result = runOmp(omp, ["plugin", "config", "set", PLUGIN_NAME, key, String(value)]);
-	return result.ok ? undefined : result.error;
-}

@@ -1,3 +1,4 @@
+import { errorText } from "../_shared/errors.ts";
 import { isMapping } from "./merge.ts";
 
 type MatchField = "model" | "provider";
@@ -17,7 +18,7 @@ function parseHeader(text: string): Header {
 	try {
 		data = Bun.YAML.parse(text);
 	} catch (error) {
-		return { kind: "invalid", reason: `invalid YAML header: ${error instanceof Error ? error.message : String(error)}` };
+		return { kind: "invalid", reason: `invalid YAML header: ${errorText(error)}` };
 	}
 	if (!isMapping(data)) return { kind: "invalid", reason: "header must set `model` and/or `provider`" };
 	const constraints: Constraint[] = [];
@@ -31,7 +32,7 @@ function parseHeader(text: string): Header {
 		try {
 			new RegExp(value);
 		} catch (error) {
-			return { kind: "invalid", reason: `\`${key}\` is not a valid regex: ${error instanceof Error ? error.message : String(error)}` };
+			return { kind: "invalid", reason: `\`${key}\` is not a valid regex: ${errorText(error)}` };
 		}
 		if (value !== value.trim() || /[\r\n]/.test(value)) {
 			return { kind: "invalid", reason: `\`${key}\` cannot be preserved in single-line fragment frontmatter` };

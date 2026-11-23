@@ -1,14 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { isMapping, type Mapping, type Path } from "./merge.ts";
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { errorText } from "../_shared/errors.ts";
+import { atomicWrite } from "./files.ts";
+import { type Format, isMapping, type Mapping, type Path, parseStructured, related, valueAt } from "./merge.ts";
 
 export const BASE_DIR = ".omp-config-base";
 const STATE_FILE = "state.json";
 const FILES_DIR = "files";
 const STATE_VERSION = 1;
 
-type PlainBase = { readonly kind: "none" } | { readonly kind: "unknown" } | { readonly kind: "known"; readonly content: Buffer };
+export type PlainBase = { readonly kind: "none" } | { readonly kind: "unknown" } | { readonly kind: "known"; readonly content: Buffer };
 
 export interface StructuredRecord {
 	readonly value: Mapping;
@@ -49,7 +51,7 @@ export class BaseRecord {
 		try {
 			parsed = JSON.parse(readFileSync(statePath, "utf8"));
 		} catch (error) {
-			throw new Error(`${statePath}: unreadable base record (${error instanceof Error ? error.message : String(error)}); nothing applied`);
+			throw new Error(`${statePath}: unreadable base record (${errorText(error)}); nothing applied`);
 		}
 		if (!isMapping(parsed) || parsed.version !== STATE_VERSION) throw new Error(`${statePath}: unsupported base record; nothing applied`);
 		const unknownPlain = new Set<string>();
@@ -106,7 +108,7 @@ export class BaseRecord {
 		for (const change of changes) {
 			switch (change.kind) {
 				case "plain-known":
-					writeAtomic(join(this.dir, FILES_DIR, change.rel), change.content);
+					atomicWrite(join(this.dir, FILES_DIR, change.rel), change.content);
 					this.unknownPlain.delete(change.rel);
 					break;
 				case "plain-unknown":
@@ -134,20 +136,15 @@ export class BaseRecord {
 			unknownPlain: [...this.unknownPlain].sort(),
 			structured: Object.fromEntries([...this.structured].sort(([a], [b]) => a.localeCompare(b))),
 		};
-		writeAtomic(join(this.dir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
+		atomicWrite(join(this.dir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
 	}
 }
 
-function writeAtomic(path: string, content: string | Uint8Array): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}`;
-	try {
-		writeFileSync(tmp, content);
-		renameSync(tmp, path);
-	} catch (error) {
-		rmSync(tmp, { force: true });
-		throw error;
-	}
+export function git(cwd: string, args: readonly string[]): { ok: true; out: string } | { ok: false; err: string } {
+	const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+	if (result.error) return { ok: false, err: result.error.message };
+	if (result.status !== 0) return { ok: false, err: (result.stderr || result.stdout).trim() || `git ${args[0]} exited ${result.status}` };
+	return { ok: true, out: result.stdout };
 }
 
 function blobId(content: Uint8Array): string {
@@ -159,6 +156,7 @@ function blobId(content: Uint8Array): string {
 
 export class RepoHistory {
 	private deepened = false;
+	private readonly blobCache = new Map<string, Set<string>>();
 	readonly notes: string[] = [];
 
 	constructor(
@@ -184,6 +182,8 @@ export class RepoHistory {
 	}
 
 	private blobs(rel: string): Set<string> {
+		const cached = this.blobCache.get(rel);
+		if (cached !== undefined) return cached;
 		this.deepen();
 		const out = this.git(["log", "--format=", "--raw", "--no-abbrev", "--no-renames", "HEAD", "--", rel]);
 		const ids = new Set<string>();
@@ -191,6 +191,7 @@ export class RepoHistory {
 			const fields = line.split("\t", 1)[0]?.split(" ") ?? [];
 			for (const id of [fields[2], fields[3]]) if (id && !/^0+$/.test(id)) ids.add(id);
 		}
+		this.blobCache.set(rel, ids);
 		return ids;
 	}
 
@@ -224,4 +225,28 @@ export class RepoHistory {
 		const result = spawnSync("git", ["-C", this.source, "show", `${commit}:${rel}`]);
 		return result.status === 0 && !result.error ? result.stdout : undefined;
 	}
+
+	structuredVersions(rel: string, format: Format): Mapping[] {
+		const versions: Mapping[] = [];
+		this.eachVersion(rel, (text) => {
+			try {
+				versions.push(parseStructured(text, format));
+			} catch {}
+		});
+		return versions;
+	}
+}
+
+export function unmodifiedSection(
+	base: BaseRecord,
+	history: RepoHistory,
+	rel: string,
+	format: Format,
+	path: Path,
+	value: unknown,
+): boolean {
+	const recorded = base.structuredOf(rel);
+	if (recorded !== undefined)
+		return !recorded.unknown.some((unknown) => related(unknown, path)) && Bun.deepEquals(value, valueAt(recorded.value, path), true);
+	return history.structuredVersions(rel, format).some((version) => Bun.deepEquals(value, valueAt(version, path), true));
 }
