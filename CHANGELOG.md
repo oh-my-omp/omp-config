@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-24
+
 ### Added
 
 - Added a sandbox `prune` subcommand that tears down leftover runs from earlier builds while sparing sandboxes that are still active
