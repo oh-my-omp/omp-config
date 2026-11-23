@@ -41,7 +41,7 @@
 
 源码：`agent/extensions/isolation-nudge/`。
 
-在主会话与子代理的 `tool_call` 阶段检查 `task` 调用。当一次 `task` 调用会让 $\ge 2$ 个可写代理（`task:*`、内置 `task`、未填 `agent` 的项、`m1` 等，合并计算本次批次、同一 assistant message 中前序 `task` 调用已派发的共享写者——宿主先准备好整条 message 的所有调用再执行，这些写者尚无运行中的 job——与当前会话仍在运行的共享写入任务）在未设 `isolated: true` 的情况下共用同一工作目录，且其中有未显式填写 `isolated` 的项时，按该项 `task` 文本的 SHA-256 拦截一次，提示写入任务设 `isolated: true`、只读任务设 `isolated: false`；相同 `task` 文本再次调用时放行。它同时向 `_shared/omomp-shared/compact-handoff.ts` 注册 `StatelessNoiseGuard`，避免单次 `Not dispatched — a reminder, not a rule.` 提醒进入压缩摘要。
+在主会话与子代理的 `tool_call` 阶段检查 `task` 调用，前提是 `task` 工具的参数提供 `isolated`（开启隔离且不在 plan mode）。除非某项设了 `isolated: true`，或其 agent（经 OMP 的 agent 发现按会话工作目录查找）只声明 OMP 只读工具集（`READ_ONLY_TOOL_NAMES`）中的工具，该项就是写入者；未填 `agent`、没有 `tools` 列表的 agent（`task:*`、`dispatch-owner`）以及发现结果中没有的 agent（会话内定义的 agent）都是写入者，`discuss:*`、`mentor:default`（`tools: []`）和 `scout` 不是。当一次 `task` 调用会让 $\ge 2$ 个写入者共用同一工作目录——合并计算本次批次、同一轮中先前已放行但尚无结果的 `task` 调用的写入者（宿主先准备好整条 message 的所有调用再执行；该记录在 `turn_start` 清空，被其他扩展拦下的调用不会遗留）、以及 `tool_result` 记录下仍在运行的写入任务——且其中有未显式填写 `isolated` 的项时，按该项 `task`（或拼接后的 `steps`）文本的 SHA-256 拦截一次，提示写入任务设 `isolated: true`、只读任务设 `isolated: false`；相同文本再次调用时放行。状态在 `session_start` 与 `session_switch` 时重置。它同时向 `_shared/omomp-shared/compact-handoff.ts` 注册 `StatelessNoiseGuard`，避免单次 `Not dispatched — a reminder, not a rule.` 提醒进入压缩摘要。
 
 ### task-split-check
 

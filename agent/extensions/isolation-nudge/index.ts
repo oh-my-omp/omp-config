@@ -8,11 +8,11 @@ import {
 	z,
 	type zod,
 } from "@oh-my-pi/pi-coding-agent";
+import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discovery";
+import { READ_ONLY_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/task/read-only-policy";
 
 import { errorText } from "../_shared/errors.ts";
 import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
-
-const isWriter = (agent: string | undefined): boolean => agent === undefined || /^task(?::|$)/.test(agent) || /^m\d+$/.test(agent);
 
 const taskItemShape = {
 	task: z
@@ -53,17 +53,28 @@ const spawnProgress = (details: unknown): readonly SpawnRecord[] => {
 	return parsed.success ? parsed.data.progress : [];
 };
 
-const textOf = (item: TaskItem): string => item.steps?.join("\n") ?? item.task ?? "";
+const isolatedProperty = z.object({ properties: z.object({ isolated: z.object({}) }) });
+const isolatedParameterShapes = [isolatedProperty, z.object({ properties: z.object({ tasks: z.object({ items: isolatedProperty }) }) })];
 
-const promptHash = (item: TaskItem): string => createHash("sha256").update(textOf(item)).digest("hex");
+const quoted = (label: string): string => `\`${label}\``;
 
-const itemLabel = (item: TaskItem, index: number): string => `\`${item.name ?? `item ${index + 1}`}\``;
+type Writer = { readonly index: number; readonly label: string; readonly item: TaskItem };
 
-const renderReminder = (unreminded: readonly string[], sameMessageIds: readonly string[], runningIds: readonly string[]): string => {
+type InFlightCall = { readonly writerIndices: ReadonlySet<number>; readonly labels: readonly string[] };
+
+type SessionState = {
+	readonly inFlight: Map<string, InFlightCall>;
+	readonly sharedAgentIds: Set<string>;
+	readonly remindedPrompts: Set<string>;
+};
+
+const freshState = (): SessionState => ({ inFlight: new Map(), sharedAgentIds: new Set(), remindedPrompts: new Set() });
+
+const renderReminder = (unreminded: readonly string[], inFlight: readonly string[], running: readonly string[]): string => {
 	const agents = [
-		...sameMessageIds.map((id) => `\`${id}\` (dispatched in this message)`),
-		...runningIds.map((id) => `\`${id}\` (already running)`),
-		...unreminded,
+		...inFlight.map((label) => `${quoted(label)} (dispatched earlier in this message)`),
+		...running.map((id) => `${quoted(id)} (already running)`),
+		...unreminded.map(quoted),
 	];
 	return [
 		`Not dispatched — a reminder, not a rule. This call would leave write-capable agents sharing this working directory without isolation: ${agents.join(", ")}. Agents sharing a checkout can overwrite each other's work.`,
@@ -72,15 +83,8 @@ const renderReminder = (unreminded: readonly string[], sameMessageIds: readonly 
 	].join("\n");
 };
 
-type SessionState = {
-	readonly sharedAgentIds: Set<string>;
-	readonly sameMessageShared: string[];
-	readonly pending: Map<string, ReadonlySet<number>>;
-	readonly remindedPrompts: Set<string>;
-};
-
 export default function isolationNudge(pi: ExtensionAPI): void {
-	const sessions = new Map<string, SessionState>();
+	let state = freshState();
 	registerCompactHandoff(
 		pi,
 		defineStatelessNoiseGuard({
@@ -90,76 +94,80 @@ export default function isolationNudge(pi: ExtensionAPI): void {
 		}),
 	);
 
-	const stateOf = (ctx: ExtensionContext): SessionState => {
-		const key = ctx.sessionManager.getSessionFile() ?? ctx.cwd;
-		const existing = sessions.get(key);
-		if (existing !== undefined) return existing;
-		const fresh: SessionState = {
-			sharedAgentIds: new Set(),
-			sameMessageShared: [],
-			pending: new Map(),
-			remindedPrompts: new Set(),
-		};
-		sessions.set(key, fresh);
-		return fresh;
-	};
-
-	const runningSharedIds = (ctx: ExtensionContext, sharedAgentIds: Set<string>): string[] => {
-		const running = new Set((ctx.getAsyncJobSnapshot()?.running ?? []).filter((job) => job.type === "task").map((job) => job.id));
-		for (const id of sharedAgentIds) if (!running.has(id)) sharedAgentIds.delete(id);
-		return [...sharedAgentIds];
-	};
-
-	const isolationAvailable = (): boolean =>
-		pi.getAllTools().some((tool) => tool.name === "task" && tool.description.includes("`isolated`"));
-
-	const onTaskCall = (toolCallId: string, input: unknown, ctx: ExtensionContext): string | null => {
-		const items = parseTaskItems(input);
-		if (items === null) return null;
-		const state = stateOf(ctx);
-
-		const shared = new Set<number>();
-		const unreminded: { readonly label: string; readonly hash: string }[] = [];
-		items.forEach((item, index) => {
-			if (item.isolated === true || !isWriter(item.agent)) return;
-			shared.add(index);
-			if (item.isolated !== undefined) return;
-			const hash = promptHash(item);
-			if (!state.remindedPrompts.has(hash)) unreminded.push({ label: itemLabel(item, index), hash });
+	const taskOffersIsolation = (): boolean =>
+		pi.getAllTools().some(({ name, parameters }) => {
+			if (name !== "task") return false;
+			const schema = typeof parameters === "function" ? parameters.toJsonSchema() : parameters;
+			return isolatedParameterShapes.some((shape) => shape.safeParse(schema).success);
 		});
-		if (shared.size === 0) return null;
 
-		const sameMessageIds = state.sameMessageShared;
-		const runningIds = runningSharedIds(ctx, state.sharedAgentIds);
-		if (shared.size + sameMessageIds.length + runningIds.length >= 2 && unreminded.length > 0 && isolationAvailable()) {
+	const sharedWriters = async (items: readonly TaskItem[], cwd: string): Promise<readonly Writer[]> => {
+		if (items.every((item) => item.isolated === true)) return [];
+		const { agents } = await discoverAgents(cwd);
+		return items.flatMap((item, index) => {
+			const name = item.agent?.trim();
+			const tools = name ? getAgent(agents, name)?.tools : undefined;
+			const readOnly = tools?.every((tool) => READ_ONLY_TOOL_NAMES.has(tool)) === true;
+			return item.isolated === true || readOnly ? [] : [{ index, label: item.name ?? `${name || "task"} #${index + 1}`, item }];
+		});
+	};
+
+	const pruneFinishedAgents = (ctx: ExtensionContext): readonly string[] => {
+		const running = new Set((ctx.getAsyncJobSnapshot()?.running ?? []).filter((job) => job.type === "task").map((job) => job.id));
+		for (const id of state.sharedAgentIds) if (!running.has(id)) state.sharedAgentIds.delete(id);
+		return [...state.sharedAgentIds];
+	};
+
+	const onTaskCall = async (toolCallId: string, input: unknown, ctx: ExtensionContext): Promise<string | null> => {
+		const items = parseTaskItems(input);
+		if (items === null || !taskOffersIsolation()) return null;
+		const writers = await sharedWriters(items, ctx.cwd);
+		if (writers.length === 0) return null;
+
+		const unreminded = writers
+			.filter(({ item }) => item.isolated === undefined)
+			.map(({ label, item }) => ({
+				label,
+				hash: createHash("sha256")
+					.update(item.steps?.join("\n") ?? item.task ?? "")
+					.digest("hex"),
+			}))
+			.filter(({ hash }) => !state.remindedPrompts.has(hash));
+		const inFlight = [...state.inFlight.values()].flatMap((call) => call.labels);
+		const running = pruneFinishedAgents(ctx);
+		if (unreminded.length > 0 && writers.length + inFlight.length + running.length >= 2) {
 			for (const { hash } of unreminded) state.remindedPrompts.add(hash);
 			const labels = unreminded.map(({ label }) => label);
 			pi.logger.info("isolation-nudge reminder: blocked shared-checkout dispatch", {
 				unreminded: labels,
-				sameMessageSharedWriters: sameMessageIds,
-				runningSharedWriters: runningIds,
+				inFlightSharedWriters: inFlight,
+				runningSharedWriters: running,
 			});
-			return renderReminder(labels, sameMessageIds, runningIds);
+			return renderReminder(labels, inFlight, running);
 		}
-		for (const index of shared) state.sameMessageShared.push(itemLabel(items[index]!, index));
-		state.pending.set(toolCallId, shared);
+		state.inFlight.set(toolCallId, {
+			writerIndices: new Set(writers.map(({ index }) => index)),
+			labels: writers.map(({ label }) => label),
+		});
 		return null;
 	};
 
-	pi.on("assistant_message", (_event, ctx) => {
-		try {
-			stateOf(ctx).sameMessageShared.length = 0;
-		} catch (error) {
-			pi.logger.warn("isolation-nudge could not reset same-message writers", { error: errorText(error) });
-		}
+	pi.on("session_start", () => {
+		state = freshState();
+	});
+	pi.on("session_switch", () => {
+		state = freshState();
+	});
+	pi.on("turn_start", () => {
+		state.inFlight.clear();
 	});
 
 	// A throwing tool_call handler blocks the tool, so every failure degrades to
 	// "no reminder" and the spawn runs exactly as the model wrote it.
-	pi.on("tool_call", (event, ctx) => {
+	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "task") return;
 		try {
-			const reason = onTaskCall(event.toolCallId, event.input, ctx);
+			const reason = await onTaskCall(event.toolCallId, event.input, ctx);
 			return reason === null ? undefined : { block: true, reason };
 		} catch (error) {
 			pi.logger.warn("isolation-nudge skipped a task call", { error: errorText(error) });
@@ -167,16 +175,15 @@ export default function isolationNudge(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("tool_result", (event, ctx) => {
+	pi.on("tool_result", (event) => {
 		if (event.toolName !== "task") return;
 		try {
-			const state = stateOf(ctx);
-			const shared = state.pending.get(event.toolCallId);
-			if (shared === undefined) return;
-			state.pending.delete(event.toolCallId);
+			const call = state.inFlight.get(event.toolCallId);
+			if (call === undefined) return;
+			state.inFlight.delete(event.toolCallId);
 			if (event.isError) return;
 			for (const spawn of spawnProgress(event.details)) {
-				if (shared.has(spawn.index)) state.sharedAgentIds.add(spawn.id);
+				if (call.writerIndices.has(spawn.index)) state.sharedAgentIds.add(spawn.id);
 			}
 		} catch (error) {
 			pi.logger.warn("isolation-nudge could not record a task result", { error: errorText(error) });
