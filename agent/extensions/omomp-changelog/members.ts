@@ -7,38 +7,48 @@ import { errorText } from "../_shared/errors.ts";
 
 export type Member = { readonly name: string; readonly version: string; readonly changelogPath: string };
 
-export type Discovery =
-	| { readonly kind: "found"; readonly members: readonly Member[] }
-	| { readonly kind: "failed"; readonly reason: string };
+type Discovered =
+	| { readonly kind: "member"; readonly member: Member }
+	| { readonly kind: "broken"; readonly name: string; readonly reason: string };
 
-const packageSchema = z.object({ version: z.string(), omomp: z.unknown() });
-const declarationSchema = z.object({ changelog: z.string() });
+type Candidate = Discovered | { readonly kind: "other" };
 
-function readMember(name: string, root: string): Member | undefined {
+const NO_PROJECT_OVERRIDES = "/";
+
+const packageSchema = z.object({ omomp: z.unknown() });
+const memberSchema = z.object({ version: z.string(), omomp: z.object({ changelog: z.string() }) });
+
+function readCandidate(name: string, root: string): Candidate {
+	const file = join(root, "package.json");
 	let json: unknown;
 	try {
-		json = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-	} catch {
-		return undefined;
+		json = JSON.parse(readFileSync(file, "utf8"));
+	} catch (error) {
+		return { kind: "broken", name, reason: `${file}: ${errorText(error)}` };
 	}
 	const pkg = packageSchema.safeParse(json);
-	if (!pkg.success) return undefined;
-	const declaration = declarationSchema.safeParse(pkg.data.omomp);
-	if (!declaration.success) return undefined;
-	return { name, version: pkg.data.version, changelogPath: resolve(root, declaration.data.changelog) };
+	if (!pkg.success || pkg.data.omomp === undefined) return { kind: "other" };
+	const declared = memberSchema.safeParse(json);
+	if (!declared.success) return { kind: "broken", name, reason: `${file}: expected a string version and omomp.changelog` };
+	return {
+		kind: "member",
+		member: { name, version: declared.data.version, changelogPath: resolve(root, declared.data.omomp.changelog) },
+	};
 }
 
-export async function discoverMembers(): Promise<Discovery> {
+export async function discoverMembers(): Promise<
+	{ readonly kind: "found"; readonly members: readonly Discovered[] } | { readonly kind: "failed"; readonly reason: string }
+> {
 	let plugins: InstalledPlugin[];
 	try {
-		plugins = await new PluginManager("/").list();
+		plugins = await new PluginManager(NO_PROJECT_OVERRIDES).list();
 	} catch (error) {
 		return { kind: "failed", reason: errorText(error) };
 	}
-	const members: Member[] = [];
+	const members: Discovered[] = [];
 	for (const plugin of plugins) {
-		const member = readMember(plugin.name, plugin.path);
-		if (member !== undefined) members.push(member);
+		const candidate = readCandidate(plugin.name, plugin.path);
+		if (candidate.kind !== "other") members.push(candidate);
 	}
 	return { kind: "found", members };
 }

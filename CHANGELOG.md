@@ -89,6 +89,8 @@
 - Fixed `isolation-nudge` reminders quoting writers dispatched earlier in the same message with double backticks
 - Fixed `isolation-nudge` carrying a `task` call blocked by another extension, or a message whose stream was cut off, into later messages' writer count: pending calls now reset at `turn_start` and all state resets at `session_start`/`session_switch`
 - Registered the `repo-rules` compaction handoff under its real `omp-config/repo-rules` source and stopped its summary claim from calling root `AGENTS.md`/`CLAUDE.md` "non-root" or naming internal helper calls
+- Kept the `omomp-changelog` marker entry of a package whose `omomp` declaration or `package.json` cannot be read, logging it and listing it under `/omomp-changelog`, instead of silently dropping it and losing that package's next What's New
+- Showed the `omomp-changelog` What's New even when `seen.json` cannot be written, logging the failure and removing the temporary file
 - Made `input-polish` try the next model when a rewrite comes back empty or drops or changes an attachment/paste placeholder, instead of failing on the first model
 - Kept the `input-polish` preview box inside terminals narrower than 22 columns and sized it from the TUI's own terminal height
 - Stopped a second `input-polish` session attach that raced the first from leaving an extra key handler subscribed

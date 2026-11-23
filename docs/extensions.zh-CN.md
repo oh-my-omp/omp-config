@@ -313,7 +313,7 @@ OMP 的 tool command 通道启用时，OMP 把 `loadMode` 为 `discoverable` 的
 把本机已装 omomp 组件的更新内容合并成一块 What's New，并提供 `/omomp-changelog` 查看它们的历史。OMP 自己的 What's New 与 `/changelog` 不受影响。
 
 - **成员**：已装插件（启用或禁用都算）中，`package.json` 顶层 `omomp` 是对象且 `changelog`（相对包根目录的路径）是字符串的包；`omp-config` 经它的插件链接同样是成员。成员以及各包的版本（取自包内 `package.json`）在每次启动时现场读取；没有这个声明的插件从不出现。
-- **标记**：`<agentDir>/omomp-changelog/seen.json` 记录每个成员上次展示过的版本，属于本机状态，更新器不托管，`/sync-omp-config` 不带走。没有标记的成员记下当前版本、不显示；版本相等不显示；当前版本更高则显示 (标记, 当前] 内的版本段并推进标记；当前版本更低不显示、标记不变。changelog 读不出、找不到当前版本段或有版本段没有日期的成员不显示、标记不变，并在日志里记一条指名它的 warning。不再是成员的包，其标记项被删除，重新安装后从头开始、不弹历史。
+- **标记**：`<agentDir>/omomp-changelog/seen.json` 记录每个成员上次展示过的版本，属于本机状态，更新器不托管，`/sync-omp-config` 不带走。没有标记的成员记下当前版本、不显示；版本相等不显示；当前版本更高则显示 (标记, 当前] 内的版本段并推进标记；当前版本更低不显示、标记不变。changelog 读不出、找不到当前版本段或有版本段没有日期的成员不显示、标记不变，并在日志里记一条指名它的 warning；`omomp` 字段不是这种声明或 `package.json` 读不出的包同样处理，`/omomp-changelog` 在历史下方列出它。标记写不进时在日志里记一条 warning，What's New 照常显示。不再是成员的包，其标记项被删除，重新安装后从头开始、不弹历史。
 - **启动**：在有 UI 的主会话里，所有版本有增加的成员的版本段合并成编辑器上方的一块 widget，按发布日期、再按组件分组；你发出第一条消息（斜杠命令不算）后它消失。`startup.changelogMode` 为 `summary`（默认）时显示组件数、发布日数与变更数，带 `/omomp-changelog` 提示的分类计数，以及每个组件一行的版本变化；`expanded` 显示 Markdown，`## <日期>` 从新到旧，每个日期下 `### <包名> vX.Y.Z`。`hidden` 只把版本段标记为已看、不显示（同时设置了 `startup.quiet` 也是如此）；模式为显示且 `startup.quiet` 为真时不显示、标记不推进。无 UI 的会话和 subagent 既不显示也不改标记。
 - **命令**：`/omomp-changelog` 把每个成员 changelog 里最近三个发布日合并成一条 Markdown 消息输出，`last` 一天，`last N` N 天，`full` 全部；其他参数只输出用法行。它读取每个成员当前的 changelog，不读也不写标记。
 - **语言**：widget 与命令的文字跟随 [omomp-lang](#omomp-lang)；changelog 条目原样显示。

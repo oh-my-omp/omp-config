@@ -1,6 +1,6 @@
 import { tr } from "../_shared/i18n.ts";
 import { nestCategories, orderedCategories } from "./changelog.ts";
-import type { Day, Digest } from "./plan.ts";
+import type { Day, Digest } from "./days.ts";
 
 const plural = (count: number, en: string, enPlural: string, zh: string): string =>
 	tr(`${count} ${count === 1 ? en : enPlural}`, `${count} ${zh}`);
@@ -52,7 +52,6 @@ export function summaryLines(digest: Digest): string[] {
 	});
 	const hint = tr("Use /omomp-changelog for details", "使用 /omomp-changelog 查看详情");
 	return [
-		headerLine(digest),
 		[...breakdown, hint].join(" · "),
 		...digest.components.map(
 			(component) => `${component.name} ${component.from} → ${component.to}  ${plural(component.changes, "change", "changes", "项变更")}`,

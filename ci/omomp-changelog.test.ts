@@ -1,20 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { countChanges, nestCategories, parseReleases } from "../agent/extensions/omomp-changelog/changelog.ts";
+import { digestOf, entriesOf, groupDays, parseView } from "../agent/extensions/omomp-changelog/days.ts";
 import type { Member } from "../agent/extensions/omomp-changelog/members.ts";
-import {
-	type ChangelogLoad,
-	classify,
-	digestOf,
-	entriesOf,
-	groupDays,
-	parseView,
-	policyOf,
-	settle,
-	type Upgrade,
-	type Verdict,
-} from "../agent/extensions/omomp-changelog/plan.ts";
-
-import { daysMarkdown, summaryLines } from "../agent/extensions/omomp-changelog/render.ts";
+import { daysMarkdown, headerLine, summaryLines } from "../agent/extensions/omomp-changelog/render.ts";
+import { type ChangelogLoad, classify, policyOf, settle, type Upgrade } from "../agent/extensions/omomp-changelog/settle.ts";
 
 process.env.OMOMP_LANG = "en";
 
@@ -109,16 +98,15 @@ describe("classify", () => {
 describe("settle", () => {
 	const a = member("a", "0.3.0");
 	const b = member("b", "0.1.1");
-	const newer = (m: Member, from: string): Verdict =>
-		classify(m, from, () => loaded(m === a ? FX_A : log("## [0.1.1] - 2026-11-11", "", "- f")));
+	const newer = (m: Member, from: string) => classify(m, from, () => loaded(m === a ? FX_A : log("## [0.1.1] - 2026-11-11", "", "- f")));
 	const marker = new Map([
 		["a", "0.1.0"],
 		["b", "0.1.0"],
 		["gone", "9.9.9"],
 	]);
 	const verdicts = [
-		[a, newer(a, "0.1.0")],
-		[b, newer(b, "0.1.0")],
+		["a", newer(a, "0.1.0")],
+		["b", newer(b, "0.1.0")],
 	] as const;
 
 	test("show advances every shown member and drops entries of packages that are no longer members", () => {
@@ -147,9 +135,9 @@ describe("settle", () => {
 		const broken = member("e", "0.5.0");
 		const settled = settle(
 			[
-				[fresh, classify(fresh, undefined, () => loaded(""))],
-				[old, classify(old, "0.2.0", () => loaded(""))],
-				[broken, classify(broken, "0.4.0", () => loaded(FX_A))],
+				["c", classify(fresh, undefined, () => loaded(""))],
+				["d", classify(old, "0.2.0", () => loaded(""))],
+				["e", classify(broken, "0.4.0", () => loaded(FX_A))],
 			],
 			new Map([
 				["d", "0.2.0"],
@@ -176,8 +164,9 @@ describe("merged days", () => {
 	const upgrades = [upgrade("fx-b", "0.1.1", "0.1.0", fxB), upgrade("fx-a", "0.2.0", "0.1.0", FX_A)];
 
 	test("the summary lists figures, ordered categories and one row per component", () => {
-		expect(summaryLines(digestOf(upgrades))).toEqual([
-			"omomp · 2 components · 1 release day · 3 changes",
+		const digest = digestOf(upgrades);
+		expect(headerLine(digest)).toBe("omomp · 2 components · 1 release day · 3 changes");
+		expect(summaryLines(digest)).toEqual([
 			"1 added · 2 fixed · Use /omomp-changelog for details",
 			"fx-a 0.1.0 → 0.2.0  2 changes",
 			"fx-b 0.1.0 → 0.1.1  1 change",

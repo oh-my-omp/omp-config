@@ -6,26 +6,17 @@ import { Container, Markdown, Text } from "@oh-my-pi/pi-tui";
 import { getMarkdownTheme } from "@oh-my-pi/pi-tui/theme";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
-import { parseReleases } from "./changelog.ts";
-import { readMarker, sameMarker, writeMarker } from "./marker.ts";
+import { isDated, parseReleases } from "./changelog.ts";
+import { digestOf, type Entry, entriesOf, groupDays, parseView } from "./days.ts";
+import { readMarker, type Seen, sameMarker, writeMarker } from "./marker.ts";
 import { discoverMembers, type Member } from "./members.ts";
-import {
-	type ChangelogLoad,
-	classify,
-	digestOf,
-	type Entry,
-	entriesOf,
-	groupDays,
-	parseView,
-	policyOf,
-	type Seen,
-	settle,
-	type Upgrade,
-} from "./plan.ts";
 import { daysMarkdown, headerLine, summaryLines } from "./render.ts";
+import { type ChangelogLoad, classify, type Layout, policyOf, settle, type Upgrade } from "./settle.ts";
 
 const WIDGET_KEY = "omomp-changelog";
 const MESSAGE_TYPE = "omomp-changelog";
+
+type StartDisplay = { readonly layout: Layout; readonly upgrades: readonly Upgrade[] };
 
 function loadChangelog(member: Member): ChangelogLoad {
 	let content: string;
@@ -37,18 +28,16 @@ function loadChangelog(member: Member): ChangelogLoad {
 	return { kind: "ok", releases: parseReleases(content) };
 }
 
-function showWidget(ctx: ExtensionContext, layout: "summary" | "expanded", upgrades: readonly Upgrade[]): void {
+function showWidget(ctx: ExtensionContext, { layout, upgrades }: StartDisplay): void {
 	const digest = digestOf(upgrades);
 	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
 		const body = new Container();
+		body.addChild(new Text(theme.bold(theme.fg("accent", headerLine(digest))), 1, 0));
 		switch (layout) {
-			case "summary": {
-				const [head = "", ...rest] = summaryLines(digest);
-				body.addChild(new Text([theme.bold(theme.fg("accent", head)), ...rest].join("\n"), 1, 0));
+			case "summary":
+				body.addChild(new Text(summaryLines(digest).join("\n"), 1, 0));
 				break;
-			}
 			case "expanded":
-				body.addChild(new Text(theme.bold(theme.fg("accent", headerLine(digest))), 1, 0));
 				body.addChild(new Markdown(daysMarkdown(groupDays(entriesOf(upgrades))), 1, 0, getMarkdownTheme()));
 				break;
 			default: {
@@ -60,9 +49,7 @@ function showWidget(ctx: ExtensionContext, layout: "summary" | "expanded", upgra
 	});
 }
 
-async function settleStart(
-	pi: ExtensionAPI,
-): Promise<{ readonly layout: "summary" | "expanded"; readonly upgrades: readonly Upgrade[] } | undefined> {
+async function settleStart(pi: ExtensionAPI): Promise<StartDisplay | undefined> {
 	const found = await discoverMembers();
 	if (found.kind === "failed") {
 		pi.logger.warn("omomp-changelog: listing the installed plugins failed", { error: found.reason });
@@ -72,11 +59,17 @@ async function settleStart(
 	if (read.kind === "invalid") pi.logger.warn("omomp-changelog: the marker is unreadable and is rebuilt", { error: read.reason });
 	const before: Seen = read.kind === "ok" ? read.seen : new Map();
 	const policy = policyOf(cfgStartupQuiet.get(settings), cfgStartupChangelogMode.get(settings));
-	const verdicts = found.members.map((member) => [member, classify(member, before.get(member.name), () => loadChangelog(member))] as const);
-	for (const [member, verdict] of verdicts)
-		if (verdict.kind === "unreadable") pi.logger.warn(`omomp-changelog: ${member.name}: ${verdict.reason}`);
+	const verdicts = found.members.map((discovered) => {
+		if (discovered.kind === "broken") return [discovered.name, { kind: "unreadable", reason: discovered.reason }] as const;
+		const { member } = discovered;
+		return [member.name, classify(member, before.get(member.name), () => loadChangelog(member))] as const;
+	});
+	for (const [name, verdict] of verdicts) if (verdict.kind === "unreadable") pi.logger.warn(`omomp-changelog: ${name}: ${verdict.reason}`);
 	const { seen, upgrades } = settle(verdicts, before, policy);
-	if (read.kind === "invalid" || !sameMarker(before, seen)) writeMarker(seen);
+	if (read.kind === "invalid" || !sameMarker(before, seen)) {
+		const written = writeMarker(seen);
+		if (written.kind === "failed") pi.logger.warn("omomp-changelog: writing the marker failed", { error: written.reason });
+	}
 	return policy.kind === "show" && upgrades.length > 0 ? { layout: policy.layout, upgrades } : undefined;
 }
 
@@ -97,7 +90,13 @@ async function showHistory(pi: ExtensionAPI, ctx: ExtensionCommandContext, args:
 	}
 	const entries: Entry[] = [];
 	const skipped: string[] = [];
-	for (const member of found.members) {
+	for (const discovered of found.members) {
+		if (discovered.kind === "broken") {
+			pi.logger.warn(`omomp-changelog: ${discovered.name}: ${discovered.reason}`);
+			skipped.push(tr(`${discovered.name}: omomp declaration unreadable`, `${discovered.name}：omomp 声明读不出`));
+			continue;
+		}
+		const { member } = discovered;
 		const loaded = loadChangelog(member);
 		if (loaded.kind === "failed") {
 			pi.logger.warn(`omomp-changelog: ${member.name}: ${loaded.reason}`);
@@ -105,11 +104,11 @@ async function showHistory(pi: ExtensionAPI, ctx: ExtensionCommandContext, args:
 			continue;
 		}
 		for (const release of loaded.releases) {
-			if (release.date === null) {
+			if (!isDated(release)) {
 				pi.logger.warn(`omomp-changelog: ${member.name}: section ${release.text} has no YYYY-MM-DD date`);
 				continue;
 			}
-			entries.push({ name: member.name, release: { ...release, date: release.date } });
+			entries.push({ name: member.name, release });
 		}
 	}
 	const all = groupDays(entries);
@@ -119,7 +118,7 @@ async function showHistory(pi: ExtensionAPI, ctx: ExtensionCommandContext, args:
 	pi.sendMessage(
 		{
 			customType: MESSAGE_TYPE,
-			content: [markdown, ...(notes.length > 0 ? ["", ...notes] : [])].join("\n"),
+			content: [markdown, ...(notes.length > 0 ? ["", "---", "", ...notes] : [])].join("\n"),
 			display: true,
 			attribution: "agent",
 		},
@@ -154,7 +153,7 @@ export default function omompChangelog(pi: ExtensionAPI): void {
 			if (ctx.agent.kind !== "main" || !ctx.hasUI) return;
 			const start = await settleStart(pi);
 			if (start === undefined) return;
-			showWidget(ctx, start.layout, start.upgrades);
+			showWidget(ctx, start);
 			shown = true;
 		} catch (error) {
 			pi.logger.warn("omomp-changelog: start failed", { error: errorText(error) });

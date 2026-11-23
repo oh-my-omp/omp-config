@@ -1,6 +1,6 @@
 import { Lexer } from "@oh-my-pi/pi-utils/marked";
 
-export type Version = { readonly major: number; readonly minor: number; readonly patch: number };
+type Version = { readonly major: number; readonly minor: number; readonly patch: number };
 
 export type Release = {
 	readonly version: Version;
@@ -12,6 +12,8 @@ export type Release = {
 export type DatedRelease = Release & { readonly date: string };
 
 export const isDated = (release: Release): release is DatedRelease => release.date !== null;
+
+export const byCodePoint = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 // @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#compareChangelogEntries
 // Compares parsed versions instead of changelog entries; the host function is not exported.
@@ -59,7 +61,7 @@ export function parseReleases(content: string): Release[] {
 }
 // @upstream-end
 
-export type Changes = { readonly count: number; readonly categories: ReadonlyMap<string, number> };
+type Changes = { readonly count: number; readonly categories: ReadonlyMap<string, number> };
 
 // @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#summarizeChangelogEntries
 // Counts one release body per call; the host function is not exported.
