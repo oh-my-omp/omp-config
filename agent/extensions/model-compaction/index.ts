@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Settings } from "@oh-my-pi/pi-coding-agent";
-import { cfgCompactionModelThresholds, cfgExtendedContext } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { cfgCompactionModelThresholds } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { planModelCompactionPoint } from "@oh-my-pi/pi-coding-agent/session/model-compaction-threshold";
 import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -16,6 +17,7 @@ interface Constraint {
 }
 
 interface Rule {
+	readonly file: string;
 	readonly constraints: readonly [Constraint, ...Constraint[]];
 	readonly thresholdTokens: number;
 }
@@ -28,14 +30,12 @@ interface LoadedRules {
 type ThresholdEntry = number | string | null;
 type ThresholdRecord = Readonly<Record<string, ThresholdEntry>>;
 
-type RuntimeRecord =
-	| { readonly kind: "absent" }
-	| { readonly kind: "present"; readonly value: ThresholdRecord }
-	| { readonly kind: "unreadable" };
+type Baseline = { readonly kind: "absent" } | { readonly kind: "present"; readonly value: ThresholdRecord };
+type RuntimeRecord = Baseline | { readonly kind: "unreadable" };
 
 type Ownership =
 	| { readonly kind: "idle" }
-	| { readonly kind: "owned"; readonly baseline: Exclude<RuntimeRecord, { kind: "unreadable" }>; readonly written: ThresholdRecord }
+	| { readonly kind: "owned"; readonly baseline: Baseline; readonly written: ThresholdRecord }
 	| { readonly kind: "yielded" };
 
 interface Expansion {
@@ -43,24 +43,24 @@ interface Expansion {
 	readonly refusals: readonly string[];
 }
 
-function compiles(pattern: string): boolean {
-	try {
-		new RegExp(pattern);
-		return true;
-	} catch {
-		return false;
-	}
-}
+type RuleParse = { readonly kind: "ok"; readonly rule: Rule } | { readonly kind: "invalid"; readonly reason: string };
 
 const FILE_PATTERN = /^COMPACTION-.+\.md$/i;
 const KNOWN_KEYS: Readonly<Record<string, true>> = { provider: true, model: true, thresholdtokens: true };
 
-type RuleParse = { readonly kind: "ok"; readonly rule: Rule } | { readonly kind: "invalid"; readonly reason: string };
+function compile(pattern: string): RegExp | null {
+	if (pattern === "") return null;
+	try {
+		return new RegExp(pattern);
+	} catch {
+		return null;
+	}
+}
 
-function parseRuleFile(path: string): RuleParse {
+function parseRuleFile(file: string): RuleParse {
 	let raw: string;
 	try {
-		raw = readFileSync(path, "utf8");
+		raw = readFileSync(file, "utf8");
 	} catch (error) {
 		return { kind: "invalid", reason: `unreadable: ${errorText(error)}` };
 	}
@@ -74,9 +74,9 @@ function parseRuleFile(path: string): RuleParse {
 	for (const field of ["provider", "model"] as const) {
 		const value = fields[field];
 		if (value === undefined) continue;
-		const pattern = unquote(value);
-		if (pattern === "" || !compiles(pattern)) return { kind: "invalid", reason: `${field} is not a valid regex` };
-		constraints.push({ field, pattern: new RegExp(pattern) });
+		const pattern = compile(unquote(value));
+		if (pattern === null) return { kind: "invalid", reason: `${field} is not a valid regex` };
+		constraints.push({ field, pattern });
 	}
 	const [first, ...rest] = constraints;
 	if (first === undefined) return { kind: "invalid", reason: "sets neither `model` nor `provider`" };
@@ -85,7 +85,7 @@ function parseRuleFile(path: string): RuleParse {
 	const thresholdTokens = Number(unquote(threshold));
 	if (!Number.isSafeInteger(thresholdTokens) || thresholdTokens <= 0)
 		return { kind: "invalid", reason: "thresholdTokens is not a positive integer token count" };
-	return { kind: "ok", rule: { constraints: [first, ...rest], thresholdTokens } };
+	return { kind: "ok", rule: { file, constraints: [first, ...rest], thresholdTokens } };
 }
 
 function loadRules(cwd: string): LoadedRules {
@@ -103,20 +103,21 @@ function loadRules(cwd: string): LoadedRules {
 				break;
 			default: {
 				const unreachable: never = parsed;
-				return unreachable;
+				throw new Error(`unexpected rule parse ${JSON.stringify(unreachable)}`);
 			}
 		}
 	}
 	return { rules, problems };
 }
 
-function tierChange(ctx: ExtensionContext, settings: Settings, model: Model, thresholdTokens: number): string | null {
+function refusal(ctx: ExtensionContext, settings: Settings, model: Model, thresholdTokens: number): string | null {
 	const tiers = ctx.modelRegistry.contextWindowTiers(model);
+	const plan = planModelCompactionPoint(settings, model, `f${thresholdTokens}`, tiers);
+	if (plan === undefined)
+		return `does not fit below its ${tiers?.extended ?? model.contextWindow}-token largest window; use a smaller value`;
 	if (tiers === undefined || (model.contextWindow !== tiers.standard && model.contextWindow !== tiers.extended)) return null;
-	const extendedNow = model.contextWindow === tiers.extended;
-	const extendedWith = cfgExtendedContext.get(settings) || thresholdTokens >= tiers.standard;
-	if (extendedNow === extendedWith) return null;
-	return extendedWith
+	if (plan.window === model.contextWindow) return null;
+	return plan.window === tiers.extended
 		? `would switch it from its ${tiers.standard}-token standard window to its ${tiers.extended}-token extended window; use a value below ${tiers.standard}`
 		: `would switch it from its ${tiers.extended}-token extended window back to its ${tiers.standard}-token standard window; use a value of at least ${tiers.standard}`;
 }
@@ -126,13 +127,12 @@ function expand(ctx: ExtensionContext, settings: Settings, rules: readonly Rule[
 	const refusals: string[] = [];
 	for (const model of ctx.models.list()) {
 		const values: Record<MatchField, string> = { provider: model.provider, model: model.id };
-		const index = rules.findIndex((rule) => rule.constraints.every((c) => c.pattern.test(values[c.field])));
-		const rule = rules[index];
+		const rule = rules.find((candidate) => candidate.constraints.every((c) => c.pattern.test(values[c.field])));
 		if (rule === undefined) continue;
 		const key = `${model.provider}/${model.id}`;
-		const change = tierChange(ctx, settings, model, rule.thresholdTokens);
-		if (change === null) entries[key] = `f${rule.thresholdTokens}`;
-		else refusals.push(`rules[${index}] (thresholdTokens ${rule.thresholdTokens}) not applied to ${key}: it ${change}`);
+		const refused = refusal(ctx, settings, model, rule.thresholdTokens);
+		if (refused === null) entries[key] = `f${rule.thresholdTokens}`;
+		else refusals.push(`${rule.file} (thresholdTokens ${rule.thresholdTokens}) not applied to ${key}: it ${refused}`);
 	}
 	return { entries, refusals };
 }
@@ -156,7 +156,20 @@ function ownRuntimeRecord(settings: Settings): RuntimeRecord {
 	return { kind: "present", value };
 }
 
-function restore(settings: Settings, baseline: Extract<Ownership, { kind: "owned" }>["baseline"]): void {
+function compose(baseline: Baseline, entries: ThresholdRecord): ThresholdRecord {
+	switch (baseline.kind) {
+		case "absent":
+			return entries;
+		case "present":
+			return { ...baseline.value, ...entries };
+		default: {
+			const unreachable: never = baseline;
+			throw new Error(`unexpected baseline ${JSON.stringify(unreachable)}`);
+		}
+	}
+}
+
+function restore(settings: Settings, baseline: Baseline): void {
 	switch (baseline.kind) {
 		case "absent":
 			cfgCompactionModelThresholds.clearOverride(settings);
@@ -166,7 +179,7 @@ function restore(settings: Settings, baseline: Extract<Ownership, { kind: "owned
 			return;
 		default: {
 			const unreachable: never = baseline;
-			throw new Error(`unexpected runtime record ${JSON.stringify(unreachable)}`);
+			throw new Error(`unexpected baseline ${JSON.stringify(unreachable)}`);
 		}
 	}
 }
@@ -181,25 +194,39 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 	let ownership: Ownership = { kind: "idle" };
 	let warned: string | null = null;
 
-	const report = (ctx: ExtensionContext, problems: readonly string[]): void => {
-		const text = problems.length === 0 ? null : `model-compaction: ${problems.join("; ")}`;
-		if (text === warned) return;
-		warned = text;
-		if (text === null) return;
-		pi.logger.warn(text);
-		if (ctx.hasUI) ctx.ui.notify(tr(text, `模型压缩：${problems.join("；")}`), "warning");
+	const warn = (ctx: ExtensionContext, en: string | null, zh: string): void => {
+		if (en === warned) return;
+		warned = en;
+		if (en === null) return;
+		pi.logger.warn(en);
+		if (ctx.hasUI) ctx.ui.notify(tr(en, zh), "warning");
+	};
+
+	const report = (ctx: ExtensionContext, problems: readonly string[]): void =>
+		warn(ctx, problems.length === 0 ? null : `model-compaction: ${problems.join("; ")}`, `模型压缩：${problems.join("；")}`);
+
+	const yieldOwnership = (ctx: ExtensionContext, en: string, zh: string): void => {
+		ownership = { kind: "yielded" };
+		warn(ctx, `model-compaction: ${en}`, `模型压缩：${zh}`);
 	};
 
 	const stillOwned = (ctx: ExtensionContext, settings: Settings, written: ThresholdRecord): boolean => {
 		const current = ownRuntimeRecord(settings);
 		if (current.kind === "present" && Bun.deepEquals(current.value, written, true)) return true;
-		ownership = { kind: "yielded" };
-		const text =
-			"model-compaction: the runtime compaction.modelThresholds record was changed by another writer; no longer managing it in this session";
-		pi.logger.warn(text);
-		if (ctx.hasUI)
-			ctx.ui.notify(tr(text, "模型压缩：运行时的 compaction.modelThresholds 记录已被其他写入方修改；本会话将不再管理该记录"), "warning");
+		yieldOwnership(
+			ctx,
+			"the runtime compaction.modelThresholds record was changed by another writer; no longer managing it in this session",
+			"运行时的 compaction.modelThresholds 记录已被其他写入方修改；本会话将不再管理该记录",
+		);
 		return false;
+	};
+
+	const write = (settings: Settings, baseline: Baseline, entries: ThresholdRecord): void => {
+		const written = compose(baseline, entries);
+		if (ownership.kind === "owned" && Bun.deepEquals(written, ownership.written, true)) return;
+		cfgCompactionModelThresholds.override(settings, written);
+		ownership = { kind: "owned", baseline, written };
+		pi.logger.info("model-compaction: thresholds applied", { entries });
 	};
 
 	const apply = (ctx: ExtensionContext, settings: Settings, entries: ThresholdRecord): void => {
@@ -211,14 +238,14 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 				if (empty) return;
 				const baseline = ownRuntimeRecord(settings);
 				if (baseline.kind === "unreadable") {
-					ownership = { kind: "yielded" };
-					report(ctx, ["the runtime compaction.modelThresholds record is not a threshold map; leaving it untouched in this session"]);
+					yieldOwnership(
+						ctx,
+						"the runtime compaction.modelThresholds record is not a threshold map; leaving it untouched in this session",
+						"运行时的 compaction.modelThresholds 记录不是阈值表；本会话不改动它",
+					);
 					return;
 				}
-				const written = { ...(baseline.kind === "present" ? baseline.value : {}), ...entries };
-				cfgCompactionModelThresholds.override(settings, written);
-				ownership = { kind: "owned", baseline, written };
-				pi.logger.info("model-compaction: thresholds applied", { entries });
+				write(settings, baseline, entries);
 				return;
 			}
 			case "owned": {
@@ -228,11 +255,7 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 					ownership = { kind: "idle" };
 					return;
 				}
-				const written = { ...(ownership.baseline.kind === "present" ? ownership.baseline.value : {}), ...entries };
-				if (Bun.deepEquals(written, ownership.written, true)) return;
-				cfgCompactionModelThresholds.override(settings, written);
-				ownership = { kind: "owned", baseline: ownership.baseline, written };
-				pi.logger.info("model-compaction: thresholds applied", { entries });
+				write(settings, ownership.baseline, entries);
 				return;
 			}
 			default: {
@@ -243,7 +266,7 @@ export default function modelCompaction(pi: ExtensionAPI): void {
 	};
 
 	const sync = (ctx: ExtensionContext): void => {
-		if (ctx.agent.kind !== "main") return;
+		if (ctx.agent.kind !== "main" || ownership.kind === "yielded") return;
 		try {
 			const settings = sessionSettings(ctx);
 			const loaded = loadRules(ctx.cwd);

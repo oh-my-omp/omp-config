@@ -22,6 +22,7 @@
 
 ### Changed
 
+- Made `model-compaction` refuse a rule whose `thresholdTokens` does not fit below the model's largest context window, deciding tier changes and fit with OMP's own `planModelCompactionPoint`, and name the rule file instead of a list index in refusal warnings
 - Updated the shared copy of `compact-handoff.ts` to oh-my-omp/shared@db9dde4.
 - Gated every `task-split-check` and `task-completion-judge` model attempt on the session's spend cap (a refusal ends the check without trying the next model) and recorded each reply's usage in the calling session's ledger, its cost in the session's spend and a chat telemetry span
 - Made `task-split-check` and `task-completion-judge` skip a model without credentials and move on to the next one
@@ -54,6 +55,7 @@
 - Made `tool-topics` write each OMP tool's surface and `Topics` index into the system prompt in place of the native description at every prompt, instead of an `omp-config/tool-topics` reminder that was sent again after every compaction; the replaced descriptions no longer reach the model twice
 - Passed the watched session's `sessionId` and `cwd` into `watchdog-agent`'s chat reviewer prompt and matched the tool-usage instruction to whether `tools` grants action tools beyond read-only inspection
 - Aligned `agent/SYSTEM_TEMPLATE.md`, `agent/config.yml` (`tools.commandDocs: inline`), `REPLACE-SYSTEM-default.yml` and `extensions-last/README*.md` with OMP 19.1.0 tool commands (`{{toolCommandDocs}}`, `help://read/urls`, `help://eval/agents`, command form for `report_issue`) and removed the obsolete `xd://` device replacement rule
+- Simplified `task-completion-judge`: tool-call arguments, results and the submission are serialized natively and cut to their limits (60% head + 40% tail) instead of streamed through a custom bounded JSON writer, the shared context is located in the joined system prompt, the worker's Todo list is read once per review, and the bounce decision is one exhaustive function
 - Updated `tool-topics` to index and rewrite OMP 19.1.0 command-mounted tool sections (`## <tool>` / `<tool> — …` / `Usage:`) while skipping catalog-only entries without drift warnings, migrated `SURFACE-*`/`TOPIC-*` docs and `tool-policy-nag/pty.ts` from `xd://` to `help://` and command forms, and removed dead `xd://bash` device-write channel branches and their obsolete tests
 
 ### Removed
@@ -67,6 +69,7 @@
 - Compared repo-rules context-file boundaries case-insensitively on Windows so home and repo-root paths match regardless of casing
 - Kept the user's enabled state and feature selection of installed plugins across updater applies and startup auto-update: a plugin whose declared spec is unchanged is refreshed with `omp plugin upgrade` instead of `omp install`, a plugin whose spec changed is reinstalled and disabled again if it was disabled, an npm plugin pinned to the recorded exact version is left as is, and a locally linked plugin is no longer installed over; a link made over an installed dependency, which the host's bun install replaces whenever any plugin is installed or upgraded, is linked again with its enable state and features restored
 - Located the shared batch context for `task-completion-judge` by the host subagent template's `⁂ Context` heading instead of a `§ Context` marker the host no longer renders
+- Judged `task-completion-judge` data yields whose `error` is a filler such as `unused`, `n/a` or `none`; the host treats these as successful results, but the judge skipped them as error yields
 - Kept the `harness-restart` completion notice pending until OMP accepted it: a refused or failed send is now logged and re-sent on the next session start or switch instead of being marked consumed
 - Made the system-prompt replacement rule for `xd://` device calls match the device sentence whether or not `xd://<tool>` is in backticks, so a template aligned with OMP's bundled one keeps the "Devices are not functions" replacement
 - Fixed host-form `ask` results being read as unanswered: answers now come from the form's `answers[]` fields, folded onto one line with matching option notes appended

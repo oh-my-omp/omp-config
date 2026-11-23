@@ -96,7 +96,7 @@ OMP 的 `agents-md` 与 `claude-md` provider 把独立的 `AGENTS.md` / `CLAUDE.
 - **带 `paths` 的规则**：frontmatter 含 `paths`（YAML 列表或逗号分隔的 glob，支持 `{…}` 与 `[…]`）的规则，只在匹配文件被成功 `read`、`write`、`edit`，或被 `bash` 中读取单文件的纯 `cat`/`head`/`tail` 触及时才加载（含管道、命令串联或多文件的命令不计）。适用范围涵盖上述扫描目录和 OMP 原生发现的全部规则（项目/用户级 `.omp` 与 `.agents`、cursor/windsurf/cline/GitHub 规则、插件或扩展根目录下的 `rules/`）。相对路径 glob 的基准目录：用户级规则为 `cwd`，项目规则为点目录所在父目录，插件或扩展 `rules/` 为该插件或扩展根目录。OMP 原生发现的带 `paths` 规则留在 OMP 放置它的 `<generic-rules>` 或 `<domain-rules>` 中；增量逐条引出在其中找到的规则及其 `paths`，写明它只在处理匹配文件时适用。这些规则继续遵守 `ttsr.disabledRules` 与 `agents` 作用域。TTSR 规则（`condition`、`astCondition`、`question`）和 OMP 内置规则仍由 OMP 处理。命中的规则通过 `tool_result` 的 `additionalContext`（`<path-scoped-rule path="…">`）每个上下文注入一次，与增量同时到期时排在增量之后；若 compaction、resume 或切分支使该标记离开当前上下文，再次触及匹配文件时会重新注入。
 - **绝对路径 `paths` 模式**：以 `~/` 开头的模式与绝对路径模式（`/…`；Windows 上还有 `C:/…` 或 `C:\…`）直接匹配被触及文件的绝对路径（`~` 为家目录），可用于在 `~/.claude/rules` 中按目录名匹配任意位置的仓库（如 `/**/{omp,.omp,omp-*,*-omp,*-omp-*}/**`）。Windows 上以 `/` 开头的模式没有盘符，不匹配任何文件，应写成 `C:/**/…`。
 
-`repo-rules` 和条件专题注入共用 `_shared/context-delivery.ts`：是否已经投递由活动叶节点模型上下文中的持久 developer 标记决定；临时 turn 集合只覆盖宿主尚未持久化的工具批次窗口。`repo-rules` 同时向 `_shared/omomp-shared/compact-handoff.ts` 注册 `plugin-managed` 类型的 `StatefulHarnessHandoff`，声明压缩后会自动重注非根 `AGENTS.md`/`CLAUDE.md`、无 `paths` 规则与 `<path-scoped-rules>`，避免摘要重复抄写这些静态规则。
+`repo-rules` 和条件专题注入共用 `_shared/context-delivery.ts`：是否已经投递由活动叶节点模型上下文中的持久 developer 标记决定；临时 turn 集合只覆盖宿主尚未持久化的工具批次窗口。`repo-rules` 同时向 `_shared/omomp-shared/compact-handoff.ts` 注册 `plugin-managed` 类型的 `StatefulHarnessHandoff`，声明压缩后会自动重注 `AGENTS.md`/`CLAUDE.md`、无 `paths` 规则与 `<path-scoped-rules>`，避免摘要重复抄写这些静态规则。
 
 ---
 
@@ -126,7 +126,7 @@ thresholdTokens: 150000
 
 对 `ctx.models.list()` 中的每个模型，取第一条命中的有效规则——项目规则全部在前，扩展目录里的本机规则全部在后作回退，与文件名无关；每层内部按发现顺序（从 cwd 向上，每个目录内按文件名排序）——把 `"<provider>/<id>": "f<thresholdTokens>"` 写入主会话的运行时设置层（不改磁盘上的 `config.yml`；`/model` 切换、重试回退以及读取主会话设置的子代理都会按各自模型使用对应阈值）。运行时设置层只存在于 omp 进程内，恢复的会话靠 `session_start` 重新写回条目；agent 自己发起的轮次（通知、续跑提醒、IRC 唤醒）不经过 `before_agent_start`，否则恢复后只由这类轮次推进的会话会按 OMP 默认阈值压缩。仓库不带规则文件。
 
-由于原生 `f<N>` 条目可能改变模型的上下文窗口档位（standard vs extended），会让某个模型切换当前窗口档位的规则对该模型拒绝并记 warning。未知键和非空正文都是错误，写错的键不会悄悄放宽规则；无法读取或无效的文件跳过并记 warning，其他文件仍生效，没有任何有效文件时不应用规则。其他来源已写入的运行时条目会被保留，并在无规则命中或 `session_shutdown` 时恢复；若运行期间有其他代码修改了这张映射表，扩展会记一次 warning 并停止更新。
+由于原生 `f<N>` 条目可能改变模型的上下文窗口档位（standard vs extended），会让某个模型切换当前窗口档位、或不小于该模型最大窗口的规则，对该模型拒绝并记一条写明规则文件的 warning；判断用的是 OMP 自己的 `planModelCompactionPoint`，与 `/model` 压缩点预览依据的是同一份计划。未知键和非空正文都是错误，写错的键不会悄悄放宽规则；无法读取或无效的文件跳过并记 warning，其他文件仍生效，没有任何有效文件时不应用规则。其他来源已写入的运行时条目会被保留，并在无规则命中或 `session_shutdown` 时恢复；若运行期间有其他代码修改了这张映射表，扩展会记一次 warning 并停止更新。
 ### ctx
 
 [omp-todo-more](plugins-and-modes.zh-CN.md#todo-more) 插件拥有 `ctx` 与 `todo`；`agent/config.yml` 关闭原生 `todo`。更新器在安装插件前预检待退役本地 Todo/ctx 文件的归属；只有 OMP 确认插件就绪后才删除列出的 Todo 文件，且只有该就绪插件带有 `src/ctx` 时才删除列出的 ctx 文件。
