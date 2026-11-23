@@ -15,7 +15,7 @@ export const isDated = (release: Release): release is DatedRelease => release.da
 
 export const byCodePoint = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#compareChangelogEntries
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.1 src/utils/changelog.ts#compareChangelogEntries
 // Compares parsed versions instead of changelog entries; the host function is not exported.
 export function compareVersions(a: Version, b: Version): number {
 	if (a.major !== b.major) return a.major - b.major;
@@ -24,7 +24,7 @@ export function compareVersions(a: Version, b: Version): number {
 }
 // @upstream-end
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#parseChangelogContent
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.1 src/utils/changelog.ts#parseChangelogContent
 // Also keeps the release date and drops the heading from the body; the host function is not exported.
 export function parseReleases(content: string): Release[] {
 	const releases: Release[] = [];
@@ -63,7 +63,7 @@ export function parseReleases(content: string): Release[] {
 
 type Changes = { readonly count: number; readonly categories: ReadonlyMap<string, number> };
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#summarizeChangelogEntries
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.1 src/utils/changelog.ts#summarizeChangelogEntries
 // Counts one release body per call; the host function is not exported.
 const UNCATEGORIZED = "Other";
 
@@ -88,7 +88,7 @@ export function countChanges(body: string): Changes {
 }
 // @upstream-end
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#formatStartupChangelogSummary
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.1 src/utils/changelog.ts#formatStartupChangelogSummary
 // Only the category ordering: importing the whole function would replace the What's New summary format.
 const CATEGORY_ORDER: readonly string[] = ["Breaking Changes", "Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"];
 

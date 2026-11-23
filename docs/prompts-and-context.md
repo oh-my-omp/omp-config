@@ -130,6 +130,6 @@ Because a native `f<N>` threshold can switch a model between its standard and ex
 
 ### ctx
 
-The [omp-todo-ng](plugins-and-modes.md#todo-ng) plugin owns `ctx` and `todo`; `agent/config.yml` disables native `todo`. The updater preflights ownership of the local Todo/ctx files it retires before installing plugins, removes the listed Todo files only after OMP confirms plugin readiness, and removes the listed ctx files only when that ready plugin carries `src/ctx`.
+The [omp-todo-ng](plugins-and-modes.md#todo-ng) plugin owns `ctx` and `todo`, running on top of native `todo`, which `agent/config.yml` keeps enabled (`todo.enabled: true`) so the plugin's `todo` tool shadows the built-in one. The updater preflights ownership of the local Todo/ctx files it retires before installing plugins, removes the listed Todo files only after OMP confirms plugin readiness, and removes the listed ctx files only when that ready plugin carries `src/ctx`.
 
 Tool documentation: `help://todo/lifecycle` (and `todo({})` reads live plan state; `omp-sessions` provides `session://`).

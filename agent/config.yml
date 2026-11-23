@@ -69,12 +69,12 @@ launch:
 bashInterceptor:
   enabled: true
   # OMP's defaults minus `cat <<` heredocs piped into a program and `tail -f`
-  # (both stay shell), and minus the three rules that send services, watchers and
-  # `nohup`/`&` to `bash` with `name`: `launch.enabled` is false, so that mode
-  # does not exist here; such work belongs to `bash` with `pty: true`.
+  # (both stay shell), and minus the three rules that send services/debuggers,
+  # watch mode and `nohup`/`&` to `bash` with `name`: `launch.enabled` is false,
+  # so that mode does not exist here; such work belongs to `bash` with `pty: true`.
   patterns:
     - pattern: |-
-        ^\s*(?:cat\s+(?!<<)|(?:head|less|more)\s+|tail\s+(?!(?:.*\s)?-[a-zA-Z]*[fF](?:\s|$)))
+        ^\s*(?:cat\s+(?!\s|(?:[02-9]>{1,2}\|?\s*[^\s>|]\S*\s+)*(?:<<|1?>(?!&)|&>))|(?:head|less|more)\s+|tail\s+(?!(?:.*\s)?-[a-zA-Z]*[fF](?:\s|$)))
       tool: read
       message: Use the `read` tool instead of cat/head/tail/less/more. It provides better context and handles binary files.
     - pattern: |-
@@ -98,9 +98,9 @@ bashInterceptor:
       tool: edit
       message: Use the `edit` tool instead of awk -i inplace. It provides diff preview and fuzzy matching.
     - pattern: |-
-        ^\s*(echo|printf|cat\s*<<)\s+(?:(?:[^"'>]|"[^"]*"|'[^']*')|(?<!\|)>{1,2}\|?\s*(?:"/dev/(?:null|tty|stdout|stderr)"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\s;&|]|$))*(?<!\|)>{1,2}\|?\s*(?!(?:"/dev/(?:null|tty|stdout|stderr)"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\s;&|]|$))[$\w./~"'-]
+        ^\s*(?:(?:echo|printf)\s+|cat\s*<<|cat(?=\s+(?:\d+|&)?>)\s+)(?:(?:\\[\s\S]|\$\((?:[^()"'`]|"[^"]*"|'[^']*'|`[^`]*`|\([^()]*\))*\)|\$\{[^{}]*\}|`[^`]*`|\$(?!\((?:[^()"'`]|"[^"]*"|'[^']*'|`[^`]*`|\([^()]*\))*\)|\{[^{}]*\})|`(?![^`]*`)|[^"'>;&|\n\\$`]|(?<=[<>])&|(?<![<>])&(?=>)|(?<=(?:^|\s)[02-9])>{1,2}\|?|"[^"]*"|'[^']*')|(?<!\||>|(?:^|\s)[02-9])>{1,2}\|?\s*(?:"/dev/(?:null|tty|stdout|stderr)"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?=[\s;&|]|$))*(?<!\||>|(?:^|\s)[02-9])>{1,2}\|?\s*(?!(?:"/dev/(?:null|tty|stdout|stderr)"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\s;&|]|$))[$\w./~"'-]
       tool: write
-      message: Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation.
+      message: Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation. `write` replaces the whole file; to append to an existing file, use `edit` to insert after its last line.
 cycleOrder:
   - slow
 extendedContext: true

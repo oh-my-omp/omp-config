@@ -113,7 +113,7 @@ const todoFailure = (result: Exclude<TodoReadResult, ReviewTodo>): string => {
 	}
 };
 
-// @upstream verbatim @oh-my-pi/pi-coding-agent@19.1.0 src/tools/yield.ts#PLACEHOLDER_YIELD_ERRORS
+// @upstream verbatim @oh-my-pi/pi-coding-agent@19.1.1 src/tools/yield.ts#PLACEHOLDER_YIELD_ERRORS
 const PLACEHOLDER_YIELD_ERRORS = new Set([
 	"ignore",
 	"ignored",

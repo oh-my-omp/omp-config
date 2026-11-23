@@ -53,7 +53,7 @@ export function digestOf(upgrades: readonly Upgrade[]): Digest {
 const RECENT_DAYS = 3;
 const LAST_DAYS = 1;
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.0 src/utils/changelog.ts#parseChangelogView
+// @upstream adapted @oh-my-pi/pi-coding-agent@19.1.1 src/utils/changelog.ts#parseChangelogView
 // Counts release days rather than entries and answers /omomp-changelog's usage, so the exported host function is not imported.
 export function parseView(
 	args: string,

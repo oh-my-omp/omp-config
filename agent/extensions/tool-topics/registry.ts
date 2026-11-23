@@ -83,6 +83,7 @@ async function allListings(scope: Scope, toolNames: () => readonly string[]): Pr
 }
 
 async function nativeTopic(scope: Scope, tool: string, topic: string): Promise<string | undefined> {
+	if (scope.context?.session === undefined) return undefined;
 	const resource = await scope.base.resolve(parseInternalUrl(`help://${tool}/${topic}`), scope.context);
 	return typeof resource.content === "string" ? resource.content : undefined;
 }
@@ -193,6 +194,7 @@ function createHelpHandler(base: ProtocolHandler, toolNames: () => readonly stri
 }
 
 export function publishTopics(docs: readonly ToolDocs[], toolNames: () => readonly string[], warn: Warn): void {
+	// Catalog inject rules may target another tool (`inject[].tool`); do not publish a tool-filtered copy to the hub.
 	registerToolTopics(
 		OWNER,
 		docs.flatMap(({ tool, topics }) =>
@@ -204,7 +206,6 @@ export function publishTopics(docs: readonly ToolDocs[], toolNames: () => readon
 					when: topic.when,
 					body: topic.body,
 					hiddenFromIndex: topic.hiddenFromIndex,
-					inject: topic.inject.filter((rule) => rule.tool === tool).map((rule) => rule.match),
 				}),
 			),
 		),
