@@ -62,10 +62,10 @@ const probe = (input: Probe) => ("shell" in input ? ptyShellHit(input.shell) : p
 
 describe("pty rule registry", () => {
 	for (const [rule, { hit, miss }] of Object.entries(FIXTURES)) {
-		test(`${rule} refuses its hit`, async () => {
+		test(`${rule} refuses its hit`, () => {
 			expect<string | undefined>(probe(hit)?.rule).toBe(rule);
 		});
-		test(`${rule} lets its miss through`, async () => {
+		test(`${rule} lets its miss through`, () => {
 			expect(probe(miss)).toBeNull();
 		});
 	}
@@ -146,7 +146,7 @@ describe("pty eval cells", () => {
 	const pyRule = (code: string) => ptyEvalHit("py", code)?.rule ?? null;
 	const jsRule = (code: string) => ptyEvalHit("js", code)?.rule ?? null;
 
-	test("py launches spelled under their own names with literal arguments", async () => {
+	test("py launches spelled under their own names with literal arguments", () => {
 		expect(pyRule('import subprocess\nsubprocess.run(["ssh", "host", "true"])\nprint(1)')).toBe("ssh");
 		expect(pyRule('import subprocess\nsubprocess.check_output("tail -f log", shell=True)')).toBe("tailFollow");
 		expect(pyRule('import os\nos.system("zsh -c true")')).toBe("shellString");
@@ -155,7 +155,7 @@ describe("pty eval cells", () => {
 		expect(pyRule("%%bash\nwatch date")).toBe("watch");
 	});
 
-	test("py aliases, variables, f-strings and untokenizable cells pass", async () => {
+	test("py aliases, variables, f-strings and untokenizable cells pass", () => {
 		expect(pyRule('import subprocess as sp\nsp.run(["ssh", "host"])')).toBeNull();
 		expect(pyRule('from os import system as sh\nsh("ssh host")')).toBeNull();
 		expect(pyRule('import subprocess\ncmd = ["ssh", "h"]\nsubprocess.run(cmd)')).toBeNull();
@@ -165,7 +165,7 @@ describe("pty eval cells", () => {
 		expect(pyRule('tool.bash({"command": "ssh host"})')).toBeNull();
 	});
 
-	test("js launches spelled under their own names with literal arguments", async () => {
+	test("js launches spelled under their own names with literal arguments", () => {
 		expect(jsRule("await Bun.$`ssh host true`.nothrow();")).toBe("ssh");
 		expect(jsRule('Bun.spawnSync(["kubectl", "logs", "-f", "p"]);')).toBe("kubectlLogsFollow");
 		expect(jsRule('import { execSync } from "node:child_process";\nexecSync("docker exec app ls");')).toBe("containerExec");
@@ -173,7 +173,7 @@ describe("pty eval cells", () => {
 		expect(jsRule('import { spawnSync } from "child_process";\nspawnSync("tail", ["-f", "x"], { shell: true });')).toBe("tailFollow");
 	});
 
-	test("js aliases, interpolation, bridges and unparsable cells pass", async () => {
+	test("js aliases, interpolation, bridges and unparsable cells pass", () => {
 		expect(jsRule('import { execSync as run } from "child_process";\nrun("ssh host");')).toBeNull();
 		expect(jsRule('const cp = require("child_process");\ncp.execSync("ssh host");')).toBeNull();
 		expect(jsRule("const h = 'x';\nawait Bun.$`ssh $" + "{h} true`;")).toBeNull();

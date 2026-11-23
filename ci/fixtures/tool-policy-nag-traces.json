@@ -1,0 +1,550 @@
+{
+	"maskedGrep": {
+		"command": "cd ../../.. && grep -rn \"SessionEntry\" node_modules/@oh-my-pi/pi-coding-agent/src/index.ts | head -5",
+		"isError": false,
+		"details": {
+			"trace": {
+				"v": 1,
+				"seq": 12,
+				"status": 0,
+				"rootVpid": 1073741824,
+				"t_ns": 977416,
+				"script": "grep -rn \"SessionEntry\" node_modules/@oh-my-pi/pi-coding-agent/src/index.ts | head -5",
+				"units": [
+					{
+						"at": 0,
+						"line": 1,
+						"bytes": 85,
+						"nodes": [
+							{
+								"k": "and_or",
+								"lo": 0,
+								"hi": 85,
+								"state": "ok"
+							},
+							{
+								"k": "pipeline",
+								"lo": 0,
+								"hi": 85,
+								"p": 0,
+								"state": "ok"
+							},
+							{
+								"k": "simple",
+								"lo": 0,
+								"hi": 75,
+								"p": 1,
+								"state": "fail",
+								"runs": 1,
+								"st": 1,
+								"fails": 1,
+								"ns": 733334,
+								"at": 69916,
+								"argv": [
+									"grep",
+									"-rn",
+									"SessionEntry",
+									"node_modules/@oh-my-pi/pi-coding-agent/src/index.ts"
+								],
+								"res": "native",
+								"end_ns": 803250,
+								"end_seq": 10
+							},
+							{
+								"k": "word",
+								"lo": 0,
+								"hi": 4,
+								"p": 2,
+								"state": "skipped"
+							},
+							{
+								"k": "word",
+								"lo": 5,
+								"hi": 8,
+								"p": 2,
+								"state": "skipped"
+							},
+							{
+								"k": "word",
+								"lo": 9,
+								"hi": 23,
+								"p": 2,
+								"state": "skipped"
+							},
+							{
+								"k": "word",
+								"lo": 24,
+								"hi": 75,
+								"p": 2,
+								"state": "skipped"
+							},
+							{
+								"k": "simple",
+								"lo": 78,
+								"hi": 85,
+								"p": 1,
+								"state": "ok",
+								"runs": 1,
+								"st": 0,
+								"ns": 616417,
+								"at": 339833,
+								"argv": [
+									"head",
+									"-5"
+								],
+								"res": "native",
+								"end_ns": 956250,
+								"end_seq": 11
+							},
+							{
+								"k": "word",
+								"lo": 78,
+								"hi": 82,
+								"p": 7,
+								"state": "skipped"
+							},
+							{
+								"k": "word",
+								"lo": 83,
+								"hi": 85,
+								"p": 7,
+								"state": "skipped"
+							}
+						],
+						"syntax": "AwAAAAAAABRMZ3JlcC1yblNlc3Npb25FbnRyeW5vZGVfbW9kdWxlcy9Ab2gtbXktcGkvcGktY29kaW5nLWFnZW50L3NyYy9pbmRleC50c2hlYWQtNRUZAAAEABkABAMAGAMABAEEGAQFAwEEGQAHDABZAAAAAwECGAUJDgECGQATMwAYBhgzAQIFAAAABA4MBgIEAgBLAQIZAEYEABkASgIAGAhOBAEEGAlTAgEEBQAAAAIEAgQHTgcBAgMBAFUCDgICAABVAQJBAAAAAgECAAAAAAEC"
+					}
+				],
+				"history": [
+					{
+						"seq": 1,
+						"t_ns": 0,
+						"event_seq": 200,
+						"vpid": 1073741824,
+						"kind": "RunStart"
+					},
+					{
+						"seq": 3,
+						"t_ns": 63833,
+						"event_seq": 202,
+						"u": 0,
+						"n": 1,
+						"vpid": 1073741824,
+						"kind": "Pipeline"
+					},
+					{
+						"seq": 5,
+						"t_ns": 69916,
+						"event_seq": 204,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 0,
+							"vpid": 1073741845,
+							"seq": 35
+						},
+						"vpid": 1073741845,
+						"kind": "CmdStart"
+					},
+					{
+						"seq": 6,
+						"t_ns": 69916,
+						"event_seq": 205,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 0,
+							"vpid": 1073741845,
+							"seq": 35
+						},
+						"vpid": 1073741845,
+						"kind": "CmdExpanded",
+						"argv": [
+							"grep",
+							"-rn",
+							"SessionEntry",
+							"node_modules/@oh-my-pi/pi-coding-agent/src/index.ts"
+						],
+						"assigns": [],
+						"resolved": "native",
+						"redirs": []
+					},
+					{
+						"seq": 8,
+						"t_ns": 339833,
+						"event_seq": 207,
+						"u": 0,
+						"n": 7,
+						"command": {
+							"run": 0,
+							"vpid": 1073741846,
+							"seq": 36
+						},
+						"vpid": 1073741846,
+						"kind": "CmdStart"
+					},
+					{
+						"seq": 9,
+						"t_ns": 339833,
+						"event_seq": 208,
+						"u": 0,
+						"n": 7,
+						"command": {
+							"run": 0,
+							"vpid": 1073741846,
+							"seq": 36
+						},
+						"vpid": 1073741846,
+						"kind": "CmdExpanded",
+						"argv": [
+							"head",
+							"-5"
+						],
+						"assigns": [],
+						"resolved": "native",
+						"redirs": []
+					},
+					{
+						"seq": 10,
+						"t_ns": 803250,
+						"event_seq": 209,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 0,
+							"vpid": 1073741845,
+							"seq": 35
+						},
+						"vpid": 1073741845,
+						"kind": "CmdEnd",
+						"status": 1,
+						"dur_ns": 733334,
+						"pipestatus": []
+					},
+					{
+						"seq": 11,
+						"t_ns": 956250,
+						"event_seq": 210,
+						"u": 0,
+						"n": 7,
+						"command": {
+							"run": 0,
+							"vpid": 1073741846,
+							"seq": 36
+						},
+						"vpid": 1073741846,
+						"kind": "CmdEnd",
+						"status": 0,
+						"dur_ns": 616417,
+						"pipestatus": []
+					},
+					{
+						"seq": 12,
+						"t_ns": 977416,
+						"event_seq": 211,
+						"vpid": 1073741824,
+						"kind": "RunEnd",
+						"status": 0
+					}
+				]
+			}
+		}
+	},
+	"listing": {
+		"command": "ls /tmp/pb54/base/src/extension",
+		"isError": false,
+		"details": {
+			"trace": {
+				"v": 1,
+				"seq": 7,
+				"status": 0,
+				"rootVpid": 1073741824,
+				"t_ns": 834584,
+				"script": "ls /tmp/pb54/base/src/extension",
+				"units": [
+					{
+						"at": 0,
+						"line": 1,
+						"bytes": 31,
+						"nodes": [
+							{
+								"k": "and_or",
+								"lo": 0,
+								"hi": 31,
+								"state": "ok"
+							},
+							{
+								"k": "pipeline",
+								"lo": 0,
+								"hi": 31,
+								"p": 0,
+								"state": "ok"
+							},
+							{
+								"k": "simple",
+								"lo": 0,
+								"hi": 31,
+								"p": 1,
+								"state": "ok",
+								"runs": 1,
+								"st": 0,
+								"ns": 806375,
+								"at": 21584,
+								"argv": [
+									"ls",
+									"/tmp/pb54/base/src/extension"
+								],
+								"res": "native",
+								"end_ns": 827959,
+								"end_seq": 6
+							},
+							{
+								"k": "word",
+								"lo": 0,
+								"hi": 2,
+								"p": 2,
+								"state": "skipped"
+							},
+							{
+								"k": "word",
+								"lo": 3,
+								"hi": 31,
+								"p": 2,
+								"state": "skipped"
+							}
+						],
+						"syntax": "AwAAAAAAAAkebHMvdG1wL3BiNTQvYmFzZS9zcmMvZXh0ZW5zaW9uChkAAAIAGQACHAAYAwACAQQYBAMcAQQFAAAAAgQCBAIAHwECAwEAHwECAgAAHwECQQAAAAIBAgAAAAABAg=="
+					}
+				],
+				"history": [
+					{
+						"seq": 1,
+						"t_ns": 0,
+						"event_seq": 154,
+						"vpid": 1073741824,
+						"kind": "RunStart"
+					},
+					{
+						"seq": 3,
+						"t_ns": 21584,
+						"event_seq": 156,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 21,
+							"vpid": 1073741824,
+							"seq": 28
+						},
+						"vpid": 1073741824,
+						"kind": "CmdStart"
+					},
+					{
+						"seq": 4,
+						"t_ns": 21584,
+						"event_seq": 157,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 21,
+							"vpid": 1073741824,
+							"seq": 28
+						},
+						"vpid": 1073741824,
+						"kind": "CmdExpanded",
+						"argv": [
+							"ls",
+							"/tmp/pb54/base/src/extension"
+						],
+						"assigns": [],
+						"resolved": "native",
+						"redirs": []
+					},
+					{
+						"seq": 5,
+						"t_ns": 789375,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 21,
+							"vpid": 1073741824,
+							"seq": 28
+						},
+						"vpid": 1073741824,
+						"kind": "Output",
+						"text": "agents.ts\nclient.ts\neval-prelude.ts\nindex.ts\npane-listener.ts\nparams.ts\ntern-setup.ts\ntopics\ntopics.ts\n",
+						"fd": 1
+					},
+					{
+						"seq": 6,
+						"t_ns": 827959,
+						"event_seq": 158,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 21,
+							"vpid": 1073741824,
+							"seq": 28
+						},
+						"vpid": 1073741824,
+						"kind": "CmdEnd",
+						"status": 0,
+						"dur_ns": 806375,
+						"pipestatus": []
+					},
+					{
+						"seq": 7,
+						"t_ns": 834584,
+						"event_seq": 159,
+						"vpid": 1073741824,
+						"kind": "RunEnd",
+						"status": 0
+					}
+				]
+			}
+		}
+	},
+	"write": {
+		"command": "cat agent://ReviewDiff402/explanation > /tmp/omp402-ev/review-diff-2.md",
+		"isError": false,
+		"details": {
+			"trace": {
+				"v": 1,
+				"seq": 6,
+				"status": 0,
+				"rootVpid": 1073741824,
+				"t_ns": 7576375,
+				"script": "cat agent://ReviewDiff402/explanation > /tmp/omp402-ev/review-diff-2.md",
+				"units": [
+					{
+						"at": 0,
+						"line": 1,
+						"bytes": 71,
+						"nodes": [
+							{
+								"k": "and_or",
+								"lo": 0,
+								"hi": 71,
+								"state": "ok"
+							},
+							{
+								"k": "pipeline",
+								"lo": 0,
+								"hi": 71,
+								"p": 0,
+								"state": "ok"
+							},
+							{
+								"k": "simple",
+								"lo": 0,
+								"hi": 71,
+								"p": 1,
+								"state": "ok",
+								"runs": 1,
+								"st": 0,
+								"ns": 7457000,
+								"at": 48042,
+								"argv": [
+									"cat",
+									"agent://ReviewDiff402/explanation"
+								],
+								"res": "native",
+								"end_ns": 7505042,
+								"end_seq": 5
+							},
+							{
+								"k": "word",
+								"lo": 0,
+								"hi": 3,
+								"p": 2,
+								"state": "skipped"
+							},
+							{
+								"k": "word",
+								"lo": 4,
+								"hi": 37,
+								"p": 2,
+								"state": "skipped"
+							},
+							{
+								"k": "word",
+								"lo": 40,
+								"hi": 71,
+								"p": 2,
+								"state": "skipped"
+							}
+						],
+						"syntax": "AwAAAAAAAAxDY2F0YWdlbnQ6Ly9SZXZpZXdEaWZmNDAyL2V4cGxhbmF0aW9uL3RtcC9vbXA0MDItZXYvcmV2aWV3LWRpZmYtMi5tZA0ZAAADABkAAyEAGAMAAwEEGAQEIQEEGQAkHwAYBSgfAQLWACYhAf////8PAQIFAAAAAgoIBAIARwICBAMBAEcBAgIAAEcBAkEAAAACAQIAAAAAAQI="
+					}
+				],
+				"history": [
+					{
+						"seq": 1,
+						"t_ns": 0,
+						"event_seq": 870,
+						"vpid": 1073741824,
+						"kind": "RunStart"
+					},
+					{
+						"seq": 3,
+						"t_ns": 48042,
+						"event_seq": 872,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 95,
+							"vpid": 1073741824,
+							"seq": 134
+						},
+						"vpid": 1073741824,
+						"kind": "CmdStart"
+					},
+					{
+						"seq": 4,
+						"t_ns": 603083,
+						"event_seq": 873,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 95,
+							"vpid": 1073741824,
+							"seq": 134
+						},
+						"vpid": 1073741824,
+						"kind": "CmdExpanded",
+						"argv": [
+							"cat",
+							"agent://ReviewDiff402/explanation"
+						],
+						"assigns": [],
+						"resolved": "native",
+						"redirs": []
+					},
+					{
+						"seq": 5,
+						"t_ns": 7505042,
+						"event_seq": 874,
+						"u": 0,
+						"n": 2,
+						"command": {
+							"run": 95,
+							"vpid": 1073741824,
+							"seq": 134
+						},
+						"vpid": 1073741824,
+						"kind": "CmdEnd",
+						"status": 0,
+						"dur_ns": 7457000,
+						"pipestatus": []
+					},
+					{
+						"seq": 6,
+						"t_ns": 7576375,
+						"event_seq": 875,
+						"vpid": 1073741824,
+						"kind": "RunEnd",
+						"status": 0
+					}
+				]
+			}
+		}
+	}
+}
