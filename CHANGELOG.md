@@ -80,6 +80,8 @@
 
 ### Fixed
 
+- Fixed `harness_restart` starting a new agent turn after the user interrupted the turn that queued it: the cancellation notice now waits hidden for the user's next turn
+- Fixed `harness_restart` not telling the agent about a failed restart when recording the failure in the session threw
 - Fixed `tool-policy-nag` risk and masked-failure reminders breaking their quoted command when it contains a run of three or more backticks
 - Fixed `omomp-lang` logging that the launch environment overrides `omomp-lang.language` when an inherited `OMOMP_LANG` (for example in an `omp` started from an omp shell) names the configured language
 - Fixed `omp-config-autoupdate.exclude` entries not protecting the numbered `APPEND-SYSTEM-model-NN.md` targets when the updater splits a legacy `APPEND_SYSTEM_MODEL.md` on Windows, and made the updater's excluded-path safety check see move and split targets there

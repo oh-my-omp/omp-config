@@ -6,7 +6,8 @@ import { captureInteractiveMode, type InteractiveModeFailure } from "../_shared/
 import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";
 
 const TOOL = "harness_restart";
-const ENTRY_TYPE = "mouriya.omp.harness-restart.request";
+const MARKER_TYPE = "mouriya.omp.harness-restart.request";
+const NOTICE_TYPE = "mouriya.omp.harness-restart.notice";
 const IDLE_POLL_MS = 50;
 
 const DESCRIPTION = [
@@ -22,23 +23,16 @@ const params = z.object({
 });
 
 type Marker = { readonly reason: string; readonly at: number };
-type Request = { readonly sessionId: string; readonly marker: Marker };
 type State =
 	| { readonly kind: "idle" }
-	| { readonly kind: "queued"; readonly request: Request }
-	| { readonly kind: "armed"; readonly request: Request; readonly timer: Timer }
-	| { readonly kind: "running"; readonly request: Request };
+	| { readonly kind: "queued"; readonly marker: Marker }
+	| { readonly kind: "armed"; readonly marker: Marker; readonly timer: Timer }
+	| { readonly kind: "running"; readonly marker: Marker };
 
 type Runtime = { readonly pi: ExtensionAPI; state: State };
-type ToolResult = AgentToolResult<undefined>;
 
-const markerSchema = z.object({ reason: z.string(), at: z.number() }).passthrough();
-const consumedSchema = z.object({ consumed: z.literal(true) }).passthrough();
-
-function reset(runtime: Runtime, ctx: ExtensionContext): void {
-	if (runtime.state.kind === "armed") ctx.clearTimer(runtime.state.timer);
-	runtime.state = { kind: "idle" };
-}
+const markerSchema = z.object({ reason: z.string(), at: z.number() });
+const consumedSchema = z.object({ consumed: z.literal(true) });
 
 function captureFailureText(failure: InteractiveModeFailure): string {
 	switch (failure.kind) {
@@ -62,112 +56,94 @@ function pendingMarker(ctx: ExtensionContext): Marker | undefined {
 			found = undefined;
 			continue;
 		}
-		if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE || !("data" in entry)) continue;
+		if (entry.type !== "custom" || entry.customType !== MARKER_TYPE) continue;
 		if (consumedSchema.safeParse(entry.data).success) {
 			found = undefined;
 			continue;
 		}
 		const parsed = markerSchema.safeParse(entry.data);
-		if (parsed.success) found = { reason: parsed.data.reason.trim(), at: parsed.data.at };
+		if (parsed.success) found = parsed.data;
 	}
 	return found;
 }
 
-type SendSite =
-	| "completion notice"
-	| "queued restart not run notice"
-	| "queued restart failed notice"
-	| "queued restart failed before marker notice"
-	| "queued restart cancelled notice";
-
-function sendNotice(pi: ExtensionAPI, site: SendSite, text: string, onDelivered?: () => void): void {
-	void pi.sendUserMessage(text, { attribution: "agent" }).then(
-		() => {
-			if (onDelivered === undefined) return;
-			try {
-				onDelivered();
-			} catch (error) {
-				pi.logger.warn(`harness-restart: ${site} accepted but the consumed marker was not written`, { error: errorText(error) });
-			}
-		},
-		(error: unknown) => {
-			pi.logger.warn(`harness-restart: ${site} not delivered`, { error: errorText(error) });
-		},
-	);
+function consume(pi: ExtensionAPI): void {
+	pi.appendEntry(MARKER_TYPE, { consumed: true, at: Date.now() });
 }
 
-async function execute(runtime: Runtime, ctx: ExtensionContext, request: Request): Promise<void> {
-	runtime.state = { kind: "running", request };
-	let marked = false;
+async function announce(pi: ExtensionAPI, ctx: ExtensionContext, marker: Marker): Promise<void> {
 	try {
-		if (ctx.sessionManager.getSessionId() !== request.sessionId) return;
-		const live = captureInteractiveMode(ctx);
-		if (live.kind !== "ok") {
-			const reason = captureFailureText(live);
-			runtime.pi.logger.warn("harness-restart: queued restart not run", { reason });
-			sendNotice(runtime.pi, "queued restart not run notice", `The queued harness restart did not run: ${reason}`);
-			return;
-		}
-		runtime.pi.appendEntry(ENTRY_TYPE, request.marker);
-		marked = true;
-		const fail = (detail: string): void => {
-			// Every path that does not relaunch must consume the marker written above.
-			runtime.pi.appendEntry(ENTRY_TYPE, { consumed: true, at: Date.now() });
-			runtime.pi.logger.warn("harness-restart: restart failed", { error: detail });
-			sendNotice(runtime.pi, "queued restart failed notice", `The queued harness restart failed: ${detail}`);
-		};
-		try {
-			if (ctx.hasUI) ctx.ui.notify(tr("Restarting omp…", "正在重启 omp…"), "info");
-			await live.mode.restart();
-			fail("InteractiveMode.restart() returned without relaunching omp.");
-		} catch (error) {
-			fail(errorText(error));
-		}
+		const reason = marker.reason ? `Reason was: ${marker.reason}.` : "No reason was recorded.";
+		const text = `Harness restart completed (${new Date(marker.at).toISOString()}). ${reason} Continue what you were doing.`;
+		await pi.sendUserMessage(text, { attribution: "agent" });
+		const pending = pendingMarker(ctx);
+		if (pending?.at === marker.at && pending.reason === marker.reason) consume(pi);
 	} catch (error) {
-		if (marked) {
-			runtime.pi.logger.warn("harness-restart: failed after marker", { error: errorText(error) });
-		} else {
-			runtime.pi.logger.warn("harness-restart: queued restart failed before marker", { error: errorText(error) });
-			sendNotice(runtime.pi, "queued restart failed before marker notice", `The queued harness restart failed: ${errorText(error)}`);
-		}
-	} finally {
-		runtime.state = { kind: "idle" };
+		pi.logger.warn("harness-restart: completion notice failed", { error: errorText(error) });
 	}
 }
 
-function arm(runtime: Runtime, ctx: ExtensionContext, request: Request): void {
+async function relaunch(pi: ExtensionAPI, ctx: ExtensionContext, marker: Marker): Promise<string> {
+	const live = captureInteractiveMode(ctx);
+	if (live.kind !== "ok") return `it did not run: ${captureFailureText(live)}`;
+	pi.appendEntry(MARKER_TYPE, marker);
+	try {
+		ctx.ui.notify(tr("Restarting omp…", "正在重启 omp…"), "info");
+		await live.mode.restart();
+		return "InteractiveMode.restart() returned without relaunching omp.";
+	} catch (error) {
+		return errorText(error);
+	} finally {
+		// Every path that does not relaunch must consume the marker, or the next start reports a restart that never happened.
+		consume(pi);
+	}
+}
+
+async function execute(runtime: Runtime, ctx: ExtensionContext, marker: Marker): Promise<void> {
+	runtime.state = { kind: "running", marker };
+	let failure: string;
+	try {
+		failure = await relaunch(runtime.pi, ctx, marker);
+	} catch (error) {
+		failure = errorText(error);
+	}
+	runtime.state = { kind: "idle" };
+	runtime.pi.logger.warn("harness-restart: queued restart failed", { error: failure });
+	void runtime.pi
+		.sendUserMessage(`The queued harness restart failed: ${failure}`, { attribution: "agent" })
+		.catch((error: unknown) => runtime.pi.logger.warn("harness-restart: failure notice not delivered", { error: errorText(error) }));
+}
+
+function arm(runtime: Runtime, ctx: ExtensionContext, marker: Marker): void {
 	const tick = (): void => {
-		if (runtime.state.kind !== "armed" || runtime.state.request !== request) return;
+		if (runtime.state.kind !== "armed" || runtime.state.marker !== marker) return;
 		if (!ctx.isIdle() || ctx.hasPendingMessages()) {
-			runtime.state = { kind: "armed", request, timer: ctx.setTimeout(tick, IDLE_POLL_MS) };
+			runtime.state = { kind: "armed", marker, timer: ctx.setTimeout(tick, IDLE_POLL_MS) };
 			return;
 		}
-		void execute(runtime, ctx, request);
+		void execute(runtime, ctx, marker);
 	};
-	runtime.state = { kind: "armed", request, timer: ctx.setTimeout(tick, IDLE_POLL_MS) };
+	runtime.state = { kind: "armed", marker, timer: ctx.setTimeout(tick, IDLE_POLL_MS) };
+}
+
+function disarm(runtime: Runtime, ctx: ExtensionContext): void {
+	if (runtime.state.kind !== "armed") return;
+	ctx.clearTimer(runtime.state.timer);
+	runtime.state = { kind: "queued", marker: runtime.state.marker };
+}
+
+function reset(runtime: Runtime, ctx: ExtensionContext): void {
+	if (runtime.state.kind === "armed") ctx.clearTimer(runtime.state.timer);
+	runtime.state = { kind: "idle" };
 }
 
 async function activate(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
-	if (ctx.agent.kind === "main") {
-		const marker = pendingMarker(ctx);
-		if (marker !== undefined) {
-			const when = Number.isFinite(marker.at) ? new Date(marker.at).toISOString() : "unknown time";
-			sendNotice(
-				pi,
-				"completion notice",
-				`Harness restart completed (${when}). ${marker.reason ? `Reason was: ${marker.reason}.` : "No reason was recorded."} Continue what you were doing.`,
-				() => {
-					const pending = pendingMarker(ctx);
-					if (pending === undefined || pending.at !== marker.at || pending.reason !== marker.reason) return;
-					pi.appendEntry(ENTRY_TYPE, { consumed: true, at: Date.now() });
-				},
-			);
-		}
-	}
-	if (ctx.mode !== "tui" || ctx.agent.kind !== "main") return;
+	if (ctx.agent.kind !== "main") return;
+	const marker = pendingMarker(ctx);
+	if (marker !== undefined) void announce(pi, ctx, marker);
+	if (ctx.mode !== "tui") return;
 	const active = pi.getActiveTools();
-	if (active.includes(TOOL)) return;
-	await applyActiveTools(pi, [...active, TOOL]);
+	if (!active.includes(TOOL)) await applyActiveTools(pi, [...active, TOOL]);
 }
 
 function blocker(runtime: Runtime, ctx: ExtensionContext): string | undefined {
@@ -190,12 +166,10 @@ function blocker(runtime: Runtime, ctx: ExtensionContext): string | undefined {
 	return undefined;
 }
 
-async function restart(runtime: Runtime, ctx: ExtensionContext, rawParams: unknown): Promise<ToolResult> {
+function restart(runtime: Runtime, ctx: ExtensionContext, reason: string | undefined): AgentToolResult<undefined> {
 	const blocked = blocker(runtime, ctx);
 	if (blocked !== undefined) return { content: [{ type: "text", text: blocked }], isError: true };
-	const reason = params.parse(rawParams).reason?.trim() ?? "";
-	const marker: Marker = { reason, at: Date.now() };
-	runtime.state = { kind: "queued", request: { sessionId: ctx.sessionManager.getSessionId(), marker } };
+	runtime.state = { kind: "queued", marker: { reason: reason?.trim() ?? "", at: Date.now() } };
 	return {
 		content: [
 			{
@@ -206,28 +180,26 @@ async function restart(runtime: Runtime, ctx: ExtensionContext, rawParams: unkno
 	};
 }
 
-function disarm(runtime: Runtime, ctx: ExtensionContext): void {
-	if (runtime.state.kind !== "armed") return;
-	ctx.clearTimer(runtime.state.timer);
-	runtime.state = { kind: "queued", request: runtime.state.request };
-}
-
 function onAgentEnd(runtime: Runtime, event: AgentEndEvent, ctx: ExtensionContext): void {
 	if (runtime.state.kind !== "queued") return;
-	if (event.willContinue === true && event.awaitingAsyncWork !== true) return;
-	const request = runtime.state.request;
+	if (event.willContinue && !event.awaitingAsyncWork) return;
+	const marker = runtime.state.marker;
 	const last = event.messages.findLast((message) => message.role === "assistant");
-	if (last?.role === "assistant" && last.stopReason === "aborted" && isUserInterruptAbort(last)) {
-		runtime.state = { kind: "idle" };
-		ctx.ui.notify(tr("Queued harness restart cancelled: the turn was interrupted.", "已取消排队的 Harness 重启：本轮被中断。"), "info");
-		sendNotice(
-			runtime.pi,
-			"queued restart cancelled notice",
-			"The queued harness restart was cancelled because the user interrupted the turn; nothing changed.",
-		);
+	if (last?.role !== "assistant" || last.stopReason !== "aborted" || !isUserInterruptAbort(last)) {
+		arm(runtime, ctx, marker);
 		return;
 	}
-	arm(runtime, ctx, request);
+	runtime.state = { kind: "idle" };
+	ctx.ui.notify(tr("Queued harness restart cancelled: the turn was interrupted.", "已取消排队的 Harness 重启：本轮被中断。"), "info");
+	runtime.pi.sendMessage(
+		{
+			customType: NOTICE_TYPE,
+			content: "The queued harness restart was cancelled because the user interrupted the turn; nothing changed.",
+			display: false,
+			attribution: "agent",
+		},
+		{ deliverAs: "nextTurn" },
+	);
 }
 
 async function guardHook(pi: ExtensionAPI, label: string, handler: () => void | Promise<void>): Promise<void> {
@@ -258,9 +230,9 @@ export default function harnessRestart(pi: ExtensionAPI): void {
 		loadMode: "essential",
 		defaultInactive: true,
 		parameters: params,
-		async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, toolParams, _signal, _onUpdate, ctx) {
 			try {
-				return await restart(runtime, ctx, rawParams);
+				return restart(runtime, ctx, toolParams.reason);
 			} catch (error) {
 				pi.logger.warn("harness-restart: tool failed", { error: errorText(error) });
 				return { content: [{ type: "text", text: errorText(error) }], isError: true };
