@@ -3,7 +3,7 @@ tool: ast_grep
 name: patterns
 title: Writing a pattern
 when: before writing `pat`, or when a pattern matched nothing, matched fewer sites than `grep`, or reported parse issues
-upstream: pi-coding-agent@18.15.0 src/prompts/tools/ast-grep.md, omp://tools/ast-grep.md § Notes
+upstream: pi-coding-agent@19.1.1 src/prompts/tools/ast-grep.md, omp://tools/ast-grep.md § Notes
 ---
 # Writing a pattern
 

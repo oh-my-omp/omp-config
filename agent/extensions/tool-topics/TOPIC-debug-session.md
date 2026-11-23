@@ -3,11 +3,11 @@ tool: debug
 name: session
 title: Launching, stepping and inspecting
 when: before launching or attaching a debugger, or when a step timed out or inspection says there is no frame
-upstream: pi-coding-agent@18.13.2 src/tools/debug.ts, src/dap/{config,session}.ts, omp://tools/debug.md § Flow, § Errors, § Limits & Caps
+upstream: pi-coding-agent@19.1.1 src/tools/debug.ts, src/dap/{config,session}.ts, omp://tools/debug.md § Flow, § Modes / Variants, § Errors, § Limits & Caps
 ---
 # Launching, stepping and inspecting
 
-- Adapter: `adapter` wins; otherwise `launch` picks by file extension and project markers among installed ones (`gdb`, `lldb-dap`, `codelldb`, `debugpy`, `dlv`, `js-debug-adapter`, `netcoredbg`, `kotlin-debug-adapter`, `rdbg`, `php-debug-adapter`, `bash-debug-adapter`, `dart-debug-adapter`, `flutter-debug-adapter`, `elixir-ls-debugger`). A directory `program` needs a directory-capable adapter (e.g. `dlv` on a Go package). No adapter → the error lists installed ones (`pip install debugpy` for Python).
+- Adapter: `adapter` wins; otherwise `launch` picks by file extension and project markers among installed ones (`gdb`, `lldb-dap`, `codelldb`, `debugpy`, `dlv`, `js-debug-adapter`, `netcoredbg`, `kotlin-debug-adapter`, `rdbg`, `php-debug-adapter`, `bash-debug-adapter`, `dart-debug-adapter`, `flutter-debug-adapter`, `elixir-ls-debugger`). A directory `program` needs a directory-capable adapter (e.g. `dlv` on a Go package; `dlv` automatically selects `mode: "debug"` for directories/`.go` sources and `mode: "exec"` for compiled binaries). No adapter → the error lists installed ones (`pip install debugpy` for Python).
 - `attach` needs `pid` or `port` (+`host`); a port prefers `debugpy`.
 - One root session at a time: `terminate` before launching another. Idle sessions are cleaned after 10 minutes.
 - Breakpoints: `file` + `line`, or `function` (wins over file/line); `condition` for conditional ones. Set them before `continue`.

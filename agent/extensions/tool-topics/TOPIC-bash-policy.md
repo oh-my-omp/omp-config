@@ -3,7 +3,7 @@ tool: bash
 name: policy
 title: Blocked commands, deletion and approval
 when: after a command returned `Blocked:` or a `delete-guard:` error, or before deleting files or running a destructive command
-upstream: pi-coding-agent@18.14.0 src/tools/bash.ts, src/tools/bash-interceptor.ts, src/tools/approval.ts, src/tools/settings.ts, src/exec/settings.ts; agent/config.yml bashInterceptor; agent/extensions/delete-guard
+upstream: pi-coding-agent@19.1.1 src/tools/bash.ts, src/tools/bash-interceptor.ts, src/tools/shell-tokenize.ts, src/tools/approval.ts, src/tools/settings.ts, src/exec/settings.ts; agent/config.yml bashInterceptor; agent/extensions/delete-guard
 hiddenFromIndex: true
 inject:
   - id: bash-policy-blocked
@@ -15,13 +15,13 @@ inject:
 ---
 # Blocked commands, deletion and approval
 
-- `Blocked: <message>` means the command matched a routing rule and never ran. Redo the work with the tool the message names. Routes in this setup:
-  - `cat`/`head`/`tail`/`less`/`more` on files (not `tail -f`) → `read`
-  - `grep`/`rg`/`ag`/`ack` → `grep`
+- An intercepted command never runs and points at the dedicated tool to use instead: `execute()` returns `Blocked: <message>`, while `approval()` denies intercepted calls with the same message without the `Blocked: ` prefix. Routes in this setup:
+  - `cat`/`head`/`tail`/`less`/`more` on files (not `cat <<` heredocs or `tail -f`) → `read`
+  - `grep`/`rg`/`ripgrep`/`ag`/`ack` → `grep`
+  - `find`/`fd`/`locate` with name/type/glob flags → `glob`
   - in-place `sed -i`/`perl -i`/`awk -i inplace` → `edit`
-  - in-place `sed -i`/`perl -i`/`awk -i` → `edit`
   - `echo`/`printf`/`cat <<` redirected into a file → `write`
-- Routing checks each `&&`/`||`/`;`/`|` segment; a stage reading piped stdin (`… | grep x`) is not routed.
+- Routing checks the full command first, then each flat segment separated by `&&`, `||`, `;`, `|`, `|&`, `&`, or newlines (with and without leading `NAME=value` assignments); a stage reading piped stdin from `|` or `|&` (`… | grep x`) is not routed.
 - Deleting files: call the `delete` tool with literal paths and leave `mode` unset; the default moves them to the system trash. Set `mode: "permanent"` (unrecoverable) only when the user explicitly asks for unrecoverable deletion; "delete", "remove", "clean up" or a request phrased as `rm -rf` is not such a request. A permanent call still asks the user to confirm, and a subagent or headless run cannot get that confirmation. Bash never deletes: a call containing `rm`, `unlink`, `rmdir`, `shred`, `find -delete` or `find -exec rm` anywhere it would run (also after `sudo`/`env`/`xargs`/`timeout`…, inside `$(…)`, `${ …; }`, `sh -c '…'`, `omp bash -c '…'`, `eval`, `trap`), or `hash -p` pointing a name at one of them, is refused with a `delete-guard:` error and does not run, whatever its arguments. The same holds inside `powershell`/`pwsh -Command` (`Remove-Item` and its aliases, `[IO.File]::Delete`, `.Delete(`) and `cmd /c` (`del`, `erase`, `rd`, `rmdir`). Arguments that only mention these words (`echo rm`, `git rm`) are fine, and so are programs that delete as part of their own job (`rsync --delete`).
 - `delete-guard:` also refuses commands it cannot read: a command name from a variable or substitution (`$CMD x`, `%X%`), a non-literal `sh -c "$s"` / `eval "$s"`, `iex` / `Invoke-Expression`, `[scriptblock]::Create(`, `-EncodedCommand`, a script piped into a shell (`… | sh`, `… | omp bash`), or `source <(…)` / `source /dev/stdin`. Write the command out literally.
 - Interpreters: inline code run by `python3 -c`, `node`/`bun` `-e`/`--eval`/`-p`/`--print`, `deno eval`, `perl -e` or `ruby -e` is judged under the same deletion rules as eval cells (Perl and Ruby by name). Inline code or a script that comes from a variable, a pipe or an unquoted here-document is refused as non-literal; a literal script file (`python3 x.py`) runs. Write the code out literally, or use the `delete` tool for deletion.

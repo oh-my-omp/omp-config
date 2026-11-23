@@ -3,7 +3,7 @@ tool: task
 name: judge
 title: Let an eval judge read many short texts for you
 when: before reading many short texts (titles, rows, findings, summaries) only to answer a fixed question about each, or to sort them into classes
-upstream: pi-coding-agent@18.13.2 src/prompts/tools/eval-judge.md, src/judgment/index.ts
+upstream: pi-coding-agent@19.1.1 src/prompts/tools/eval-judge.md, src/judgment/index.ts, src/tools/eval-doc-topics.ts
 ---
 # Let an eval judge read many short texts for you
 
@@ -21,9 +21,10 @@ for await (const [id, item] of b.drainIter({ timeout: 120 }))
 await b.close();
 ```
 
-- Keep each text short: a title, a row, one finding, a summary. The judge model has a small context; a long text goes to `completion(…, { schema })` or `agent(…, { schema })` (`help://eval/workflow`), or is cut down to the part the question needs.
-- The judge sees only the text you pass, no files, history or tools. Texts come from values already in the cell, such as `tool.<name>()` bridge results; `output(ids)` returns `{ id, content }` records, so pass `content`. Files still go through `read`.
+- Keep each text short: a title, a row, one finding, a summary. The judge model has a small context; a long text goes to `completion(…, { model: "default"|"smol"|"slow"|"m<N>", schema })` or `agent(…, { schema })` (`help://eval/workflow`), or is cut down to the part the question needs.
+- The judge sees only the text (and optional `images`) you pass, no files, history or tools. Texts come from values already in the cell, such as `tool.<name>()` bridge results; `output(ids)` returns `{ id, content }` records, so pass `content`. Files still go through `read`.
+- Optional parameters: `judge(state, questions, { images? })` accepts local paths or `ImageContent`; `judgeBatch` (`judge_batch` in Python) also accepts `concurrency` (capped at 32), `retries`, `minOk` (`min_ok`), `intent`, and per-key `images` (`{ key: [...] }`, zero-based index keys for arrays). Image requests skip judges without image support and fail if none remain.
 - Derive the labels from the decision you have to make. `bool` is a probability of yes, and the threshold is yours.
 - An answer sorts and filters; it is not evidence. Read what you act on.
 - Assignment splitting, parallel-writer isolation and `task:*` completion are already judged when you dispatch and when a worker yields; do not judge them again.
-- One text: `await judge(text, questions)`. Signatures, `score`, images and batch draining: `help://eval/judge`.
+- Full signatures (`judge`, `judgeBatch`, `completion` including `"m<N>"`), `score` rubrics, and batch draining/re-attach live in host-native `help://eval/judge`.

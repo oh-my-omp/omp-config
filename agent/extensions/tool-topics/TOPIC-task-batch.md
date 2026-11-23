@@ -3,7 +3,7 @@ tool: task
 name: batch
 title: Templated batch dispatch from eval
 when: before dispatching many items built from a template, or in waves
-upstream: pi-coding-agent@18.22.2 src/eval/js/tool-bridge.ts, src/extensibility/extensions/wrapper.ts, src/eval/agent-bridge.ts, omp://tools/eval.md § Prelude helpers, § judge() and judgment batches, § completion(), § agent()
+upstream: pi-coding-agent@19.1.1 src/eval/js/tool-bridge.ts, src/extensibility/extensions/wrapper.ts, src/eval/agent-bridge.ts, omp://tools/eval.md § Prelude helpers, § judge() and judgment batches, § completion(), § agent()
 ---
 # Templated batch dispatch from eval
 
