@@ -72,6 +72,7 @@
 - Made `subagent-usage` reuse a full calibration that is already running instead of running a second full calibration after it
 - Named the judged `reply` state field in `lang-nag`'s judge question, and simplified its detection to idle, running or mismatch with one settings reload for `session_start` and `session_switch`
 - Restructured `watchdog-agent`: one session lifecycle (unloaded, active, closed) owns the per-session state, session entries are parsed with schemas in their own module, `/watchdog` handlers live with the command parser and draft prompts in their own module
+- Restructured `turn-judge`: spec-file parsing moved to its own module, the main session and subagent paths are chosen by agent kind, the timeline and the skip-tool check walk the session separately, and timeline fitting serializes each kept entry once
 - Split `omp-config-update.ts` into modules for files, paths and exclusions, the report shape, plugins, omomp settings migration, legacy migrations, the `omp-light` launcher and conflict adaptation; the entry script keeps its exports, owner lists and retirement lists, and the Todo and fork plugin prerequisites share one readiness check (an installed plugin missing a required file now reports `<plugin> is missing <file>`)
 
 ### Removed
@@ -79,6 +80,7 @@
 - Removed `task` guidance for consulting a past session with `agent: "seance"` and the rule that isolated items cannot use it
 - Removed the project agents `loop:scout`, `loop:worker`, `loop:worker-free`, `loop:guardian` and `loop:verifier` and their `.omp/config.yml` model bindings
 - Removed the project agent `consult:carbon`, its model binding, and the `hard-decisions-go-to-carbon` rule that routed hard decisions to it
+- Removed the `turn-judge` error that told `TURN-JUDGE-*.md` files to rename `maxChars` to `maxBytes`; a leftover `maxChars` key is now ignored like any other unknown key
 
 ### Fixed
 

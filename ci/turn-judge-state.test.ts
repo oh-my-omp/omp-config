@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { fitState, MAX_BYTES_LIMIT, parseMaxBytes, type TimelineEntry } from "../agent/extensions/turn-judge/state.ts";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseSpecFile } from "../agent/extensions/turn-judge/spec.ts";
+import { fitState, type TimelineEntry } from "../agent/extensions/turn-judge/state.ts";
 
 function bytes(value: unknown): number {
 	return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -10,11 +14,17 @@ const escapes = 'a"b\\c\nd'.repeat(2_000);
 const emoji = "😀".repeat(10_000);
 const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
+function specWithMaxBytes(maxBytes: string) {
+	const path = join(mkdtempSync(join(tmpdir(), "turn-judge-")), "TURN-JUDGE-limit.md");
+	writeFileSync(path, `---\nmaxBytes: ${maxBytes}\nquestion.asks: Does it ask?\nwhen.asks: asks >= 0.5\nprompt: go on\n---\n`);
+	return parseSpecFile(path);
+}
+
 describe("turn-judge maxBytes limit", () => {
 	test("64KB is accepted and 64KB + 1 byte is invalid", () => {
-		expect(MAX_BYTES_LIMIT).toBe(65_536);
-		expect(parseMaxBytes("65536")).toEqual({ kind: "ok", value: 65_536 });
-		expect(parseMaxBytes("65537").kind).toBe("invalid");
+		const accepted = specWithMaxBytes("65536");
+		expect(accepted.kind === "ok" && accepted.spec.maxBytes).toBe(65_536);
+		expect(specWithMaxBytes("65537").kind).toBe("invalid");
 	});
 });
 

@@ -1,21 +1,3 @@
-import { tr } from "../_shared/i18n.ts";
-
-export const MAX_BYTES_LIMIT = 65_536;
-
-export type MaxBytesParse = { readonly kind: "ok"; readonly value: number } | { readonly kind: "invalid"; readonly reason: string };
-
-export function parseMaxBytes(raw: string): MaxBytesParse {
-	const value = Number(raw);
-	if (!Number.isInteger(value) || value <= 0)
-		return { kind: "invalid", reason: tr("maxBytes must be a positive integer", "maxBytes 必须是正整数") };
-	if (value > MAX_BYTES_LIMIT)
-		return {
-			kind: "invalid",
-			reason: tr(`maxBytes must be at most ${MAX_BYTES_LIMIT} (64KB)`, `maxBytes 不能超过 ${MAX_BYTES_LIMIT}（64KB）`),
-		};
-	return { kind: "ok", value };
-}
-
 export type TimelineKind = "用户说" | "用户在ask中回答" | "提醒" | "模型想" | "模型说" | "模型调用工具";
 
 export type TimelineEntry = { readonly 类型: TimelineKind; readonly 内容: string };
@@ -31,6 +13,12 @@ const STATE_OVERHEAD_BYTES = serializedBytes({ 时间线: [], 本轮回复: "" }
 const ELLIPSIS_BYTES = serializedBytes("…");
 
 const ENTRY_FRAME_BYTES = serializedBytes({ 类型: "", 内容: "" });
+
+function sizeWithin(entry: TimelineEntry, budget: number): number | undefined {
+	if (ENTRY_FRAME_BYTES + Buffer.byteLength(entry.类型, "utf8") + Buffer.byteLength(entry.内容, "utf8") > budget) return undefined;
+	const size = serializedBytes(entry);
+	return size <= budget ? size : undefined;
+}
 
 function headWithin(text: string, budget: number): string {
 	if (Buffer.byteLength(text, "utf8") + 2 <= budget && serializedBytes(text) <= budget) return text;
@@ -69,11 +57,7 @@ function headWithin(text: string, budget: number): string {
 }
 
 function fitEntry(entry: TimelineEntry, budget: number): TimelineEntry {
-	if (
-		ENTRY_FRAME_BYTES + Buffer.byteLength(entry.类型) + Buffer.byteLength(entry.内容, "utf8") <= budget &&
-		serializedBytes(entry) <= budget
-	)
-		return entry;
+	if (sizeWithin(entry, budget) !== undefined) return entry;
 	const overhead = serializedBytes({ 类型: entry.类型, 内容: "" });
 	return { 类型: entry.类型, 内容: headWithin(entry.内容, budget - overhead) };
 }
@@ -102,11 +86,11 @@ export function fitState(entries: readonly TimelineEntry[], reply: string, maxBy
 		remaining -= serializedBytes(fittedNewest) + 1;
 		const kept: TimelineEntry[] = [fittedNewest];
 		for (let i = tail.length - 2; i >= 0; i--) {
-			const entry = tail[i] as TimelineEntry;
-			if (ENTRY_FRAME_BYTES + Buffer.byteLength(entry.类型) + Buffer.byteLength(entry.内容, "utf8") + 1 > remaining) break;
-			const cost = serializedBytes(entry) + 1;
-			if (cost > remaining) break;
-			remaining -= cost;
+			const entry = tail[i];
+			if (entry === undefined) break;
+			const size = sizeWithin(entry, remaining - 1);
+			if (size === undefined) break;
+			remaining -= size + 1;
 			kept.push(entry);
 		}
 		fitted.push(...kept.reverse());

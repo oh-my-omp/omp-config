@@ -1,66 +1,24 @@
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, Judge, NoulQuestion } from "@oh-my-pi/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { AssistantMessage, Judge } from "@oh-my-pi/pi-ai";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { openJudge } from "../_shared/judge.ts";
 import { textOf } from "../_shared/messages.ts";
 import { defineStatelessNoiseGuard, isCompacting, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
-import {
-	type FilterKeys,
-	type FilterProblem,
-	type InjectMode,
-	parseInjectMode,
-	parseSessionFilter,
-	producerMatches,
-	type SessionFilter,
-	targetsSession,
-} from "../_shared/session-filter.ts";
-import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
-import { fitState, parseMaxBytes, type TimelineEntry, type TurnState } from "./state.ts";
+import { type InjectMode, producerMatches, targetsSession } from "../_shared/session-filter.ts";
+import { discoverSpecFiles } from "../_shared/spec-files.ts";
+import { type Comparison, parseSpecFile, type TurnJudgeSpec } from "./spec.ts";
+import { fitState, type TimelineEntry, type TurnState } from "./state.ts";
 
 const FILE_PATTERN = /^TURN-JUDGE-.+\.md$/i;
-const QUESTION_KEY = /^question\.([a-z0-9_]+)(?:\.(true|false))?$/;
-const RULE_KEY = /^when\.([a-z0-9_]+)$/;
-const COMPARISON = /^([a-z0-9_]+)\s*(>=|<)\s*(\d*\.?\d+)$/;
-const DEFAULT_MAX_BYTES = 30_000;
 const JUDGE_TIMEOUT_MS = 90_000;
 const SUB_DEADLINE_MS = 20_000;
 const POLL_MS = 25;
 const REMINDER_MAX_CHARS = 400;
-const FILTER_KEYS: FilterKeys = { target: "target", cwd: "cwd", model: "model", provider: "provider" };
 const PROMPT_CUSTOM_TYPE = "turn-judge";
 const REMINDER_CUSTOM_TYPES: ReadonlySet<string> = new Set(["watchdog", PROMPT_CUSTOM_TYPE]);
-
-type NoulCriteria = { readonly true?: string; readonly false?: string };
-
-type TurnQuestion = { readonly id: string; readonly instructions: string; readonly criteria: NoulCriteria | null };
-
-type Comparison = { readonly question: string; readonly op: "atLeast" | "below"; readonly value: number };
-
-type Rule = { readonly name: string; readonly conditions: readonly Comparison[] };
-
-type TurnJudgeSpec = {
-	readonly name: string;
-	readonly filePath: string;
-	readonly questions: readonly TurnQuestion[];
-	readonly rules: readonly Rule[];
-	readonly prompt: string;
-	readonly maxBytes: number;
-	readonly skipTools: ReadonlySet<string>;
-	readonly filter: SessionFilter;
-	readonly inject: InjectMode;
-};
-
-type SpecParse =
-	| { readonly kind: "ok"; readonly spec: TurnJudgeSpec }
-	| { readonly kind: "disabled" }
-	| { readonly kind: "invalid"; readonly reason: string };
-
-type Before = { readonly timeline: readonly TimelineEntry[]; readonly toolCalls: readonly string[] };
 
 type Verdict = Readonly<Record<string, number>>;
 
@@ -80,181 +38,25 @@ type Report =
 
 type Delivery = { readonly kind: "sent" } | { readonly kind: "unsent"; readonly reason: string } | { readonly kind: "unconfirmed" };
 
+type Prepared = { readonly spec: TurnJudgeSpec; readonly state: TurnState };
+
+type Admission = { readonly matches: (message: AgentMessage) => boolean; readonly settle: (admitted: boolean) => void };
+
+type AdmissionWatcher = {
+	watch(matches: (message: AgentMessage) => boolean, signal: AbortSignal): Promise<boolean>;
+};
+
+type SubPrompts = { readonly system: string; readonly user: string };
+
+type SubTurn = {
+	readonly specs: readonly TurnJudgeSpec[];
+	readonly timeline: readonly TimelineEntry[];
+	readonly reply: string;
+	readonly judgedTimestamp: number;
+	readonly deadline: AbortSignal;
+};
+
 const warnedFiles = new Set<string>();
-
-type QuestionsParse =
-	| { readonly kind: "ok"; readonly questions: readonly TurnQuestion[] }
-	| { readonly kind: "invalid"; readonly reason: string };
-
-function parseQuestions(fields: Readonly<Record<string, string>>): QuestionsParse {
-	const instructions = new Map<string, string>();
-	const yes = new Map<string, string>();
-	const no = new Map<string, string>();
-	for (const [key, raw] of Object.entries(fields)) {
-		const m = key.match(QUESTION_KEY);
-		const id = m?.[1];
-		if (!m || id === undefined) continue;
-		const value = unquote(raw);
-		if (!value) return { kind: "invalid", reason: tr(`${key} is empty`, `${key} 为空`) };
-		const side = m[2];
-		if (side === undefined) instructions.set(id, value);
-		else if (side === "true") yes.set(id, value);
-		else no.set(id, value);
-	}
-	if (instructions.size === 0)
-		return { kind: "invalid", reason: tr("needs at least one question.<id> entry", "至少需要一个 question.<id> 条目") };
-	for (const id of [...yes.keys(), ...no.keys()]) {
-		if (!instructions.has(id)) return { kind: "invalid", reason: tr(`question.${id} is not declared`, `question.${id} 未声明`) };
-	}
-	const questions: TurnQuestion[] = [];
-	for (const [id, text] of instructions) {
-		const whenYes = yes.get(id);
-		const whenNo = no.get(id);
-		const criteria: NoulCriteria | null =
-			whenYes === undefined && whenNo === undefined
-				? null
-				: { ...(whenYes === undefined ? {} : { true: whenYes }), ...(whenNo === undefined ? {} : { false: whenNo }) };
-		questions.push({ id, instructions: text, criteria });
-	}
-	return { kind: "ok", questions };
-}
-
-type RulesParse = { readonly kind: "ok"; readonly rules: readonly Rule[] } | { readonly kind: "invalid"; readonly reason: string };
-
-function parseRules(fields: Readonly<Record<string, string>>, questions: readonly TurnQuestion[]): RulesParse {
-	const declared = new Set(questions.map((q) => q.id));
-	const used = new Set<string>();
-	const rules: Rule[] = [];
-	for (const [key, raw] of Object.entries(fields)) {
-		const name = key.match(RULE_KEY)?.[1];
-		if (name === undefined) continue;
-		const conditions: Comparison[] = [];
-		for (const part of unquote(raw).split("&")) {
-			const m = part.trim().match(COMPARISON);
-			const [, question, op, rawValue] = m ?? [];
-			if (question === undefined || op === undefined || rawValue === undefined)
-				return {
-					kind: "invalid",
-					reason: tr(
-						`${key}: "${part.trim()}" is not <question> >= p or <question> < p`,
-						`${key}：“${part.trim()}”不是 <question> >= p 或 <question> < p`,
-					),
-				};
-			if (!declared.has(question))
-				return { kind: "invalid", reason: tr(`${key}: question.${question} is not declared`, `${key}：question.${question} 未声明`) };
-			const value = Number(rawValue);
-			if (!(value > 0 && value <= 1))
-				return { kind: "invalid", reason: tr(`${key}: ${rawValue} must be in (0, 1]`, `${key}：${rawValue} 必须在 (0, 1] 范围内`) };
-			used.add(question);
-			conditions.push({ question, op: op === ">=" ? "atLeast" : "below", value });
-		}
-		rules.push({ name, conditions });
-	}
-	if (rules.length === 0) return { kind: "invalid", reason: tr("needs at least one when.<name> rule", "至少需要一条 when.<name> 规则") };
-	const unused = questions.find((q) => !used.has(q.id));
-	if (unused !== undefined)
-		return {
-			kind: "invalid",
-			reason: tr(`question.${unused.id} is used by no when.<name> rule`, `没有 when.<name> 规则使用 question.${unused.id}`),
-		};
-	return { kind: "ok", rules };
-}
-
-function describeProblem(problem: FilterProblem): string {
-	switch (problem.kind) {
-		case "missing":
-			return tr(`${problem.key} is missing`, `缺少 ${problem.key}`);
-		case "empty":
-			return tr(`${problem.key} lists nothing`, `${problem.key} 未列出任何值`);
-		case "relative":
-			return tr(
-				`${problem.key} pattern "${problem.pattern}" must be absolute or start with ~/`,
-				`${problem.key} 模式“${problem.pattern}”必须是绝对路径或以 ~/ 开头`,
-			);
-		case "badRegex":
-			return tr(`${problem.key} is not a valid regex: ${problem.detail}`, `${problem.key} 不是有效正则表达式：${problem.detail}`);
-		case "badInject":
-			return tr(
-				`${problem.key} must be system or user, not "${problem.value}"`,
-				`${problem.key} 只能是 system 或 user，不能是“${problem.value}”`,
-			);
-		default: {
-			const unreachable: never = problem;
-			return unreachable;
-		}
-	}
-}
-
-type SkipToolsParse = { readonly kind: "ok"; readonly tools: ReadonlySet<string> } | { readonly kind: "invalid"; readonly reason: string };
-
-function parseSkipTools(raw: string | undefined): SkipToolsParse {
-	if (raw === undefined) return { kind: "ok", tools: new Set() };
-	const tools = raw
-		.split(",")
-		.map((item) => unquote(item))
-		.filter((item) => item !== "");
-	if (tools.length === 0) return { kind: "invalid", reason: tr("skipTools lists nothing", "skipTools 未列出任何工具") };
-	return { kind: "ok", tools: new Set(tools) };
-}
-
-function parseSpecFile(path: string): SpecParse {
-	let raw: string;
-	try {
-		raw = readFileSync(path, "utf8");
-	} catch (error) {
-		const detail = String(error);
-		return { kind: "invalid", reason: tr(`unreadable: ${detail}`, `无法读取：${detail}`) };
-	}
-	const parsed = parseFrontmatter(raw);
-	if (!parsed) return { kind: "invalid", reason: tr("missing frontmatter", "缺少 frontmatter") };
-	const { fields, body } = parsed;
-	if (fields.enabled !== undefined && !/^(true|yes|on|1)$/i.test(unquote(fields.enabled))) return { kind: "disabled" };
-	if (body.trim() !== "")
-		return {
-			kind: "invalid",
-			reason: tr("the body must be empty: questions are question.<id> keys", "正文必须为空：问题写在 question.<id> 键中"),
-		};
-	const prompt = fields.prompt === undefined ? "" : unquote(fields.prompt);
-	if (prompt === "") return { kind: "invalid", reason: tr("prompt is missing or empty", "缺少 prompt 或 prompt 为空") };
-	if (fields.maxchars !== undefined)
-		return {
-			kind: "invalid",
-			reason: tr("maxChars was renamed to maxBytes", "maxChars 已改名为 maxBytes（maxChars was renamed to maxBytes）"),
-		};
-	let maxBytes = DEFAULT_MAX_BYTES;
-	if (fields.maxbytes !== undefined) {
-		const parsed = parseMaxBytes(unquote(fields.maxbytes));
-		if (parsed.kind === "invalid") return parsed;
-		maxBytes = parsed.value;
-	}
-	const filter = parseSessionFilter(fields, FILTER_KEYS, { kind: "default", targets: [{ kind: "main" }] }, "frontmatter");
-	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
-	const inject = parseInjectMode(fields.inject);
-	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };
-	const skipTools = parseSkipTools(fields.skiptools);
-	if (skipTools.kind === "invalid") return skipTools;
-	const questions = parseQuestions(fields);
-	if (questions.kind === "invalid") return questions;
-	const rules = parseRules(fields, questions.questions);
-	if (rules.kind === "invalid") return rules;
-	const label = basename(path)
-		.replace(/^TURN-JUDGE-/i, "")
-		.replace(/\.md$/i, "");
-	return {
-		kind: "ok",
-		spec: {
-			name: fields.name ? unquote(fields.name) : label,
-			filePath: path,
-			questions: questions.questions,
-			rules: rules.rules,
-			prompt,
-			maxBytes,
-			filter: filter.value,
-			inject: inject.value,
-			skipTools: skipTools.tools,
-		},
-	};
-}
 
 function notify(pi: ExtensionAPI, ctx: ExtensionContext, lines: readonly string[], level: "info" | "warning"): void {
 	if (lines.length === 0) return;
@@ -292,6 +94,17 @@ function applyingSpecs(pi: ExtensionAPI, ctx: ExtensionContext, message: Assista
 	return specs;
 }
 
+function* ancestors(ctx: ExtensionContext): Generator<SessionEntry> {
+	const visited = new Set<string>();
+	for (let id = ctx.sessionManager.getLeafId(); id !== null && !visited.has(id); ) {
+		visited.add(id);
+		const entry = ctx.sessionManager.getEntry(id);
+		if (entry === undefined) return;
+		yield entry;
+		id = entry.parentId;
+	}
+}
+
 function assistantEvents(message: AssistantMessage, withText: boolean): TimelineEntry[] {
 	const events: TimelineEntry[] = [];
 	for (const block of message.content) {
@@ -322,86 +135,63 @@ function reminder(text: string): TimelineEntry {
 	return { 类型: "提醒", 内容: text.length > REMINDER_MAX_CHARS ? `${text.slice(0, REMINDER_MAX_CHARS)}…` : text };
 }
 
-function before(ctx: ExtensionContext, judged: AssistantMessage): Before {
+function toolCallsSinceLastStop(ctx: ExtensionContext, judged: AssistantMessage): ReadonlySet<string> {
+	const calls = new Set<string>();
+	for (const entry of ancestors(ctx)) {
+		if (entry.type !== "message" || entry.message.timestamp >= judged.timestamp) continue;
+		const message = entry.message;
+		if (message.role !== "assistant") continue;
+		if (message.stopReason === "stop") break;
+		for (const block of message.content) if (block.type === "toolCall") calls.add(block.name);
+	}
+	return calls;
+}
+
+function timelineSinceHumanInput(ctx: ExtensionContext, judged: AssistantMessage): TimelineEntry[] {
 	const main = ctx.agent.kind === "main";
-	const timeline = assistantEvents(judged, false)
+	const newestFirst = assistantEvents(judged, false)
 		.filter((event) => event.类型 !== "模型调用工具")
 		.reverse();
-	const toolCalls: string[] = [];
-	const visited = new Set<string>();
-	let windowOpen = true;
-	let callsOpen = true;
-	for (let id = ctx.sessionManager.getLeafId(); (windowOpen || callsOpen) && id !== null && !visited.has(id); ) {
-		visited.add(id);
-		const entry = ctx.sessionManager.getEntry(id);
-		if (entry === undefined) break;
-		id = entry.parentId;
+	for (const entry of ancestors(ctx)) {
 		if (entry.type === "custom_message") {
 			if (!REMINDER_CUSTOM_TYPES.has(entry.customType) || Date.parse(entry.timestamp) >= judged.timestamp) continue;
-			if (!windowOpen) continue;
 			const text = textOf(entry.content, "\n").trim();
-			if (text !== "") timeline.push(reminder(text));
+			if (text !== "") newestFirst.push(reminder(text));
 			continue;
 		}
-		if (entry.type !== "message") continue;
+		if (entry.type !== "message" || entry.message.timestamp >= judged.timestamp) continue;
 		const message = entry.message;
-		if (message.timestamp >= judged.timestamp) continue;
 		if (message.role === "user") {
-			if (!windowOpen) continue;
 			const text = textOf(message.content, "\n").trim();
 			if (text === "") continue;
-			const human = message.synthetic !== true && (!main || message.attribution === "user");
-			if (human) windowOpen = false;
-			timeline.push(human ? { 类型: "用户说", 内容: text } : reminder(text));
-			continue;
-		}
-		if (message.role === "assistant") {
-			if (callsOpen) {
-				if (message.stopReason === "stop") callsOpen = false;
-				else
-					for (let i = message.content.length - 1; i >= 0; i--) {
-						const block = message.content[i];
-						if (block !== undefined && block.type === "toolCall") toolCalls.push(block.name);
-					}
+			if (message.synthetic !== true && (!main || message.attribution === "user")) {
+				newestFirst.push({ 类型: "用户说", 内容: text });
+				break;
 			}
-			if (windowOpen) timeline.push(...assistantEvents(message, true).reverse());
-			continue;
-		}
-		if (message.role === "toolResult" && windowOpen) {
+			newestFirst.push(reminder(text));
+		} else if (message.role === "assistant") {
+			newestFirst.push(...assistantEvents(message, true).reverse());
+		} else if (message.role === "toolResult") {
 			const answers = askAnswers(message);
-			if (answers !== null) timeline.push({ 类型: "用户在ask中回答", 内容: formatAskAnswers(answers) });
+			if (answers !== null) newestFirst.push({ 类型: "用户在ask中回答", 内容: formatAskAnswers(answers) });
 		}
 	}
-	timeline.reverse();
-	return { timeline, toolCalls: toolCalls.reverse() };
+	return newestFirst.reverse();
 }
 
 function hasMessageAfter(ctx: ExtensionContext, judgedTimestamp: number): boolean {
-	const visited = new Set<string>();
-	for (let id = ctx.sessionManager.getLeafId(); id !== null && !visited.has(id); ) {
-		visited.add(id);
-		const entry = ctx.sessionManager.getEntry(id);
-		if (entry === undefined) return false;
-		id = entry.parentId;
-		if (entry.type === "message") return entry.message.timestamp > judgedTimestamp;
-	}
+	for (const entry of ancestors(ctx)) if (entry.type === "message") return entry.message.timestamp > judgedTimestamp;
 	return false;
 }
 
 async function runJudge(judge: Judge, spec: TurnJudgeSpec, state: TurnState, signal: AbortSignal): Promise<JudgeResult> {
 	try {
-		const questions: Record<string, NoulQuestion> = {};
-		for (const q of spec.questions)
-			questions[q.id] =
-				q.criteria === null
-					? { type: "noul", instructions: q.instructions }
-					: { type: "noul", instructions: q.instructions, criteria: q.criteria };
-		const result = await judge.judge({ state, questions }, { signal });
+		const result = await judge.judge({ state, questions: spec.questions }, { signal });
 		const verdict: Record<string, number> = {};
-		for (const q of spec.questions) {
-			const answer = result.answers[q.id];
-			if (answer === undefined) return { kind: "failed", reason: tr(`no answer for question.${q.id}`, `question.${q.id} 没有回答`) };
-			verdict[q.id] = answer.noul;
+		for (const id of Object.keys(spec.questions)) {
+			const answer = result.answers[id];
+			if (answer === undefined) return { kind: "failed", reason: tr(`no answer for question.${id}`, `question.${id} 没有回答`) };
+			verdict[id] = answer.noul;
 		}
 		return { kind: "ok", verdict };
 	} catch (error) {
@@ -429,7 +219,9 @@ function decide(spec: TurnJudgeSpec, verdict: Verdict): Action {
 }
 
 function describeVerdict(spec: TurnJudgeSpec, verdict: Verdict, action: Action): string {
-	const parts = spec.questions.map((q) => `${q.id} ${(verdict[q.id] ?? 0).toFixed(2)}`).join(" · ");
+	const parts = Object.keys(spec.questions)
+		.map((id) => `${id} ${(verdict[id] ?? 0).toFixed(2)}`)
+		.join(" · ");
 	switch (action.kind) {
 		case "prompt":
 			return tr(`turn-judge ${spec.name}: when.${action.rule} (${parts})`, `turn-judge ${spec.name}：when.${action.rule}（${parts}）`);
@@ -442,14 +234,12 @@ function describeVerdict(spec: TurnJudgeSpec, verdict: Verdict, action: Action):
 	}
 }
 
-type Prepared = { readonly spec: TurnJudgeSpec; readonly state: TurnState };
-
-function prepareJudgments(specs: readonly TurnJudgeSpec[], context: Before, reply: string): Prepared[] {
+function prepareJudgments(specs: readonly TurnJudgeSpec[], timeline: readonly TimelineEntry[], reply: string): Prepared[] {
 	const byBudget = new Map<number, TurnState>();
 	return specs.map((spec) => {
 		let state = byBudget.get(spec.maxBytes);
 		if (state === undefined) {
-			state = fitState(context.timeline, reply, spec.maxBytes);
+			state = fitState(timeline, reply, spec.maxBytes);
 			byBudget.set(spec.maxBytes, state);
 		}
 		return { spec, state };
@@ -458,19 +248,11 @@ function prepareJudgments(specs: readonly TurnJudgeSpec[], context: Before, repl
 
 async function judgeSpec(judge: Judge, spec: TurnJudgeSpec, state: TurnState, signal: AbortSignal): Promise<Judged> {
 	const result = await runJudge(judge, spec, state, signal);
-	switch (result.kind) {
-		case "failed":
-			return {
-				kind: "failed",
-				line: tr(`turn-judge ${spec.name}: judgment failed (${result.reason})`, `turn-judge ${spec.name}：判断失败（${result.reason}）`),
-			};
-		case "ok":
-			break;
-		default: {
-			const unreachable: never = result;
-			return unreachable;
-		}
-	}
+	if (result.kind === "failed")
+		return {
+			kind: "failed",
+			line: tr(`turn-judge ${spec.name}: judgment failed (${result.reason})`, `turn-judge ${spec.name}：判断失败（${result.reason}）`),
+		};
 	const action = decide(spec, result.verdict);
 	const line = describeVerdict(spec, result.verdict, action);
 	switch (action.kind) {
@@ -492,12 +274,6 @@ async function waitUntil(ready: () => boolean, signal: AbortSignal): Promise<boo
 	}
 	return true;
 }
-
-type Admission = { readonly matches: (message: AgentMessage) => boolean; readonly settle: (admitted: boolean) => void };
-
-type AdmissionWatcher = {
-	watch(matches: (message: AgentMessage) => boolean, signal: AbortSignal): Promise<boolean>;
-};
 
 function createAdmissionWatcher(pi: ExtensionAPI): AdmissionWatcher {
 	const pending = new Set<Admission>();
@@ -524,21 +300,15 @@ function createAdmissionWatcher(pi: ExtensionAPI): AdmissionWatcher {
 	};
 }
 
-type SubPrompts = { readonly system: string; readonly user: string };
-
-/**
- * Prompt dispatch
- * awaits preprocessing before the session reports busy; returning earlier
- * would let the executor collect the judged report instead.
- */
+// Do not return before the new turn is admitted: the executor would collect the judged reply instead.
 async function deliverToSubagent(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	admissions: AdmissionWatcher,
 	prompts: SubPrompts,
-	judgedTimestamp: number,
-	deadline: AbortSignal,
+	turn: SubTurn,
 ): Promise<Delivery> {
+	const { deadline, judgedTimestamp } = turn;
 	if (deadline.aborted) return { kind: "unsent", reason: tr("judgment timed out", "判断超出时限") };
 	if (!(await waitUntil(() => ctx.isIdle(), deadline)))
 		return { kind: "unsent", reason: tr("subagent did not become idle in time", "时限内子会话未空闲") };
@@ -573,23 +343,65 @@ async function deliverToSubagent(
 	return (await admitted) ? { kind: "sent" } : { kind: "unconfirmed" };
 }
 
-async function judgeSubagentTurn(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	admissions: AdmissionWatcher,
-	specs: readonly TurnJudgeSpec[],
-	context: Before,
-	message: AssistantMessage,
-	reply: string,
-	deadline: AbortSignal,
-): Promise<void> {
+function deliveryLines(delivery: Delivery, triggered: readonly Judged[], tag: string): Report[] {
+	switch (delivery.kind) {
+		case "sent":
+			return triggered.map((t) => ({ kind: "info", line: tr(`${t.line} → prompt (${tag})`, `${t.line} → 提示（${tag}）`) }));
+		case "unsent":
+			return triggered.map((t) => ({
+				kind: "info",
+				line: tr(`${t.line}; ${delivery.reason}, prompt not sent (${tag})`, `${t.line}；${delivery.reason}，未发送提示（${tag}）`),
+			}));
+		case "unconfirmed":
+			return triggered.map((t) => ({
+				kind: "warning",
+				line: tr(
+					`${t.line} → prompt (${tag}); the start of a new turn was not confirmed within the deadline, so the parent agent may receive the original reply`,
+					`${t.line} → 提示（${tag}）；时限内未确认新回合开始，父代理可能收到原回复`,
+				),
+			}));
+		default: {
+			const unreachable: never = delivery;
+			return unreachable;
+		}
+	}
+}
+
+function notifyReports(pi: ExtensionAPI, ctx: ExtensionContext, reports: readonly Report[]): void {
+	notify(
+		pi,
+		ctx,
+		reports.flatMap((r) => (r.kind === "warning" ? [r.line] : [])),
+		"warning",
+	);
+	notify(
+		pi,
+		ctx,
+		reports.flatMap((r) => (r.kind === "info" ? [r.line] : [])),
+		"info",
+	);
+}
+
+async function judgeSubagentTurn(pi: ExtensionAPI, ctx: ExtensionContext, admissions: AdmissionWatcher, turn: SubTurn): Promise<void> {
 	const opened = openJudge(ctx, "turn-judge");
 	if (opened.kind === "inactive") return;
 	const judged = await Promise.all(
-		prepareJudgments(specs, context, reply).map(({ spec, state }) => judgeSpec(opened.judge, spec, state, deadline)),
+		prepareJudgments(turn.specs, turn.timeline, turn.reply).map(({ spec, state }) => judgeSpec(opened.judge, spec, state, turn.deadline)),
 	);
-	const warnings = judged.flatMap((j) => (j.kind === "failed" ? [j.line] : []));
-	const infos = judged.flatMap((j) => (j.kind === "info" ? [j.line] : []));
+	const reports: Report[] = judged.flatMap((j): Report[] => {
+		switch (j.kind) {
+			case "failed":
+				return [{ kind: "warning", line: j.line }];
+			case "info":
+				return [{ kind: "info", line: j.line }];
+			case "prompt":
+				return [];
+			default: {
+				const unreachable: never = j;
+				return unreachable;
+			}
+		}
+	});
 	const triggered = judged.flatMap((j) => (j.kind === "prompt" ? [j] : []));
 	if (triggered.length > 0) {
 		const joined = (inject: InjectMode): string =>
@@ -597,44 +409,10 @@ async function judgeSubagentTurn(
 				.filter((t) => t.inject === inject)
 				.map((t) => t.prompt)
 				.join("\n\n");
-		const delivery = await deliverToSubagent(
-			pi,
-			ctx,
-			admissions,
-			{ system: joined("system"), user: joined("user") },
-			message.timestamp,
-			deadline,
-		);
-		const tag = `${ctx.agent.name} (${ctx.agent.id})`;
-		switch (delivery.kind) {
-			case "sent":
-				infos.push(...triggered.map((t) => tr(`${t.line} → prompt (${tag})`, `${t.line} → 提示（${tag}）`)));
-				break;
-			case "unsent":
-				infos.push(
-					...triggered.map((t) =>
-						tr(`${t.line}; ${delivery.reason}, prompt not sent (${tag})`, `${t.line}；${delivery.reason}，未发送提示（${tag}）`),
-					),
-				);
-				break;
-			case "unconfirmed":
-				warnings.push(
-					...triggered.map((t) =>
-						tr(
-							`${t.line} → prompt (${tag}); the start of a new turn was not confirmed within the deadline, so the parent agent may receive the original reply`,
-							`${t.line} → 提示（${tag}）；时限内未确认新回合开始，父代理可能收到原回复`,
-						),
-					),
-				);
-				break;
-			default: {
-				const unreachable: never = delivery;
-				return unreachable;
-			}
-		}
+		const delivery = await deliverToSubagent(pi, ctx, admissions, { system: joined("system"), user: joined("user") }, turn);
+		reports.push(...deliveryLines(delivery, triggered, `${ctx.agent.name} (${ctx.agent.id})`));
 	}
-	notify(pi, ctx, warnings, "warning");
-	notify(pi, ctx, infos, "info");
+	notifyReports(pi, ctx, reports);
 }
 
 export default function turnJudge(pi: ExtensionAPI): void {
@@ -672,16 +450,15 @@ export default function turnJudge(pi: ExtensionAPI): void {
 							{ customType: PROMPT_CUSTOM_TYPE, content: judged.prompt, display: true, attribution: "agent" },
 							ctx.isIdle() ? { triggerTurn: true } : { deliverAs: "followUp", triggerTurn: true },
 						);
-						break;
+						return { kind: "sent" };
 					case "user":
 						pi.sendUserMessage(judged.prompt, ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "followUp", attribution: "agent" });
-						break;
+						return { kind: "sent" };
 					default: {
 						const unreachable: never = judged.inject;
-						throw new Error(`unknown inject mode ${String(unreachable)}`);
+						return unreachable;
 					}
 				}
-				return { kind: "sent" };
 			default: {
 				const unreachable: never = judged;
 				return unreachable;
@@ -689,31 +466,23 @@ export default function turnJudge(pi: ExtensionAPI): void {
 		}
 	};
 
-	const judgeMainTurn = async (ctx: ExtensionContext, specs: readonly TurnJudgeSpec[], context: Before, reply: string) => {
+	const judgeMainTurnInBackground = (
+		ctx: ExtensionContext,
+		specs: readonly TurnJudgeSpec[],
+		timeline: readonly TimelineEntry[],
+		reply: string,
+	): void => {
 		const startedAt = epoch;
 		const opened = openJudge(ctx, "turn-judge");
 		if (opened.kind === "inactive") return;
 		void Promise.all(
-			prepareJudgments(specs, context, reply).map(async ({ spec, state }) =>
+			prepareJudgments(specs, timeline, reply).map(async ({ spec, state }) =>
 				settleMain(ctx, await judgeSpec(opened.judge, spec, state, AbortSignal.timeout(JUDGE_TIMEOUT_MS)), startedAt),
 			),
 		)
-			.then((reports) => {
-				notify(
-					pi,
-					ctx,
-					reports.flatMap((r) => (r.kind === "warning" ? [r.line] : [])),
-					"warning",
-				);
-				notify(
-					pi,
-					ctx,
-					reports.flatMap((r) => (r.kind === "info" ? [r.line] : [])),
-					"info",
-				);
-			})
+			.then((reports) => notifyReports(pi, ctx, reports))
 			.catch((error) => {
-				pi.logger.warn("turn-judge: message_end failed", { error: errorText(error) });
+				pi.logger.warn("turn-judge: background judgment failed", { error: errorText(error) });
 			});
 	};
 
@@ -737,16 +506,32 @@ export default function turnJudge(pi: ExtensionAPI): void {
 		try {
 			const message = event.message;
 			if (message.role !== "assistant" || message.stopReason !== "stop") return;
-			const deadline = ctx.agent.kind === "sub" ? AbortSignal.timeout(SUB_DEADLINE_MS) : null;
 			const reply = textOf(message.content, "\n").trim();
 			if (reply === "") return;
 			const scoped = applyingSpecs(pi, ctx, message);
 			if (scoped.length === 0) return;
-			const context = before(ctx, message);
-			const specs = scoped.filter((spec) => !context.toolCalls.some((name) => spec.skipTools.has(name)));
+			const calls = toolCallsSinceLastStop(ctx, message);
+			const specs = scoped.filter((spec) => calls.isDisjointFrom(spec.skipTools));
 			if (specs.length === 0) return;
-			if (deadline === null) await judgeMainTurn(ctx, specs, context, reply);
-			else await judgeSubagentTurn(pi, ctx, admissions, specs, context, message, reply, deadline);
+			const timeline = timelineSinceHumanInput(ctx, message);
+			switch (ctx.agent.kind) {
+				case "main":
+					judgeMainTurnInBackground(ctx, specs, timeline, reply);
+					return;
+				case "sub":
+					await judgeSubagentTurn(pi, ctx, admissions, {
+						specs,
+						timeline,
+						reply,
+						judgedTimestamp: message.timestamp,
+						deadline: AbortSignal.timeout(SUB_DEADLINE_MS),
+					});
+					return;
+				default: {
+					const unreachable: never = ctx.agent.kind;
+					return unreachable;
+				}
+			}
 		} catch (error) {
 			pi.logger.warn("turn-judge: message_end failed", { error: errorText(error) });
 		}
