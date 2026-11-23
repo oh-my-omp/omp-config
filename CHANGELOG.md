@@ -70,6 +70,7 @@
 - Changed `isolation-nudge` to classify writers from OMP's agent definitions (any agent not limited to read-only tools, including `dispatch-owner` and unknown agents) instead of matching `task:*`/`m<N>` names, so `mentor:default` and other tool-limited agents no longer count
 - Changed `isolation-nudge` to detect isolation support from the `task` tool's `isolated` parameter instead of its description text
 - Made `subagent-usage` reuse a full calibration that is already running instead of running a second full calibration after it
+- Named the judged `reply` state field in `lang-nag`'s judge question, and simplified its detection to idle, running or mismatch with one settings reload for `session_start` and `session_switch`
 - Restructured `watchdog-agent`: one session lifecycle (unloaded, active, closed) owns the per-session state, session entries are parsed with schemas in their own module, `/watchdog` handlers live with the command parser and draft prompts in their own module
 - Split `omp-config-update.ts` into modules for files, paths and exclusions, the report shape, plugins, omomp settings migration, legacy migrations, the `omp-light` launcher and conflict adaptation; the entry script keeps its exports, owner lists and retirement lists, and the Todo and fork plugin prerequisites share one readiness check (an installed plugin missing a required file now reports `<plugin> is missing <file>`)
 

@@ -1,13 +1,13 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { Judge } from "@oh-my-pi/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
-import { type JudgeOpen, openJudge } from "../_shared/judge.ts";
+import { openJudge } from "../_shared/judge.ts";
 import { textOf } from "../_shared/messages.ts";
 import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
 import { defineSettings, readSettings } from "../_shared/plugin-settings.ts";
 
-const DETECT_CHAR_LIMIT = 200; // code points of the last paragraph handed to the judge; never more.
+const DETECT_CHAR_LIMIT = 200;
+const FENCED_BLOCK = /^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm;
 
 const configSchema = z.object({
 	language: z.string().min(1),
@@ -43,60 +43,44 @@ function terminalReplyText(messages: readonly AgentMessage[]): string {
 }
 
 function lastParagraphSample(body: string): string {
-	const trimmed = body.trim();
-	if (trimmed === "") return "";
-	const paragraphs = trimmed
+	const last = body
+		.replace(FENCED_BLOCK, "")
 		.split(/\n[ \t]*\n/)
-		.map((p) => p.trim())
-		.filter((p) => p !== "");
-	const last = paragraphs[paragraphs.length - 1] ?? trimmed;
-	return [...last].slice(0, DETECT_CHAR_LIMIT).join("");
+		.map((paragraph) => paragraph.trim())
+		.filter((paragraph) => paragraph !== "")
+		.at(-1);
+	return last === undefined ? "" : [...last].slice(0, DETECT_CHAR_LIMIT).join("");
 }
 
-async function detectInstruction(
+async function replyMismatches(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	cfg: LangNagConfig,
+	language: string,
 	sample: string,
 	signal: AbortSignal,
-): Promise<string | null> {
-	let opened: JudgeOpen;
+): Promise<boolean> {
 	try {
-		opened = openJudge(ctx, "lang-nag");
-	} catch (error) {
-		if (!signal.aborted) pi.logger.warn("lang-nag: judge unavailable", { error: errorText(error) });
-		return null;
-	}
-	switch (opened.kind) {
-		case "ready":
-			return judgeInstruction(pi, opened.judge, cfg, sample, signal);
-		case "inactive":
-			return null;
-		default: {
-			const exhaustive: never = opened;
-			return exhaustive;
+		const opened = openJudge(ctx, "lang-nag");
+		switch (opened.kind) {
+			case "inactive":
+				return false;
+			case "ready":
+				break;
+			default: {
+				const exhaustive: never = opened;
+				return exhaustive;
+			}
 		}
-	}
-}
-
-async function judgeInstruction(
-	pi: ExtensionAPI,
-	judge: Judge,
-	cfg: LangNagConfig,
-	sample: string,
-	signal: AbortSignal,
-): Promise<string | null> {
-	try {
-		const result = await judge.judge(
+		const result = await opened.judge.judge(
 			{
 				state: { reply: sample },
 				questions: {
 					language: {
 						type: "choice",
-						instructions: `Decide whether the REPLY is written mainly in ${cfg.language}. Ignore code, file paths, URLs, and isolated technical terms; judge the prose.`,
+						instructions: `Decide whether \`reply\` is written mainly in ${language}. Ignore code, file paths, URLs, and isolated technical terms; judge the prose.`,
 						criteria: {
-							yes: `The prose is mainly in ${cfg.language}.`,
-							no: `The prose is mainly in a language other than ${cfg.language}.`,
+							yes: `The prose is mainly in ${language}.`,
+							no: `The prose is mainly in a language other than ${language}.`,
 						},
 					},
 				},
@@ -104,23 +88,24 @@ async function judgeInstruction(
 			{ signal },
 		);
 		const answer = result.answers.language;
-		if (answer === undefined || answer.type !== "choice") {
+		if (answer?.type !== "choice") {
 			pi.logger.warn("lang-nag: judge returned no choice answer");
-			return null;
+			return false;
 		}
-		return answer.choice === "no" ? cfg.instruction : null;
+		return answer.choice === "no";
 	} catch (error) {
 		if (!signal.aborted) pi.logger.warn("lang-nag: judge failed", { error: errorText(error) });
-		return null;
+		return false;
 	}
 }
 
 type Detection =
 	| { readonly kind: "idle" }
 	| { readonly kind: "running"; readonly controller: AbortController }
-	| { readonly kind: "settled"; readonly instruction: string | null };
+	| { readonly kind: "mismatch" };
 
 const IDLE: Detection = { kind: "idle" };
+const MISMATCH: Detection = { kind: "mismatch" };
 
 export default function langNag(pi: ExtensionAPI): void {
 	let config: LangNagConfig | null = null;
@@ -132,7 +117,7 @@ export default function langNag(pi: ExtensionAPI): void {
 				detection.controller.abort();
 				break;
 			case "idle":
-			case "settled":
+			case "mismatch":
 				break;
 			default: {
 				const exhaustive: never = detection;
@@ -140,6 +125,22 @@ export default function langNag(pi: ExtensionAPI): void {
 			}
 		}
 		detection = IDLE;
+	};
+
+	const reload = async (_event: unknown, ctx: ExtensionContext): Promise<void> => {
+		cancelDetection();
+		config = null;
+		if (ctx.agent.kind !== "main") return;
+		try {
+			config = await loadConfig(pi, ctx.cwd);
+			pi.logger.info(config ? `lang-nag: active (language=${config.language})` : "lang-nag: inert");
+		} catch (error) {
+			pi.logger.warn("lang-nag: settings load failed", { error: errorText(error) });
+		}
+	};
+
+	const cancelOnMain = (_event: unknown, ctx: ExtensionContext): void => {
+		if (ctx.agent.kind === "main") cancelDetection();
 	};
 
 	registerCompactHandoff(
@@ -151,42 +152,12 @@ export default function langNag(pi: ExtensionAPI): void {
 		}),
 	);
 
-	pi.on("session_start", async (_event, ctx) => {
-		try {
-			cancelDetection();
-			config = ctx.agent.kind === "main" ? await loadConfig(pi, ctx.cwd) : null;
-			if (ctx.agent.kind !== "main") return;
-			if (config) {
-				pi.logger.info(`lang-nag: active (language=${config.language})`);
-			} else {
-				pi.logger.info("lang-nag: inert");
-			}
-		} catch (error) {
-			config = null;
-			pi.logger.warn("lang-nag: session start failed", { error: errorText(error) });
-		}
-	});
-	pi.on("session_switch", async (_event, ctx) => {
-		try {
-			cancelDetection();
-			config = ctx.agent.kind === "main" ? await loadConfig(pi, ctx.cwd) : null;
-		} catch (error) {
-			config = null;
-			pi.logger.warn("lang-nag: session switch failed", { error: errorText(error) });
-		}
-	});
-	pi.on("session_branch", (_event, ctx) => {
-		if (ctx.agent.kind === "main") cancelDetection();
-	});
-	pi.on("session_tree", (_event, ctx) => {
-		if (ctx.agent.kind === "main") cancelDetection();
-	});
-	pi.on("session_before_compact", (_event, ctx) => {
-		if (ctx.agent.kind === "main") cancelDetection();
-	});
-	pi.on("session_compact", (_event, ctx) => {
-		if (ctx.agent.kind === "main") cancelDetection();
-	});
+	pi.on("session_start", reload);
+	pi.on("session_switch", reload);
+	pi.on("session_branch", cancelOnMain);
+	pi.on("session_tree", cancelOnMain);
+	pi.on("session_before_compact", cancelOnMain);
+	pi.on("session_compact", cancelOnMain);
 
 	pi.on("agent_end", (event, ctx) => {
 		try {
@@ -198,8 +169,8 @@ export default function langNag(pi: ExtensionAPI): void {
 			const controller = new AbortController();
 			const running: Detection = { kind: "running", controller };
 			detection = running;
-			void detectInstruction(pi, ctx, config, sample, controller.signal).then((instruction) => {
-				if (detection === running) detection = { kind: "settled", instruction };
+			void replyMismatches(pi, ctx, config.language, sample, controller.signal).then((mismatch) => {
+				if (detection === running) detection = mismatch ? MISMATCH : IDLE;
 			});
 		} catch (error) {
 			pi.logger.warn("lang-nag: reply detection failed", { error: errorText(error) });
@@ -208,31 +179,15 @@ export default function langNag(pi: ExtensionAPI): void {
 
 	pi.on("input", (event, ctx) => {
 		if (ctx.agent.kind !== "main") return;
-		// Drop any verdict: this turn is consumed by the command, and a stale
-		// instruction must not leak into the next genuine user message.
 		if (event.text.startsWith("/")) {
 			cancelDetection();
 			return;
 		}
-		// Only prepend to genuine user turns, never to synthetic injections
-		// (steers/asides from this or other extensions).
 		if (event.source === "extension") return;
-
 		const current = detection;
 		cancelDetection();
-		switch (current.kind) {
-			case "settled":
-				if (current.instruction !== null && current.instruction !== "") {
-					return { text: `${current.instruction}\n\n${event.text}` };
-				}
-				return;
-			case "idle":
-			case "running":
-				return;
-			default: {
-				const exhaustive: never = current;
-				return exhaustive;
-			}
+		if (current.kind === "mismatch" && config !== null) {
+			return { text: `${config.instruction}\n\n${event.text}` };
 		}
 	});
 }

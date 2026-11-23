@@ -181,7 +181,7 @@ cwd: /absolute/path/to/leader-checkout
 
 源码：`agent/extensions/lang-nag/`。仅在主会话运行。
 
-在 `agent_end` 只判定本轮的终态回复：最后一条助手消息，且它以 `stopReason: "stop"` 结束。用户中断（Esc）、停在工具调用、出错或被截断的一轮不判定，也不改用本轮更早的中途文字。取该回复最后一段的前 200 个字符，通过 `openJudge` 判断是否主要使用 `lang-nag.language` 设置的语言（`omp-config`；manifest 默认 `language: 中文`、`instruction: 说中文`，会话开始或切换时读取；项目覆盖优先于机器值）。会话等待后台任务时交还控制权的回复同样检测；会话自行安排的续跑不检测。若不符，在用户下一条输入前加上配置的 instruction（斜杠命令会清除待发标记；用户发送时若判定仍未返回则直接中止判定并原样发出）。
+在 `agent_end` 只判定本轮的终态回复：最后一条助手消息，且它以 `stopReason: "stop"` 结束。用户中断（Esc）、停在工具调用、出错或被截断的一轮不判定，也不改用本轮更早的中途文字。去掉该回复中的围栏代码块后，取剩余部分最后一段的前 200 个字符，通过 `openJudge` 判断是否主要使用 `lang-nag.language` 设置的语言（`omp-config`；manifest 默认 `language: 中文`、`instruction: 说中文`，会话开始或切换时读取；项目覆盖优先于机器值）。会话等待后台任务时交还控制权的回复同样检测；会话自行安排的续跑不检测。若不符，在用户下一条输入前加上配置的 instruction（斜杠命令会清除待发标记；用户发送时若判定仍未返回则直接中止判定并原样发出）。
 
 ---
 
