@@ -5,7 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { errorText } from "../_shared/errors.ts";
-import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+import { discoverSpecFiles, isEnabled, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 import { type BranchNeed, createTranscriptReader, liveView, type RootView, type TranscriptReader } from "./transcript.ts";
 
 const FILE_PATTERN = /^PROMPT-INJECT-.+\.md$/i;
@@ -90,7 +90,7 @@ function parseSpecFile(path: string): SpecParse {
 	const parsed = parseFrontmatter(raw);
 	if (!parsed) return { kind: "invalid", reason: "missing frontmatter" };
 	const { fields, body } = parsed;
-	if (fields.enabled !== undefined && !/^(true|yes|on|1)$/i.test(unquote(fields.enabled))) return { kind: "disabled" };
+	if (!isEnabled(fields)) return { kind: "disabled" };
 	const targets = fields.target ? parseTargets(fields.target) : null;
 	if (!targets) return { kind: "invalid", reason: "missing target" };
 	const template = body.trim();

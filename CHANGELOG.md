@@ -72,6 +72,7 @@
 
 ### Fixed
 
+- Accepted a UTF-8 byte-order mark at the start of `APPEND-SYSTEM-*.md`, `PROMPT-INJECT-*.md`, `TURN-JUDGE-*.md`, `WATCHDOG-*.md` and `COMPACTION-*.md` files instead of rejecting them for missing frontmatter (`append-system-model` already did), and read their `enabled` flag through one shared check
 - Stopped `child-memory-warning` from repeating the same sampling-failure warning every 2 s when the failure happens after a successful process snapshot, and described `child-memory-warning.thresholdGiB` as phys_footprint instead of resident memory
 - Made `/subagent-usage on` and `recalibrate` warn when the calling session cannot be resolved instead of silently starting no calibration, and stopped `subagent-usage` from counting a dispatch whose resolved model has no `provider/` prefix under a truncated provider name
 - Stopped `watchdog-agent` from injecting a chat reviewer reply that has neither `PASS` nor a `SEVERITY:` line; the reply is logged and the same work is reviewed again

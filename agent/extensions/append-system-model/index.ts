@@ -11,7 +11,7 @@ import {
 	parseSessionConditions,
 	type SessionConditions,
 } from "../_shared/prompt-conditions.ts";
-import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+import { discoverSpecFiles, isEnabled, parseFrontmatter } from "../_shared/spec-files.ts";
 
 const FILE_PATTERN = /^APPEND-SYSTEM-.+\.md$/i;
 
@@ -27,7 +27,7 @@ type FragmentParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-const warnedFiles = new Set<string>();
+const reported = new Set<string>();
 
 function describeProblem(problem: ConditionProblem): string {
 	switch (problem.kind) {
@@ -64,14 +64,14 @@ function parseFragment(path: string): FragmentParse {
 		const detail = errorText(error);
 		return { kind: "invalid", reason: tr(`unreadable: ${detail}`, `无法读取：${detail}`) };
 	}
-	const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
-	const parsed = parseFrontmatter(stripped);
+	const parsed = parseFrontmatter(raw);
 	if (!parsed) return { kind: "invalid", reason: tr("missing frontmatter", "缺少 frontmatter") };
-	const { fields, body } = parsed;
+	const { fields } = parsed;
 	const unknown = Object.keys(fields).find((key) => !ALLOWED_KEYS.has(key));
 	if (unknown !== undefined) return { kind: "invalid", reason: tr(`unknown key ${unknown}`, `未知键 ${unknown}`) };
-	if (fields.enabled !== undefined && !/^(true|yes|on|1)$/i.test(unquote(fields.enabled))) return { kind: "disabled" };
-	if (!/\S/.test(body)) return { kind: "invalid", reason: tr("empty body", "正文为空") };
+	if (!isEnabled(fields)) return { kind: "disabled" };
+	const body = parsed.body.trim();
+	if (body === "") return { kind: "invalid", reason: tr("empty body", "正文为空") };
 	const conditions = parseSessionConditions(fields, { kind: "default", targets: [{ kind: "main" }] }, "frontmatter");
 	if (conditions.kind === "invalid") return { kind: "invalid", reason: describeProblem(conditions.problem) };
 	return { kind: "ok", fragment: { conditions: conditions.value, body } };
@@ -79,8 +79,8 @@ function parseFragment(path: string): FragmentParse {
 
 function warn(pi: ExtensionAPI, ctx: ExtensionContext, path: string, reason: string): void {
 	const key = `${path}\0${reason}`;
-	if (warnedFiles.has(key)) return;
-	warnedFiles.add(key);
+	if (reported.has(key)) return;
+	reported.add(key);
 	pi.logger.warn(`append-system-model: skipped ${path}: ${reason}`);
 	const notice = tr(`append-system-model: skipped ${path}: ${reason}`, `append-system-model：跳过 ${path}：${reason}`);
 	if (ctx.hasUI) ctx.ui.notify(notice, "warning");
@@ -94,7 +94,7 @@ function fragmentDelta(pi: ExtensionAPI, ctx: ExtensionContext): Delta {
 		const parsed = parseFragment(path);
 		switch (parsed.kind) {
 			case "ok":
-				if (conditionsApply(parsed.fragment.conditions, ctx, delegation)) bodies.push(parsed.fragment.body.trim());
+				if (conditionsApply(parsed.fragment.conditions, ctx, delegation)) bodies.push(parsed.fragment.body);
 				break;
 			case "disabled":
 				break;

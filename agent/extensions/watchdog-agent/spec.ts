@@ -12,7 +12,7 @@ import {
 	parseSessionFilter,
 	type SessionFilter,
 } from "../_shared/session-filter.ts";
-import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
+import { discoverSpecFiles, isEnabled, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
 const WATCHDOG_FILE_PATTERN = /^WATCHDOG-.+\.md$/i;
 export const WATCHDOG_FILTER_KEYS: FilterKeys = { target: "target", cwd: "cwd", model: "watchModel", provider: "watchProvider" };
 const DEFAULT_TOOLS: readonly string[] = ["read", "grep", "glob"];
@@ -123,7 +123,7 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 		return { kind: "invalid", reason: `cannot read: ${errorText(error)}` };
 	}
 	const { fields, body } = parseFrontmatter(raw) ?? { fields: {}, body: raw };
-	const enabled = fields.enabled === undefined || /^(true|yes|on|1)$/i.test(unquote(fields.enabled));
+	const enabled = isEnabled(fields);
 	const filter = parseSessionFilter(fields, WATCHDOG_FILTER_KEYS, { kind: "required" }, "frontmatter");
 	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
 	const inject = parseInjectMode(fields.inject);

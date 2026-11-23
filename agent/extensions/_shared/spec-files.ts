@@ -54,7 +54,8 @@ function realpathOr(path: string): string {
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 export function parseFrontmatter(raw: string): { readonly fields: Readonly<Record<string, string>>; readonly body: string } | null {
-	const match = FRONTMATTER.exec(raw);
+	const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+	const match = FRONTMATTER.exec(text);
 	if (!match) return null;
 	const fields: Record<string, string> = {};
 	for (const line of (match[1] ?? "").split(/\r?\n/)) {
@@ -64,7 +65,11 @@ export function parseFrontmatter(raw: string): { readonly fields: Readonly<Recor
 		if (colon <= 0) continue;
 		fields[trimmed.slice(0, colon).trim().toLowerCase()] = trimmed.slice(colon + 1).trim();
 	}
-	return { fields, body: raw.slice(match[0].length) };
+	return { fields, body: text.slice(match[0].length) };
+}
+
+export function isEnabled(fields: Readonly<Record<string, string>>): boolean {
+	return fields.enabled === undefined || /^(true|yes|on|1)$/i.test(unquote(fields.enabled));
 }
 
 export function unquote(value: string): string {
