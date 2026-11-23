@@ -111,221 +111,248 @@ export function splitSimpleCommands(command: string): SimpleCommand[] {
 	return scanShell(command).commands;
 }
 
-export function scanShell(command: string): ShellScan {
-	const commands: ParsedCommand[] = [];
-	const background = new Set<number>();
-	let current: CommandToken[] = [];
-	let pipelineId = 0;
-	let nextPipelineId = 1;
-	let word = "";
-	let wordStart: number | null = null;
-	let wordEnd = 0;
-	let wordVerbatim = true;
-	let wordCanBeFd = true;
-	let wordDynamic = false;
-	let piped = false;
-	let quote: '"' | "'" | null = null;
-	const substitutions: Array<{ readonly delimiter: "$(" | "`" | "${"; readonly resumeQuote: '"' | null }> = [];
-	const suspendedCommands: Array<{ readonly current: CommandToken[]; readonly pipelineId: number; readonly piped: boolean }> = [];
-	const hereDocuments: HereDocument[] = [];
-	let expectingHereDocumentDelimiter: HereDocument | null = null;
-	const resetWord = (): void => {
-		word = "";
-		wordStart = null;
-		wordEnd = 0;
-		wordVerbatim = true;
-		wordCanBeFd = true;
-		wordDynamic = false;
-	};
-	const breakVerbatim = (): void => {
-		if (!wordVerbatim) return;
-		if (wordStart !== null && wordEnd > wordStart) word = command.slice(wordStart, wordEnd);
-		wordVerbatim = false;
-	};
-	const appendWord = (text: string): void => {
-		breakVerbatim();
-		word += text;
-	};
-	const flushWord = (): void => {
-		const text = wordVerbatim ? (wordStart === null ? "" : command.slice(wordStart, wordEnd)) : word;
-		if (text.length === 0) {
-			resetWord();
-			return;
-		}
-		current.push({ kind: "word", text, dynamic: wordDynamic });
-		if (expectingHereDocumentDelimiter !== null) {
-			hereDocuments.push({ delimiter: text, stripTabs: expectingHereDocumentDelimiter.stripTabs });
-			expectingHereDocumentDelimiter = null;
-		}
-		resetWord();
-	};
-	const flushCommand = (): void => {
-		flushWord();
-		if (current.length === 0) return;
-		commands.push({ tokens: current, pipelineId, piped, captured: substitutions.length > 0 });
-		current = [];
-		piped = false;
-	};
-	const flushPipeline = (): void => {
-		flushCommand();
-		piped = false;
-		pipelineId = nextPipelineId++;
-	};
-	const beginSubstitution = (delimiter: "$(" | "`" | "${", resumeQuote: '"' | null): void => {
-		wordDynamic = true;
-		flushWord();
-		suspendedCommands.push({ current, pipelineId, piped });
-		current = [];
-		piped = false;
-		pipelineId = nextPipelineId++;
-		substitutions.push({ delimiter, resumeQuote });
-	};
-	const finishSubstitution = (): void => {
-		flushCommand();
-		const suspended = suspendedCommands.pop();
-		current = suspended?.current ?? [];
-		pipelineId = suspended?.pipelineId ?? 0;
-		piped = suspended?.piped ?? false;
-		const substitution = substitutions.pop();
-		quote = substitution?.resumeQuote ?? null;
-		wordDynamic = true;
-	};
+type Delimiter = "$(" | "`" | "${";
 
-	for (let i = 0; i < command.length; i++) {
-		const ch = command.charAt(i);
-		if (quote !== null) {
-			if (ch === quote) {
-				quote = null;
-			} else if (quote === '"' && ch === "\\" && i + 1 < command.length) {
-				appendWord(command.charAt(i + 1));
-				i++;
-			} else if (quote === '"' && ch === "$" && command[i + 1] === "(") {
-				beginSubstitution("$(", '"');
-				quote = null;
-				i++;
-			} else if (quote === '"' && ch === "`") {
-				beginSubstitution("`", '"');
-				quote = null;
-			} else if (quote === '"' && ch === "$" && command[i + 1] === "{" && isFunctionSubstitutionOpener(command[i + 2])) {
-				beginSubstitution("${", '"');
-				quote = null;
-				i++;
-				if (command[i + 1] === "|") i++;
-			} else {
-				if (quote === '"' && ch === "$") wordDynamic = true;
-				appendWord(ch);
-			}
-			continue;
+type Scanner = {
+	readonly command: string;
+	readonly commands: ParsedCommand[];
+	readonly background: Set<number>;
+	current: CommandToken[];
+	pipelineId: number;
+	nextPipelineId: number;
+	word: string;
+	wordStart: number | null;
+	wordEnd: number;
+	wordVerbatim: boolean;
+	wordCanBeFd: boolean;
+	wordDynamic: boolean;
+	piped: boolean;
+	quote: '"' | "'" | null;
+	readonly substitutions: { readonly delimiter: Delimiter; readonly resumeQuote: '"' | null }[];
+	readonly suspended: { readonly current: CommandToken[]; readonly pipelineId: number; readonly piped: boolean }[];
+	readonly hereDocuments: HereDocument[];
+	expectingDelimiter: HereDocument | null;
+};
+
+function resetWord(s: Scanner): void {
+	s.word = "";
+	s.wordStart = null;
+	s.wordEnd = 0;
+	s.wordVerbatim = true;
+	s.wordCanBeFd = true;
+	s.wordDynamic = false;
+}
+
+function appendWord(s: Scanner, text: string): void {
+	if (s.wordVerbatim) {
+		if (s.wordStart !== null && s.wordEnd > s.wordStart) s.word = s.command.slice(s.wordStart, s.wordEnd);
+		s.wordVerbatim = false;
+	}
+	s.word += text;
+}
+
+function flushWord(s: Scanner): void {
+	const text = s.wordVerbatim ? (s.wordStart === null ? "" : s.command.slice(s.wordStart, s.wordEnd)) : s.word;
+	if (text.length > 0) {
+		s.current.push({ kind: "word", text, dynamic: s.wordDynamic });
+		if (s.expectingDelimiter !== null) {
+			s.hereDocuments.push({ delimiter: text, stripTabs: s.expectingDelimiter.stripTabs });
+			s.expectingDelimiter = null;
 		}
+	}
+	resetWord(s);
+}
+
+function flushCommand(s: Scanner): void {
+	flushWord(s);
+	if (s.current.length === 0) return;
+	s.commands.push({ tokens: s.current, pipelineId: s.pipelineId, piped: s.piped, captured: s.substitutions.length > 0 });
+	s.current = [];
+	s.piped = false;
+}
+
+function flushPipeline(s: Scanner): void {
+	flushCommand(s);
+	s.piped = false;
+	s.pipelineId = s.nextPipelineId++;
+}
+
+function beginSubstitution(s: Scanner, delimiter: Delimiter, resumeQuote: '"' | null): void {
+	s.wordDynamic = true;
+	flushWord(s);
+	s.suspended.push({ current: s.current, pipelineId: s.pipelineId, piped: s.piped });
+	s.current = [];
+	s.piped = false;
+	s.pipelineId = s.nextPipelineId++;
+	s.substitutions.push({ delimiter, resumeQuote });
+}
+
+function finishSubstitution(s: Scanner): void {
+	flushCommand(s);
+	const suspended = s.suspended.pop();
+	s.current = suspended?.current ?? [];
+	s.pipelineId = suspended?.pipelineId ?? 0;
+	s.piped = suspended?.piped ?? false;
+	s.quote = s.substitutions.pop()?.resumeQuote ?? null;
+	s.wordDynamic = true;
+}
+
+const openSubstitution = (s: Scanner): Delimiter | undefined => s.substitutions[s.substitutions.length - 1]?.delimiter;
+
+function beginBraceSubstitution(s: Scanner, i: number, resumeQuote: '"' | null): number {
+	beginSubstitution(s, "${", resumeQuote);
+	return s.command[i + 2] === "|" ? i + 2 : i + 1;
+}
+
+function scanQuoted(s: Scanner, i: number): number {
+	const { command } = s;
+	const ch = command.charAt(i);
+	if (ch === s.quote) {
+		s.quote = null;
+		return i;
+	}
+	if (s.quote === '"') {
 		if (ch === "\\" && i + 1 < command.length) {
-			if (wordStart === null) wordStart = i;
-			wordCanBeFd = false;
-			appendWord(command.charAt(i + 1));
-			i++;
-			continue;
-		}
-		if (ch === '"' || ch === "'") {
-			if (wordStart === null) wordStart = i;
-			breakVerbatim();
-			wordCanBeFd = false;
-			quote = ch;
-			continue;
+			appendWord(s, command.charAt(i + 1));
+			return i + 1;
 		}
 		if (ch === "$" && command[i + 1] === "(") {
-			beginSubstitution("$(", null);
-			i++;
-			continue;
-		}
-		if (ch === "$" && command[i + 1] === "{" && isFunctionSubstitutionOpener(command[i + 2])) {
-			beginSubstitution("${", null);
-			i++;
-			if (command[i + 1] === "|") i++;
-			continue;
+			beginSubstitution(s, "$(", '"');
+			s.quote = null;
+			return i + 1;
 		}
 		if (ch === "`") {
-			const substitution = substitutions[substitutions.length - 1];
-			if (substitution?.delimiter === "`") finishSubstitution();
-			else beginSubstitution("`", null);
-			continue;
+			beginSubstitution(s, "`", '"');
+			s.quote = null;
+			return i;
 		}
-		if (ch === ")" && substitutions[substitutions.length - 1]?.delimiter === "$(") {
-			finishSubstitution();
-			continue;
+		if (ch === "$" && command[i + 1] === "{" && isFunctionSubstitutionOpener(command[i + 2])) {
+			s.quote = null;
+			return beginBraceSubstitution(s, i, '"');
 		}
-		if (ch === "}" && wordStart === null && current.length === 0 && substitutions[substitutions.length - 1]?.delimiter === "${") {
-			finishSubstitution();
-			continue;
-		}
-		if (ch === " " || ch === "\t" || ch === "\r") {
-			flushWord();
-			continue;
-		}
-		if (ch === "\n") {
-			flushPipeline();
-			if (hereDocuments.length > 0) {
-				i = skipHereDocuments(command, i + 1, hereDocuments) - 1;
-				hereDocuments.length = 0;
-			}
-			continue;
-		}
-		if (ch === "|") {
-			if (command[i + 1] === "|") {
-				flushPipeline();
-				i++;
-			} else {
-				flushCommand();
-				piped = true;
-				if (command[i + 1] === "&") i++;
-			}
-			continue;
-		}
-		if (ch === "&" && command[i + 1] === ">") {
-			flushWord();
-			const redirect = parseRedirect(command, i + 1, ">", 1);
-			current.push(redirect.token);
-			i += 1 + redirect.consumed;
-			continue;
-		}
-		if (ch === "&" && command[i + 1] === "&") {
-			flushPipeline();
-			i++;
-			continue;
-		}
-		if (ch === "&") background.add(pipelineId);
-		if (isOperatorChar(ch)) {
-			flushPipeline();
-			continue;
-		}
-		if (ch === "<" || ch === ">") {
-			let fdPrefix: number | null = null;
-			const pending = wordStart !== null && wordVerbatim && wordEnd === i ? command.slice(wordStart, wordEnd) : "";
-			if (wordCanBeFd && pending.length > 0 && /^\d+$/.test(pending)) {
-				fdPrefix = Number(pending);
-				word = "";
-				wordStart = null;
-				wordEnd = 0;
-				wordVerbatim = true;
-			} else {
-				flushWord();
-			}
-
-			const redirect = parseRedirect(command, i, ch, fdPrefix);
-			current.push(redirect.token);
-			if (redirect.document !== null) expectingHereDocumentDelimiter = redirect.document;
-			i += redirect.consumed;
-			continue;
-		}
-		if (ch === "#" && wordStart === null && !wordDynamic) {
-			const newline = command.indexOf("\n", i + 1);
-			i = (newline === -1 ? command.length : newline) - 1;
-			continue;
-		}
-		if (wordStart === null) wordStart = i;
-		if (ch === "$") wordDynamic = true;
-		if (wordVerbatim) wordEnd = i + 1;
-		else word += ch;
+		if (ch === "$") s.wordDynamic = true;
 	}
-	const complete = quote === null && substitutions.length === 0;
-	flushPipeline();
-	return { commands: markLoops(commands, background), complete };
+	appendWord(s, ch);
+	return i;
+}
+
+function scanRedirect(s: Scanner, i: number, ch: "<" | ">"): number {
+	const pending = s.wordStart !== null && s.wordVerbatim && s.wordEnd === i ? s.command.slice(s.wordStart, s.wordEnd) : "";
+	const fdPrefix = s.wordCanBeFd && /^\d+$/.test(pending) ? Number(pending) : null;
+	if (fdPrefix === null) flushWord(s);
+	else resetWord(s);
+	const redirect = parseRedirect(s.command, i, ch, fdPrefix);
+	s.current.push(redirect.token);
+	if (redirect.document !== null) s.expectingDelimiter = redirect.document;
+	return i + redirect.consumed;
+}
+
+function scanOperator(s: Scanner, i: number, ch: string): number {
+	const next = s.command[i + 1];
+	if (ch === "\n") {
+		flushPipeline(s);
+		if (s.hereDocuments.length === 0) return i;
+		const end = skipHereDocuments(s.command, i + 1, s.hereDocuments) - 1;
+		s.hereDocuments.length = 0;
+		return end;
+	}
+	if (ch === "|" && next === "|") {
+		flushPipeline(s);
+		return i + 1;
+	}
+	if (ch === "|") {
+		flushCommand(s);
+		s.piped = true;
+		return next === "&" ? i + 1 : i;
+	}
+	if (ch === "&" && next === ">") {
+		flushWord(s);
+		const redirect = parseRedirect(s.command, i + 1, ">", 1);
+		s.current.push(redirect.token);
+		return i + 1 + redirect.consumed;
+	}
+	if (ch === "&" && next === "&") {
+		flushPipeline(s);
+		return i + 1;
+	}
+	if (ch === "&") s.background.add(s.pipelineId);
+	flushPipeline(s);
+	return i;
+}
+
+function scanUnquoted(s: Scanner, i: number): number {
+	const { command } = s;
+	const ch = command.charAt(i);
+	if (ch === "\\" && i + 1 < command.length) {
+		if (s.wordStart === null) s.wordStart = i;
+		s.wordCanBeFd = false;
+		appendWord(s, command.charAt(i + 1));
+		return i + 1;
+	}
+	if (ch === '"' || ch === "'") {
+		if (s.wordStart === null) s.wordStart = i;
+		appendWord(s, "");
+		s.wordCanBeFd = false;
+		s.quote = ch;
+		return i;
+	}
+	if (ch === "$" && command[i + 1] === "(") {
+		beginSubstitution(s, "$(", null);
+		return i + 1;
+	}
+	if (ch === "$" && command[i + 1] === "{" && isFunctionSubstitutionOpener(command[i + 2])) return beginBraceSubstitution(s, i, null);
+	if (ch === "`") {
+		if (openSubstitution(s) === "`") finishSubstitution(s);
+		else beginSubstitution(s, "`", null);
+		return i;
+	}
+	if (
+		(ch === ")" && openSubstitution(s) === "$(") ||
+		(ch === "}" && s.wordStart === null && s.current.length === 0 && openSubstitution(s) === "${")
+	) {
+		finishSubstitution(s);
+		return i;
+	}
+	if (ch === " " || ch === "\t" || ch === "\r") {
+		flushWord(s);
+		return i;
+	}
+	if (isOperatorChar(ch)) return scanOperator(s, i, ch);
+	if (ch === "<" || ch === ">") return scanRedirect(s, i, ch);
+	if (ch === "#" && s.wordStart === null && !s.wordDynamic) {
+		const newline = command.indexOf("\n", i + 1);
+		return (newline === -1 ? command.length : newline) - 1;
+	}
+	if (s.wordStart === null) s.wordStart = i;
+	if (ch === "$") s.wordDynamic = true;
+	if (s.wordVerbatim) s.wordEnd = i + 1;
+	else s.word += ch;
+	return i;
+}
+
+export function scanShell(command: string): ShellScan {
+	const s: Scanner = {
+		command,
+		commands: [],
+		background: new Set(),
+		current: [],
+		pipelineId: 0,
+		nextPipelineId: 1,
+		word: "",
+		wordStart: null,
+		wordEnd: 0,
+		wordVerbatim: true,
+		wordCanBeFd: true,
+		wordDynamic: false,
+		piped: false,
+		quote: null,
+		substitutions: [],
+		suspended: [],
+		hereDocuments: [],
+		expectingDelimiter: null,
+	};
+	for (let i = 0; i < command.length; i++) i = s.quote === null ? scanUnquoted(s, i) : scanQuoted(s, i);
+	const complete = s.quote === null && s.substitutions.length === 0;
+	flushPipeline(s);
+	return { commands: markLoops(s.commands, s.background), complete };
 }
