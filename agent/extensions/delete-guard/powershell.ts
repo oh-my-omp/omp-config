@@ -1,6 +1,6 @@
 import type { ArgvWord } from "./classify.ts";
 import { classifyNestedProgram, programName } from "./nested.ts";
-import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
+import { ALLOW, block, MAX_DEPTH, tooDeep, type Verdict } from "./verdict.ts";
 
 const DELETE_COMMANDS: ReadonlySet<string> = new Set(["remove-item", "rm", "ri", "del", "erase", "rd", "rmdir"]);
 
@@ -90,7 +90,7 @@ class PsParser {
 		while (this.i < this.src.length) {
 			const ch = this.src.charAt(this.i);
 			if (hereString) {
-				if ((ch === "\n" || this.i === 0) && this.src.startsWith(`${quote}@`, this.i + 1)) {
+				if (ch === "\n" && this.src.startsWith(`${quote}@`, this.i + 1)) {
 					this.i += 3;
 					return expands;
 				}
@@ -230,8 +230,6 @@ class PsParser {
 	}
 }
 
-const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
-
 function assignedCommand(words: readonly PsWord[]): readonly PsWord[] | null {
 	for (let k = 0; k < words.length; k++) {
 		const word = words[k];
@@ -286,7 +284,7 @@ function classifyStatement(statement: PsStatement, depth: number): Verdict {
 }
 
 export function classifyPowershell(text: string, depth: number): Verdict {
-	if (depth > MAX_DEPTH) return block("nonLiteral", text, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
+	if (depth > MAX_DEPTH) return tooDeep(text);
 	let script: PsScript;
 	try {
 		script = new PsParser(text).parse();

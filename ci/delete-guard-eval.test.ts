@@ -7,11 +7,11 @@ import type { Dialect } from "../agent/extensions/delete-guard/verdict.ts";
 
 const POSIX: Dialect = { kind: "posix" };
 const pyRule = (code: string): string => {
-	const verdict = classifyPy(code, POSIX, POSIX);
+	const verdict = classifyPy(code, POSIX);
 	return verdict.kind === "allow" ? "allow" : verdict.rule;
 };
 const jsRule = async (code: string): Promise<string> => {
-	const { verdict } = await classifyJs(code, POSIX, POSIX, EMPTY_CARRY);
+	const { verdict } = await classifyJs(code, POSIX, EMPTY_CARRY);
 	return verdict.kind === "allow" ? "allow" : verdict.rule;
 };
 const jsEval = (code: string, session: EvalSession, reset = false) =>
@@ -222,10 +222,10 @@ describe("python cells: issue 151 bypasses", () => {
 
 describe("launcher names carried between js cells", () => {
 	test("a bound launcher name blocks in a later cell, and a module alias too", async () => {
-		const first = await classifyJs("const $ = Bun.$; const cp = require('child_process')", POSIX, POSIX, EMPTY_CARRY);
+		const first = await classifyJs("const $ = Bun.$; const cp = require('child_process')", POSIX, EMPTY_CARRY);
 		expect(first.verdict.kind).toBe("allow");
-		expect((await classifyJs("await $`rm -rf x`", POSIX, POSIX, first.carry)).verdict.kind).toBe("block");
-		expect((await classifyJs("cp.execSync('rm -rf x')", POSIX, POSIX, first.carry)).verdict.kind).toBe("block");
+		expect((await classifyJs("await $`rm -rf x`", POSIX, first.carry)).verdict.kind).toBe("block");
+		expect((await classifyJs("cp.execSync('rm -rf x')", POSIX, first.carry)).verdict.kind).toBe("block");
 	});
 
 	test("a cell that is blocked binds nothing", async () => {

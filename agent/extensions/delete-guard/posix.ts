@@ -1,4 +1,5 @@
-import { classifyNestedProgram, programName } from "./nested.ts";
+import type { ArgvWord } from "./classify.ts";
+import { classifyNestedProgram, programName, SHELLS } from "./nested.ts";
 import {
 	heredocText,
 	parsePosix,
@@ -9,11 +10,9 @@ import {
 	stdinLabel,
 	type Word,
 } from "./posix-parse.ts";
-import { ALLOW, type Fragment, fragmentText, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
+import { ALLOW, AMBIGUITY_BUDGET, absurd, block, type Fragment, MAX_DEPTH, tooDeep, type Verdict } from "./verdict.ts";
 
 const DELETE_COMMANDS: ReadonlySet<string> = new Set(["rm", "unlink", "rmdir", "shred"]);
-
-const SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 
 const OMP_SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh"]);
 
@@ -36,7 +35,6 @@ const RESERVED: ReadonlySet<string> = new Set([
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 
-/** Name tables are Sets and Maps: a plain object would also match `constructor` or `toString`. */
 type Flags = ReadonlySet<string>;
 
 type PrefixSpec = {
@@ -198,24 +196,14 @@ const PREFIXES: ReadonlyMap<string, PrefixSpec> = new Map(
 
 const FIND_EXEC: ReadonlySet<string> = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
-const AMBIGUITY_BUDGET = 4;
-
 type Context = {
 	readonly depth: number;
 	readonly stdin: StdinSource | null;
 	readonly fragment: Fragment;
 };
 
-const block = (rule: Rule, fragment: Fragment, detail: string): Verdict => ({
-	kind: "block",
-	rule,
-	fragment: fragmentText(fragment),
-	detail,
-});
-
 function classifyNested(text: string, depth: number, fragment: Fragment): Verdict {
-	if (depth > MAX_DEPTH) return block("nonLiteral", fragment, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
-	return classifyPosix(text, depth);
+	return depth > MAX_DEPTH ? tooDeep(fragment) : classifyPosix(text, depth);
 }
 
 function classifyScriptWord(ctx: Context, word: Word, what: string): Verdict {
@@ -288,8 +276,7 @@ function resolveFind(ctx: Context, words: readonly Word[], start: number): Verdi
 		if (!FIND_EXEC.has(word.text)) continue;
 		let end = k + 1;
 		while (end < words.length && !(words[end]?.literal && (words[end]?.text === ";" || words[end]?.text === "+"))) end++;
-		if (ctx.depth + 1 > MAX_DEPTH)
-			return block("nonLiteral", ctx.fragment, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
+		if (ctx.depth + 1 > MAX_DEPTH) return tooDeep(ctx.fragment);
 		const verdict = resolveCommand({ depth: ctx.depth + 1, stdin: null, fragment: ctx.fragment }, words.slice(k + 1, end), 0);
 		if (verdict.kind === "block") return verdict;
 		k = end;
@@ -474,7 +461,7 @@ function resolveCommand(ctx: Context, words: readonly Word[], start: number): Ve
 	if (DELETE_COMMANDS.has(name)) return block("delete", ctx.fragment, `\`${name}\` deletes files`);
 	const prefix = PREFIXES.get(name);
 	if (prefix !== undefined) return resolvePrefix(ctx, words, start + 1, prefix, AMBIGUITY_BUDGET);
-	if (SHELLS.has(name)) return resolveShell(ctx, words, start + 1);
+	if (SHELLS.get(name) === "posix") return resolveShell(ctx, words, start + 1);
 	const nested = classifyNestedProgram(word, words.slice(start + 1), ctx.depth, ctx.fragment, ctx.stdin);
 	if (nested !== null) return nested;
 	switch (name) {
@@ -539,7 +526,7 @@ function walkScript(script: Script, depth: number): Verdict {
 	return ALLOW;
 }
 
-export function classifyPosixArgv(words: readonly { readonly text: string; readonly literal: boolean }[], depth: number): Verdict {
+export function classifyPosixArgv(words: readonly ArgvWord[], depth: number): Verdict {
 	const fragment = words.map((word) => (word.literal ? word.text : "<expr>")).join(" ");
 	const argv: Word[] = words.map((word) => ({ text: word.text, raw: word.literal ? word.text : "<expr>", literal: word.literal }));
 	return resolveCommand({ depth, stdin: null, fragment }, argv, 0);

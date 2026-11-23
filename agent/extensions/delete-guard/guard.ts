@@ -1,9 +1,9 @@
 import { EMPTY_CARRY, type JsCarry } from "../_shared/eval-js-launches.ts";
 import { watchedCallOf } from "../_shared/tool-calls.ts";
-import { classify } from "./classify.ts";
 import { classifyJs } from "./eval-js.ts";
 import { classifyPy } from "./eval-py.ts";
-import { ALLOW, BRUSH, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
+import { classifyPosix } from "./posix.ts";
+import { ALLOW, absurd, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
 
 type Entry =
 	| { readonly kind: "bash"; readonly command: string }
@@ -37,31 +37,27 @@ function entryOf(toolName: string, input: unknown): Entry | null {
 			return call.language === "py" || call.language === "js"
 				? { kind: "eval", language: call.language, code: call.code, reset: call.reset }
 				: null;
-		default: {
-			const unreachable: never = call;
-			return unreachable;
-		}
+		default:
+			return absurd(call);
 	}
 }
 
 function judge(entry: Entry, session: EvalSession): Verdict {
 	switch (entry.kind) {
 		case "bash":
-			return classify(BRUSH, { kind: "script", text: entry.command }, 0);
+			return classifyPosix(entry.command, 0);
 		case "eval": {
-			if (entry.language === "py") return classifyPy(entry.code, SYSTEM_SHELL, BRUSH);
+			if (entry.language === "py") return classifyPy(entry.code, SYSTEM_SHELL);
 			if (isStandalonePercentCommand(entry.code)) {
 				if (entry.reset) session.carry = EMPTY_CARRY;
 				return ALLOW;
 			}
-			const judgement = classifyJs(entry.code, SYSTEM_SHELL, BRUSH, entry.reset ? EMPTY_CARRY : session.carry);
+			const judgement = classifyJs(entry.code, SYSTEM_SHELL, entry.reset ? EMPTY_CARRY : session.carry);
 			if (judgement.verdict.kind === "allow") session.carry = judgement.carry;
 			return judgement.verdict;
 		}
-		default: {
-			const unreachable: never = entry;
-			return unreachable;
-		}
+		default:
+			return absurd(entry);
 	}
 }
 
@@ -75,10 +71,8 @@ function reasonFor(rule: Rule, fragment: string, detail: string, deleteAvailable
 			return `delete-guard: deletion commands are disabled; this call did not run. Deletion command: \`${shown}\` (${detail}). ${outlet}`;
 		case "nonLiteral":
 			return `delete-guard: this call did not run. Non-literal command: \`${shown}\` (${detail}). Commands must be literal: no command name from a variable or substitution, no non-literal nested shell or eval script, no script fed to a shell through stdin; write the command out. ${outlet}`;
-		default: {
-			const unreachable: never = rule;
-			return unreachable;
-		}
+		default:
+			return absurd(rule);
 	}
 }
 
@@ -98,9 +92,7 @@ export async function guardToolCall(
 			return undefined;
 		case "block":
 			return { block: true, reason: reasonFor(verdict.rule, verdict.fragment, verdict.detail, deleteAvailable()) };
-		default: {
-			const unreachable: never = verdict;
-			return unreachable;
-		}
+		default:
+			return absurd(verdict);
 	}
 }

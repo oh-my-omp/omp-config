@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 import { errorText } from "../_shared/errors.ts";
 import type { Target } from "./targets.ts";
+import { absurd } from "./verdict.ts";
 
 const STICKY_BIT = 0o1000;
 
@@ -31,7 +32,7 @@ export type Outcome =
 
 const MAC_TRASH = "/usr/bin/trash";
 
-/** `powershell.exe` by absolute path under `SystemRoot`, never a bare name the cwd could shadow. */
+// Never spawn `powershell.exe` by bare name: a file of that name in the cwd would run instead.
 function windowsPowershell(): string | null {
 	const root = process.env.SystemRoot ?? process.env.windir;
 	if (root === undefined) return null;
@@ -39,10 +40,7 @@ function windowsPowershell(): string | null {
 	return existsSync(exe) ? exe : null;
 }
 
-/**
- * UNC paths and non-fixed drives have no Recycle Bin, where
- * `SendToRecycleBin` would delete permanently, so the script refuses them.
- */
+// Never drop the UNC / non-fixed drive refusal: there `SendToRecycleBin` deletes permanently.
 const RECYCLE_SCRIPT = [
 	"$ErrorActionPreference = 'Stop'",
 	"Add-Type -AssemblyName Microsoft.VisualBasic",

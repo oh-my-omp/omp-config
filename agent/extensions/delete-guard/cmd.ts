@@ -1,6 +1,6 @@
 import type { ArgvWord } from "./classify.ts";
 import { classifyNestedProgram, programName } from "./nested.ts";
-import { ALLOW, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
+import { ALLOW, block, MAX_DEPTH, tooDeep, type Verdict } from "./verdict.ts";
 
 const DELETE_COMMANDS: ReadonlySet<string> = new Set(["del", "erase", "rd", "rmdir", "rm", "unlink", "shred"]);
 
@@ -68,9 +68,9 @@ function splitCmd(text: string): CmdCommand[] {
 			}
 			while (text.charAt(i + 1) === ">" || text.charAt(i + 1) === "&") i++;
 			while (text.charAt(i + 1) === " ") i++;
-			let target = "";
-			while (i + 1 < text.length && !" \t&|()<>".includes(text.charAt(i + 1))) target += text.charAt(++i);
-			if (target.length === 0 && !/[0-9]/.test(text.charAt(i))) throw new CmdParseFailure("redirection without a target");
+			const targetStart = i;
+			while (i + 1 < text.length && !" \t&|()<>".includes(text.charAt(i + 1))) i++;
+			if (i === targetStart && !/[0-9]/.test(text.charAt(i))) throw new CmdParseFailure("redirection without a target");
 			continue;
 		}
 		if (ch === " " || ch === "\t") {
@@ -85,8 +85,6 @@ function splitCmd(text: string): CmdCommand[] {
 	flushCommand(text.length);
 	return commands;
 }
-
-const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
 function afterIf(words: readonly CmdWord[], start: number): number {
 	let i = start;
@@ -149,7 +147,7 @@ function classifyCmdCommand(command: CmdCommand, depth: number): Verdict {
 }
 
 export function classifyCmd(text: string, depth: number): Verdict {
-	if (depth > MAX_DEPTH) return block("nonLiteral", text, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
+	if (depth > MAX_DEPTH) return tooDeep(text);
 	let commands: CmdCommand[];
 	try {
 		commands = splitCmd(text);

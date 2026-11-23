@@ -1,6 +1,7 @@
 import { isOp, type PyLaunch, type PyScan, pyLaunchAt, scanPy } from "../_shared/eval-py-launches.ts";
-import { classify } from "./classify.ts";
-import { ALLOW, type Dialect, type Rule, type Verdict } from "./verdict.ts";
+import { classifyScript } from "./classify.ts";
+import { classifyPosix, classifyPosixArgv } from "./posix.ts";
+import { ALLOW, absurd, block, type Dialect, MAX_DEPTH, type Verdict } from "./verdict.ts";
 
 const DISTINCTIVE_DELETE: ReadonlySet<string> = new Set(["rmtree", "removedirs", "unlink", "rmdir"]);
 
@@ -8,11 +9,8 @@ type Context = {
 	readonly code: string;
 	readonly scan: PyScan;
 	readonly shell: Dialect;
-	readonly brush: Dialect;
 	readonly depth: number;
 };
-
-const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
 
 function lineAt(code: string, at: number): string {
 	const start = code.lastIndexOf("\n", at - 1) + 1;
@@ -22,31 +20,22 @@ function lineAt(code: string, at: number): string {
 
 function judgeLaunch(ctx: Context, launch: PyLaunch, at: number): Verdict {
 	const nonLiteral = (what: string): Verdict => block("nonLiteral", lineAt(ctx.code, at), `${what} is not a literal string`);
+	const depth = ctx.depth + 1;
 	switch (launch.kind) {
 		case "bridge":
-			return launch.command === null
-				? nonLiteral("the bash bridge command")
-				: classify(ctx.brush, { kind: "script", text: launch.command }, ctx.depth + 1);
+			return launch.command === null ? nonLiteral("the bash bridge command") : classifyPosix(launch.command, depth);
 		case "script":
-			return launch.text === null
-				? nonLiteral("the command handed to a shell")
-				: classify(ctx.shell, { kind: "script", text: launch.text }, ctx.depth + 1);
+			return launch.text === null ? nonLiteral("the command handed to a shell") : classifyScript(ctx.shell, launch.text, depth);
 		case "shellHelper":
-			return launch.text === null
-				? nonLiteral("the command handed to `sh`")
-				: classify(ctx.brush, { kind: "script", text: launch.text }, ctx.depth + 1);
+			return launch.text === null ? nonLiteral("the command handed to `sh`") : classifyPosix(launch.text, depth);
 		case "argv":
-			return launch.words === null ? nonLiteral("the command") : classify(ctx.brush, { kind: "argv", words: launch.words }, ctx.depth + 1);
+			return launch.words === null ? nonLiteral("the command") : classifyPosixArgv(launch.words, depth);
 		case "execEval":
-			return launch.code === null
-				? nonLiteral(`the code given to \`${launch.api}\``)
-				: classifyPy(launch.code, ctx.shell, ctx.brush, ctx.depth + 1);
+			return launch.code === null ? nonLiteral(`the code given to \`${launch.api}\``) : classifyPy(launch.code, ctx.shell, depth);
 		case "opaque":
 			return nonLiteral(`the module loaded by \`${launch.api}\``);
-		default: {
-			const unreachable: never = launch;
-			return unreachable;
-		}
+		default:
+			return absurd(launch);
 	}
 }
 
@@ -77,22 +66,19 @@ function judgeTokens(ctx: Context): Verdict {
 	return ALLOW;
 }
 
-export function classifyPy(code: string, shell: Dialect, brush: Dialect, depth = 0): Verdict {
+export function classifyPy(code: string, shell: Dialect, depth = 0): Verdict {
 	const scanned = scanPy(code);
 	if (scanned.kind === "unlexable") return block("nonLiteral", code, `the cell cannot be tokenized (${scanned.reason})`);
 	const { scan } = scanned;
 	for (const script of scan.shellScripts) {
-		const verdict = classify(shell, { kind: "script", text: script }, 1);
+		const verdict = classifyScript(shell, script, depth + 1);
 		if (verdict.kind === "block") return verdict;
 	}
-	const verdict = judgeTokens({ code, scan, shell, brush, depth });
+	const verdict = judgeTokens({ code, scan, shell, depth });
 	if (verdict.kind === "block") return verdict;
-	if (depth >= 8)
-		return scan.pythonSnippets.length > 0
-			? block("nonLiteral", code, "Python code nested more than 8 levels deep is not classified")
-			: ALLOW;
 	for (const snippet of scan.pythonSnippets) {
-		const nested = classifyPy(snippet, shell, brush, depth + 1);
+		if (depth >= MAX_DEPTH) return block("nonLiteral", code, `Python code nested more than ${MAX_DEPTH} levels deep is not classified`);
+		const nested = classifyPy(snippet, shell, depth + 1);
 		if (nested.kind === "block") return nested;
 	}
 	return ALLOW;

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { classify } from "../agent/extensions/delete-guard/classify.ts";
+import { classifyScript } from "../agent/extensions/delete-guard/classify.ts";
 import { classifyPosix } from "../agent/extensions/delete-guard/posix.ts";
 import type { Dialect, Verdict } from "../agent/extensions/delete-guard/verdict.ts";
 
 const ruleFrom = (verdict: Verdict): string => (verdict.kind === "allow" ? "allow" : verdict.rule);
 const ruleOf = (command: string): string => ruleFrom(classifyPosix(command, 0));
-const ruleIn = (dialect: Dialect, text: string): string => ruleFrom(classify(dialect, { kind: "script", text }, 0));
+const ruleIn = (dialect: Dialect, text: string): string => ruleFrom(classifyScript(dialect, text, 0));
 
 describe("nested PowerShell and cmd from brush", () => {
 	test.each([

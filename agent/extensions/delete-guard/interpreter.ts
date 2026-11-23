@@ -3,7 +3,7 @@ import type { ArgvWord } from "./classify.ts";
 import { classifyJs } from "./eval-js.ts";
 import { classifyPy } from "./eval-py.ts";
 import { heredocText, STDIN_SCRIPT, type StdinSource, stdinLabel } from "./posix-parse.ts";
-import { ALLOW, BRUSH, type Fragment, fragmentText, MAX_DEPTH, type Rule, SYSTEM_SHELL, type Verdict } from "./verdict.ts";
+import { ALLOW, AMBIGUITY_BUDGET, absurd, block, type Fragment, MAX_DEPTH, SYSTEM_SHELL, tooDeep, type Verdict } from "./verdict.ts";
 
 export type InterpreterKind = "python" | "node" | "bun" | "deno" | "perl" | "ruby";
 
@@ -19,8 +19,6 @@ const PATTERNS: ReadonlyArray<readonly [RegExp, InterpreterKind]> = [
 export function interpreterKind(program: string): InterpreterKind | null {
 	return PATTERNS.find(([pattern]) => pattern.test(program))?.[1] ?? null;
 }
-
-const AMBIGUITY_BUDGET = 4;
 
 type Step =
 	| { readonly kind: "flag" }
@@ -40,13 +38,6 @@ type Env = {
 	readonly fragment: Fragment;
 	readonly stdin: StdinSource | null;
 };
-
-const block = (rule: Rule, fragment: Fragment, detail: string): Verdict => ({
-	kind: "block",
-	rule,
-	fragment: fragmentText(fragment),
-	detail,
-});
 
 const REMOTE_SPECIFIER = /^(?:data|https?|ftp|blob):/i;
 
@@ -71,15 +62,15 @@ const PYTHON: Spec = {
 	},
 };
 
-const NODE_VALUE_LONG: Readonly<Record<string, true>> = {
-	"--require": true,
-	"--import": true,
-	"--loader": true,
-	"--experimental-loader": true,
-	"--input-type": true,
-	"--conditions": true,
-	"--title": true,
-};
+const NODE_VALUE_LONG: ReadonlySet<string> = new Set([
+	"--require",
+	"--import",
+	"--loader",
+	"--experimental-loader",
+	"--input-type",
+	"--conditions",
+	"--title",
+]);
 
 const NODE: Spec = {
 	operand: "file",
@@ -87,7 +78,7 @@ const NODE: Spec = {
 		if (word.startsWith("--")) {
 			const { name, attached } = longOption(word);
 			if (name === "--eval" || name === "--print") return { kind: "code", attached, ends: false };
-			if (Object.hasOwn(NODE_VALUE_LONG, name)) return { kind: "value", attached };
+			if (NODE_VALUE_LONG.has(name)) return { kind: "value", attached };
 			return attached === null ? { kind: "unknown" } : { kind: "flag" };
 		}
 		if (word === "-e" || word === "-p") return { kind: "code", attached: null, ends: false };
@@ -100,17 +91,17 @@ const NODE: Spec = {
 	},
 };
 
-const DENO_VALUE_LONG: Readonly<Record<string, true>> = {
-	"--config": true,
-	"--import-map": true,
-	"--log-level": true,
-	"--ext": true,
-	"--seed": true,
-	"--location": true,
-	"--cert": true,
-	"--lock": true,
-	"--eval-file": true,
-};
+const DENO_VALUE_LONG: ReadonlySet<string> = new Set([
+	"--config",
+	"--import-map",
+	"--log-level",
+	"--ext",
+	"--seed",
+	"--location",
+	"--cert",
+	"--lock",
+	"--eval-file",
+]);
 
 const DENO: Spec = {
 	operand: "file",
@@ -118,7 +109,7 @@ const DENO: Spec = {
 		if (word.startsWith("--")) {
 			const { name, attached } = longOption(word);
 			if (name === "--eval") return { kind: "code", attached, ends: false };
-			if (Object.hasOwn(DENO_VALUE_LONG, name)) return { kind: "value", attached };
+			if (DENO_VALUE_LONG.has(name)) return { kind: "value", attached };
 			return attached === null ? { kind: "unknown" } : { kind: "flag" };
 		}
 		for (let j = 1; j < word.length; j++) {
@@ -176,11 +167,11 @@ function classifyInline(env: Env, code: ArgvWord): Verdict {
 	if (!code.literal) return block("nonLiteral", env.fragment, `the ${env.kind} code comes from an expansion`);
 	switch (env.kind) {
 		case "python":
-			return classifyPy(code.text, SYSTEM_SHELL, BRUSH, env.depth + 1);
+			return classifyPy(code.text, SYSTEM_SHELL, env.depth + 1);
 		case "node":
 		case "bun":
 		case "deno":
-			return classifyJs(code.text, SYSTEM_SHELL, BRUSH, EMPTY_CARRY, env.depth + 1).verdict;
+			return classifyJs(code.text, SYSTEM_SHELL, EMPTY_CARRY, env.depth + 1).verdict;
 		case "perl":
 		case "ruby":
 			return scanNamedDeletes(code.text, env.fragment);
@@ -275,38 +266,38 @@ function walk(env: Env, spec: Spec, args: readonly ArgvWord[], start: number, co
 	}
 }
 
-const DENO_SUBCOMMANDS: Readonly<Record<string, true>> = {
-	add: true,
-	bench: true,
-	cache: true,
-	check: true,
-	clean: true,
-	compile: true,
-	doc: true,
-	fmt: true,
-	info: true,
-	init: true,
-	install: true,
-	jupyter: true,
-	lint: true,
-	lsp: true,
-	publish: true,
-	remove: true,
-	serve: true,
-	task: true,
-	test: true,
-	uninstall: true,
-	upgrade: true,
-	vendor: true,
-	x: true,
-};
+const DENO_SUBCOMMANDS: ReadonlySet<string> = new Set([
+	"add",
+	"bench",
+	"cache",
+	"check",
+	"clean",
+	"compile",
+	"doc",
+	"fmt",
+	"info",
+	"init",
+	"install",
+	"jupyter",
+	"lint",
+	"lsp",
+	"publish",
+	"remove",
+	"serve",
+	"task",
+	"test",
+	"uninstall",
+	"upgrade",
+	"vendor",
+	"x",
+]);
 
 function classifyDeno(env: Env, args: readonly ArgvWord[]): Verdict {
 	const first = args[0];
 	if (first !== undefined && !first.literal) return block("nonLiteral", env.fragment, "the deno subcommand comes from an expansion");
 	if (first?.text === "eval") return walk(env, DENO_EVAL, args, 1, [], AMBIGUITY_BUDGET);
 	if (first?.text === "run" || first?.text === "repl") return walk(env, DENO, args, 1, [], AMBIGUITY_BUDGET);
-	if (first !== undefined && Object.hasOwn(DENO_SUBCOMMANDS, first.text)) return ALLOW;
+	if (first !== undefined && DENO_SUBCOMMANDS.has(first.text)) return ALLOW;
 	return walk(env, DENO, args, 0, [], AMBIGUITY_BUDGET);
 }
 
@@ -315,8 +306,7 @@ export function classifyInterpreter(
 	args: readonly ArgvWord[],
 	ctx: { readonly depth: number; readonly fragment: Fragment; readonly stdin: StdinSource | null },
 ): Verdict {
-	if (ctx.depth > MAX_DEPTH)
-		return block("nonLiteral", ctx.fragment, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
+	if (ctx.depth > MAX_DEPTH) return tooDeep(ctx.fragment);
 	const env: Env = { kind, depth: ctx.depth, fragment: ctx.fragment, stdin: ctx.stdin };
 	switch (kind) {
 		case "python":

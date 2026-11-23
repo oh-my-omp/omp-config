@@ -10,8 +10,9 @@ import {
 	receiverModule,
 	walk,
 } from "../_shared/eval-js-launches.ts";
-import { classify } from "./classify.ts";
-import { ALLOW, type Dialect, type Rule, type Verdict } from "./verdict.ts";
+import { classifyScript } from "./classify.ts";
+import { classifyPosix, classifyPosixArgv } from "./posix.ts";
+import { ALLOW, absurd, block, type Dialect, type Verdict } from "./verdict.ts";
 
 const DISTINCTIVE_DELETE: ReadonlySet<string> = new Set(["rmSync", "unlinkSync", "rmdirSync", "unlink", "rmdir"]);
 
@@ -19,51 +20,40 @@ type Context = {
 	readonly code: string;
 	readonly bindings: JsCell["bindings"];
 	readonly shell: Dialect;
-	readonly brush: Dialect;
 	readonly depth: number;
 };
 
 export type JsJudgement = { readonly verdict: Verdict; readonly carry: JsCarry };
 
-const block = (rule: Rule, fragment: string, detail: string): Verdict => ({ kind: "block", rule, fragment, detail });
-
 function judgeLaunch(launch: JsLaunch, fragment: string, ctx: Context): Verdict {
 	const nonLiteral = (what: string): Verdict => block("nonLiteral", fragment, `${what} is not a literal string`);
+	const depth = ctx.depth + 1;
 	switch (launch.kind) {
 		case "childScript":
-			return launch.text === null
-				? nonLiteral("the command handed to a shell")
-				: classify(ctx.shell, { kind: "script", text: launch.text }, ctx.depth + 1);
+			return launch.text === null ? nonLiteral("the command handed to a shell") : classifyScript(ctx.shell, launch.text, depth);
 		case "childSpawn": {
 			const words = launch.words;
 			if (words === null) return nonLiteral("the argument list");
 			if (launch.shell) {
 				if (words.some((word) => !word.literal)) return nonLiteral("the command handed to a shell");
-				return classify(ctx.shell, { kind: "script", text: words.map((word) => word.text).join(" ") }, ctx.depth + 1);
+				return classifyScript(ctx.shell, words.map((word) => word.text).join(" "), depth);
 			}
-			return classify(ctx.brush, { kind: "argv", words }, ctx.depth + 1);
+			return classifyPosixArgv(words, depth);
 		}
 		case "bunSpawn":
-			return launch.words === null
-				? nonLiteral("the command list")
-				: classify(ctx.brush, { kind: "argv", words: launch.words }, ctx.depth + 1);
+			return launch.words === null ? nonLiteral("the command list") : classifyPosixArgv(launch.words, depth);
 		case "shellHelper":
-			return launch.text === null
-				? nonLiteral("the command handed to `sh`")
-				: classify(ctx.brush, { kind: "script", text: launch.text }, ctx.depth + 1);
+			return launch.text === null ? nonLiteral("the command handed to `sh`") : classifyPosix(launch.text, depth);
 		case "bunShell":
 			return launch.text === null
 				? block("nonLiteral", fragment, "the `Bun.$` template interpolates values, so it is not a literal command")
-				: classify(ctx.brush, { kind: "script", text: launch.text }, ctx.depth + 1);
+				: classifyPosix(launch.text, depth);
 		case "bridge":
-			if (launch.command !== null) return classify(ctx.brush, { kind: "script", text: launch.command }, ctx.depth + 1);
-			return nonLiteral("the bash bridge command");
+			return launch.command === null ? nonLiteral("the bash bridge command") : classifyPosix(launch.command, depth);
 		case "indeterminate":
 			return block("nonLiteral", fragment, `${launch.what} is not statically known`);
-		default: {
-			const unreachable: never = launch;
-			return unreachable;
-		}
+		default:
+			return absurd(launch);
 	}
 }
 
@@ -92,7 +82,7 @@ function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Contex
 	const { bindings } = ctx;
 	if (node.type === "Identifier" && isReference(node, parent)) {
 		if (DISTINCTIVE_DELETE.has(node.name)) return block("delete", quoted, `\`${node.name}\` deletes files`);
-		const member = ctx.bindings.members.get(node.name) ?? ctx.bindings.prior.members.get(node.name);
+		const member = bindings.members.get(node.name) ?? bindings.prior.members.get(node.name);
 		const exported = member?.slice(member.lastIndexOf(".") + 1) ?? "";
 		const fromFs = member?.startsWith("fs.") === true || member?.startsWith("fs/promises.") === true;
 		if (fromFs && (exported === "rm" || DISTINCTIVE_DELETE.has(exported))) return block("delete", quoted, `\`${member}\` deletes files`);
@@ -112,9 +102,9 @@ function judgeNode(node: Node, parent: Node | null, statement: Node, ctx: Contex
 	return launch === null ? ALLOW : judgeLaunch(launch, fragment(node), ctx);
 }
 
-export function classifyJs(code: string, shell: Dialect, brush: Dialect, carry: JsCarry, depth = 0): JsJudgement {
+export function classifyJs(code: string, shell: Dialect, carry: JsCarry, depth = 0): JsJudgement {
 	const cell = parseJs(code, carry);
-	const ctx: Context = { code, bindings: cell.bindings, shell, brush, depth };
+	const ctx: Context = { code, bindings: cell.bindings, shell, depth };
 	let verdict: Verdict = ALLOW;
 	for (const statement of cell.program.body) {
 		walk(statement, cell.program, (node, parent) => {

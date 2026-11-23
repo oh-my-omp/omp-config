@@ -4,6 +4,7 @@ import { tr } from "../_shared/i18n.ts";
 import { type Outcome, type Platform, runDeletion, supportedPlatform, trashUnavailable } from "./backends.ts";
 import { type EvalSession, guardToolCall, newEvalSession, resetEvalSession } from "./guard.ts";
 import { type Target, validateTargets } from "./targets.ts";
+import { absurd } from "./verdict.ts";
 
 const DELETE_TOOL = "delete";
 
@@ -42,10 +43,8 @@ function formatOutcome(outcome: Outcome): string {
 			return `ok     ${outcome.given}: ${outcome.note}`;
 		case "failed":
 			return `failed ${outcome.given}: ${outcome.error}`;
-		default: {
-			const unreachable: never = outcome;
-			return unreachable;
-		}
+		default:
+			return absurd(outcome);
 	}
 }
 
@@ -65,10 +64,8 @@ async function runDelete(platform: Platform, rawParams: unknown, cwd: string, as
 			);
 		case "ok":
 			break;
-		default: {
-			const unreachable: never = validation;
-			return unreachable;
-		}
+		default:
+			return absurd(validation);
 	}
 	switch (mode) {
 		case "trash": {
@@ -88,17 +85,13 @@ async function runDelete(platform: Platform, rawParams: unknown, cwd: string, as
 						`${DELETE_TOOL}: nothing was deleted: permanent deletion needs the user's confirmation, and this session has no UI to ask (a subagent, a headless or print run). ${TRASH_HINT}`,
 						true,
 					);
-				default: {
-					const unreachable: never = consent;
-					return unreachable;
-				}
+				default:
+					return absurd(consent);
 			}
 			break;
 		}
-		default: {
-			const unreachable: never = mode;
-			return unreachable;
-		}
+		default:
+			return absurd(mode);
 	}
 	const outcomes = await runDeletion(platform, mode, validation.targets);
 	const failed = outcomes.filter((outcome) => outcome.kind === "failed").length;

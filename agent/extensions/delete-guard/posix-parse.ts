@@ -1,3 +1,5 @@
+import { absurd } from "./verdict.ts";
+
 export type Word = { readonly text: string; readonly raw: string; readonly literal: boolean };
 
 export const STDIN_SCRIPT = /^\/dev\/(?:stdin|fd\/\d+)$|^\/proc\/self\/fd\/\d+$/;
@@ -71,6 +73,16 @@ type PendingDoc = { readonly slot: HeredocSlot; readonly delimiter: string; read
 
 type Case = "pattern" | "body";
 
+type ScriptState = {
+	readonly closer: ")" | "}" | null;
+	readonly builder: Builder;
+	command: CommandBuilder | null;
+	braces: number;
+	piped: boolean;
+	groups: number;
+	readonly cases: Case[];
+};
+
 const isBlank = (ch: string): boolean => ch === " " || ch === "\t" || ch === "\r";
 
 const ASSIGNMENT_PREFIX = /^[A-Za-z_][A-Za-z0-9_]*\+?=$/;
@@ -81,6 +93,8 @@ const NAME_CHAR = /[A-Za-z0-9_]/;
 const GLOB = /[*?]|\[[^\]\0]+\]/;
 const BRACE = /\{[^{}\0]*(,|\.\.)[^{}\0]*\}/;
 const RESERVED_OPENERS: ReadonlySet<string> = new Set(["!", "if", "then", "elif", "else", "while", "until", "do", "{", "time"]);
+
+const isReservedOpener = (word: Word): boolean => word.literal && RESERVED_OPENERS.has(word.text);
 
 class Parser {
 	i = 0;
@@ -127,133 +141,159 @@ class Parser {
 			}
 			return command;
 		};
-		const current = (): CommandBuilder | null => command;
 		for (;;) {
 			this.skipBlanks();
-			if (this.i >= this.src.length) {
-				if (closer === ")") this.fail("unterminated `$(` or `<(`");
-				if (closer === "}") this.fail(`unterminated \`\${ …; }\``);
-				if (groups > 0) this.fail("unterminated `(` group");
-				finishCommand();
-				this.readPendingDocs();
-				return builder;
-			}
+			if (this.i >= this.src.length) return this.endOfInput(state);
 			const ch = this.src.charAt(this.i);
 			if (ch === "#") {
 				while (this.i < this.src.length && this.src.charAt(this.i) !== "\n") this.i++;
-				continue;
+			} else if (state.cases.at(-1) === "pattern") {
+				this.casePatternStep(state, ch);
+			} else if (this.step(state, ch)) {
+				return state.builder;
 			}
-			if (cases.at(-1) === "pattern") {
-				if (ch === "\n") {
-					this.i++;
-					this.readPendingDocs();
-					continue;
-				}
-				if (this.readCasePattern(builder)) cases.pop();
-				else cases[cases.length - 1] = "body";
-				continue;
-			}
-			if (ch === "\n") {
-				finishCommand();
+		}
+	}
+
+	private finishCommand(state: ScriptState): void {
+		const command = state.command;
+		if (command !== null && command.words.length > 0) {
+			state.builder.commands.push({ words: command.words, stdin: command.stdin, src: this.src, start: command.start, end: this.i });
+		}
+		state.command = null;
+	}
+
+	private openCommand(state: ScriptState): CommandBuilder {
+		if (state.command === null) {
+			state.command = { start: this.i, words: [], stdin: state.piped ? { kind: "pipe" } : null };
+			state.piped = false;
+		}
+		return state.command;
+	}
+
+	private endOfInput(state: ScriptState): Script {
+		if (state.closer === ")") this.fail("unterminated `$(` or `<(`");
+		if (state.closer === "}") this.fail(`unterminated \`\${ …; }\``);
+		if (state.groups > 0) this.fail("unterminated `(` group");
+		this.finishCommand(state);
+		this.readPendingDocs();
+		return state.builder;
+	}
+
+	private casePatternStep(state: ScriptState, ch: string): void {
+		if (ch === "\n") {
+			this.i++;
+			this.readPendingDocs();
+		} else if (this.readCasePattern(state.builder)) {
+			state.cases.pop();
+		} else {
+			state.cases[state.cases.length - 1] = "body";
+		}
+	}
+
+	private step(state: ScriptState, ch: string): boolean {
+		if (ch === "\n") {
+			this.finishCommand(state);
+			this.i++;
+			state.piped = false;
+			this.readPendingDocs();
+			return false;
+		}
+		if (ch === ")") return this.closeParen(state);
+		if (ch === "(") {
+			this.openParen(state);
+			return false;
+		}
+		if (ch === ";") {
+			this.semicolon(state);
+			return false;
+		}
+		if (ch === "|" || (ch === "&" && !this.src.startsWith("&>", this.i))) {
+			this.finishCommand(state);
+			const doubled = this.src.startsWith(ch + ch, this.i);
+			state.piped = ch === "|" && !doubled;
+			this.i += doubled || this.src.startsWith("|&", this.i) ? 2 : 1;
+			return false;
+		}
+		if (state.closer === "}" && ch === "}" && state.command === null) {
+			if (state.braces === 0) {
 				this.i++;
-				piped = false;
-				this.readPendingDocs();
-				continue;
+				return true;
 			}
-			if (ch === ")") {
-				finishCommand();
-				this.i++;
-				if (groups > 0) {
-					groups--;
-					continue;
-				}
-				if (closer === ")") return builder;
-				this.fail("unexpected `)`");
+			state.braces--;
+		}
+		if (!this.readRedirect(state.builder, () => this.openCommand(state))) this.readCommandWord(state);
+		return false;
+	}
+
+	private closeParen(state: ScriptState): boolean {
+		this.finishCommand(state);
+		this.i++;
+		if (state.groups > 0) {
+			state.groups--;
+			return false;
+		}
+		if (state.closer === ")") return true;
+		this.fail("unexpected `)`");
+	}
+
+	private openParen(state: ScriptState): void {
+		const before = state.command;
+		if (before !== null && !before.words.every(isReservedOpener)) {
+			if (before.words[0]?.text === "for" && this.src.charAt(this.i + 1) === "(") {
+				this.skipArithmetic(state.builder, 2);
+				return;
 			}
-			if (ch === "(") {
-				const before = current();
-				if (before !== null && !before.words.every((word) => word.literal && RESERVED_OPENERS.has(word.text))) {
-					if (before.words[0]?.text === "for" && this.src.charAt(this.i + 1) === "(") {
-						this.skipArithmetic(builder, 2);
-						continue;
-					}
-					if (this.isFunctionHeader(before)) {
-						this.i++;
-						this.skipBlanks();
-						if (this.src.charAt(this.i) !== ")") this.fail("unexpected `(`");
-						this.i++;
-						command = null;
-						continue;
-					}
-					this.fail("unexpected `(`");
-				}
-				if (this.src.charAt(this.i + 1) === "(") {
-					const arithmetic = open();
-					const start = this.i;
-					this.skipArithmetic(builder, 2);
-					arithmetic.words.push({ text: "((", raw: this.src.slice(start, this.i), literal: true });
-					continue;
-				}
-				this.i++;
-				groups++;
-				continue;
-			}
-			if (ch === ";") {
-				const terminator = [";;&", ";;", ";&"].find((op) => this.src.startsWith(op, this.i));
-				finishCommand();
-				piped = false;
-				if (terminator !== undefined) {
-					this.i += terminator.length;
-					if (cases.at(-1) !== "body") this.fail(`unexpected \`${terminator}\``);
-					cases[cases.length - 1] = "pattern";
-					continue;
-				}
-				this.i++;
-				continue;
-			}
-			if (ch === "|") {
-				finishCommand();
-				if (this.src.startsWith("||", this.i)) {
-					this.i += 2;
-					piped = false;
-				} else {
-					this.i += this.src.startsWith("|&", this.i) ? 2 : 1;
-					piped = true;
-				}
-				continue;
-			}
-			if (ch === "&" && !this.src.startsWith("&>", this.i)) {
-				finishCommand();
-				this.i += this.src.startsWith("&&", this.i) ? 2 : 1;
-				piped = false;
-				continue;
-			}
-			if (closer === "}" && ch === "}" && current() === null) {
-				if (braces === 0) {
-					this.i++;
-					return builder;
-				}
-				braces--;
-			}
-			if (this.readRedirect(builder, open)) continue;
-			const target = open();
-			const word = this.readWord(builder);
-			target.words.push(word);
-			if (word.literal && word.text === "{" && target.words.every((w) => w.literal && RESERVED_OPENERS.has(w.text))) braces++;
-			if (target.words.length === 1 && word.literal && word.text === "[[") {
-				this.skipDoubleBracket(builder);
-				continue;
-			}
-			const [first, second, third] = target.words;
-			if (target.words.length === 3 && first?.text === "case" && third?.literal && third.text === "in" && second !== undefined) {
-				command = null;
-				cases.push("pattern");
-				continue;
-			}
-			if (target.words.length === 1 && word.literal && word.text === "esac" && cases.at(-1) === "body") {
-				cases.pop();
-				command = null;
-			}
+			if (!this.isFunctionHeader(before)) this.fail("unexpected `(`");
+			this.i++;
+			this.skipBlanks();
+			if (this.src.charAt(this.i) !== ")") this.fail("unexpected `(`");
+			this.i++;
+			state.command = null;
+			return;
+		}
+		if (this.src.charAt(this.i + 1) === "(") {
+			const arithmetic = this.openCommand(state);
+			const start = this.i;
+			this.skipArithmetic(state.builder, 2);
+			arithmetic.words.push({ text: "((", raw: this.src.slice(start, this.i), literal: true });
+			return;
+		}
+		this.i++;
+		state.groups++;
+	}
+
+	private semicolon(state: ScriptState): void {
+		const terminator = [";;&", ";;", ";&"].find((op) => this.src.startsWith(op, this.i));
+		this.finishCommand(state);
+		state.piped = false;
+		if (terminator === undefined) {
+			this.i++;
+			return;
+		}
+		this.i += terminator.length;
+		if (state.cases.at(-1) !== "body") this.fail(`unexpected \`${terminator}\``);
+		state.cases[state.cases.length - 1] = "pattern";
+	}
+
+	private readCommandWord(state: ScriptState): void {
+		const target = this.openCommand(state);
+		const word = this.readWord(state.builder);
+		target.words.push(word);
+		if (word.literal && word.text === "{" && target.words.every(isReservedOpener)) state.braces++;
+		if (target.words.length === 1 && word.literal && word.text === "[[") {
+			this.skipDoubleBracket(state.builder);
+			return;
+		}
+		const [first, second, third] = target.words;
+		if (target.words.length === 3 && first?.text === "case" && third?.literal && third.text === "in" && second !== undefined) {
+			state.command = null;
+			state.cases.push("pattern");
+			return;
+		}
+		if (target.words.length === 1 && word.literal && word.text === "esac" && state.cases.at(-1) === "body") {
+			state.cases.pop();
+			state.command = null;
 		}
 	}
 

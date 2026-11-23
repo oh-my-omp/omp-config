@@ -4,7 +4,7 @@ import { classifyInterpreter, interpreterKind } from "./interpreter.ts";
 import { classifyPosixArgv } from "./posix.ts";
 import type { StdinSource } from "./posix-parse.ts";
 import { classifyPowershell } from "./powershell.ts";
-import { ALLOW, type Fragment, fragmentText, MAX_DEPTH, type Rule, type Verdict } from "./verdict.ts";
+import { ALLOW, absurd, block, type Fragment, MAX_DEPTH, tooDeep, type Verdict } from "./verdict.ts";
 
 type ShellKind = "posix" | "powershell" | "cmd";
 
@@ -13,26 +13,16 @@ export function programName(text: string): string {
 	return base.endsWith(".exe") || base.endsWith(".com") ? base.slice(0, -4) : base;
 }
 
-const SHELLS: Record<string, ShellKind> = {
-	sh: "posix",
-	bash: "posix",
-	zsh: "posix",
-	dash: "posix",
-	ksh: "posix",
-	powershell: "powershell",
-	pwsh: "powershell",
-	cmd: "cmd",
-};
-
-const block = (rule: Rule, fragment: Fragment, detail: string): Verdict => ({
-	kind: "block",
-	rule,
-	fragment: fragmentText(fragment),
-	detail,
-});
-
-const tooDeep = (fragment: Fragment): Verdict =>
-	block("nonLiteral", fragment, `scripts nested more than ${MAX_DEPTH} levels deep are not classified`);
+export const SHELLS: ReadonlyMap<string, ShellKind> = new Map([
+	["sh", "posix"],
+	["bash", "posix"],
+	["zsh", "posix"],
+	["dash", "posix"],
+	["ksh", "posix"],
+	["powershell", "powershell"],
+	["pwsh", "powershell"],
+	["cmd", "cmd"],
+]);
 
 const PS_VALUE_PARAMS = [
 	"executionpolicy",
@@ -45,7 +35,7 @@ const PS_VALUE_PARAMS = [
 	"custompipename",
 ];
 
-export function classifyPowershellInvocation(args: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
+function classifyPowershellInvocation(args: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
 	if (depth > MAX_DEPTH) return tooDeep(fragment);
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -74,7 +64,7 @@ function scriptVerdict(words: readonly ArgvWord[], depth: number, fragment: Frag
 		: classifyPowershell(script, depth + 1);
 }
 
-export function classifyCmdInvocation(args: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
+function classifyCmdInvocation(args: readonly ArgvWord[], depth: number, fragment: Fragment): Verdict {
 	if (depth > MAX_DEPTH) return tooDeep(fragment);
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -114,7 +104,7 @@ export function classifyNestedProgram(
 	stdin: StdinSource | null,
 ): Verdict | null {
 	const program = programName(name.text);
-	const shell = Object.hasOwn(SHELLS, program) ? SHELLS[program] : undefined;
+	const shell = SHELLS.get(program);
 	if (shell !== undefined) return classifyShellInvocation(shell, name, args, depth, fragment);
 	const interpreter = interpreterKind(program);
 	if (interpreter !== null) return classifyInterpreter(interpreter, args, { depth, fragment, stdin });
