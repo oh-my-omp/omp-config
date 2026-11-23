@@ -123,9 +123,9 @@ const UPDATER_REL = "extensions/omp-config-autoupdate/omp-config-update.ts";
 const LEGACY_UPDATER_REL = "omp-config-update.ts";
 
 const TODO_PLUGIN: RequiredPlugin = {
-	name: "omp-todo-more",
+	name: "omp-todo-ng",
 	label: "Todo plugin",
-	requiredBy: (spec) => spec === "https://github.com/oh-my-omp/omp-todo-more#release",
+	requiredBy: (spec) => spec === "https://github.com/oh-my-omp/omp-todo-ng#release",
 	entry: "./index.ts",
 	files: ["index.ts"],
 };
@@ -149,9 +149,9 @@ const CTX_RETIREMENTS: readonly string[] = [
 ];
 
 const FORK_PLUGIN: RequiredPlugin = {
-	name: "omp-subagent-more",
-	label: "omp-subagent-more plugin",
-	requiredBy: (spec) => spec.split("#", 1)[0] === "https://github.com/oh-my-omp/omp-subagent-more",
+	name: "omp-subagent-ng",
+	label: "omp-subagent-ng plugin",
+	requiredBy: (spec) => spec.split("#", 1)[0] === "https://github.com/oh-my-omp/omp-subagent-ng",
 	entry: "./extensions/fork-task/index.ts",
 	files: ["extensions/fork-task/index.ts", "agents/fork-self.md"],
 };

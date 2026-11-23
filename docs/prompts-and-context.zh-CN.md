@@ -12,7 +12,7 @@
 | `agent/PERSONALITY.md` | 仅主会话（子代理固定 `personality: none`） | 填充 `# Personality` 下的 `{{personality}}`。前半部分保留 OMP `personality: default` 原文（`Evidence-first terse engineer`）；后半部分定义 `# Writing` 分析与研究写作规范：结论、数字或机制直接开篇，一句话写清时间、主体、动作、规模与来源，多项对象或指标合并进一张表且不在正文逐行复述，删去过程自述、重复解释、叠加免责声明与文末总结。 |
 | `agent/APPEND_SYSTEM.md`（轻量模式为空文件 `APPEND_SYSTEM_LIGHT.md`） | 仅主会话 | 增加主会话默认规则：用户的明确指令优先于默认规则；最终回复使用带主语的完整句子、首次提及时指认对象、结论旁附 `path:line` 或实测输出、不用类比；不为省 token 跳过必读文件或截断内容（改设计文档前先通读全文及关联文档）。 |
 | [repo-rules](#repo-rules) | 主会话 + 子代理（子代理不含 AGENTS.md） | 以相对仓库根的路径投递工作目录的 `AGENTS.md` / `CLAUDE.md`，取代 OMP 原生的上下文文件注入；加载 `.claude/rules`、`.agents/rules`、`.pi/rules` 与 `~/.claude/rules` 中的规则文件；二者合为一条增量消息，并处理所有规则来源的 `paths` 按路径触发。 |
-| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 只把 system prompt 中 OMP 自己的工具实例的说明改写为 surface 加 `Topics` 索引；由插件或扩展注册的工具保留自己的说明与专题，包括以相同名称替换内置工具的情况，例如 `omp-ask-more` 的 `ask`。详细调用说明按需读取 `help://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
+| [tool-topics](extensions.zh-CN.md#tool-topics) | 主会话 + 子代理（完整与轻量模式） | 只把 system prompt 中 OMP 自己的工具实例的说明改写为 surface 加 `Topics` 索引；由插件或扩展注册的工具保留自己的说明与专题，包括以相同名称替换内置工具的情况，例如 `omp-ask-ng` 的 `ask`。详细调用说明按需读取 `help://<tool>/<topic>`，`SYSTEM_TEMPLATE.md` 要求调用前先读条件命中的专题。 |
 | [system-prompt-replace](#system-prompt-replace) | 按规则（默认所有会话；完整与轻量模式） | 按 `REPLACE-SYSTEM-*.yml` 规则文件对渲染出的 system prompt 给出措辞级修改，直接发送修改好的 system prompt；每条规则可以全局生效，也可以限定会话、cwd、模型、provider、当前模型的委派倾向（delegation bias）或模式，并用 `exclude.*` 写明何时不生效。 |
 | [append-system-model](#append-system-model) | 按片段（默认仅主会话） | 把 frontmatter 条件（会话、cwd、模型、provider、当前模型的委派倾向、完整/轻量模式，以及表示何时不注入的 `exclude.*`）命中的 `APPEND-SYSTEM-*.md` 片段作为一条增量消息送达。仓库自带 `APPEND-SYSTEM-decision-support.md`：完整模式的主会话中，重大决策询问 `discuss:steady` 与 `discuss:divergent`，长调查在开始前与交付前会商 `mentor:default`；主模型为 `claude-opus-5-5` 时不注入。 |
 | [argon-long-output](extensions.zh-CN.md#argon-long-output) | 主会话 + 子代理（各按自己的模型匹配） | 模型为 `google-gemini-cli` 上的 `gemini-4-argon` 时把仓库下发的 `ARGON_PROMPT.md` 作为一条增量消息送达：先写骨架、再逐节 `edit`，让每次 `write`/`edit` 内容和最终回复都不超过 8,000 字符。 |
@@ -102,13 +102,13 @@ OMP 的 `agents-md` 与 `claude-md` provider 把独立的 `AGENTS.md` / `CLAUDE.
 
 ## 上下文与压缩
 
-- **`task` 与 `fork_task`**：普通 `task` 新建空白子代理会话，只传入 `context` 与 `task` 文本，子代理的查找过程和工具输出留在其分支内，主会话只收最终 `yield` 结果。`fork_task` 由 [omp-subagent-more](https://github.com/oh-my-omp/omp-subagent-more#readme) 插件提供。
+- **`task` 与 `fork_task`**：普通 `task` 新建空白子代理会话，只传入 `context` 与 `task` 文本，子代理的查找过程和工具输出留在其分支内，主会话只收最终 `yield` 结果。`fork_task` 由 [omp-subagent-ng](https://github.com/oh-my-omp/omp-subagent-ng#readme) 插件提供。
 - **压缩顺序与触发时机**：`agent/config.yml` 将 `compaction.methodOrder` 设为 `[remote, soft, snapcompact, handoff, shake]`，并将 `compaction.asyncEnabled` 设为 `false`。开启 `asyncEnabled` 时，OMP 会在阈值前最多 32k token 提前在后台请求摘要，拿到后一直存到阈值才替换，且 Anthropic 的摘要不会重新生成，这期间每次请求仍发送完整历史；关闭后只在到达阈值时执行压缩。
 - **共享压缩交接（`_shared/omomp-shared/compact-handoff.ts`）**：`repo-rules`、`tool-policy-nag`、`turn-judge`、`watchdog-agent`、`lang-nag`、`isolation-nudge` 与 `task-completion-judge` 统一向进程级共享压缩协调器（`Symbol.for("omomp.shared.compactRegistry")`）注册。在不修改 OMP 宿主代码且不改写压缩前历史消息（保全 KV Prompt Cache 命中）的前提下，协调器对 `session.compacting` 只回答一次，给出 omomp 的摘要提示词、各插件压缩后会自动重注入的状态声明（摘要不再抄写这些状态）与噪音防护指令，在 `session_before_compact` 原地裁剪 `preparation.fileOps` 为近端仓库核心文件，并提供 `isCompacting` 屏障使在途监督钩子在压缩边界安全收敛。
 
 ### fork-task
 
-`fork_task` 由插件 [omp-subagent-more](https://github.com/oh-my-omp/omp-subagent-more#readme) 的 `fork-task` 扩展入口提供。
+`fork_task` 由插件 [omp-subagent-ng](https://github.com/oh-my-omp/omp-subagent-ng#readme) 的 `fork-task` 扩展入口提供。
 
 ### model-compaction
 
@@ -129,6 +129,6 @@ thresholdTokens: 150000
 由于原生 `f<N>` 条目可能改变模型的上下文窗口档位（standard vs extended），会让某个模型切换当前窗口档位、或不小于该模型最大窗口的规则，对该模型拒绝并记一条写明规则文件的 warning；判断用的是 OMP 自己的 `planModelCompactionPoint`，与 `/model` 压缩点预览依据的是同一份计划。未知键和非空正文都是错误，写错的键不会悄悄放宽规则；无法读取或无效的文件跳过并记 warning，其他文件仍生效，没有任何有效文件时不应用规则。其他来源已写入的运行时条目会被保留，并在无规则命中或 `session_shutdown` 时恢复；若运行期间有其他代码修改了这张映射表，扩展会记一次 warning 并停止更新。
 ### ctx
 
-[omp-todo-more](plugins-and-modes.zh-CN.md#todo-more) 插件拥有 `ctx` 与 `todo`；`agent/config.yml` 关闭原生 `todo`。更新器在安装插件前预检待退役本地 Todo/ctx 文件的归属；只有 OMP 确认插件就绪后才删除列出的 Todo 文件，且只有该就绪插件带有 `src/ctx` 时才删除列出的 ctx 文件。
+[omp-todo-ng](plugins-and-modes.zh-CN.md#todo-ng) 插件拥有 `ctx` 与 `todo`；`agent/config.yml` 关闭原生 `todo`。更新器在安装插件前预检待退役本地 Todo/ctx 文件的归属；只有 OMP 确认插件就绪后才删除列出的 Todo 文件，且只有该就绪插件带有 `src/ctx` 时才删除列出的 ctx 文件。
 
 工具文档：`help://todo/lifecycle`（调用 `todo({})` 直接读取实时计划状态；`omp-sessions` 提供 `session://`）。

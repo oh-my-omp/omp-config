@@ -101,11 +101,11 @@ const estimateTokens = (text: string): number => {
 const todoFailure = (result: Exclude<TodoReadResult, ReviewTodo>): string => {
 	switch (result.kind) {
 		case "unavailable":
-			return "todo-more review state unavailable";
+			return "todo-ng review state unavailable";
 		case "no_reply":
-			return "todo-more did not answer the read request";
+			return "todo-ng did not answer the read request";
 		case "malformed":
-			return `todo-more replied out of protocol: ${result.reason}`;
+			return `todo-ng replied out of protocol: ${result.reason}`;
 		default: {
 			const unreachable: never = result;
 			return unreachable;

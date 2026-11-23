@@ -71,7 +71,7 @@
 - **判定词解析**：判定词是回复首行的开头词元——`DONE`、`NOT_DONE` 或 `NOT DONE`——经 trim、去掉首尾反引号与星号、大小写不敏感比较；词元之后须紧接行尾、空白或 `_` 以外的 Unicode 标点（`NOT_DONE: 缺测试`、`DONE — 全部完成` 算判定；`Verdict: DONE`、`NOT-DONE`、`NOT_DONE_X`、`DONEFOO` 不算）。回复其余部分作为原因。首行不符、无可用模型、超时或全部模型失败都判不出结论：只放行当次 `yield`，下一个终止性 `yield` 照常鉴定。
 - **退回规则**：
   1. 首次判为 `NOT_DONE` 时拦截 `yield` 并返回原因，要求子代理继续完成并验证。
-  2. 判为 `DONE` 后，同步触发 `omp-todo-more:read` 读取最新 Todo 列表；若仍有 `pending` 或 `in_progress` 项，再拦截一次并列出这些项的说明，要求先更新 Todo 状态。
+  2. 判为 `DONE` 后，同步触发 `omp-todo-ng:read` 读取最新 Todo 列表；若仍有 `pending` 或 `in_progress` 项，再拦截一次并列出这些项的说明，要求先更新 Todo 状态。
   3. 每种退回在每个子代理会话中各最多发生一次，避免真实受阻的子代理陷入死循环；`yield` 通过后，该会话后续 `yield` 不再拦截。判定结论只写日志（`task-completion-judge verdict`），`yield` 数据保持 agent 的 `{ report }` schema。配置、模型或插件读取失败时记 warning 并放行。它同时向 `_shared/omomp-shared/compact-handoff.ts` 注册 `StatelessNoiseGuard`，避免交付前的退回提示进入压缩摘要。
 
 ### subagent-usage

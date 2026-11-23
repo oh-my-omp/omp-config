@@ -72,7 +72,7 @@ describe("tool-topics unified help:// integration and auto-injection", () => {
 			},
 		];
 		publishTopics(ownTopics, () => ["read", "ask", "native_only"], noWarn);
-		registerToolTopics("omp-ask-more", [
+		registerToolTopics("omp-ask-ng", [
 			{
 				tool: "ask",
 				topic: "routing",

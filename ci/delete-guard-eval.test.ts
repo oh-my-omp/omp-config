@@ -247,7 +247,7 @@ describe("launcher names carried between js cells", () => {
 
 describe("standalone percent commands in js cells", () => {
 	test.each([
-		"%load skill://omp-subagent-more/orchestrate.js",
+		"%load skill://omp-subagent-ng/orchestrate.js",
 		"  %load /tmp/probe.js\n",
 		"%bun add is-number",
 		"%environment managed",
