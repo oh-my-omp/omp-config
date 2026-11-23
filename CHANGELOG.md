@@ -22,6 +22,7 @@
 
 ### Changed
 
+- Made `user-prompt-inject` decide which root-session messages count as user requests and `ask` answers with one rule for both a root session in the same thread and one read from its transcript file, validate transcript records against OMP's message shapes, and read the transcript through a single file handle per model call
 - Detected `repo-rules` single-file `cat`/`head`/`tail` reads in `bash` with OMP's own shell lexer (`tools/shell-tokenize`) instead of a private tokenizer, and found the repository root for rule scanning with OMP's `findRepoRoot`
 - Made `model-compaction` refuse a rule whose `thresholdTokens` does not fit below the model's largest context window, deciding tier changes and fit with OMP's own `planModelCompactionPoint`, and name the rule file instead of a list index in refusal warnings
 - Simplified `child-memory-warning`: process start times and footprints are exact numbers instead of split 64-bit halves, each scan builds fresh process and ownership indexes instead of reusing aliased buffers, the libproc reader is one class with named offsets, and the non-Darwin log line reads `disabled (darwin only)`

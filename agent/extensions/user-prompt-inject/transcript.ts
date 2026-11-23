@@ -1,28 +1,66 @@
 import { closeSync, openSync, readSync, type Stats, statSync } from "node:fs";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { SESSION_TITLE_SLOT_BYTES, type SessionEntry, type SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import type { ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai";
+import { type SessionEntry, z, type zod } from "@oh-my-pi/pi-coding-agent";
+import { SESSION_TITLE_SLOT_BYTES, type SessionEntryBase, type SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { parseSessionContent } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
-import { textOf } from "../_shared/messages.ts";
+import { type MessageContent, parseStoredContent, textOf } from "../_shared/messages.ts";
 
 const LF = 0x0a;
 const READ_CHUNK_BYTES = 1 << 20;
 const SEAM_BYTES = 64;
 
-export type PromptSource = { readonly length: number; at(index: number): string };
-
 export type BranchNeed = { readonly prompts: boolean; readonly answers: boolean };
 
-type BranchPrompts = {
-	readonly prompts: PromptSource;
-	answers(): readonly string[];
+export type RootView = {
+	readonly prompts: { readonly length: number; at(index: number): string };
+	readonly answers: readonly string[];
 };
 
-type EntryRole = "prompt" | "answers" | "other";
+type PromptMessage = Pick<UserMessage, "role" | "synthetic" | "attribution"> & { readonly content: MessageContent };
+
+type AnswerMessage = Pick<ToolResultMessage, "role" | "toolName" | "isError" | "details">;
+
+type RoleMessage = PromptMessage | AnswerMessage;
+
+type StoredEntry = Pick<SessionEntryBase, "type" | "id" | "parentId"> & { readonly message?: unknown };
+
+const storedHeader: zod.ZodLikeSchema<Pick<SessionHeader, "type" | "id">> = z.object({ type: z.literal("session"), id: z.string() });
+
+const storedEntry: zod.ZodLikeSchema<StoredEntry> = z.object({
+	type: z.string(),
+	id: z.string(),
+	parentId: z.union([z.string(), z.null()]),
+	message: z.unknown().optional(),
+});
+
+const storedMessage: zod.ZodLikeSchema<RoleMessage> = z.union([
+	z.object({
+		role: z.literal("user"),
+		content: z.unknown().transform(parseStoredContent),
+		synthetic: z.boolean().optional(),
+		attribution: z.enum(["user", "agent"]).optional(),
+	}),
+	z.object({
+		role: z.literal("toolResult"),
+		toolName: z.string(),
+		isError: z.boolean(),
+		details: z.unknown().optional(),
+	}),
+]);
+
+type Classified =
+	| { readonly kind: "prompt"; readonly text: string }
+	| { readonly kind: "answers"; readonly text: string }
+	| { readonly kind: "other" };
+
+const OTHER: Classified = { kind: "other" };
+
+const EMPTY_VIEW: RootView = { prompts: { length: 0, at: () => "" }, answers: [] };
 
 type EntryFacts = {
 	readonly parentId: string | null;
-	readonly role: EntryRole;
+	readonly kind: Classified["kind"];
 	readonly start: number;
 	readonly end: number;
 };
@@ -31,47 +69,86 @@ type Cursor = {
 	offset: number;
 	size: number;
 	mtimeMs: number;
-	dev: number;
-	ino: number;
-	head: string;
+	readonly dev: number;
+	readonly ino: number;
+	readonly head: string;
 	seam: string;
 	readonly entries: Map<string, EntryFacts>;
 	leafId: string | null;
 	header: "pending" | "ok" | "invalid";
 };
 
+type Head = { readonly bodyStart: number; readonly bytes: string };
+
 export type TranscriptReader = {
 	reset(): void;
-	read(file: string, need: BranchNeed): BranchPrompts;
+	read(file: string, need: BranchNeed): RootView;
 	release(): void;
 };
 
+function classify(message: RoleMessage): Classified {
+	switch (message.role) {
+		case "user": {
+			if (message.attribution !== "user" || message.synthetic === true) return OTHER;
+			const text = textOf(message.content, "\n").trim();
+			return text === "" ? OTHER : { kind: "prompt", text };
+		}
+		case "toolResult": {
+			const answers = askAnswers(message);
+			return answers === null ? OTHER : { kind: "answers", text: formatAskAnswers(answers) };
+		}
+		default: {
+			const unreachable: never = message;
+			return unreachable;
+		}
+	}
+}
+
+export function liveView(branch: readonly SessionEntry[], need: BranchNeed): RootView {
+	const prompts: string[] = [];
+	const answers: string[] = [];
+	for (const entry of branch) {
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (message.role !== "user" && message.role !== "toolResult") continue;
+		const classified = classify(message);
+		if (classified.kind === "prompt" && need.prompts) prompts.push(classified.text);
+		if (classified.kind === "answers" && need.answers) answers.push(classified.text);
+	}
+	return { prompts: { length: prompts.length, at: (index) => prompts[index] ?? "" }, answers };
+}
+
 export function createTranscriptReader(): TranscriptReader {
 	let cursor: Cursor | null = null;
-	let cursorFile = "";
 	let handle: number | null = null;
-	let scratch: Uint8Array = new Uint8Array(0);
-	const record = (facts: EntryFacts): AgentMessage | null => {
-		handle ??= openSync(cursorFile, "r");
+	let scratch = new Uint8Array(0);
+	const textAt = (fd: number, facts: EntryFacts | undefined): string => {
+		if (facts === undefined) return "";
 		const length = facts.end - facts.start;
 		if (scratch.length < length) scratch = new Uint8Array(length);
-		const filled = readInto(handle, scratch, facts.start, length);
-		return parseMessage(scratch.subarray(0, filled));
+		const entry = storedEntry.safeParse(Bun.JSONL.parseChunk(scratch.subarray(0, readInto(fd, scratch, facts.start, length))).values[0]);
+		const message = entry.success ? messageOf(entry.data) : null;
+		const classified = message === null ? OTHER : classify(message);
+		return classified.kind === "other" ? "" : classified.text;
 	};
 
 	return {
 		reset(): void {
 			cursor = null;
 		},
-		read(file: string, need: BranchNeed): BranchPrompts {
-			cursorFile = file;
-			cursor = ensureCursor(cursor, file);
+		read(file: string, need: BranchNeed): RootView {
+			const stats = statSync(file, { throwIfNoEntry: false });
+			if (stats === undefined) {
+				cursor = null;
+				return EMPTY_VIEW;
+			}
+			handle ??= openSync(file, "r");
+			const fd = handle;
+			cursor = ensureCursor(fd, cursor, stats);
 			const branch = branchOf(cursor);
-			const prompts = need.prompts ? branch.filter((facts) => facts.role === "prompt") : [];
-			return {
-				prompts: { length: prompts.length, at: (index) => promptText(record, prompts[index]) },
-				answers: () => (need.answers ? answerTexts(record, branch) : []),
-			};
+			const prompts = need.prompts ? branch.filter((facts) => facts.kind === "prompt") : [];
+			const answers = need.answers ? branch.filter((facts) => facts.kind === "answers").map((facts) => textAt(fd, facts)) : [];
+			return { prompts: { length: prompts.length, at: (index) => textAt(fd, prompts[index]) }, answers };
 		},
 		release(): void {
 			if (handle !== null) {
@@ -82,40 +159,22 @@ export function createTranscriptReader(): TranscriptReader {
 	};
 }
 
-function ensureCursor(current: Cursor | null, file: string): Cursor {
-	const stats = statSync(file, { throwIfNoEntry: false });
-	if (stats === undefined) return emptyCursor();
-	const head = headOf(file);
-	const seam = sampleBefore(file, current === null ? 0 : current.offset);
+function ensureCursor(fd: number, current: Cursor | null, stats: Stats): Cursor {
+	const head = headOf(fd);
 	const stale =
 		current === null ||
 		current.dev !== stats.dev ||
 		current.ino !== stats.ino ||
-		current.head !== head.bytes ||
-		current.seam !== seam ||
 		stats.size < current.size ||
-		(stats.size === current.size && stats.mtimeMs !== current.mtimeMs);
+		(stats.size === current.size && stats.mtimeMs !== current.mtimeMs) ||
+		current.head !== head.bytes ||
+		current.seam !== sampleBefore(fd, current.offset);
 	const cursor = stale ? startCursor(head, stats) : current;
-	if (stats.size > cursor.offset) advance(file, cursor, stats.size);
+	if (stats.size > cursor.offset) advance(fd, cursor, stats.size);
 	cursor.size = stats.size;
 	cursor.mtimeMs = stats.mtimeMs;
-	cursor.seam = sampleBefore(file, cursor.offset);
+	cursor.seam = sampleBefore(fd, cursor.offset);
 	return cursor;
-}
-
-function emptyCursor(): Cursor {
-	return {
-		offset: 0,
-		size: 0,
-		mtimeMs: 0,
-		dev: -1,
-		ino: -1,
-		head: "",
-		seam: "",
-		entries: new Map(),
-		leafId: null,
-		header: "invalid",
-	};
 }
 
 function startCursor(head: Head, stats: Stats): Cursor {
@@ -133,56 +192,39 @@ function startCursor(head: Head, stats: Stats): Cursor {
 	};
 }
 
-type Head = { readonly bodyStart: number; readonly bytes: string };
-
-function headOf(file: string): Head {
-	const fd = openSync(file, "r");
-	try {
-		const bytes = readBytesAt(fd, 0, SESSION_TITLE_SLOT_BYTES);
-		const text = bytes.toString("utf8");
-		const newline = bytes.indexOf(LF);
-		if (newline === -1) return { bodyStart: 0, bytes: text };
-		const slot = parseSessionContent(text.slice(0, newline + 1)).titleSlot;
-		return { bodyStart: slot === undefined ? 0 : newline + 1, bytes: text };
-	} finally {
-		closeSync(fd);
-	}
+function headOf(fd: number): Head {
+	const bytes = readBytesAt(fd, 0, SESSION_TITLE_SLOT_BYTES);
+	const text = bytes.toString("utf8");
+	const newline = bytes.indexOf(LF);
+	if (newline === -1) return { bodyStart: 0, bytes: text };
+	const slot = parseSessionContent(text.slice(0, newline + 1)).titleSlot;
+	return { bodyStart: slot === undefined ? 0 : newline + 1, bytes: text };
 }
 
-function advance(file: string, cursor: Cursor, size: number): void {
-	const fd = openSync(file, "r");
-	try {
-		while (cursor.offset < size) {
-			const remaining = size - cursor.offset;
-			let window = Math.min(READ_CHUNK_BYTES, remaining);
-			let bytes = readBytesAt(fd, cursor.offset, window);
-			let end = bytes.lastIndexOf(LF);
-			while (end === -1 && window < remaining) {
-				window = Math.min(window * 2, remaining);
-				bytes = readBytesAt(fd, cursor.offset, window);
-				end = bytes.lastIndexOf(LF);
-			}
-			if (end === -1) {
-				absorb(cursor, bytes, cursor.offset);
-				return;
-			}
-			absorb(cursor, bytes.subarray(0, end + 1), cursor.offset);
-			cursor.offset += end + 1;
+function advance(fd: number, cursor: Cursor, size: number): void {
+	while (cursor.offset < size) {
+		const remaining = size - cursor.offset;
+		let window = Math.min(READ_CHUNK_BYTES, remaining);
+		let bytes = readBytesAt(fd, cursor.offset, window);
+		let end = bytes.lastIndexOf(LF);
+		while (end === -1 && window < remaining) {
+			window = Math.min(window * 2, remaining);
+			bytes = readBytesAt(fd, cursor.offset, window);
+			end = bytes.lastIndexOf(LF);
 		}
-	} finally {
-		closeSync(fd);
+		if (end === -1) {
+			absorb(cursor, bytes, cursor.offset);
+			return;
+		}
+		absorb(cursor, bytes.subarray(0, end + 1), cursor.offset);
+		cursor.offset += end + 1;
 	}
 }
 
-function sampleBefore(file: string, offset: number): string {
+function sampleBefore(fd: number, offset: number): string {
 	if (offset === 0) return "";
 	const length = Math.min(SEAM_BYTES, offset);
-	const fd = openSync(file, "r");
-	try {
-		return readBytesAt(fd, offset - length, length).toString("utf8");
-	} finally {
-		closeSync(fd);
-	}
+	return readBytesAt(fd, offset - length, length).toString("utf8");
 }
 
 function absorb(cursor: Cursor, bytes: Buffer, baseOffset: number): void {
@@ -197,30 +239,25 @@ function absorb(cursor: Cursor, bytes: Buffer, baseOffset: number): void {
 }
 
 function absorbRecord(cursor: Cursor, line: Uint8Array, start: number, end: number): void {
-	const value = Bun.JSONL.parseChunk(line).values[0];
+	const value: unknown = Bun.JSONL.parseChunk(line).values[0];
 	if (value === undefined) return;
 	if (cursor.header === "pending") {
-		cursor.header = isSessionHeader(value) ? "ok" : "invalid";
+		cursor.header = storedHeader.safeParse(value).success ? "ok" : "invalid";
 		return;
 	}
 	if (cursor.header === "invalid") return;
-	if (!isSessionEntry(value)) return;
-	cursor.entries.set(value.id, factsOf(value, start, end));
-	cursor.leafId = value.id;
+	const entry = storedEntry.safeParse(value);
+	if (!entry.success) return;
+	const message = messageOf(entry.data);
+	const kind = message === null ? "other" : classify(message).kind;
+	cursor.entries.set(entry.data.id, { parentId: entry.data.parentId, kind, start, end });
+	cursor.leafId = entry.data.id;
 }
 
-function factsOf(entry: SessionEntry, start: number, end: number): EntryFacts {
-	const parentId = typeof entry.parentId === "string" ? entry.parentId : null;
-	return { parentId, role: roleOf(entry), start, end };
-}
-
-function roleOf(entry: SessionEntry): EntryRole {
-	if (entry.type !== "message") return "other";
-	const message = entry.message;
-	if (!isRecord(message)) return "other";
-	if (message.role === "toolResult") return askAnswers(message) === null ? "other" : "answers";
-	if (message.role !== "user" || message.attribution !== "user" || message.synthetic === true) return "other";
-	return textOf(message.content, "\n").trim() === "" ? "other" : "prompt";
+function messageOf(entry: StoredEntry): RoleMessage | null {
+	if (entry.type !== "message") return null;
+	const message = storedMessage.safeParse(entry.message);
+	return message.success ? message.data : null;
 }
 
 function branchOf(cursor: Cursor): EntryFacts[] {
@@ -238,32 +275,6 @@ function branchOf(cursor: Cursor): EntryFacts[] {
 	return branch;
 }
 
-type RecordReader = (facts: EntryFacts) => AgentMessage | null;
-
-function promptText(read: RecordReader, facts: EntryFacts | undefined): string {
-	if (facts === undefined) return "";
-	const message = read(facts);
-	return message !== null && message.role === "user" ? textOf(message.content, "\n").trim() : "";
-}
-
-function answerTexts(read: RecordReader, branch: readonly EntryFacts[]): readonly string[] {
-	const answers: string[] = [];
-	for (const facts of branch) {
-		if (facts.role !== "answers") continue;
-		const message = read(facts);
-		if (message === null || message.role !== "toolResult") continue;
-		const answered = askAnswers(message);
-		if (answered !== null) answers.push(formatAskAnswers(answered));
-	}
-	return answers;
-}
-
-function parseMessage(bytes: Uint8Array): AgentMessage | null {
-	const value: unknown = Bun.JSONL.parseChunk(bytes).values[0];
-	if (!isSessionEntry(value) || value.type !== "message") return null;
-	return isRecord(value.message) ? value.message : null;
-}
-
 function readInto(fd: number, buffer: Uint8Array, position: number, length: number): number {
 	let filled = 0;
 	while (filled < length) {
@@ -277,16 +288,4 @@ function readInto(fd: number, buffer: Uint8Array, position: number, length: numb
 function readBytesAt(fd: number, position: number, length: number): Buffer {
 	const buffer = Buffer.allocUnsafe(length);
 	return buffer.subarray(0, readInto(fd, buffer, position, length));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isSessionHeader(value: unknown): value is SessionHeader {
-	return isRecord(value) && value.type === "session" && typeof value.id === "string";
-}
-
-function isSessionEntry(value: unknown): value is SessionEntry {
-	return isRecord(value) && value.type !== "session" && typeof value.id === "string";
 }

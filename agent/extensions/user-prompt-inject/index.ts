@@ -1,23 +1,17 @@
-// Attribution is set by whoever sends the message,
-// so extensions that inject user-role messages must send them with
-// `attribution: "agent"`.
-
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import type { DeveloperMessage } from "@oh-my-pi/pi-ai";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
-import { askAnswers, formatAskAnswers } from "../_shared/ask-answers.ts";
 import { errorText } from "../_shared/errors.ts";
-import { type MessageContent, textOf } from "../_shared/messages.ts";
 import { discoverSpecFiles, parseFrontmatter, unquote } from "../_shared/spec-files.ts";
-import { type BranchNeed, createTranscriptReader, type PromptSource, type TranscriptReader } from "./transcript.ts";
+import { type BranchNeed, createTranscriptReader, liveView, type RootView, type TranscriptReader } from "./transcript.ts";
 
 const FILE_PATTERN = /^PROMPT-INJECT-.+\.md$/i;
 const PLACEHOLDER_PATTERN = /\{\{\s*((?:user_prompt|ask_answers)\b[^}]*?)\s*\}\}/g;
-const SCALAR_PATTERN = /^user_prompt\[\s*(-?\d+)\s*\]$/;
-const SLICE_PATTERN = /^user_prompt\[\s*(-?\d+)\s*:\s*(-?\d+|e)\s*\]$/;
+const SCALAR_PATTERN = /^user_prompt\[(-?\d+)\]$/;
+const SLICE_PATTERN = /^user_prompt\[(-?\d+):(-?\d+|e)\]$/;
 const ANSWERS_EXPR = "ask_answers";
 
 type SliceEnd = { readonly kind: "end" } | { readonly kind: "index"; readonly value: number };
@@ -42,9 +36,7 @@ type SpecParse =
 	| { readonly kind: "disabled" }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-type MissingRoot = { readonly kind: "missing"; readonly reason: string };
-
-type RootPrompts = { readonly kind: "ok"; readonly prompts: PromptSource; readonly answers: readonly string[] } | MissingRoot;
+type RootLookup = { readonly kind: "ok"; readonly view: RootView } | { readonly kind: "missing"; readonly reason: string };
 
 function parseTargets(value: string): TargetSet | null {
 	let s = value.trim();
@@ -103,10 +95,10 @@ function parseSpecFile(path: string): SpecParse {
 	if (!targets) return { kind: "invalid", reason: "missing target" };
 	const template = body.trim();
 	if (template === "") return { kind: "invalid", reason: "empty body" };
-	const segments = parseTemplate(template);
-	switch (segments.kind) {
+	const parsedTemplate = parseTemplate(template);
+	switch (parsedTemplate.kind) {
 		case "invalid":
-			return segments;
+			return parsedTemplate;
 		case "ok": {
 			const label = basename(path)
 				.replace(/^PROMPT-INJECT-/i, "")
@@ -116,13 +108,13 @@ function parseSpecFile(path: string): SpecParse {
 				spec: {
 					name: fields.name ? unquote(fields.name) : label,
 					targets,
-					segments: segments.segments,
+					segments: parsedTemplate.segments,
 					filePath: path,
 				},
 			};
 		}
 		default: {
-			const unreachable: never = segments;
+			const unreachable: never = parsedTemplate;
 			return unreachable;
 		}
 	}
@@ -133,7 +125,7 @@ function clampBound(bound: number, length: number): number {
 	return Math.min(Math.max(n, 0), length);
 }
 
-function renderSegment(segment: Segment, root: { readonly prompts: PromptSource; readonly answers: readonly string[] }): string {
+function renderSegment(segment: Segment, root: RootView): string {
 	const { prompts } = root;
 	switch (segment.kind) {
 		case "text":
@@ -170,13 +162,13 @@ function renderSegment(segment: Segment, root: { readonly prompts: PromptSource;
 	}
 }
 
-function renderSpec(spec: InjectSpec, root: { readonly prompts: PromptSource; readonly answers: readonly string[] }): string {
+function renderSpec(spec: InjectSpec, root: RootView): string {
 	const body = spec.segments.map((s) => renderSegment(s, root)).join("");
 	const name = spec.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 	return `<user-prompt-inject name="${name}">\n${body}\n</user-prompt-inject>`;
 }
 
-function rootPrompts(ctx: ExtensionContext, need: BranchNeed, reader: TranscriptReader): RootPrompts {
+function rootView(ctx: ExtensionContext, need: BranchNeed, reader: TranscriptReader): RootLookup {
 	const registry = AgentRegistry.global();
 	const visited = new Set<string>();
 	let id = ctx.agent.parentId;
@@ -187,48 +179,17 @@ function rootPrompts(ctx: ExtensionContext, need: BranchNeed, reader: Transcript
 		if (!ref) return { kind: "missing", reason: `ancestor ${id} not in registry` };
 		if (ref.kind === "main") {
 			if (!ref.session) return { kind: "missing", reason: `root ${id} has no live session` };
-			if (isLocalAgentSession(ref.session)) return livePrompts(ref.session.sessionManager.getBranch(), need);
+			if (isLocalAgentSession(ref.session)) return { kind: "ok", view: liveView(ref.session.sessionManager.getBranch(), need) };
 			const file = ref.session.sessionManager.getSessionFile();
 			if (!file) return { kind: "missing", reason: "root session on another thread has no persisted transcript" };
-			const branch = reader.read(file, need);
-			return { kind: "ok", prompts: branch.prompts, answers: need.answers ? branch.answers() : [] };
+			return { kind: "ok", view: reader.read(file, need) };
 		}
 		id = ref.parentId;
 	}
 	return { kind: "missing", reason: "no main ancestor" };
 }
 
-function livePrompts(branch: readonly SessionEntry[], need: BranchNeed): RootPrompts {
-	const prompts: MessageContent[] = [];
-	const answers: string[] = [];
-	for (const entry of branch) {
-		if (entry.type !== "message") continue;
-		const message = entry.message;
-		if (message.role === "toolResult") {
-			if (!need.answers) continue;
-			const answered = askAnswers(message);
-			if (answered !== null) answers.push(formatAskAnswers(answered));
-			continue;
-		}
-		if (!need.prompts) continue;
-		if (message.role !== "user" || message.attribution !== "user" || message.synthetic === true) continue;
-		if (textOf(message.content, "\n").trim() === "") continue;
-		prompts.push(message.content);
-	}
-	return {
-		kind: "ok",
-		prompts: {
-			length: prompts.length,
-			at: (index) => {
-				const content = prompts[index];
-				return content === undefined ? "" : textOf(content, "\n").trim();
-			},
-		},
-		answers,
-	};
-}
-
-function targets(spec: InjectSpec, agentName: string): boolean {
+function isTargeted(spec: InjectSpec, agentName: string): boolean {
 	switch (spec.targets.kind) {
 		case "all":
 			return true;
@@ -271,7 +232,7 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 				const parsed = parseSpecFile(path);
 				switch (parsed.kind) {
 					case "ok":
-						if (targets(parsed.spec, ctx.agent.name)) found.push(parsed.spec);
+						if (isTargeted(parsed.spec, ctx.agent.name)) found.push(parsed.spec);
 						break;
 					case "disabled":
 						break;
@@ -297,7 +258,7 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 	pi.on("context", (event, ctx) => {
 		try {
 			if (active.length === 0) return;
-			const root = rootPrompts(ctx, need, reader);
+			const root = rootView(ctx, need, reader);
 			switch (root.kind) {
 				case "missing":
 					if (warnedReason !== root.reason) {
@@ -312,7 +273,7 @@ export default function userPromptInject(pi: ExtensionAPI): void {
 					return unreachable;
 				}
 			}
-			const text = active.map((spec) => renderSpec(spec, root)).join("\n\n");
+			const text = active.map((spec) => renderSpec(spec, root.view)).join("\n\n");
 			const message: DeveloperMessage = {
 				role: "developer",
 				content: [{ type: "text", text }],
