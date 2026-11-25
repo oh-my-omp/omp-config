@@ -7,7 +7,7 @@ import {
 	type ResolveContext,
 	type UrlCompletion,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { listToolTopics, registerToolTopics, resolveToolTopic, type ToolTopicDoc } from "../_shared/omomp-shared/internal-url.ts";
 import type { ToolDocs } from "./catalog.ts";
 
@@ -86,6 +86,25 @@ async function nativeTopic(scope: Scope, tool: string, topic: string): Promise<s
 	if (scope.context?.session === undefined) return undefined;
 	const resource = await scope.base.resolve(parseInternalUrl(`help://${tool}/${topic}`), scope.context);
 	return typeof resource.content === "string" ? resource.content : undefined;
+}
+
+async function resolveUnregistered(
+	scope: Scope,
+	url: InternalUrl,
+	tool: string,
+	topic: string,
+): Promise<InternalResource<string | Buffer>> {
+	try {
+		return await scope.base.resolve(url, scope.context);
+	} catch (error) {
+		if (!(error instanceof ToolError)) throw error;
+		const { hub, native } = await listing(scope, tool, hubTopics(tool));
+		const available = [...hub.map((doc) => doc.topic), ...native].sort();
+		if (available.length === 0 || available.includes(topic)) throw error;
+		throw new ToolError(
+			`Unknown topic '${topic}' for ${tool}. Available: ${available.join(", ")}. Read help://${tool} for the topic index.`,
+		);
+	}
 }
 
 function hubLine(doc: ToolTopicDoc, markHidden: boolean): string {
@@ -169,7 +188,7 @@ function createHelpHandler(base: ProtocolHandler, toolNames: () => readonly stri
 				return markdown(url.href, renderTool(await listing(scope(context), tool, hub)));
 			}
 			const resolved = resolveToolTopic(tool, topic);
-			return resolved === undefined ? base.resolve(url, context) : markdown(url.href, resolved.content);
+			return resolved === undefined ? resolveUnregistered(scope(context), url, tool, topic) : markdown(url.href, resolved.content);
 		},
 		async enumerate(url, context) {
 			const { tool, topic } = parseHelpTarget(url);

@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { isUiNode, type JSXNode } from "@oh-my-pi/pi-tui";
 import { errorText } from "../_shared/errors.ts";
 
 function shadow<T extends object, K extends keyof T>(target: T, key: K, value: T[K]): () => void {
@@ -12,13 +13,31 @@ function shadow<T extends object, K extends keyof T>(target: T, key: K, value: T
 	};
 }
 
-function presentedText(content: Parameters<InteractiveModeContext["present"]>[0]): string[] {
-	const components = Array.isArray(content) ? content : [content];
-	return components.flatMap((component) => {
-		if (!("getText" in component) || typeof component.getText !== "function") return [];
-		const text = stripVTControlCharacters(String(component.getText.call(component))).trim();
-		return text ? [text] : [];
-	});
+function nodeText(node: JSXNode, out: string[]): void {
+	if (node === null || node === undefined || typeof node === "boolean") return;
+	if (typeof node === "string" || typeof node === "number") {
+		out.push(String(node));
+		return;
+	}
+	if (typeof node === "function") {
+		nodeText(node(), out);
+		return;
+	}
+	if (isUiNode(node)) {
+		const props = node.props();
+		if ("text" in props && typeof props.text === "string") out.push(props.text);
+		else if ("spans" in props && Array.isArray(props.spans)) out.push(props.spans.map((span) => span.t).join(""));
+		for (const child of node.children()) nodeText(child, out);
+		return;
+	}
+	for (const item of node) nodeText(item, out);
+}
+
+function presentedText(factory: Parameters<InteractiveModeContext["present"]>[0]): string[] {
+	const parts: string[] = [];
+	nodeText(factory(), parts);
+	const text = stripVTControlCharacters(parts.join("\n")).trim();
+	return text ? [text] : [];
 }
 
 export async function runSlashCommand(mode: InteractiveModeContext, text: string): Promise<string[]> {
@@ -44,11 +63,11 @@ export async function runSlashCommand(mode: InteractiveModeContext, text: string
 			record("", message);
 			showStatus.call(mode, message, options);
 		}),
-		shadow(mode, "present", (content) => {
-			shown.push(...presentedText(content));
-			present.call(mode, content);
+		shadow(mode, "present", (factory, options) => {
+			shown.push(...presentedText(factory));
+			return present.call(mode, factory, options);
 		}),
-		shadow(mode.editor, "addToHistory", () => {}),
+		shadow(mode.composer, "addToHistory", () => {}),
 	];
 	try {
 		const handled = await executeBuiltinSlashCommand(text, { ctx: mode, draftDetached: true });

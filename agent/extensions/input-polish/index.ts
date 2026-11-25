@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionAPI, type ExtensionContext, type ShortcutConflict, z } from "@oh-my-pi/pi-coding-agent";
-import { isKeyRelease, parseKey } from "@oh-my-pi/pi-tui";
+import { decodeKey, type KeyDecodeContext } from "@oh-my-pi/pi-tui/driver/input/keys";
 import { errorText } from "../_shared/errors.ts";
 import { type HelperResult, runHelperPrompt } from "../_shared/helper-session.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -200,6 +200,7 @@ type Phase = { readonly kind: "closed" } | { readonly kind: "open"; readonly run
 const CLOSED: Phase = { kind: "closed" };
 
 const COMMAND_PREFIX = /^\s*[/!$]/;
+const KEY_DECODING: KeyDecodeContext = { kitty: false, backspaceIsCtrl: false };
 
 function pickModels(ctx: ExtensionContext): readonly RoleModel[] | null {
 	let models: RoleModel[];
@@ -261,15 +262,11 @@ export default function inputPolish(pi: ExtensionAPI): void {
 			phase = { kind: "open", run };
 			ctx.ui
 				.custom<void>(
-					(tui, theme) => {
-						run.requestRender = () => tui.requestRender();
-						return new PreviewView(tui, theme, run);
+					(ui, theme) => {
+						run.requestRender = () => ui.requestRender();
+						return new PreviewView(ui, theme, run);
 					},
-					{
-						overlay: true,
-						signal: run.overlayAbort.signal,
-						overlayOptions: { anchor: "bottom-center", width: "100%", maxHeight: "100%", margin: 0 },
-					},
+					{ overlay: true, signal: run.overlayAbort.signal },
 				)
 				.catch((error: unknown) => {
 					if (!run.overlayAbort.signal.aborted) {
@@ -313,9 +310,10 @@ export default function inputPolish(pi: ExtensionAPI): void {
 		unsubscribe = ctx.ui.onTerminalInput((data) => {
 			try {
 				// Kitty key-release/repeat events must not act as a second press.
-				if (isKeyRelease(data)) return phase.kind === "open" ? { consume: true } : undefined;
+				const decoded = decodeKey(data, KEY_DECODING);
+				if (decoded !== null && decoded.kind !== "press") return phase.kind === "open" ? { consume: true } : undefined;
 
-				const key = parseKey(data);
+				const key = decoded?.id;
 				if (phase.kind === "open") {
 					if (key === "escape" || key === "ctrl+c") {
 						dismiss();

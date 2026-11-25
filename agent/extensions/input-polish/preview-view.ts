@@ -1,5 +1,5 @@
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { type Component, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import type { ExtensionTheme, ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
+import { truncate, visibleWidth, wrap } from "@oh-my-pi/pi-tui/text/width";
 import { tr } from "../_shared/i18n.ts";
 
 export type Preview =
@@ -7,13 +7,11 @@ export type Preview =
 	| { readonly kind: "ready"; readonly text: string }
 	| { readonly kind: "failed"; readonly message: string };
 
-type Theme = ExtensionContext["ui"]["theme"];
-
 const CHROME_ROWS = 6;
 const MAX_TERMINAL_SHARE = 0.75;
 
 function wrapLine(line: string, width: number): string[] {
-	return line === "" ? [""] : wrapTextWithAnsi(line, width);
+	return line === "" ? [""] : wrap(line, width);
 }
 
 function wrappedTail(raw: string, width: number, count: number): string[] {
@@ -36,7 +34,7 @@ function wrappedTail(raw: string, width: number, count: number): string[] {
 	return reversed.reverse();
 }
 
-function wrappedHead(raw: string, width: number, count: number, theme: Theme): string[] {
+function wrappedHead(raw: string, width: number, count: number, theme: ExtensionTheme): string[] {
 	const wrapped = raw.split("\n").flatMap((line) => wrapLine(line, width));
 	if (wrapped.length <= count) return wrapped;
 	const hidden = wrapped.length - (count - 1);
@@ -49,10 +47,10 @@ interface Content {
 	readonly lines: readonly string[];
 }
 
-export class PreviewView implements Component {
+export class PreviewView {
 	constructor(
-		private readonly tui: TUI,
-		private readonly theme: Theme,
+		private readonly ui: ExtensionUiHost,
+		private readonly theme: ExtensionTheme,
 		private readonly source: { readonly preview: Preview },
 	) {}
 
@@ -87,11 +85,11 @@ export class PreviewView implements Component {
 	render(width: number): readonly string[] {
 		const t = this.theme;
 		const innerWidth = Math.max(0, width - 2);
-		const maxBody = Math.max(1, Math.floor(this.tui.terminal.rows * MAX_TERMINAL_SHARE) - CHROME_ROWS);
+		const maxBody = Math.max(1, Math.floor(this.ui.size().rows * MAX_TERMINAL_SHARE) - CHROME_ROWS);
 		const { title, hint, lines } = this.content(Math.max(1, innerWidth - 2), maxBody);
 
 		const frame = (text: string): string => {
-			const cut = truncateToWidth(` ${text}`, innerWidth, "");
+			const cut = truncate(` ${text}`, innerWidth, "");
 			return `${t.fg("border", "│")}${cut}${" ".repeat(Math.max(0, innerWidth - visibleWidth(cut)))}${t.fg("border", "│")}`;
 		};
 		const rule = (l: string, r: string): string => t.fg("border", `${l}${"─".repeat(innerWidth)}${r}`);

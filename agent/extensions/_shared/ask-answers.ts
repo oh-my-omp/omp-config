@@ -1,5 +1,4 @@
-import { z, type zod } from "@oh-my-pi/pi-coding-agent";
-import type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
+import { type AskToolDetails, z, type zod } from "@oh-my-pi/pi-coding-agent";
 
 type AskAnswer = { readonly question: string; readonly answer: string };
 type OptionNote = NonNullable<AskToolDetails["notes"]>[number];
