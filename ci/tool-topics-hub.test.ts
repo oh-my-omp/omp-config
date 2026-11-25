@@ -127,6 +127,13 @@ describe("tool-topics unified help:// integration and auto-injection", () => {
 		expect((await router.resolve("help://read/urls", resolveCtx)).content).toBe("# Native read URLs");
 		expect((await router.resolve("help://ask/routing", resolveCtx)).content).toBe("# Ask routing body");
 		expect((await router.resolve("help://native_only/guide", resolveCtx)).content).toBe("# Native guide");
+
+		await expect(router.resolve("help://read/no-such-topic", resolveCtx)).rejects.toThrow(
+			"Unknown topic 'no-such-topic' for read. Available: failures, sources, urls. Read help://read for the topic index.",
+		);
+		await expect(router.resolve("help://ask/no-such-topic", resolveCtx)).rejects.toThrow(
+			"Unknown topic 'no-such-topic' for ask. Available: routing. Read help://ask for the topic index.",
+		);
 	});
 
 	test("injects onError, resultPattern, and external hub plugin rules via help:// once per context", async () => {
