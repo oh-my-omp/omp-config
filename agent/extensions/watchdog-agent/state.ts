@@ -11,7 +11,7 @@ import {
 	writeOverride,
 } from "./entries.ts";
 import { branchMessages, countActions, producerOf } from "./review.ts";
-import { discoverWatchdogFiles, parseWatchdogFile, WATCHDOG_FILTER_KEYS, type WatchdogSpec } from "./spec.ts";
+import { discoverWatchdogFiles, injectLabel, parseWatchdogFile, WATCHDOG_FILTER_KEYS, type WatchdogSpec } from "./spec.ts";
 
 export type QueuedNote = { readonly filePath: string; readonly inject: InjectMode; readonly text: string };
 
@@ -185,7 +185,7 @@ export function logActive(runtime: Runtime, session: ActiveSession): void {
 	const agent = session.view.agent;
 	const who = agent.kind === "main" ? "main" : `subagent "${agent.name}"`;
 	const active = [...session.states.values()].map(
-		(s) => `${s.spec.name}(every=${s.spec.every}, scope=${s.spec.scope}, inject=${s.spec.inject})`,
+		(s) => `${s.spec.name}(every=${s.spec.every}, scope=${s.spec.scope}, inject=${injectLabel(s.spec)})`,
 	);
 	runtime.pi.logger.info(`watchdog: ${active.length} watchdog(s) active for ${who}${active.length > 0 ? ` — ${active.join(", ")}` : ""}`);
 }
@@ -198,9 +198,24 @@ export function describe(runtime: Runtime, spec: WatchdogSpec, t: Translate): st
 		: effectiveEnabled(runtime, spec)
 			? t("ON", "开启")
 			: t("OFF", "关闭");
-	const backend = spec.kind === "jev" ? "JUDGE" : `${t("chat", "聊天")} ${spec.model ?? "@advisor"}`;
+	const backend = backendLabel(spec, t);
 	const scope = spec.scope === "full" ? t("full", "全部") : t("window", "窗口");
-	return `${spec.name}: ${state} · ${t("global", "全局")} ${onOff(spec.enabled)} · ${t("session", "会话")} ${override === undefined ? "—" : onOff(override)} · ${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, t("any", "不限"))} · inject ${spec.inject} · ${t("every", "每")} ${spec.every} · ${t("scope", "范围")} ${scope} · ${backend}\n  ${spec.filePath}`;
+	return `${spec.name}: ${state} · ${t("global", "全局")} ${onOff(spec.enabled)} · ${t("session", "会话")} ${override === undefined ? "—" : onOff(override)} · ${describeFilter(spec.filter, WATCHDOG_FILTER_KEYS, t("any", "不限"))} · inject ${injectLabel(spec)} · ${t("every", "每")} ${spec.every} · ${t("scope", "范围")} ${scope} · ${backend}\n  ${spec.filePath}`;
+}
+
+function backendLabel(spec: WatchdogSpec, t: Translate): string {
+	switch (spec.kind) {
+		case "jev":
+			return "JUDGE";
+		case "chat":
+			return `${t("chat", "聊天")} ${spec.model ?? "@advisor"}`;
+		case "observer":
+			return `${t("observer", "观察者")} ${spec.model ?? "@advisor"}`;
+		default: {
+			const unreachable: never = spec;
+			return unreachable;
+		}
+	}
 }
 
 const english: Translate = (en) => en;

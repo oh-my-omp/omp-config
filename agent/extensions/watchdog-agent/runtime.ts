@@ -5,8 +5,8 @@ import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/om
 import { type InjectMode, producerMatches } from "../_shared/session-filter.ts";
 import { registerCommand } from "./commands.ts";
 import { NOTE_CUSTOM_TYPE, noteIndexOf, writeCursor, writeUserNote } from "./entries.ts";
-import { countActions, producerOf, reviewTranscript, runJev, runReviewer } from "./review.ts";
-import { type DeliverAs, touchedWatchdogFiles, type Verdict, type WatchdogSpec } from "./spec.ts";
+import { countActions, producerOf, reviewTranscript, runJev, runObserver, runReviewer } from "./review.ts";
+import { type DeliverAs, type NotifyingWatchdog, touchedWatchdogFiles, type Verdict, type WatchdogSpec } from "./spec.ts";
 import {
 	type ActiveSession,
 	abortReviews,
@@ -57,7 +57,7 @@ function send(runtime: Runtime, inject: InjectMode, notes: readonly QueuedNote[]
 	}
 }
 
-function noteText(spec: WatchdogSpec, severity: string, note: string): string {
+function noteText(spec: NotifyingWatchdog, severity: string, note: string): string {
 	switch (spec.inject) {
 		case "system":
 			return `<watchdog name="${escapeAttr(spec.name)}" severity="${escapeAttr(severity)}">\n${note}\n</watchdog>`;
@@ -73,6 +73,7 @@ function noteText(spec: WatchdogSpec, severity: string, note: string): string {
 function deliver(runtime: Runtime, session: ActiveSession, state: WatchdogState, verdict: Verdict): void {
 	if (verdict.kind !== "advice") return;
 	const spec = state.spec;
+	if (spec.kind === "observer") return;
 	if (verdict.note.trim() === "" || state.sent >= spec.maxPerContext) return;
 	const note: QueuedNote = { filePath: spec.filePath, inject: spec.inject, text: noteText(spec, verdict.severity, verdict.note) };
 	if (verdict.delivery === "nextTurn") session.nextTurnQueue.push(note);
@@ -98,7 +99,7 @@ function start(
 ): void {
 	const spec = state.spec;
 	state.pending = 0;
-	if (state.sent >= spec.maxPerContext) return;
+	if (spec.kind !== "observer" && state.sent >= spec.maxPerContext) return;
 	const branch = ctx.sessionManager.getBranch();
 	const { transcript, reviewed } = reviewTranscript(branch, spec.scope, state.cursor, tail, noteIndexOf(session.notes, branch));
 	if (!/\S/.test(transcript)) {
@@ -106,10 +107,7 @@ function start(
 		return;
 	}
 	const controller = new AbortController();
-	const review =
-		spec.kind === "jev"
-			? runJev(runtime.pi, ctx, spec, transcript, controller.signal)
-			: runReviewer(runtime.pi, ctx, spec, transcript, controller.signal);
+	const review = runReview(runtime, ctx, spec, transcript, controller.signal);
 	const done = review
 		.then(
 			(verdict) => {
@@ -127,6 +125,27 @@ function start(
 		})
 		.catch((error) => runtime.pi.logger.warn("watchdog review delivery failed", { error: errorText(error) }));
 	state.run = { kind: "running", flushAfter: false, controller, done };
+}
+
+function runReview(
+	runtime: Runtime,
+	ctx: ExtensionContext,
+	spec: WatchdogSpec,
+	transcript: string,
+	signal: AbortSignal,
+): Promise<Verdict | null> {
+	switch (spec.kind) {
+		case "chat":
+			return runReviewer(runtime.pi, ctx, spec, transcript, signal);
+		case "jev":
+			return runJev(runtime.pi, ctx, spec, transcript, signal);
+		case "observer":
+			return runObserver(runtime.pi, ctx, spec, transcript, signal);
+		default: {
+			const unreachable: never = spec;
+			return unreachable;
+		}
+	}
 }
 
 function guarded<A extends unknown[], R>(runtime: Runtime, name: string, handler: (...args: A) => R): (...args: A) => R | undefined {

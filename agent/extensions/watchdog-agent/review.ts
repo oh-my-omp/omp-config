@@ -8,9 +8,11 @@ import { openJudge } from "../_shared/judge.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
 import type { Model, ThinkingLevel } from "../_shared/models.ts";
 import type { InjectMode, Producer } from "../_shared/session-filter.ts";
-import type { ChatWatchdog, DeliverAs, JevWatchdog, Scope, Verdict } from "./spec.ts";
+import type { ChatWatchdog, DeliverAs, JevWatchdog, ObserverWatchdog, Scope, Verdict } from "./spec.ts";
 
 const REVIEW_TIMEOUT_MS = 90_000;
+const OBSERVE_TIMEOUT_MS = 300_000;
+const OBSERVE_LOG_CHARS = 300;
 
 function toolCallSummaries(content: AssistantMessage["content"]): string[] {
 	const calls: string[] = [];
@@ -141,7 +143,10 @@ export function defaultReviewerModel(ctx: ExtensionContext): Model | undefined {
 	return ctx.models.current();
 }
 
-function resolveReviewer(ctx: ExtensionContext, spec: ChatWatchdog): { model: Model; thinkingLevel: ThinkingLevel } | null {
+function resolveReviewer(
+	ctx: ExtensionContext,
+	spec: ChatWatchdog | ObserverWatchdog,
+): { model: Model; thinkingLevel: ThinkingLevel } | null {
 	if (!spec.model) {
 		const model = defaultReviewerModel(ctx);
 		return model ? { model, thinkingLevel: "off" } : null;
@@ -149,6 +154,19 @@ function resolveReviewer(ctx: ExtensionContext, spec: ChatWatchdog): { model: Mo
 	const { base, level } = splitLevel(spec.model);
 	const model = findModel(ctx, base);
 	return model ? { model, thinkingLevel: level ?? "off" } : null;
+}
+
+function helperAgentId(name: string): string {
+	return `watchdog-${
+		name
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/^-|-$/g, "") || "watchdog"
+	}`;
+}
+
+function watchedSession(ctx: ExtensionContext): WatchedSession {
+	return { sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.sessionManager.getCwd() };
 }
 
 function noteFormat(inject: InjectMode): string {
@@ -231,18 +249,10 @@ export async function runReviewer(
 		return null;
 	}
 	const result = await runHelperPrompt(ctx, {
-		agentId: `watchdog-${
-			spec.name
-				.toLowerCase()
-				.replace(/[^a-z0-9]+/g, "-")
-				.replace(/^-|-$/g, "") || "watchdog"
-		}`,
+		agentId: helperAgentId(spec.name),
 		model: reviewer.model,
 		thinkingLevel: reviewer.thinkingLevel,
-		prompt: buildReviewPrompt(spec.guidance, transcript, spec.inject, spec.tools, {
-			sessionId: ctx.sessionManager.getSessionId(),
-			cwd: ctx.sessionManager.getCwd(),
-		}),
+		prompt: buildReviewPrompt(spec.guidance, transcript, spec.inject, spec.tools, watchedSession(ctx)),
 		systemPrompt: "default",
 		toolNames: spec.tools,
 		signal: AbortSignal.any([signal, AbortSignal.timeout(REVIEW_TIMEOUT_MS)]),
@@ -260,6 +270,61 @@ export async function runReviewer(
 			return null;
 		case "failed":
 			pi.logger.warn(`watchdog "${spec.name}": reviewer run failed`, { error: result.message });
+			return null;
+		default: {
+			const unreachable: never = result;
+			return unreachable;
+		}
+	}
+}
+
+export function buildObservePrompt(guidance: string, transcript: string, tools: readonly string[], session: WatchedSession): string {
+	return (
+		`You are a background OBSERVER of another AI coding agent ("the watched agent"). You are NOT the watched agent; do not perform its task. ` +
+		`Nothing you write reaches the watched agent or its user: your final reply is only written to a log.\n\n` +
+		`Your task:\n${guidance}\n\n` +
+		`Carry out your task on the latest work in the transcript below with your tools (${tools.join(", ")}). ` +
+		`When you are done, reply with one line saying what you did, or "nothing to do".\n\n` +
+		`Watched session:\n` +
+		`- sessionId: ${session.sessionId}\n` +
+		`- cwd: ${session.cwd}\n\n` +
+		`TRANSCRIPT:\n"""\n${transcript}\n"""`
+	);
+}
+
+export async function runObserver(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	spec: ObserverWatchdog,
+	transcript: string,
+	signal: AbortSignal,
+): Promise<Verdict | null> {
+	const observer = resolveReviewer(ctx, spec);
+	if (!observer) {
+		pi.logger.warn(`watchdog "${spec.name}": no observer model resolved (model=${spec.model ?? "@advisor"}) — skipping`);
+		return null;
+	}
+	const result = await runHelperPrompt(ctx, {
+		agentId: helperAgentId(spec.name),
+		model: observer.model,
+		thinkingLevel: observer.thinkingLevel,
+		prompt: buildObservePrompt(spec.guidance, transcript, spec.tools, watchedSession(ctx)),
+		systemPrompt: "default",
+		toolNames: spec.tools,
+		signal: AbortSignal.any([signal, AbortSignal.timeout(OBSERVE_TIMEOUT_MS)]),
+	});
+	switch (result.kind) {
+		case "text":
+			pi.logger.info(`watchdog "${spec.name}": observer done — ${result.text.replace(/\s+/g, " ").slice(0, OBSERVE_LOG_CHARS)}`);
+			return { kind: "pass" };
+		case "provider-error":
+			pi.logger.warn(`watchdog "${spec.name}": observer provider error — will retry this window`, { error: result.message });
+			return null;
+		case "canceled":
+			pi.logger.warn(`watchdog "${spec.name}": observer timed out — will retry this window`);
+			return null;
+		case "failed":
+			pi.logger.warn(`watchdog "${spec.name}": observer run failed — will retry this window`, { error: result.message });
 			return null;
 		default: {
 			const unreachable: never = result;

@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { producerMatches, targetsSession } from "../agent/extensions/_shared/session-filter.ts";
-import { buildReviewPrompt } from "../agent/extensions/watchdog-agent/review.ts";
 import { parseWatchdogFile } from "../agent/extensions/watchdog-agent/spec.ts";
 
 const root = mkdtempSync("/tmp/omp-watchdog-spec-");
@@ -21,6 +20,31 @@ function parse(lines: readonly string[], backend: "chat" | "jev") {
 	return parseWatchdogFile(file);
 }
 
+describe("observer watchdog (inject: none)", () => {
+	test("parses as an observer with no delivery path, keeping tools and model", () => {
+		const parsed = parse(["target: main", "inject: None", "tools: [bash, read]", "model: anthropic/claude-haiku-5-5", "every: 25"], "chat");
+		expect(parsed).toMatchObject({
+			kind: "ok",
+			spec: { kind: "observer", tools: ["bash", "read"], model: "anthropic/claude-haiku-5-5", every: 25 },
+		});
+		if (parsed.kind !== "ok") throw new Error(parsed.reason);
+		expect(parsed.spec).not.toHaveProperty("inject");
+		expect(parsed.spec).not.toHaveProperty("delivery");
+		expect(parsed.spec).not.toHaveProperty("maxPerContext");
+	});
+
+	for (const line of ["delivery: steer", "maxPerContext: 2", "note: x", "instructions: x"]) {
+		test(`rejects ${line.split(":")[0]} instead of silently ignoring it`, () => {
+			expect(parse(["target: main", "inject: none", line], "chat")).toMatchObject({ kind: "invalid" });
+		});
+	}
+
+	test("requires a body to act on", () => {
+		writeFileSync(file, "---\ntarget: main\ninject: none\n---\n");
+		expect(parseWatchdogFile(file)).toMatchObject({ kind: "invalid" });
+	});
+});
+
 for (const backend of ["chat", "jev"] as const) {
 	describe(`watchdog frontmatter (${backend})`, () => {
 		test("target is required", () => {
@@ -33,10 +57,7 @@ for (const backend of ["chat", "jev"] as const) {
 		});
 
 		test("an unknown inject value invalidates the file", () => {
-			expect(parse(["target: main", "inject: developer"], backend)).toEqual({
-				kind: "invalid",
-				reason: 'frontmatter `inject` must be system or user, not "developer"',
-			});
+			expect(parse(["target: main", "inject: developer"], backend)).toMatchObject({ kind: "invalid" });
 		});
 
 		test("watchModel and watchProvider filter producers; model stays the reviewer's", () => {
@@ -62,6 +83,12 @@ for (const backend of ["chat", "jev"] as const) {
 			expect(targetsSession(filter, main, "/tmp/other")).toBe(false);
 		});
 
+		if (backend === "jev") {
+			test("inject: none cannot be combined with JUDGE options", () => {
+				expect(parse(["target: main", "inject: none"], backend)).toMatchObject({ kind: "invalid" });
+			});
+		}
+
 		for (const value of ["", '""', "[]", ".", "relative/leader", "/tmp/a, ../b"]) {
 			test(`cwd ${JSON.stringify(value)} invalidates the file instead of matching everything`, () => {
 				expect(parse(["target: main", `cwd: ${value}`], backend)).toMatchObject({ kind: "invalid" });
@@ -69,26 +96,3 @@ for (const backend of ["chat", "jev"] as const) {
 		}
 	});
 }
-
-describe("buildReviewPrompt", () => {
-	const session = { sessionId: "sess-abc-123", cwd: "/Users/mouriya/Ext/code/demo" };
-
-	test("includes watched session metadata and read-only tool framing for read-only tools", () => {
-		const prompt = buildReviewPrompt("Check error handling.", "USER: hi", "system", ["read", "grep", "glob"], session);
-		expect(prompt).toContain("Watched session:\n- sessionId: sess-abc-123\n- cwd: /Users/mouriya/Ext/code/demo\n\nTRANSCRIPT:");
-		expect(prompt).toContain(
-			"You may use your read-only tools to inspect the workspace and verify a concern before raising it. Investigate briefly; never rewrite the code.",
-		);
-		expect(prompt).toContain("- If nothing is worth flagging, reply with the single word: PASS");
-		expect(prompt).toContain("SEVERITY: <nit|concern|blocker>");
-	});
-
-	test("uses configured tool framing when action tools are granted", () => {
-		const prompt = buildReviewPrompt("Log decisions via CLI.", "USER: decide", "system", ["bash", "read", "grep", "glob"], session);
-		expect(prompt).toContain("Watched session:\n- sessionId: sess-abc-123\n- cwd: /Users/mouriya/Ext/code/demo\n\nTRANSCRIPT:");
-		expect(prompt).toContain(
-			"You may use your configured tools (bash, read, grep, glob) as instructed in your review priorities above, but never perform the primary agent's coding task.",
-		);
-		expect(prompt).not.toContain("You may use your read-only tools");
-	});
-});

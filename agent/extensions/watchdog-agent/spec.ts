@@ -21,6 +21,8 @@ const GRANTABLE_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "glob", "a
 
 const DEFAULT_MAX_PER_CONTEXT = Number.POSITIVE_INFINITY;
 const DEFAULT_EVERY = 30;
+const OBSERVE_INJECT = "none";
+const OBSERVER_FORBIDDEN_KEYS: readonly string[] = ["delivery", "maxpercontext", "note", "instructions"];
 
 export type Scope = "full" | "window";
 
@@ -29,18 +31,27 @@ export type DeliverAs = NonNullable<NonNullable<Parameters<ExtensionAPI["sendMes
 type WatchdogBase = {
 	readonly name: string;
 	readonly filter: SessionFilter;
-	readonly inject: InjectMode;
 	readonly enabled: boolean;
-	readonly delivery: DeliverAs;
-	readonly maxPerContext: number;
 	readonly every: number;
 	readonly scope: Scope;
 	readonly guidance: string;
 	readonly filePath: string;
 };
 
-export type ChatWatchdog = WatchdogBase & {
+type NotifyingBase = WatchdogBase & {
+	readonly inject: InjectMode;
+	readonly delivery: DeliverAs;
+	readonly maxPerContext: number;
+};
+
+export type ChatWatchdog = NotifyingBase & {
 	readonly kind: "chat";
+	readonly model?: string;
+	readonly tools: readonly string[];
+};
+
+export type ObserverWatchdog = WatchdogBase & {
+	readonly kind: "observer";
 	readonly model?: string;
 	readonly tools: readonly string[];
 };
@@ -53,13 +64,15 @@ type JevOption = {
 	readonly outcome: JevOutcome;
 };
 
-export type JevWatchdog = WatchdogBase & {
+export type JevWatchdog = NotifyingBase & {
 	readonly kind: "jev";
 	readonly instructions: string;
 	readonly options: readonly JevOption[];
 };
 
-export type WatchdogSpec = ChatWatchdog | JevWatchdog;
+export type WatchdogSpec = ChatWatchdog | JevWatchdog | ObserverWatchdog;
+
+export type NotifyingWatchdog = ChatWatchdog | JevWatchdog;
 
 export type Verdict =
 	| { readonly kind: "pass" }
@@ -68,6 +81,20 @@ export type Verdict =
 const DEFAULT_JEV_INSTRUCTIONS =
 	"Judge only the latest work in the supplied transcript against the configured guidance. Do not infer facts outside the supplied transcript.";
 const JEV_OPTION_KEY = /^option\.([a-z0-9_-]+)(?:\.(prompt|delivery))?$/;
+
+export function injectLabel(spec: WatchdogSpec): string {
+	switch (spec.kind) {
+		case "chat":
+		case "jev":
+			return spec.inject;
+		case "observer":
+			return OBSERVE_INJECT;
+		default: {
+			const unreachable: never = spec;
+			return unreachable;
+		}
+	}
+}
 
 export function discoverWatchdogFiles(cwd: string): string[] {
 	return discoverSpecFiles(WATCHDOG_FILE_PATTERN, import.meta.dir, cwd);
@@ -137,7 +164,7 @@ function describeProblem(problem: FilterProblem): string {
 		case "badRegex":
 			return `frontmatter \`${problem.key}\` is not a valid regex: ${problem.detail}`;
 		case "badInject":
-			return `frontmatter \`${problem.key}\` must be system or user, not "${problem.value}"`;
+			return `frontmatter \`${problem.key}\` must be system, user or none, not "${problem.value}"`;
 		default: {
 			const unreachable: never = problem;
 			return unreachable;
@@ -153,33 +180,49 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 		return { kind: "invalid", reason: `cannot read: ${errorText(error)}` };
 	}
 	const { fields, body } = parseFrontmatter(raw) ?? { fields: {}, body: raw };
-	const enabled = isEnabled(fields);
 	const filter = parseSessionFilter(fields, WATCHDOG_FILTER_KEYS, { kind: "required" }, "frontmatter");
 	if (filter.kind === "invalid") return { kind: "invalid", reason: describeProblem(filter.problem) };
-	const inject = parseInjectMode(fields.inject);
-	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };
 
 	const rawTools = fields.tools ? toList(fields.tools) : DEFAULT_TOOLS;
-	const tools = rawTools.map((t) => t.toLowerCase()).filter((t) => GRANTABLE_TOOLS.has(t));
-	const delivery = normalizeDelivery(fields.delivery);
-	const maxPerContext = parsePositiveInt(fields.maxpercontext, DEFAULT_MAX_PER_CONTEXT);
+	const granted = rawTools.map((t) => t.toLowerCase()).filter((t) => GRANTABLE_TOOLS.has(t));
+	const tools = granted.length > 0 ? granted : DEFAULT_TOOLS;
+	const model = fields.model ? unquote(fields.model) : undefined;
 	const fallbackName = basename(path)
 		.replace(/^WATCHDOG-/i, "")
 		.replace(/\.md$/i, "");
-
-	const common: WatchdogBase = {
+	const base: WatchdogBase = {
 		name: fields.name ? unquote(fields.name) : fallbackName || "watchdog",
 		filter: filter.value,
-		inject: inject.value,
-		enabled,
-		delivery,
-		maxPerContext,
+		enabled: isEnabled(fields),
 		every: parsePositiveInt(fields.every, DEFAULT_EVERY),
 		scope: normalizeScope(fields.scope),
 		guidance: body.trim(),
 		filePath: path,
 	};
-	if (Object.keys(fields).some((key) => key.startsWith("option."))) {
+	const hasOptions = Object.keys(fields).some((key) => key.startsWith("option."));
+
+	if (unquote(fields.inject ?? "").toLowerCase() === OBSERVE_INJECT) {
+		const conflicting = OBSERVER_FORBIDDEN_KEYS.filter((key) => fields[key] !== undefined);
+		if (hasOptions || conflicting.length > 0) {
+			return {
+				kind: "invalid",
+				reason: `inject: none takes no ${[...conflicting, ...(hasOptions ? ["option.*"] : [])].join(", ")}`,
+			};
+		}
+		if (!base.guidance) return { kind: "invalid", reason: "inject: none requires a nonempty body" };
+		return { kind: "ok", spec: { ...base, kind: "observer", model, tools } };
+	}
+
+	const inject = parseInjectMode(fields.inject);
+	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };
+	const delivery = normalizeDelivery(fields.delivery);
+	const common: NotifyingBase = {
+		...base,
+		inject: inject.value,
+		delivery,
+		maxPerContext: parsePositiveInt(fields.maxpercontext, DEFAULT_MAX_PER_CONTEXT),
+	};
+	if (hasOptions) {
 		if (fields.model !== undefined || fields.tools !== undefined || fields.note !== undefined || !common.guidance) {
 			return {
 				kind: "invalid",
@@ -199,15 +242,7 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 			},
 		};
 	}
-	return {
-		kind: "ok",
-		spec: {
-			...common,
-			kind: "chat",
-			model: fields.model ? unquote(fields.model) : undefined,
-			tools: tools.length > 0 ? tools : DEFAULT_TOOLS,
-		},
-	};
+	return { kind: "ok", spec: { ...common, kind: "chat", model, tools } };
 }
 
 type JevOptionsParse =
