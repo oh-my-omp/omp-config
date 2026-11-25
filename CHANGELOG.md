@@ -10,6 +10,10 @@
 
 - Changed unknown `help://<tool>/<topic>` requests to return an error listing the tool's available topics
 
+### Removed
+
+- Stopped `repo-rules` from scanning Claude Code's user rule directory `~/.claude/rules`: rule files there no longer reach OMP sessions as unscoped or path-scoped rules; user-level rules for OMP go in its native rule directories (`~/.omp/agent/rules` or an extension root's `rules/`)
+
 ### Fixed
 
 - Fixed omp-config extensions failing to load on omp 19.2.0 after pi-tui exports were removed

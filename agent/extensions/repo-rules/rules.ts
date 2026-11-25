@@ -7,7 +7,6 @@ import { findRepoRoot } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "@oh-my-pi/pi-coding-agent/capability/rule";
 
 const PROJECT_RULE_DIRS = [".claude/rules", ".agents/rules", ".pi/rules"] as const;
-const USER_RULE_DIR = path.join(os.homedir(), ".claude", "rules");
 
 type UnscopedMode =
 	| { readonly kind: "always"; readonly normalizedBody: string }
@@ -137,7 +136,6 @@ function scanDirs(cwd: string, root: string): ScanDir[] {
 		if (parent === dir) break;
 		dir = parent;
 	}
-	dirs.push({ dir: USER_RULE_DIR, base: cwd });
 	return dirs;
 }
 
