@@ -7,7 +7,7 @@ import {
 	type ResolveContext,
 	type UrlCompletion,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { listToolTopics, registerToolTopics, resolveToolTopic, type ToolTopicDoc } from "../_shared/omomp-shared/internal-url.ts";
 import type { ToolDocs } from "./catalog.ts";
 

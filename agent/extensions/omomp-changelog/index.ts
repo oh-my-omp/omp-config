@@ -2,8 +2,7 @@ import { readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgStartupChangelogMode, cfgStartupQuiet } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { Container, Markdown, Text } from "@oh-my-pi/pi-tui";
-import { getMarkdownTheme } from "@oh-my-pi/pi-tui/theme";
+import { type JSXNode, jsx } from "@oh-my-pi/pi-tui";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { isDated, parseReleases } from "./changelog.ts";
@@ -28,25 +27,24 @@ function loadChangelog(member: Member): ChangelogLoad {
 	return { kind: "ok", releases: parseReleases(content) };
 }
 
-function showWidget(ctx: ExtensionContext, { layout, upgrades }: StartDisplay): void {
-	const digest = digestOf(upgrades);
-	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
-		const body = new Container();
-		body.addChild(new Text(theme.bold(theme.fg("accent", headerLine(digest))), 1, 0));
-		switch (layout) {
-			case "summary":
-				body.addChild(new Text(summaryLines(digest).join("\n"), 1, 0));
-				break;
-			case "expanded":
-				body.addChild(new Markdown(daysMarkdown(groupDays(entriesOf(upgrades))), 1, 0, getMarkdownTheme()));
-				break;
-			default: {
-				const exhaustive: never = layout;
-				return exhaustive;
-			}
+function widgetBody(layout: Layout, upgrades: readonly Upgrade[]): JSXNode {
+	switch (layout) {
+		case "summary":
+			return jsx("text", { text: summaryLines(digestOf(upgrades)).join("\n"), wrap: "word" });
+		case "expanded":
+			return jsx("md", { text: daysMarkdown(groupDays(entriesOf(upgrades))) });
+		default: {
+			const exhaustive: never = layout;
+			return exhaustive;
 		}
-		return body;
-	});
+	}
+}
+
+function showWidget(ctx: ExtensionContext, { layout, upgrades }: StartDisplay): void {
+	const header = headerLine(digestOf(upgrades));
+	ctx.ui.setWidget(WIDGET_KEY, () =>
+		jsx("col", { children: [jsx("text", { spans: [{ t: header, s: "accent strong" }], wrap: "word" }), widgetBody(layout, upgrades)] }),
+	);
 }
 
 async function settleStart(pi: ExtensionAPI): Promise<StartDisplay | undefined> {

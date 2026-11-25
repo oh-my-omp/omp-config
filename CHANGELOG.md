@@ -6,6 +6,10 @@
 
 - Added observer watchdogs: `inject: none` in a `WATCHDOG-*.md` file runs its body as a background task with the file's `tools` and `model`, logs the one-line reply and never sends anything to the watched session; `delivery`, `maxPerContext`, `note`, `instructions` and `option.*` invalidate such a file, an observer run gets 300 s instead of 90 s, and a timed-out or failed run leaves the cursor so the next run covers the same work
 
+### Fixed
+
+- Fixed omp-config extensions failing to load on omp 19.2.0 after pi-tui exports were removed
+
 ## [1.3.0] - 2026-11-24
 
 ### Added
