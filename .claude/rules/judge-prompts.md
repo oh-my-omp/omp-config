@@ -12,7 +12,7 @@ paths:
 
 # 编写 judge 问题
 
-本仓库经 `openJudge` 发出的问题（`TURN-JUDGE-*.md`、`INTENT-*.md`、`WATCHDOG-*.md` 的选项模式、`lang-nag` 等）面向 TypeSafe System One 判定模型（Jev；本机经 `futureppo-jev` 中转）。Jev 不是聊天模型：它对每个问题独立给出校准过的概率，适合一眼能判断的单个判断，不适合推理、计数或多步间接。按聊天 prompt 的写法去写问题会失效：旧版 `gpt-talk-only` 用一个 Choice 判断“该不该收工”，19 个提前收工只命中 3 个；拆成可观察的 Noul 并由规则组合后，命中 11 个，误报仍为 0。
+本仓库经 `openJudge` 发出的问题（`TURN-JUDGE-*.md`、`INTENT-*.md`、`WATCHDOG-*.md` 的选项模式、`lang-nag` 等）面向 TypeSafe System One 判定模型（Jev）。Jev 不是聊天模型：它对每个问题独立给出校准过的概率，适合一眼能判断的单个判断，不适合推理、计数或多步间接。按聊天 prompt 的写法去写问题会失效：旧版 `gpt-talk-only` 用一个 Choice 判断“该不该收工”，19 个提前收工只命中 3 个；拆成可观察的 Noul 并由规则组合后，命中 11 个，误报仍为 0。
 
 ## 判断交给模型，决定留在规则里
 
