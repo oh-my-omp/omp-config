@@ -21,11 +21,12 @@
 | [`https://github.com/oh-my-omp/omp-actual-terminal#release`](https://github.com/oh-my-omp/omp-actual-terminal) | `omp-actual-terminal` | 必装（GitHub） | 原生 launch 已关闭（`agent/config.yml` 中 `launch.enabled: false`）；接管 `bash`（`pty: true` 终端 job），提供 `write_stdin` / `monitor` / `term://` 与 `help://bash/terminal`。 |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | 必装（GitHub fork） | — |
 | [`https://github.com/oh-my-omp/omp-thinking-translator#release`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | 必装（GitHub） | 插件拥有的配置不由更新器或同步操作写入；见 [思考翻译](#思考翻译)。 |
-| [`https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-ask-ng#release`](https://github.com/oh-my-omp/omp-ask-ng) | `omp-ask-ng` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-peers#release`](https://github.com/oh-my-omp/omp-peers) | `omp-peers` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-sessions#release`](https://github.com/oh-my-omp/omp-sessions) | `omp-sessions` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-subagent-ng#release`](https://github.com/oh-my-omp/omp-subagent-ng) | `omp-subagent-ng` | 必装（GitHub） | 提供 `fork_task`。 |
+| [`# https://github.com/oh-my-omp/omp-dispatch#release`](https://github.com/oh-my-omp/omp-dispatch) | `omp-dispatch` | 可选（默认注释） | — |
+| [`# https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | 可选（默认注释） | — |
 | [`# https://github.com/oh-my-omp/omp-remote-build#release`](https://github.com/oh-my-omp/omp-remote-build) | `omp-remote-build` | 可选（默认注释） | — |
 
 ### todo-ng
