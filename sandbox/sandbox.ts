@@ -1,7 +1,18 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { copyAgentDb, copyClaude, copyOmpDir, copyRepo, IMAGE, installOmp, installTools, PLATFORM, setUpTarget } from "./content.ts";
+import {
+	copyAgentDb,
+	copyClaude,
+	copyExtensionRules,
+	copyOmpDir,
+	copyRepo,
+	IMAGE,
+	installOmp,
+	installTools,
+	PLATFORM,
+	setUpTarget,
+} from "./content.ts";
 import { run as exec, must } from "./docker.ts";
 import { parseScenario } from "./driver.ts";
 import { ledgerEnd, ledgerInProgress, ledgerStart } from "./ledger.ts";
@@ -179,6 +190,8 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 	await step("credentials outside the recorder", () => pruneCredentials(names.container, HOME));
 	const claude = await step("~/.claude", () => copyClaude(names.container, HOME));
 	console.log(`  ${claude.length === 0 ? "nothing to copy" : claude.join(", ")}`);
+	const ruleRoots = await step("rules/ of extension roots outside ~/.omp", () => copyExtensionRules(names.container, HOME));
+	console.log(`  ${ruleRoots.length === 0 ? "nothing to copy" : ruleRoots.join(", ")}`);
 	const files = await step(`working tree ${options.repo} -> /repo`, () => copyRepo(names.container, options.repo));
 	console.log(`  ${files} files`);
 	const installed = await step("plugins, latest omp, updater apply from /repo, auto-update off", () =>
