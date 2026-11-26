@@ -21,7 +21,6 @@ Independent plugins are installed into `~/.omp/plugins/` via `install-plugins.sh
 | [`https://github.com/oh-my-omp/omp-actual-terminal#release`](https://github.com/oh-my-omp/omp-actual-terminal) | `omp-actual-terminal` | Required (GitHub) | Native launch is disabled (`agent/config.yml` `launch.enabled: false`); registers `bash` (`pty: true` terminal jobs), `write_stdin`, `monitor`, `term://`, and `help://bash/terminal`. |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | Required (GitHub fork) | — |
 | [`https://github.com/oh-my-omp/omp-thinking-translator#release`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | Required (GitHub) | Plugin-owned configuration is excluded from updater and sync writes; see [Thinking translation](#thinking-translation). |
-| `pi-pretty-codeblocks` | `pi-pretty-codeblocks` | Required (npm) | — |
 | [`https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | Required (GitHub) | — |
 | [`https://github.com/oh-my-omp/omp-ask-ng#release`](https://github.com/oh-my-omp/omp-ask-ng) | `omp-ask-ng` | Required (GitHub) | — |
 | [`https://github.com/oh-my-omp/omp-peers#release`](https://github.com/oh-my-omp/omp-peers) | `omp-peers` | Required (GitHub) | — |

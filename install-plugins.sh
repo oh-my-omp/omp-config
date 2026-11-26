@@ -10,7 +10,6 @@ plugins=(
   'https://github.com/mouriya-s-lab/pi-bansos'
   'https://github.com/oh-my-omp/omp-actual-terminal#release'
   'https://github.com/oh-my-omp/omp-todo-ng#release'
-  'pi-pretty-codeblocks'
   'https://github.com/oh-my-omp/omp-thinking-translator#release'
   'https://github.com/oh-my-omp/omp-playbooks#release'
   'https://github.com/oh-my-omp/omp-ask-ng#release'

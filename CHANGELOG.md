@@ -11,6 +11,7 @@
 ### Removed
 
 - Stopped `repo-rules` from scanning Claude Code's user rule directory `~/.claude/rules`: rule files there no longer reach OMP sessions as unscoped or path-scoped rules; user-level rules for OMP go in its native rule directories (`~/.omp/agent/rules` or an extension root's `rules/`)
+- Removed `pi-pretty-codeblocks` from `install-plugins.sh`: the updater no longer installs or upgrades it, so its failed extension validation on omp 19.2 no longer stops an apply before the cutover; a machine that already has it keeps it installed, and `./plugin-audit.sh` lists it under `[卸载候选]`
 - Stopped the sandbox from copying Claude Code's `~/.claude/rules` into the container; `~/.claude/skills` and `~/.claude/CLAUDE.md` are still copied, and `~/.claude/rules` reaches the container only when `~/.claude` is itself an `extensions` entry, as that root's `rules/`
 
 ## [1.3.0] - 2026-11-24
