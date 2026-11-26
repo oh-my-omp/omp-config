@@ -1,8 +1,8 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { type BashToolInput, type ToolResultEvent, type WriteToolInput, z, type zod } from "@oh-my-pi/pi-coding-agent";
+import type { WriteToolDetails } from "@oh-my-pi/pi-coding-agent/tools/details/write";
 import { lexShellCommand } from "@oh-my-pi/pi-coding-agent/tools/shell-tokenize";
-import type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
 
 type BuiltinToolName = "read" | "write" | "edit" | "bash";
 type BuiltinResult<N extends BuiltinToolName> = Extract<ToolResultEvent, { toolName: N }>;

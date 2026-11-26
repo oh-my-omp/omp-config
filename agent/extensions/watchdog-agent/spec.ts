@@ -1,8 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { type ExtensionAPI, z, type zod } from "@oh-my-pi/pi-coding-agent";
-import type { EditToolDetails, EditToolPerFileResult } from "@oh-my-pi/pi-tui/tools/edit";
+import { type EditToolDetails, type EditToolPerFileResult, type ExtensionAPI, z, type zod } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import {
 	type FilterKeys,

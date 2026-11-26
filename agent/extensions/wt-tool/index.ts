@@ -131,8 +131,8 @@ const fail = (value: string): ToolResult => ({ ...text(value), isError: true });
 
 function captureFailureText(failure: InteractiveModeFailure): string {
 	switch (failure.kind) {
-		case "missing-setEditorComponent":
-			return "the InteractiveMode setEditorComponent method is missing (omp internals changed).";
+		case "missing-setToolsExpanded":
+			return "the InteractiveMode setToolsExpanded method is missing (omp internals changed).";
 		case "unreachable":
 			return "the interactive TUI instance is not reachable from this session.";
 		case "other-session":

@@ -8,11 +8,19 @@
 - Added observer watchdogs: `inject: none` in a `WATCHDOG-*.md` file runs its body as a background task with the file's `tools` and `model`, logs the one-line reply and never sends anything to the watched session; `delivery`, `maxPerContext`, `note`, `instructions` and `option.*` invalidate such a file, an observer run gets 300 s instead of 90 s, and a timed-out or failed run leaves the cursor so the next run covers the same work
 - Added `env: [NAME=value, …]` to observer watchdogs: each `bash` command the observer runs is preceded by `export NAME='value'` lines from a `tool_call` hook in the observer's session, so a variable such as `INTENT_ACTOR=watchdog` is set even when the model's command leaves it out; `env` without `bash` in `tools`, with `eval` in `tools`, with a malformed, repeated or empty entry list, or on a file without `inject: none` invalidates the file
 
+### Changed
+
+- Changed unknown `help://<tool>/<topic>` requests to return an error listing the tool's available topics
+
 ### Removed
 
 - Stopped `repo-rules` from scanning Claude Code's user rule directory `~/.claude/rules`: rule files there no longer reach OMP sessions as unscoped or path-scoped rules; user-level rules for OMP go in its native rule directories (`~/.omp/agent/rules` or an extension root's `rules/`)
 - Removed `pi-pretty-codeblocks` from `install-plugins.sh`: the updater no longer installs or upgrades it, so its failed extension validation on omp 19.2 no longer stops an apply before the cutover; a machine that already has it keeps it installed, and `./plugin-audit.sh` lists it under `[卸载候选]`
 - Stopped the sandbox from copying Claude Code's `~/.claude/rules` into the container; `~/.claude/skills` and `~/.claude/CLAUDE.md` are still copied, and `~/.claude/rules` reaches the container only when `~/.claude` is itself an `extensions` entry, as that root's `rules/`
+
+### Fixed
+
+- Fixed omp-config extensions failing to load on omp 19.2.0 after pi-tui exports were removed
 
 ## [1.3.0] - 2026-11-24
 
