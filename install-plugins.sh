@@ -11,11 +11,12 @@ plugins=(
   'https://github.com/oh-my-omp/omp-actual-terminal#release'
   'https://github.com/oh-my-omp/omp-todo-ng#release'
   'https://github.com/oh-my-omp/omp-thinking-translator#release'
-  'https://github.com/oh-my-omp/omp-playbooks#release'
   'https://github.com/oh-my-omp/omp-ask-ng#release'
   'https://github.com/oh-my-omp/omp-peers#release'
   'https://github.com/oh-my-omp/omp-sessions#release'
   'https://github.com/oh-my-omp/omp-subagent-ng#release'
+  # https://github.com/oh-my-omp/omp-dispatch#release
+  # https://github.com/oh-my-omp/omp-playbooks#release
   # https://github.com/oh-my-omp/omp-remote-build#release
 )
 

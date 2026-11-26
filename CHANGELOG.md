@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed `omp-playbooks` from a required plugin to a commented-out optional entry of `install-plugins.sh`, and declared `omp-dispatch` the same way beside `omp-remote-build`: onboarding and `/update-omp` no longer install any of them on a new machine, while a machine that already has one keeps it and the updater still refreshes it
+
 ### Fixed
 
 - Fixed skills missing from the sandbox container: `~/.claude/skills` and `~/.claude/CLAUDE.md` are copied with symbolic links resolved to their targets instead of as links that dangle in the container, and the `skills/` directory of every `extensions` root outside `~/.omp` is copied alongside its `rules/`
