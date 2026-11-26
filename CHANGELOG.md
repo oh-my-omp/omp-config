@@ -12,7 +12,7 @@
 
 - Fixed watchdog observers being aborted when the session shuts down: a running observer now finishes while process exit waits for it (at most its 300 s), with `watchdog "<name>": waiting for the observer to finish` on the terminal, instead of being cut off and logged as `observer timed out`
 - Fixed the observer log to tell a cancel from a timeout: a run canceled by compaction or a session switch logs `observer canceled (<cause>)`, and `observer timed out` is kept for the 300 s deadline
-- Fixed `runHelperPrompt` discarding a helper run that had already finished its answer when a cancel arrived afterwards, and missing a cancel that arrived while the helper session was being created, which let the run go on to the end
+- Fixed `runHelperPrompt` discarding a helper run that had already returned when a cancel arrived afterwards, and missing a cancel that arrived while the helper session was being created, which let the run go on to the end
 - Fixed skills missing from the sandbox container: `~/.claude/skills` and `~/.claude/CLAUDE.md` are copied with symbolic links resolved to their targets instead of as links that dangle in the container, and the `skills/` directory of every `extensions` root outside `~/.omp` is copied alongside its `rules/`
 - Fixed the README sandbox example: the scenario path is `sandbox/scenarios/echo-hi.json` from the repo root, and the model is `futureppo-pool/gpt-6.2-sol` because `futureppo-pool/ernie-5.5-flash-preview` now answers 403
 - The `request-recorder-helper` sandbox scenario's watchdog model is `futureppo-pool/gpt-6-luna` instead of `futureppo-pool/minimax-m3.1-flash`, which took 109 s for a one-tool `omp -p` run
