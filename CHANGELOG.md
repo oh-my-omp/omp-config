@@ -10,7 +10,7 @@
 ### Removed
 
 - Stopped `repo-rules` from scanning Claude Code's user rule directory `~/.claude/rules`: rule files there no longer reach OMP sessions as unscoped or path-scoped rules; user-level rules for OMP go in its native rule directories (`~/.omp/agent/rules` or an extension root's `rules/`)
-- Stopped the sandbox from copying Claude Code's `~/.claude/rules` into the container: neither OMP nor `repo-rules` reads it; `~/.claude/skills` and `~/.claude/CLAUDE.md` are still copied
+- Stopped the sandbox from copying Claude Code's `~/.claude/rules` along with `~/.claude/skills` and `~/.claude/CLAUDE.md`: it reaches the container only when `~/.claude` is itself an `extensions` entry, as that root's `rules/`
 
 ## [1.3.0] - 2026-11-24
 

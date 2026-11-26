@@ -118,7 +118,7 @@ function extensionRuleDirs(home: string): string[] {
 	const ompDir = join(home, ".omp");
 	const dirs = config.extensions
 		.filter((entry): entry is string => typeof entry === "string")
-		.map((entry) => (entry === "~" ? home : entry.startsWith("~/") ? join(home, entry.slice(2)) : entry))
+		.map((entry) => (entry.startsWith("~/") ? join(home, entry.slice(2)) : entry))
 		.filter((dir) => isAbsolute(dir) && !isWithin(ompDir, dir) && isDirectory(join(dir, "rules")));
 	return [...new Set(dirs)];
 }
