@@ -55,6 +55,20 @@ describe("observer watchdog (inject: none)", () => {
 		expect(parse(["target: main", "inject: none", "tools: [bash]"], "chat")).toMatchObject({ kind: "ok", spec: { env: [] } });
 	});
 
+	test("env strips a matched quote pair around an entry or its value, keeping inner quotes", () => {
+		expect(parse(["target: main", "inject: none", "tools: [bash]", `env: [A='v', "B=w", C="x y", D=it's]`], "chat")).toMatchObject({
+			kind: "ok",
+			spec: {
+				env: [
+					{ name: "A", value: "v" },
+					{ name: "B", value: "w" },
+					{ name: "C", value: "x y" },
+					{ name: "D", value: "it's" },
+				],
+			},
+		});
+	});
+
 	for (const [line, tools] of [
 		["env: [INTENT_ACTOR=watchdog]", "tools: [read]"],
 		["env: [INTENT_ACTOR=watchdog]", "tools: [bash, eval]"],
