@@ -5,6 +5,7 @@
 ### Added
 
 - Added observer watchdogs: `inject: none` in a `WATCHDOG-*.md` file runs its body as a background task with the file's `tools` and `model`, logs the one-line reply and never sends anything to the watched session; `delivery`, `maxPerContext`, `note`, `instructions` and `option.*` invalidate such a file, an observer run gets 300 s instead of 90 s, and a timed-out or failed run leaves the cursor so the next run covers the same work
+- Added `env: [NAME=value, …]` to observer watchdogs: each `bash` command the observer runs is preceded by `export NAME='value'` lines from a `tool_call` hook in the observer's session, so a variable such as `INTENT_ACTOR=watchdog` is set even when the model's command leaves it out; `env` without `bash` in `tools`, with `eval` in `tools`, with a malformed, repeated or empty entry list, or on a file without `inject: none` invalidates the file
 
 ### Removed
 

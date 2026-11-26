@@ -23,6 +23,7 @@ const DEFAULT_MAX_PER_CONTEXT = Number.POSITIVE_INFINITY;
 const DEFAULT_EVERY = 30;
 const OBSERVE_INJECT = "none";
 const OBSERVER_FORBIDDEN_KEYS: readonly string[] = ["delivery", "maxpercontext", "note", "instructions"];
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export type Scope = "full" | "window";
 
@@ -50,10 +51,13 @@ export type ChatWatchdog = NotifyingBase & {
 	readonly tools: readonly string[];
 };
 
+export type EnvVar = { readonly name: string; readonly value: string };
+
 export type ObserverWatchdog = WatchdogBase & {
 	readonly kind: "observer";
 	readonly model?: string;
 	readonly tools: readonly string[];
+	readonly env: readonly EnvVar[];
 };
 
 type JevOutcome = { readonly kind: "silent" } | { readonly kind: "inject"; readonly prompt: string; readonly delivery: DeliverAs };
@@ -210,9 +214,12 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 			};
 		}
 		if (!base.guidance) return { kind: "invalid", reason: "inject: none requires a nonempty body" };
-		return { kind: "ok", spec: { ...base, kind: "observer", model, tools } };
+		const env = parseEnv(fields.env, tools);
+		if (env.kind === "invalid") return env;
+		return { kind: "ok", spec: { ...base, kind: "observer", model, tools, env: env.env } };
 	}
 
+	if (fields.env !== undefined) return { kind: "invalid", reason: "env requires inject: none" };
 	const inject = parseInjectMode(fields.inject);
 	if (inject.kind === "invalid") return { kind: "invalid", reason: describeProblem(inject.problem) };
 	const delivery = normalizeDelivery(fields.delivery);
@@ -243,6 +250,24 @@ export function parseWatchdogFile(path: string): WatchdogParse {
 		};
 	}
 	return { kind: "ok", spec: { ...common, kind: "chat", model, tools } };
+}
+
+type EnvParse = { readonly kind: "ok"; readonly env: readonly EnvVar[] } | { readonly kind: "invalid"; readonly reason: string };
+
+function parseEnv(value: string | undefined, tools: readonly string[]): EnvParse {
+	if (value === undefined) return { kind: "ok", env: [] };
+	const env: EnvVar[] = [];
+	for (const entry of toList(value)) {
+		const eq = entry.indexOf("=");
+		const name = entry.slice(0, eq);
+		if (eq < 0 || !ENV_NAME.test(name)) return { kind: "invalid", reason: `env entry "${entry}" is not NAME=value` };
+		if (env.some((v) => v.name === name)) return { kind: "invalid", reason: `env sets ${name} twice` };
+		env.push({ name, value: entry.slice(eq + 1) });
+	}
+	if (env.length === 0) return { kind: "invalid", reason: "env lists nothing" };
+	if (!tools.includes("bash")) return { kind: "invalid", reason: "env requires bash in tools" };
+	if (tools.includes("eval")) return { kind: "invalid", reason: "env cannot be combined with eval, whose shell does not receive it" };
+	return { kind: "ok", env };
 }
 
 type JevOptionsParse =

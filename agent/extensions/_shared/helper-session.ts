@@ -6,6 +6,10 @@ import { errorText } from "./errors.ts";
 import { lastAssistantText } from "./messages.ts";
 import type { Model, ThinkingLevel } from "./models.ts";
 
+type PreparedExtension = NonNullable<NonNullable<Parameters<typeof createAgentSession>[0]>["preloadedPreparedExtensions"]>[number];
+
+export type HelperHook = NonNullable<PreparedExtension["factory"]>;
+
 interface HelperPrompt {
 	readonly agentId: string;
 	readonly model: Model;
@@ -15,6 +19,7 @@ interface HelperPrompt {
 	readonly toolNames?: readonly string[];
 	readonly systemPrompt: "default" | "none";
 	readonly signal?: AbortSignal;
+	readonly hooks?: readonly HelperHook[];
 	/** Must not throw; throttle in the caller. */
 	readonly onText?: (partial: string) => void;
 }
@@ -59,6 +64,12 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 			disableExtensionDiscovery: true,
 			taskDepth: 1,
 			agentId: request.agentId,
+			preloadedPreparedExtensions: (request.hooks ?? []).map((factory, i) => ({
+				path: `<inline-${i}>`,
+				resolvedPath: `<inline-${i}>`,
+				factory,
+				error: null,
+			})),
 			...(request.systemPrompt === "none" ? { systemPrompt: [] } : {}),
 		}));
 	} catch (error) {

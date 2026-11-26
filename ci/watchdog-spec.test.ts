@@ -39,6 +39,42 @@ describe("observer watchdog (inject: none)", () => {
 		});
 	}
 
+	test("env lists the variables every observer bash command runs with", () => {
+		const parsed = parse(["target: main", "inject: none", "tools: [bash]", "env: [INTENT_ACTOR=watchdog, EMPTY=, A_B=x=y]"], "chat");
+		expect(parsed).toMatchObject({
+			kind: "ok",
+			spec: {
+				kind: "observer",
+				env: [
+					{ name: "INTENT_ACTOR", value: "watchdog" },
+					{ name: "EMPTY", value: "" },
+					{ name: "A_B", value: "x=y" },
+				],
+			},
+		});
+		expect(parse(["target: main", "inject: none", "tools: [bash]"], "chat")).toMatchObject({ kind: "ok", spec: { env: [] } });
+	});
+
+	for (const [line, tools] of [
+		["env: [INTENT_ACTOR=watchdog]", "tools: [read]"],
+		["env: [INTENT_ACTOR=watchdog]", "tools: [bash, eval]"],
+		["env: [INTENT_ACTOR]", "tools: [bash]"],
+		["env: [1X=y]", "tools: [bash]"],
+		["env: [A=1, A=2]", "tools: [bash]"],
+		["env: []", "tools: [bash]"],
+	] as const) {
+		test(`rejects ${line} with ${tools}`, () => {
+			expect(parse(["target: main", "inject: none", tools, line], "chat")).toMatchObject({ kind: "invalid" });
+		});
+	}
+
+	test("env on a notifying watchdog invalidates the file", () => {
+		expect(parse(["target: main", "tools: [bash]", "env: [INTENT_ACTOR=watchdog]"], "chat")).toEqual({
+			kind: "invalid",
+			reason: "env requires inject: none",
+		});
+	});
+
 	test("requires a body to act on", () => {
 		writeFileSync(file, "---\ntarget: main\ninject: none\n---\n");
 		expect(parseWatchdogFile(file)).toMatchObject({ kind: "invalid" });

@@ -8,6 +8,7 @@ import { openJudge } from "../_shared/judge.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
 import type { Model, ThinkingLevel } from "../_shared/models.ts";
 import type { InjectMode, Producer } from "../_shared/session-filter.ts";
+import { bashEnvHook } from "./env.ts";
 import type { ChatWatchdog, DeliverAs, JevWatchdog, ObserverWatchdog, Scope, Verdict } from "./spec.ts";
 
 const REVIEW_TIMEOUT_MS = 90_000;
@@ -311,6 +312,7 @@ export async function runObserver(
 		prompt: buildObservePrompt(spec.guidance, transcript, spec.tools, watchedSession(ctx)),
 		systemPrompt: "default",
 		toolNames: spec.tools,
+		hooks: spec.env.length > 0 ? [bashEnvHook(spec.env)] : [],
 		signal: AbortSignal.any([signal, AbortSignal.timeout(OBSERVE_TIMEOUT_MS)]),
 	});
 	switch (result.kind) {
