@@ -4,12 +4,14 @@
 
 ### Added
 
+- Added the `rules/` directory of every `~/.omp/agent/config.yml` `extensions` directory outside `~/.omp` to the sandbox container, at the same path with symbolic links copied as their targets, and the host's `~/.omp/agent/rules`, which the `~/.omp/agent` copy no longer excludes
 - Added observer watchdogs: `inject: none` in a `WATCHDOG-*.md` file runs its body as a background task with the file's `tools` and `model`, logs the one-line reply and never sends anything to the watched session; `delivery`, `maxPerContext`, `note`, `instructions` and `option.*` invalidate such a file, an observer run gets 300 s instead of 90 s, and a timed-out or failed run leaves the cursor so the next run covers the same work
 - Added `env: [NAME=value, …]` to observer watchdogs: each `bash` command the observer runs is preceded by `export NAME='value'` lines from a `tool_call` hook in the observer's session, so a variable such as `INTENT_ACTOR=watchdog` is set even when the model's command leaves it out; `env` without `bash` in `tools`, with `eval` in `tools`, with a malformed, repeated or empty entry list, or on a file without `inject: none` invalidates the file
 
 ### Removed
 
 - Stopped `repo-rules` from scanning Claude Code's user rule directory `~/.claude/rules`: rule files there no longer reach OMP sessions as unscoped or path-scoped rules; user-level rules for OMP go in its native rule directories (`~/.omp/agent/rules` or an extension root's `rules/`)
+- Stopped the sandbox from copying Claude Code's `~/.claude/rules` into the container; `~/.claude/skills` and `~/.claude/CLAUDE.md` are still copied, and `~/.claude/rules` reaches the container only when `~/.claude` is itself an `extensions` entry, as that root's `rules/`
 
 ## [1.3.0] - 2026-11-24
 

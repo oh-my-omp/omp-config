@@ -34,10 +34,11 @@ bun sandbox/sandbox.ts prune                                                    
 
 内容以 tar 流或经 stdin 管道进入 `docker exec`，宿主机磁盘上不暂存任何含凭据的东西：
 
-- `~/.omp/agent`，不含 `sessions/`、`blobs/`、`terminal-sessions/`、`custom-session-files/`、`predict/`、`cache/`、`history.db*`、`agent.db*`、`models.db*`、`transcripts.db*`、`skill-descriptions.db*`、`models.yml.bak*`、`rules/`、`mcp.json*`、`extensions/`、`extensions-last/`、`agents/`、updater 托管的普通文件 `SYSTEM_TEMPLATE.md`、`APPEND_SYSTEM*.md`、`PERSONALITY.md`、`config-light.yml` 与 `omp-light.ts`、`.omp-config-base/files` 与锁文件。`~/.omp/logs` 不复制。副本中若存在 `.omp-config-base/state.json`，会将其 `unknownPlain` 清空并保留 `structured`；容器里既无本机副本也无基线记录，updater 便写入 `/repo` 中的所有普通托管文件，同时仍对 `config.yml` 执行三路合并。
+- `~/.omp/agent`，不含 `sessions/`、`blobs/`、`terminal-sessions/`、`custom-session-files/`、`predict/`、`cache/`、`history.db*`、`agent.db*`、`models.db*`、`transcripts.db*`、`skill-descriptions.db*`、`models.yml.bak*`、`mcp.json*`、`extensions/`、`extensions-last/`、`agents/`、updater 托管的普通文件 `SYSTEM_TEMPLATE.md`、`APPEND_SYSTEM*.md`、`PERSONALITY.md`、`config-light.yml` 与 `omp-light.ts`、`.omp-config-base/files` 与锁文件。`~/.omp/logs` 不复制。副本中若存在 `.omp-config-base/state.json`，会将其 `unknownPlain` 清空并保留 `structured`；容器里既无本机副本也无基线记录，updater 便写入 `/repo` 中的所有普通托管文件，同时仍对 `config.yml` 执行三路合并。
 - `agent.db`：对宿主机数据库的只读连接做 SQLite 序列化，在同一个读事务内完成，因此包含尚未 checkpoint 的 WAL 帧。随后在内存可写副本中清空 `PRUNED_TABLES` 列出的历史与缓存表（`cache`、`client_usage`、`command_usage`、`model_perf`、`model_usage`、`usage_cost_history`、`usage_history`）并压缩镜像，再标成回滚日志库（头部第 18–19 字节），逐字节写入容器，在容器内改回 WAL 并执行 `integrity_check`。宿主机随后读回容器内的副本，在内存里与裁剪后的快照逐表、逐行、逐字段比较，任何差异都让构建失败。只打印表名、行数与「every field equal」，从不打印值或摘要。在这次比较之后，只有容器内的副本会删去 provider 没有记录代理目标的 `auth_credentials` 行（见下文「凭据」）；宿主机数据库不变。
 - `~/.omp/plugins`，包含锁文件，不含 `node_modules/`（为 macOS 构建），也不含 `omp-remote-build`：容器内的 `package.json` 与 `omp-plugins.lock.json` 副本删去了它；容器内 `bun install` 按锁文件为 Linux 装相同版本，若失败则删除容器内的 `bun.lock` 后重试 `bun install`。
-- `~/.claude/rules`、`~/.claude/skills`、`~/.claude/CLAUDE.md`，存在才复制。
+- `~/.claude/skills`、`~/.claude/CLAUDE.md`，存在才复制。`~/.claude/rules` 不在这一项里；只有 `~/.claude` 本身是 `extensions` 条目时，它才经下一项进入容器。
+- `~/.omp/agent/config.yml` `extensions` 中写成绝对路径或以 `~/` 开头、指向 `~/.omp` 之外目录且带 `rules/` 的条目，其 `rules/` 复制到容器内同一路径，符号链接以目标内容复制。除 `~/.omp/agent/rules`（随上面 `~/.omp/agent` 一并复制）外，OMP 还加载每个已配置扩展根的 `rules/`；扩展根的其余内容不复制。
 - 工作树放到 `/repo`：已跟踪与未跟踪的文件，含未提交改动，不含被忽略的文件，并在容器内初始化为 `main` 分支的 git 仓库并创建 `sandbox` 提交。
 - 每个 `--plugin DIR`：其未被忽略的 git 文件（非 git 目录时排除 `node_modules` 与 `.git` 打包）复制到 `/plugins/<basename>`。
 

@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { compareImages, snapshot, type TableCheck } from "./agentdb.ts";
 import { must, mustBytes, pipe, run } from "./docker.ts";
 
@@ -23,7 +23,6 @@ const AGENT_EXCLUDES = [
 	"agent/transcripts.db*",
 	"agent/skill-descriptions.db*",
 	"agent/models.yml.bak*",
-	"agent/rules",
 	"agent/mcp.json*",
 	"agent/extensions",
 	"agent/extensions-last",
@@ -90,13 +89,47 @@ export async function copyAgentDb(container: string, home: string): Promise<Tabl
 }
 
 export async function copyClaude(container: string, home: string): Promise<string[]> {
-	const items = ["rules", "skills", "CLAUDE.md"].filter((item) => existsSync(join(home, ".claude", item)));
+	const items = ["skills", "CLAUDE.md"].filter((item) => existsSync(join(home, ".claude", item)));
 	if (items.length === 0) return items;
 	await pipe(
 		["tar", ...TAR_FLAGS, "-C", join(home, ".claude"), "-cf", "-", ...items],
 		["docker", "exec", "-i", container, "tar", "-xf", "-", "-C", join(home, ".claude")],
 	);
 	return items;
+}
+
+export async function copyExtensionRules(container: string, home: string): Promise<string[]> {
+	const dirs = extensionRuleDirs(home);
+	for (const dir of dirs) {
+		await must(["docker", "exec", container, "mkdir", "-p", dir]);
+		await pipe(
+			["tar", ...TAR_FLAGS, "-L", "-C", dir, "-cf", "-", "rules"],
+			["docker", "exec", "-i", container, "tar", "-xf", "-", "-C", dir],
+		);
+	}
+	return dirs;
+}
+
+function extensionRuleDirs(home: string): string[] {
+	const configPath = join(home, ".omp", "agent", "config.yml");
+	if (!existsSync(configPath)) return [];
+	const config: unknown = Bun.YAML.parse(readFileSync(configPath, "utf8"));
+	if (typeof config !== "object" || config === null || !("extensions" in config) || !Array.isArray(config.extensions)) return [];
+	const ompDir = join(home, ".omp");
+	const dirs = config.extensions
+		.filter((entry): entry is string => typeof entry === "string")
+		.map((entry) => (entry.startsWith("~/") ? join(home, entry.slice(2)) : entry))
+		.filter((dir) => isAbsolute(dir) && !isWithin(ompDir, dir) && isDirectory(join(dir, "rules")));
+	return [...new Set(dirs)];
+}
+
+function isWithin(parent: string, child: string): boolean {
+	const rel = relative(parent, child);
+	return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+function isDirectory(path: string): boolean {
+	return existsSync(path) && statSync(path).isDirectory();
 }
 
 export async function copyRepo(container: string, repo: string): Promise<number> {
