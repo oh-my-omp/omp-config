@@ -4,8 +4,8 @@
 
 ### Changed
 
-- Changed watchdog observers to end their reply with `STATUS: done`, `STATUS: nothing` or `STATUS: failed — <reason>`: only `done` and `nothing` advance the cursor, while `failed` (logged as `observer failed`) and a reply without a `STATUS` line keep the window for the next run, so a window whose `intent` command failed is no longer skipped
-- Changed observer runs to refuse a `bash` command that already failed in the same run when it is issued again unchanged, because a failed write such as `intent decide` may still have landed; this stops one run from writing the same decision twice
+- Changed watchdog observers to end their reply with a last line `STATUS: done`, `STATUS: nothing` or `STATUS: failed — <reason>`: only `done` and `nothing` advance the cursor, while `failed` (logged as `observer failed`) and a reply without a `STATUS` line keep the window for the next run, so a window whose `intent` command failed is no longer skipped
+- Changed observer runs to refuse a `bash` command that already failed in the same run when it is issued again unchanged, because a failed write such as `intent decide` may still have landed; this stops one run from writing the same decision twice. The comparison ignores the observer's `env` export lines, and the `env` hook no longer prefixes a command that already starts with them, so a model copying the rewritten command neither doubles the lines nor slips past the refusal
 
 ### Fixed
 

@@ -1,12 +1,13 @@
 import { type ExtensionAPI, type ToolCallEventResult, z } from "@oh-my-pi/pi-coding-agent";
 import type { HelperHook } from "../_shared/helper-session.ts";
+import { withoutPrefix } from "./env.ts";
 
 const bashInput = z.object({ command: z.string() });
 
 const REFUSAL =
 	"watchdog-agent: this exact command already failed in this observer run, so it did not run again; a failed command may still have taken effect. End with STATUS: failed.";
 
-export function failedCommandGuard(): HelperHook {
+export function failedCommandGuard(envPrefix: string): HelperHook {
 	return (pi: ExtensionAPI) => {
 		const pending = new Map<string, string>();
 		const failed = new Set<string>();
@@ -14,8 +15,9 @@ export function failedCommandGuard(): HelperHook {
 			if (event.toolName !== "bash") return undefined;
 			const parsed = bashInput.safeParse(event.input);
 			if (!parsed.success) return undefined;
-			if (failed.has(parsed.data.command)) return { block: true, reason: REFUSAL };
-			pending.set(event.toolCallId, parsed.data.command);
+			const command = withoutPrefix(parsed.data.command, envPrefix);
+			if (failed.has(command)) return { block: true, reason: REFUSAL };
+			pending.set(event.toolCallId, command);
 			return undefined;
 		});
 		pi.on("tool_result", (event) => {

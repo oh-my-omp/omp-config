@@ -8,7 +8,7 @@ import { openJudge } from "../_shared/judge.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
 import type { Model, ThinkingLevel } from "../_shared/models.ts";
 import type { InjectMode, Producer } from "../_shared/session-filter.ts";
-import { bashEnvHook } from "./env.ts";
+import { bashEnvHook, envPrefix } from "./env.ts";
 import { failedCommandGuard } from "./guard.ts";
 import type { ChatWatchdog, DeliverAs, JevWatchdog, ObserverWatchdog, Scope, Verdict } from "./spec.ts";
 import type { CancelCause } from "./state.ts";
@@ -299,17 +299,17 @@ export function buildObservePrompt(guidance: string, transcript: string, tools: 
 
 type ObserverStatus = { readonly kind: "done" } | { readonly kind: "failed"; readonly reason: string } | { readonly kind: "missing" };
 
-const CANCEL_CAUSES: readonly CancelCause[] = ["compaction", "session-switch", "shutdown"];
+const CANCEL_CAUSES: Readonly<Record<CancelCause, true>> = { compaction: true, "session-switch": true, shutdown: true };
 
-function cancelCauseOf(reason: unknown): CancelCause | "unknown" {
-	return CANCEL_CAUSES.find((cause) => cause === reason) ?? "unknown";
+function isCancelCause(reason: unknown): reason is CancelCause {
+	return typeof reason === "string" && Object.hasOwn(CANCEL_CAUSES, reason);
 }
 
 function observerStatus(reply: string): ObserverStatus {
-	const matches = [...reply.matchAll(/^\s*STATUS:\s*(done|nothing|failed)\b[\s—:-]*(.*)$/gim)];
-	const last = matches.at(-1);
-	if (last === undefined) return { kind: "missing" };
-	return last[1]?.toLowerCase() === "failed" ? { kind: "failed", reason: last[2]?.trim() || "no reason given" } : { kind: "done" };
+	const lastLine = reply.trimEnd().split(/\r?\n/).at(-1) ?? "";
+	const match = /^\s*STATUS:\s*(done|nothing|failed)\b[\s—:-]*(.*)$/i.exec(lastLine);
+	if (match === null) return { kind: "missing" };
+	return match[1]?.toLowerCase() === "failed" ? { kind: "failed", reason: match[2]?.trim() || "no reason given" } : { kind: "done" };
 }
 
 function squeeze(text: string): string {
@@ -355,7 +355,7 @@ export async function runObserver(
 		prompt: buildObservePrompt(spec.guidance, transcript, spec.tools, watchedSession(ctx)),
 		systemPrompt: "default",
 		toolNames: spec.tools,
-		hooks: [failedCommandGuard(), ...(spec.env.length > 0 ? [bashEnvHook(spec.env)] : [])],
+		hooks: [failedCommandGuard(envPrefix(spec.env)), ...(spec.env.length > 0 ? [bashEnvHook(spec.env)] : [])],
 		signal: AbortSignal.any([signal, deadline]),
 	});
 	switch (result.kind) {
@@ -366,7 +366,9 @@ export async function runObserver(
 			return null;
 		case "canceled":
 			if (signal.aborted)
-				pi.logger.warn(`watchdog "${spec.name}": observer canceled (${cancelCauseOf(signal.reason)}) — will retry this window`);
+				pi.logger.warn(
+					`watchdog "${spec.name}": observer canceled (${isCancelCause(signal.reason) ? signal.reason : "unknown"}) — will retry this window`,
+				);
 			else pi.logger.warn(`watchdog "${spec.name}": observer timed out — will retry this window`);
 			return null;
 		case "failed":
