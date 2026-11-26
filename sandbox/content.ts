@@ -39,6 +39,8 @@ const AGENT_EXCLUDES = [
 
 const EXCLUDED_PLUGINS = ["omp-remote-build"];
 
+const EXTENSION_ROOT_ITEMS = ["skills", "rules"];
+
 export async function installTools(container: string): Promise<void> {
 	await must([
 		"docker",
@@ -92,25 +94,25 @@ export async function copyClaude(container: string, home: string): Promise<strin
 	const items = ["skills", "CLAUDE.md"].filter((item) => existsSync(join(home, ".claude", item)));
 	if (items.length === 0) return items;
 	await pipe(
-		["tar", ...TAR_FLAGS, "-C", join(home, ".claude"), "-cf", "-", ...items],
+		["tar", ...TAR_FLAGS, "-L", "-C", join(home, ".claude"), "-cf", "-", ...items],
 		["docker", "exec", "-i", container, "tar", "-xf", "-", "-C", join(home, ".claude")],
 	);
 	return items;
 }
 
-export async function copyExtensionRules(container: string, home: string): Promise<string[]> {
-	const dirs = extensionRuleDirs(home);
-	for (const dir of dirs) {
+export async function copyExtensionRoots(container: string, home: string): Promise<string[]> {
+	const roots = extensionRootDirs(home);
+	for (const { dir, items } of roots) {
 		await must(["docker", "exec", container, "mkdir", "-p", dir]);
 		await pipe(
-			["tar", ...TAR_FLAGS, "-L", "-C", dir, "-cf", "-", "rules"],
+			["tar", ...TAR_FLAGS, "-L", "-C", dir, "-cf", "-", ...items],
 			["docker", "exec", "-i", container, "tar", "-xf", "-", "-C", dir],
 		);
 	}
-	return dirs;
+	return roots.map(({ dir, items }) => `${dir} (${items.join(", ")})`);
 }
 
-function extensionRuleDirs(home: string): string[] {
+function extensionRootDirs(home: string): { readonly dir: string; readonly items: readonly string[] }[] {
 	const configPath = join(home, ".omp", "agent", "config.yml");
 	if (!existsSync(configPath)) return [];
 	const config: unknown = Bun.YAML.parse(readFileSync(configPath, "utf8"));
@@ -119,8 +121,10 @@ function extensionRuleDirs(home: string): string[] {
 	const dirs = config.extensions
 		.filter((entry): entry is string => typeof entry === "string")
 		.map((entry) => (entry.startsWith("~/") ? join(home, entry.slice(2)) : entry))
-		.filter((dir) => isAbsolute(dir) && !isWithin(ompDir, dir) && isDirectory(join(dir, "rules")));
-	return [...new Set(dirs)];
+		.filter((dir) => isAbsolute(dir) && !isWithin(ompDir, dir));
+	return [...new Set(dirs)]
+		.map((dir) => ({ dir, items: EXTENSION_ROOT_ITEMS.filter((item) => isDirectory(join(dir, item))) }))
+		.filter(({ items }) => items.length > 0);
 }
 
 function isWithin(parent: string, child: string): boolean {

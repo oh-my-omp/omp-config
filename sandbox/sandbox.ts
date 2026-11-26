@@ -4,7 +4,7 @@ import { basename, join, resolve } from "node:path";
 import {
 	copyAgentDb,
 	copyClaude,
-	copyExtensionRules,
+	copyExtensionRoots,
 	copyOmpDir,
 	copyRepo,
 	IMAGE,
@@ -190,8 +190,10 @@ async function build(names: Names, options: BuildOptions, signal: AbortSignal): 
 	await step("credentials outside the recorder", () => pruneCredentials(names.container, HOME));
 	const claude = await step("~/.claude", () => copyClaude(names.container, HOME));
 	console.log(`  ${claude.length === 0 ? "nothing to copy" : claude.join(", ")}`);
-	const ruleRoots = await step("rules/ of extension roots outside ~/.omp", () => copyExtensionRules(names.container, HOME));
-	console.log(`  ${ruleRoots.length === 0 ? "nothing to copy" : ruleRoots.join(", ")}`);
+	const extensionRoots = await step("skills/ and rules/ of extension roots outside ~/.omp", () =>
+		copyExtensionRoots(names.container, HOME),
+	);
+	console.log(`  ${extensionRoots.length === 0 ? "nothing to copy" : extensionRoots.join(", ")}`);
 	const files = await step(`working tree ${options.repo} -> /repo`, () => copyRepo(names.container, options.repo));
 	console.log(`  ${files} files`);
 	const installed = await step("plugins, latest omp, updater apply from /repo, auto-update off", () =>
