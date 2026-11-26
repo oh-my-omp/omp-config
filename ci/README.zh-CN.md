@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-本节点设计 omp-config 的配置检查：在一次性环境里安装最新 omp，用仓库自己的更新器应用配置，再用免费模型跑真实 session，把 omp 和扩展打印的故障与警告去重后逐个报告出来。代码检查——`bun install`、`bun run check`（Biome 格式与 lint、`tsc --noEmit`，以及值 import 不在 omp 二进制模块表里时失败的 `ci/host-imports.ts`）、`bun run test`（`ci/` 下的单元测试，如 `ci/omp-config-update.test.ts`）与共享副本比对——由 `omomp-check` workflow 运行，其 checkout 必须保留完整历史，因为测试用 `git show` 读取历史夹具；这些规则在仓库 `AGENTS.md` 的代码规范一节，不属于本节点。
+本节点设计 omp-config 的配置检查：在一次性环境里安装最新 omp，用仓库自己的更新器应用配置，再用免费模型跑真实 session，把 omp 和扩展打印的故障与警告去重后逐个报告出来。代码检查——`bun install`、`bun run check`（Biome 格式与 lint、`tsc --noEmit`）、`bun run test`（`ci/` 下的单元测试，如 `ci/omp-config-update.test.ts`）、shared 门禁 `deps.ts gate` 与共享副本比对——由 `omomp-check` workflow 运行，其 checkout 必须保留完整历史，因为测试用 `git show` 读取历史夹具；这些规则在仓库 `AGENTS.md` 的代码规范一节，不属于本节点。该 workflow、其门禁与追踪 Issue 反馈见 [omomp-check workflow](#omomp-check-workflow) 一节。
 
 - **拥有**：检查运行的阶段、诊断的判据与分类、免费模型和影子模型的接入、workflow 的触发事件与权限。
 - **不拥有**：配置项本身的规则（仓库 `README.zh-CN.md` 与 `docs/*.zh-CN.md`，英文版 `README.md` 与 `docs/*.md`）；更新器写什么、删什么（`agent/extensions/omp-config-autoupdate/omp-config-update.ts`）；各扩展的行为（`docs/prompts-and-context.zh-CN.md`、`docs/agents.zh-CN.md` 与 `docs/extensions.zh-CN.md`）。
@@ -153,6 +153,17 @@ CI_KEEP_ROOT=1 bun ci/check.ts       # 保留临时根目录以便排查
 ```
 
 需要 Bun、git 和公网访问。
+
+## omomp-check workflow
+
+`omomp-check` workflow 运行不经模型会话的确定性代码检查。它以全量历史检出本仓库，并检出 `oh-my-omp/shared` 与 PR 的 base 分支（非 PR 运行时为本次运行的分支）同名的分支（shared 没有该分支时用 `main`），两者各自用 `--frozen-lockfile` 安装依赖，使本仓库一次失败的依赖升级不会拖垮汇报器。阶段依次为 `deps.ts check`（依赖约定）、`bun install --frozen-lockfile`、`@oh-my-pi` 升级、`bun run check`、`bun run test`、门禁与共享副本比对 `verify.ts`；每个阶段的输出同时写入各自的日志文件。
+
+门禁即 `bun omomp-shared/deps.ts gate repository`：它派生出本仓库的 `config-bundle` 形态，按已安装的宿主检查 `agent/extensions/` 与 `agent/extensions-last/` 下的生产 TypeScript——确定性上游导出检查、AST 门禁中的跨扩展隔离与链式强转 `// SAFETY:` 规则，以及测试文件存在性要求，规则细节以 [oh-my-omp/shared README](https://github.com/oh-my-omp/shared#readme) 为准。同一门禁也可本地运行：在装好了自身依赖的 `oh-my-omp/shared` 检出中，先在本仓库完成 `bun install` 与宿主升级，再运行 `bun deps.ts gate <omp-config 路径>`。
+
+失败反馈以 `if: always() && !cancelled()` 运行，按触发事件分开：
+
+- `push` 与 `pull_request` 时，汇报器只把运行摘要写进步骤摘要，不触碰任何 Issue；
+- `schedule`，以及设置 `report_issue` 的 `workflow_dispatch` 时，汇报器在 workflow 的 `issues: write` 权限下用 `${{ github.token }}` 维护本仓库唯一一条 `repo` 作用域追踪 Issue——按正文标记 `<!-- omomp-upstream-check:v1:repo -->` 查找。该 Issue 的开/更/关生命周期，以及 `oh-my-omp/shared` 自身每日检查在本仓库登记的 shared 作用域 Issue，见 shared README。
 
 ## delete-guard Windows 验收
 
