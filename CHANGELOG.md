@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-26
+
 ### Added
 
 - Added the `rules/` directory of every `~/.omp/agent/config.yml` `extensions` directory outside `~/.omp` to the sandbox container, at the same path with symbolic links copied as their targets, and the host's `~/.omp/agent/rules`, which the `~/.omp/agent` copy no longer excludes
