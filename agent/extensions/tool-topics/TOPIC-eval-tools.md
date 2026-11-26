@@ -2,8 +2,8 @@
 tool: eval
 name: tools
 title: Defining tools in a cell for subagents
-when: before giving subagents a fixed procedure, a shared store, or a guarded action they would otherwise improvise, or before passing `tools` to `agent()`, `workpool()` or a `task` item
-upstream: pi-coding-agent@19.1.1 src/task/eval-tools.ts, src/eval/py/prelude.py#_tool_schema, src/eval/js/shared/prelude.txt#registerTool, src/task/workpool.ts, src/task/workpool-yield.ts, src/tools/eval-doc-topics.ts, src/prompts/tools/eval-helpers.md, src/prompts/tools/eval-agents.md, src/prompts/tools/task.md
+when: before giving subagents a fixed procedure, a shared store, or a guarded action they would otherwise improvise, or before passing `tools` to a `task` item
+upstream: pi-coding-agent@19.1.1 src/task/eval-tools.ts, src/eval/py/prelude.py#_tool_schema, src/eval/js/shared/prelude.txt#registerTool, src/tools/eval-doc-topics.ts, src/prompts/tools/eval-helpers.md, src/prompts/tools/task.md
 ---
 # Defining tools in a cell for subagents
 
@@ -52,16 +52,15 @@ Always pass `parameters` in JS: without it the child sees an object with no prop
 
 ## Hand to children
 
-- `agent(prompt, tools=["report"], model=…)` / JS `agent(prompt, { tools: ["report"], model })`, `workpool(agent, tools=[…], model=…)`, or `tools: […]` on a `task` item (`model` is accepted when `task.perCallModel` enables eval per-call models; in a workpool it applies to each worker's first turn).
-- Workpool workers reuse sessions across items by default; `eval.workpool.freshAgents: true` spawns a fresh agent per item instead. Workers report each batch item separately via `yield({ key, data })` or `yield({ key, error })`.
+- `tools: ["report"]` on a `task` item.
 - Each name must be defined when the child is spawned; otherwise the spawn fails and lists the defined names. Not available in plan mode.
 - Say in the prompt when the child must use the tool and what a result or error means; besides that, the child knows only the description and the schema.
 
 ## Calls and results
 
-- The function runs in your kernel with its working directory, files and state, also for an `isolated` child: it does not run in the child's worktree. Calls are served while your cell is blocked in the child's `.wait()`.
+- The function runs in your kernel with its working directory, files and state, also for an `isolated` child: it does not run in the child's worktree.
 - Async Python tools share one dedicated tool event loop (separate from the cell loop), so a module-level `asyncio.Lock()` serializes concurrent calls from multiple subagents; cancelling a caller cancels its async tool coroutine, while sync tools run to completion.
 - A string return reaches the child as is; any other value as JSON. A raised exception returns its message to the child as a tool error; your kernel keeps running, so raise with the correction you want the child to make.
 - The schema is fixed when the child starts; the body is looked up by name on each call, so redefining the function changes what running children get, and undefining it makes their calls fail.
 - Resetting the kernel, or a JS cell timeout (which resets the JS VM), removes every tool of that kernel; calls from running children then fail. After your session ends, calls report the tool unavailable.
-- Full signatures and host-native prelude docs live in `help://eval/helpers`, `help://eval/agents`, `help://eval/judge`, and enabled preludes such as `help://eval/dsm` and `help://eval/ratchet`.
+- Full signatures and host-native prelude docs live in `help://eval/helpers`, `help://eval/judge`, and enabled preludes such as `help://eval/dsm` and `help://eval/ratchet`.

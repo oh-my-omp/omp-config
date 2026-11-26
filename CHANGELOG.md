@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed `help://eval/workflow`, `help://eval/tools`, `help://task/batch`, `help://task/judge` and the `eval` description to stop recommending the eval prelude's `agent()`, `workpool()` and Python model calls: per-item judgment, extraction and rewrite stay on JavaScript `judgeBatch` and `completion`, items that each need a subagent point to `help://flow/eval`, and cell-defined tools reach children through a `task` item's `tools`
+
 ### Fixed
 
 - Fixed skills missing from the sandbox container: `~/.claude/skills` and `~/.claude/CLAUDE.md` are copied with symbolic links resolved to their targets instead of as links that dangle in the container, and the `skills/` directory of every `extensions` root outside `~/.omp` is copied alongside its `rules/`
