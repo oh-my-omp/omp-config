@@ -348,19 +348,25 @@ interface OmompToolDefinitionShape {
 	execute: unknown;
 }
 
-export function omompTool<D extends OmompToolDefinitionShape>(definition: D): D {
-	const parameters = definition.parameters;
+function schemaOf(name: string, parameters: unknown): EmbeddableSchema {
 	if (!isEmbeddableSchema(parameters)) {
-		throw new Error(`omompTool(${definition.name}): parameters must be a schema created by @oh-my-pi/omptype`);
+		throw new Error(`omompTool(${name}): parameters must be a schema created by @oh-my-pi/omptype`);
 	}
+	return parameters;
+}
+
+export function omompTool<D extends OmompToolDefinitionShape>(definition: D): D {
+	const descriptors = Object.getOwnPropertyDescriptors(definition);
+	const declared = descriptors.parameters;
+	if (declared !== undefined && "value" in declared) schemaOf(definition.name, declared.value);
 	const originalExecute = definition.execute as (toolCallId: unknown, params: unknown, ...rest: unknown[]) => unknown;
-	const wrapped = {
-		...definition,
-		lenientArgValidation: true,
-		execute(this: unknown, toolCallId: unknown, params: unknown, ...rest: unknown[]) {
-			const normalized = normalizeAndValidate(definition.name, toolCallId, parameters, params);
-			return originalExecute.call(this, toolCallId, normalized, ...rest);
-		},
-	};
-	return wrapped as D;
+	function execute(this: unknown, toolCallId: unknown, params: unknown, ...rest: unknown[]) {
+		const normalized = normalizeAndValidate(definition.name, toolCallId, schemaOf(definition.name, definition.parameters), params);
+		return originalExecute.call(this, toolCallId, normalized, ...rest);
+	}
+	return Object.create(Object.getPrototypeOf(definition), {
+		...descriptors,
+		lenientArgValidation: { value: true, enumerable: true, writable: true, configurable: true },
+		execute: { value: execute, enumerable: true, writable: true, configurable: true },
+	}) as D;
 }
