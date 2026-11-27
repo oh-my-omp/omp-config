@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed `/omomp-changelog` history and `/omp-config-autoupdate run` reports so they append to the session without starting an agent turn
+- Fixed `/omomp-changelog` history and `/omp-config-autoupdate run` reports so they pass `deliverAs: "nextTurn"` with `triggerTurn: false`, appending cards incrementally instead of rebuilding the full chat transcript or steering an active turn
 
 ## [1.5.0] - 2026-11-27
 
