@@ -32,6 +32,7 @@ Configuration files expose choices users can adapt to their own work. Shipped ru
 | 22 | `argon-long-output` | [argon-long-output](#argon-long-output) | Main + Sub | Yes | `ARGON_PROMPT.md` and supported stream-timeout settings | Customize long-output instructions and explicit timeout budgets for the matching models |
 | 23 | `ast-top-level` | [ast-top-level](#ast-top-level) | Process-wide + Main + Sub | Yes | No extension config file | OMP owns the syntax-tool settings; this extension keeps enabled tools directly visible, and disabling it requires a restart |
 | 24 | `omomp-changelog` | [omomp-changelog](#omomp-changelog) | Main TUI | Yes | `startup.changelogMode`, `startup.quiet` (OMP settings); marker file | Choose `summary`, `expanded` or `hidden` startup notes; read history with `/omomp-changelog [full\|last [N]]` |
+| 25 | `task-result-guard` | [task-result-guard](#task-result-guard) | Process-wide TUI + Main + Sub | Yes | No extension config file | Compatibility guard for non-snapshot `task` results in OMP's TUI; disabling it requires a restart |
 
 ---
 
@@ -283,6 +284,16 @@ While OMP's tool-command transport is active, OMP mounts every enabled tool whos
 - **Late binding**: OMP may bind this extension after the session has partitioned its tools (startup deferral of extensions that register nothing needed before the first frame). On `session_start`, which OMP replays to late-bound extensions, a session with either tool re-applies its own active set once, re-partitioning it against the table; new and resumed sessions then list the tools in the same order.
 - **Lifetime**: the table is process-wide and never restored; disabling the extension takes effect after a restart.
 - **Failure**: a renamed export fails the load. A table that rejects the names or that OMP no longer consults is logged at load and shown as a warning on each main session start; both tools then stay bash tool commands.
+
+### task-result-guard
+
+Source: `agent/extensions/task-result-guard/`. Process-wide TUI compatibility guard, full and light mode; no config.
+
+When a `tool_call` hook blocks `task` (`isolation-nudge`, `task-split-check`) or a turn aborts/errors with unexecuted calls, OMP persists a `task` `toolResult` whose `details` is `{}` or `{ __synthetic: true, source: "assistant_stop_error" | "assistant_stop_aborted" }` instead of a `TaskToolDetails` snapshot. OMP's `taskPresenter` checks only `if (!details)` before reading `[...details.results]`, while `tool-block` switches to `defaultPresenter` ("cancelled") when `details?.source === "interrupt_skipped"`:
+
+- **Projection boundary**: wraps `UiHelpers.prototype` (`renderSessionContext`, `renderSessionContextIncrementally`, `replaySteps`), `SelectorController.prototype` (`showUserMessageSelector`, `showCopySelector`) with `SessionManager.prototype.getTree`, `EventController.prototype.handleEvent` (`tool_execution_update`, `tool_execution_end`), `Agent.prototype.getPendingToolResults`, and `agentTranscriptSource.parseEntries` once per process. For `toolName === "task"`, any `details` that is neither `undefined`, nor a `TaskToolDetails` snapshot (`isTaskToolDetails`), nor `source: "interrupt_skipped"` is shallow-copied with `details: undefined` for the view layer while leaving persisted session entries and caller objects untouched. On synthetic stop `tool_execution_end` events with a live pending card, the card's `updateResult` receives `details: undefined` while the original synthetic event still reaches `EventController` so `auto_retry_start` continues to evict superseded cards.
+- **Eager binding**: registers a namespaced message renderer (`mouriya.omp.task-result-guard`) so `canBindAfterStartup` stays `false` across `agent.db` startup-deferral cache hits and the guard is active before `renderInitialMessages` on every launch.
+- **Failure**: if a future OMP release removes or renames any target method, the extension logs a warning and notifies once on the first main UI session start without blocking startup; disabling the extension takes effect after a restart.
 
 ### tool-topics
 
