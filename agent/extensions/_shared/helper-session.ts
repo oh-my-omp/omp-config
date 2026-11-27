@@ -75,6 +75,10 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 	} catch (error) {
 		return { kind: "failed", message: errorText(error) };
 	}
+	if (signal?.aborted) {
+		await session.dispose().catch(() => undefined);
+		return { kind: "canceled" };
+	}
 
 	let partial = "";
 	const final: { answer: FinalAnswer | null } = { answer: null };
@@ -109,7 +113,6 @@ export async function runHelperPrompt(ctx: ExtensionContext, request: HelperProm
 		unsubscribe();
 		await session.dispose().catch(() => undefined);
 	}
-	if (signal?.aborted) return { kind: "canceled" };
 
 	const answer = final.answer;
 	if (answer !== null && answer.stopReason === "error") return { kind: "provider-error", message: answer.errorMessage };

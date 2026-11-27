@@ -15,6 +15,8 @@ import { discoverWatchdogFiles, injectLabel, parseWatchdogFile, WATCHDOG_FILTER_
 
 export type QueuedNote = { readonly filePath: string; readonly inject: InjectMode; readonly text: string };
 
+export type CancelCause = "compaction" | "session-switch" | "shutdown";
+
 export type RunState =
 	| { readonly kind: "idle" }
 	| { readonly kind: "running"; readonly flushAfter: boolean; readonly controller: AbortController; readonly done: Promise<void> };
@@ -58,11 +60,11 @@ export function cwdOf(runtime: Runtime): string {
 	return activeSession(runtime)?.view.sessionManager.getCwd() ?? process.cwd();
 }
 
-export function abortReviews(session: ActiveSession): Promise<void>[] {
+export function abortReviews(session: ActiveSession, cause: CancelCause): Promise<void>[] {
 	const done: Promise<void>[] = [];
 	for (const state of session.states.values()) {
 		if (state.run.kind !== "running") continue;
-		state.run.controller.abort();
+		state.run.controller.abort(cause);
 		done.push(state.run.done);
 	}
 	return done;
@@ -70,7 +72,7 @@ export function abortReviews(session: ActiveSession): Promise<void>[] {
 
 export function load(runtime: Runtime, ctx: ExtensionContext): ActiveSession {
 	const previous = activeSession(runtime);
-	if (previous) abortReviews(previous);
+	if (previous) abortReviews(previous, "session-switch");
 	const session: ActiveSession = {
 		view: { agent: ctx.agent, sessionManager: ctx.sessionManager },
 		overrides: overridesFromBranch(ctx.sessionManager.getBranch()),
@@ -100,10 +102,25 @@ export function ensureActive(runtime: Runtime, ctx: ExtensionContext): ActiveSes
 	}
 }
 
-export function close(runtime: Runtime): Promise<void>[] {
+export type ObserverRun = { readonly name: string; readonly done: Promise<void> };
+
+export type ClosedRuns = { readonly aborted: readonly Promise<void>[]; readonly observers: readonly ObserverRun[] };
+
+export function close(runtime: Runtime): ClosedRuns {
 	const session = activeSession(runtime);
 	runtime.lifecycle = { kind: "closed" };
-	return session ? abortReviews(session) : [];
+	const aborted: Promise<void>[] = [];
+	const observers: ObserverRun[] = [];
+	for (const state of session?.states.values() ?? []) {
+		if (state.run.kind !== "running") continue;
+		if (state.spec.kind === "observer") {
+			observers.push({ name: state.spec.name, done: state.run.done });
+			continue;
+		}
+		state.run.controller.abort("shutdown");
+		aborted.push(state.run.done);
+	}
+	return { aborted, observers };
 }
 
 export function isLive(runtime: Runtime, state: WatchdogState): boolean {

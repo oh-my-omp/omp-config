@@ -1,11 +1,12 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { postmortem } from "@oh-my-pi/pi-utils";
 import { errorText } from "../_shared/errors.ts";
 import { defineStatelessNoiseGuard, registerCompactHandoff } from "../_shared/omomp-shared/compact-handoff.ts";
 import { type InjectMode, producerMatches } from "../_shared/session-filter.ts";
 import { registerCommand } from "./commands.ts";
 import { NOTE_CUSTOM_TYPE, noteIndexOf, writeCursor, writeUserNote } from "./entries.ts";
-import { countActions, producerOf, reviewTranscript, runJev, runObserver, runReviewer } from "./review.ts";
+import { countActions, OBSERVE_TIMEOUT_MS, producerOf, reviewTranscript, runJev, runObserver, runReviewer } from "./review.ts";
 import { type DeliverAs, type NotifyingWatchdog, touchedWatchdogFiles, type Verdict, type WatchdogSpec } from "./spec.ts";
 import {
 	type ActiveSession,
@@ -20,6 +21,7 @@ import {
 	load,
 	logActive,
 	logInvalid,
+	type ObserverRun,
 	type QueuedNote,
 	type Runtime,
 	refresh,
@@ -148,6 +150,15 @@ function runReview(
 	}
 }
 
+function holdExit(run: ObserverRun): void {
+	const release = postmortem.register(`watchdog-agent:${run.name}`, () => run.done, {
+		exitOnly: true,
+		deadlineMs: OBSERVE_TIMEOUT_MS,
+		waitMessage: `watchdog "${run.name}": waiting for the observer to finish`,
+	});
+	void run.done.finally(release);
+}
+
 function guarded<A extends unknown[], R>(runtime: Runtime, name: string, handler: (...args: A) => R): (...args: A) => R | undefined {
 	return (...args) => {
 		try {
@@ -192,7 +203,9 @@ function registerEvents(runtime: Runtime): void {
 	pi.on(
 		"session_shutdown",
 		guarded(runtime, "session_shutdown", async () => {
-			await Promise.allSettled(close(runtime));
+			const { aborted, observers } = close(runtime);
+			for (const run of observers) holdExit(run);
+			await Promise.allSettled(aborted);
 		}),
 	);
 
@@ -223,7 +236,7 @@ function registerEvents(runtime: Runtime): void {
 		guarded(runtime, "session_before_compact", () => {
 			const session = activeSession(runtime);
 			if (!session) return;
-			abortReviews(session);
+			abortReviews(session, "compaction");
 			session.nextTurnQueue = [];
 		}),
 	);

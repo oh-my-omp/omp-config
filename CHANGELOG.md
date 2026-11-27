@@ -8,11 +8,16 @@
 
 ### Changed
 
+- Changed watchdog observers to end their reply with a last line `STATUS: done`, `STATUS: nothing` or `STATUS: failed — <reason>`: only `done` and `nothing` advance the cursor, while `failed` (logged as `observer failed`) and a reply without a `STATUS` line keep the window for the next run, so a window whose `intent` command failed is no longer skipped
+- Changed observer runs to refuse a `bash` command that already failed in the same run when it is issued again unchanged, because a failed write such as `intent decide` may still have landed; this stops one run from writing the same decision twice. The comparison ignores the observer's `env` export lines, and the `env` hook no longer prefixes a command that already starts with them, so a model copying the rewritten command neither doubles the lines nor slips past the refusal
 - Changed the `omomp-check` workflow to run `oh-my-omp/shared`'s `deps.ts gate` as its Gate stage: production files under `agent/extensions/` and `agent/extensions-last/` fail on an `@oh-my-pi/*` import the omp binary cannot load, a named value the module it runs does not export, an import of another extension's directory, or a chained cast without `// SAFETY: <reason>`; `bun run check` no longer runs `ci/host-imports.ts`, which is removed, and the workflow checks out the `oh-my-omp/shared` branch with the name of the pull request's base branch (of the run's own branch outside pull requests) when shared has one, otherwise `main`
 - Changed `omp-playbooks` from a required plugin to a commented-out optional entry of `install-plugins.sh`, and declared `omp-dispatch` the same way beside `omp-remote-build`: onboarding and `/update-omp` no longer install any of them on a new machine, while a machine that already has one keeps it and the updater still refreshes it
 
 ### Fixed
 
+- Fixed watchdog observers being aborted when the session shuts down: a running observer now finishes while process exit waits for it (at most its 300 s), with `watchdog "<name>": waiting for the observer to finish` on the terminal, instead of being cut off and logged as `observer timed out`
+- Fixed the observer log to tell a cancel from a timeout: a run canceled by compaction or a session switch logs `observer canceled (<cause>)`, and `observer timed out` is kept for the 300 s deadline
+- Fixed `runHelperPrompt` discarding a helper run that had already returned when a cancel arrived afterwards, and missing a cancel that arrived while the helper session was being created, which let the run go on to the end
 - Fixed skills missing from the sandbox container: `~/.claude/skills` and `~/.claude/CLAUDE.md` are copied with symbolic links resolved to their targets instead of as links that dangle in the container, and the `skills/` directory of every `extensions` root outside `~/.omp` is copied alongside its `rules/`
 - Fixed the README sandbox example: the scenario path is `sandbox/scenarios/echo-hi.json` from the repo root, and the model is `futureppo-pool/gpt-6.2-sol` because `futureppo-pool/ernie-5.5-flash-preview` now answers 403
 - The `request-recorder-helper` sandbox scenario's watchdog model is `futureppo-pool/gpt-6-luna` instead of `futureppo-pool/minimax-m3.1-flash`, which took 109 s for a one-tool `omp -p` run
