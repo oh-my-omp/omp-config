@@ -6,6 +6,10 @@
 
 - Updated `_shared/omomp-shared/compact-handoff.ts` (`COMPACT_HANDOFF_REVISION = 3`), `ci/compact-handoff.test.ts` and `docs/prompts-and-context` to the prefix-fact compaction prompt (`User Intent & Session Rulings`, `Decisions & Domain Dead Ends`, `Code Anchors & Verified Invocations`, `Landed Milestones & Executed Verifications`), host cut-boundary and live-handle exclusions, empty-state `inactiveClaim` support and live `delta-stream` evaluation at `before_agent_start` ([#484](https://github.com/oh-my-omp/omp-config/issues/484))
 
+### Fixed
+
+- Fixed `/omomp-changelog` history and `/omp-config-autoupdate run` reports so they append to the session without starting an agent turn
+
 ## [1.5.0] - 2026-11-27
 
 ### Added
