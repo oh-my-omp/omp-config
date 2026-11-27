@@ -120,7 +120,7 @@ async function showHistory(pi: ExtensionAPI, ctx: ExtensionCommandContext, args:
 			display: true,
 			attribution: "agent",
 		},
-		{ triggerTurn: false },
+		{ deliverAs: "nextTurn", triggerTurn: false },
 	);
 }
 

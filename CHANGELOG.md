@@ -14,6 +14,7 @@
 
 - Prevented non-snapshot task results from crashing the OMP TUI during replay, plain-terminal `/rewind` and `/copy` selectors, live updates, pending result handling, and Hub parsing by activating the guard before the first render in full and light modes
 - Preserved valid task snapshots, interrupt-skipped details, and stored transcripts while keeping synthetic stop events available for auto-retry to clear their failure cards
+- Fixed `/omomp-changelog` history and `/omp-config-autoupdate run` reports so they pass `deliverAs: "nextTurn"` with `triggerTurn: false`, appending cards incrementally instead of rebuilding the full chat transcript or steering an active turn
 
 ## [1.5.0] - 2026-11-27
 
