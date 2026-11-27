@@ -12,7 +12,7 @@
 
 ### Fixed
 
-- Prevented non-snapshot task results from crashing the OMP TUI during replay, live updates, pending result handling, and Hub parsing by activating the guard before the first render in full and light modes
+- Prevented non-snapshot task results from crashing the OMP TUI during replay, plain-terminal `/rewind` and `/copy` selectors, live updates, pending result handling, and Hub parsing by activating the guard before the first render in full and light modes
 - Preserved valid task snapshots, interrupt-skipped details, and stored transcripts while keeping synthetic stop events available for auto-retry to clear their failure cards
 
 ## [1.5.0] - 2026-11-27

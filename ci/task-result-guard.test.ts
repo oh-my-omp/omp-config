@@ -8,9 +8,12 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { canBindAfterStartup } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/startup-deferral";
 import { agentTranscriptSource } from "@oh-my-pi/pi-coding-agent/modes/agent-hub-runtime";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { type ReplayContext, type ReplayTarget, UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/task-details";
-import taskResultGuard from "../agent/extensions/task-result-guard/index.ts";
+import { resolveChildren, type UiNode } from "@oh-my-pi/pi-tui";
+import taskResultGuard, { createTaskResultGuard } from "../agent/extensions/task-result-guard/index.ts";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
@@ -440,5 +443,153 @@ describe("task-result-guard", () => {
 			{ id: "tc-p3", details: VALID_TASK_DETAILS },
 			{ id: "tc-p4", details: {} },
 		]);
+	});
+
+	test("projects plain-terminal /rewind, sibling branch trees, and /copy selectors without mutating SessionManager", () => {
+		const { pi } = makeApi();
+		taskResultGuard(pi);
+
+		const zeroUsage = {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const manager = SessionManager.inMemory("/tmp/task-guard-selector");
+		const u1 = manager.appendMessage({ role: "user", content: "first prompt", timestamp: 100 });
+		manager.appendMessage({
+			role: "assistant",
+			api: "openai-completions",
+			provider: "dummy",
+			model: "test-model",
+			stopReason: "toolUse",
+			usage: zeroUsage,
+			timestamp: 200,
+			content: [{ type: "toolCall", id: "tc-sel-main", name: "task", arguments: { task: "main", solutionSpace: "narrow" } }],
+		});
+		manager.appendMessage(taskResult("tc-sel-main", {}));
+
+		manager.branch(u1);
+		manager.appendMessage({
+			role: "assistant",
+			api: "openai-completions",
+			provider: "dummy",
+			model: "test-model",
+			stopReason: "toolUse",
+			usage: zeroUsage,
+			timestamp: 300,
+			content: [{ type: "toolCall", id: "tc-sel-sib", name: "task", arguments: { task: "sib", solutionSpace: "narrow" } }],
+		});
+		manager.appendMessage(taskResult("tc-sel-sib", { __synthetic: true, source: "assistant_stop_error" }));
+
+		let latestFactory: (() => unknown) | undefined;
+		const readLatestFactory = (): (() => unknown) | undefined => latestFactory;
+		const fakeController = new SelectorController({
+			sessionManager: manager,
+			viewSession: { sessionManager: manager },
+			shell: {
+				native: () => null,
+				size: () => ({ rows: 30, cols: 100 }),
+				overlays: {
+					show: (factory: () => unknown) => {
+						latestFactory = factory;
+						return { close: () => {} };
+					},
+				},
+			},
+			showStatus: () => {},
+			focusActiveEditorArea: () => {},
+		} as unknown as ConstructorParameters<typeof SelectorController>[0]);
+
+		fakeController.showUserMessageSelector();
+		const rewindFactory = readLatestFactory();
+		expect(rewindFactory).toBeDefined();
+		const rewindRoot = resolveChildren(rewindFactory?.() as Parameters<typeof resolveChildren>[0])();
+		const rewindBar = (rewindRoot[0]?.children() ?? [])[0] as UiNode | undefined;
+		expect(rewindBar).toBeDefined();
+		const rawRewindTerm = ((rewindBar?.props() ?? {}) as { term?: unknown }).term;
+		const rewindTerm = (typeof rawRewindTerm === "function" ? rawRewindTerm() : rawRewindTerm) as
+			| { turns: Array<{ blocks: UiNode[] }> }
+			| undefined;
+		expect(rewindTerm?.turns.length).toBeGreaterThan(0);
+		for (const turn of rewindTerm?.turns ?? []) {
+			for (const block of turn.blocks) {
+				expect(() => block.props()).not.toThrow();
+			}
+		}
+
+		const tree = manager.getTree();
+		const allTreeToolDetails: Array<{ id: string; details: unknown }> = [];
+		const walk = (nodes: ReturnType<SessionManager["getTree"]>) => {
+			for (const n of nodes) {
+				if (n.entry.type === "message" && n.entry.message.role === "toolResult") {
+					allTreeToolDetails.push({ id: n.entry.message.toolCallId, details: n.entry.message.details });
+				}
+				walk(n.children);
+			}
+		};
+		walk(tree);
+		expect(allTreeToolDetails).toEqual([
+			{ id: "tc-sel-main", details: undefined },
+			{ id: "tc-sel-sib", details: undefined },
+		]);
+
+		latestFactory = undefined;
+		fakeController.showCopySelector();
+		const copyFactory = readLatestFactory();
+		expect(copyFactory).toBeDefined();
+		const copyRoot = resolveChildren(copyFactory?.() as Parameters<typeof resolveChildren>[0])();
+		const copyPicker = (copyRoot[0]?.children() ?? [])[0] as UiNode | undefined;
+		const rawCopyTerm = ((copyPicker?.props() ?? {}) as { term?: unknown }).term;
+		const copyTerm = (typeof rawCopyTerm === "function" ? rawCopyTerm() : rawCopyTerm) as
+			| { turns: Array<{ blocks: UiNode[] }> }
+			| undefined;
+		expect(copyTerm?.turns.length).toBeGreaterThan(0);
+		for (const turn of copyTerm?.turns ?? []) {
+			for (const block of turn.blocks) {
+				expect(() => block.props()).not.toThrow();
+			}
+		}
+
+		const rawBranchResults = manager
+			.getBranch()
+			.filter((e): e is Extract<typeof e, { type: "message" }> => e.type === "message" && e.message.role === "toolResult")
+			.map((e) => (e.message as ToolResultMessage).details);
+		expect(rawBranchResults).toEqual([{ __synthetic: true, source: "assistant_stop_error" }]);
+	});
+
+	test("logs once per process and notifies once on the main UI session when a host entrypoint is missing", async () => {
+		const degradedGuard = createTaskResultGuard({
+			uiHelpersProto: {},
+			eventControllerProto: EventController.prototype,
+			selectorControllerProto: SelectorController.prototype,
+			sessionManagerProto: SessionManager.prototype,
+			agentProto: Agent.prototype,
+			transcriptSource: agentTranscriptSource,
+		});
+
+		const api1 = makeApi();
+		const outcome1 = degradedGuard(api1.pi);
+		const outcome2 = degradedGuard(api1.pi);
+		expect(outcome1.kind).toBe("missing");
+		expect(outcome2).toEqual(outcome1);
+		expect(api1.warnings).toHaveLength(1);
+
+		const notices: Array<{ text: string; level: string }> = [];
+		const startHandlers = api1.handlers.get("session_start") ?? [];
+		for (const h of startHandlers) {
+			await h({}, { agent: { kind: "sub" }, hasUI: true, ui: { notify: (t: string, l: string) => notices.push({ text: t, level: l }) } });
+		}
+		expect(notices).toHaveLength(0);
+
+		for (const h of startHandlers) {
+			await h({}, { agent: { kind: "main" }, hasUI: true, ui: { notify: (t: string, l: string) => notices.push({ text: t, level: l }) } });
+			await h({}, { agent: { kind: "main" }, hasUI: true, ui: { notify: (t: string, l: string) => notices.push({ text: t, level: l }) } });
+		}
+		expect(notices).toHaveLength(1);
+		expect(notices[0]?.level).toBe("warning");
+		expect(notices[0]?.text).toContain("UiHelpers.renderSessionContext");
 	});
 });

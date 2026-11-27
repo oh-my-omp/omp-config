@@ -1,10 +1,12 @@
 // Process-wide prototype wrappers are never undone: disabling this extension only takes effect after an omp restart.
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
-import type { AgentSessionEvent, ExtensionAPI, SessionContext } from "@oh-my-pi/pi-coding-agent";
+import type { AgentSessionEvent, ExtensionAPI, SessionContext, SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent";
 import { agentTranscriptSource } from "@oh-my-pi/pi-coding-agent/modes/agent-hub-runtime";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { type ReplayContext, type ReplayTarget, UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { isTaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/task-details";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
@@ -13,26 +15,56 @@ type RenderOptions = Parameters<UiHelpers["renderSessionContextIncrementally"]>[
 
 const EAGER_RENDERER_TYPE = "mouriya.omp.task-result-guard";
 
-type PatchOutcome =
+export type PatchOutcome =
 	| { readonly kind: "installed" }
 	| { readonly kind: "missing"; readonly targets: readonly string[] }
 	| { readonly kind: "failed"; readonly error: string };
+
+export type GuardTargets = {
+	readonly uiHelpersProto: Partial<Pick<UiHelpers, "renderSessionContext" | "renderSessionContextIncrementally" | "replaySteps">>;
+	readonly eventControllerProto: Partial<Pick<EventController, "handleEvent">>;
+	readonly selectorControllerProto: Partial<Pick<SelectorController, "showUserMessageSelector" | "showCopySelector">>;
+	readonly sessionManagerProto: Partial<Pick<SessionManager, "getTree">>;
+	readonly agentProto: Partial<Pick<Agent, "getPendingToolResults">>;
+	readonly transcriptSource: Partial<Pick<typeof agentTranscriptSource, "parseEntries">>;
+};
 
 type PendingToolHandle = {
 	updateResult: (result: { content: unknown; details?: unknown; isError?: boolean }, isPartial?: boolean, toolCallId?: string) => void;
 };
 
-type ControllerWithPendingTools = {
-	readonly ctx?: {
-		readonly pendingTools?: ReadonlyMap<string, PendingToolHandle>;
-	};
+type BranchProvider = {
+	getBranch: (leafId?: string) => SessionEntry[];
 };
-
-let cachedOutcome: PatchOutcome | undefined;
-let warnedUi = false;
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+function isPendingToolHandle(value: unknown): value is PendingToolHandle {
+	return isObjectRecord(value) && typeof value.updateResult === "function";
+}
+
+function getPendingTool(controller: unknown, toolCallId: string): PendingToolHandle | undefined {
+	if (!isObjectRecord(controller) || !isObjectRecord(controller.ctx)) return undefined;
+	const map = controller.ctx.pendingTools;
+	if (!(map instanceof Map)) return undefined;
+	const candidate: unknown = map.get(toolCallId);
+	return isPendingToolHandle(candidate) ? candidate : undefined;
+}
+
+function isBranchProvider(value: unknown): value is BranchProvider {
+	return isObjectRecord(value) && typeof value.getBranch === "function";
+}
+
+function getControllerSessionManager(controller: unknown): BranchProvider | undefined {
+	if (!isObjectRecord(controller) || !isObjectRecord(controller.ctx)) return undefined;
+	return isBranchProvider(controller.ctx.sessionManager) ? controller.ctx.sessionManager : undefined;
+}
+
+function getViewSessionManager(controller: unknown): BranchProvider | undefined {
+	if (!isObjectRecord(controller) || !isObjectRecord(controller.ctx) || !isObjectRecord(controller.ctx.viewSession)) return undefined;
+	return isBranchProvider(controller.ctx.viewSession.sessionManager) ? controller.ctx.viewSession.sessionManager : undefined;
 }
 
 // Keep interrupt_skipped intact: tool-block switches to defaultPresenter and renders "cancelled" only when source === "interrupt_skipped".
@@ -71,71 +103,137 @@ function projectReplayContext<T extends ReplayContext>(context: T): T {
 	return { ...context, messages: context.messages.map(projectAgentMessage) };
 }
 
-function installOnce(): PatchOutcome {
-	if (cachedOutcome !== undefined) return cachedOutcome;
+function projectSessionEntry(entry: SessionEntry): SessionEntry {
+	if (entry.type !== "message") return entry;
+	const projected = projectAgentMessage(entry.message);
+	return projected === entry.message ? entry : { ...entry, message: projected };
+}
 
-	const missing: string[] = [];
-	if (typeof UiHelpers?.prototype?.renderSessionContext !== "function") missing.push("UiHelpers.renderSessionContext");
-	if (typeof UiHelpers?.prototype?.renderSessionContextIncrementally !== "function")
-		missing.push("UiHelpers.renderSessionContextIncrementally");
-	if (typeof UiHelpers?.prototype?.replaySteps !== "function") missing.push("UiHelpers.replaySteps");
-	if (typeof EventController?.prototype?.handleEvent !== "function") missing.push("EventController.handleEvent");
-	if (typeof Agent?.prototype?.getPendingToolResults !== "function") missing.push("Agent.getPendingToolResults");
-	if (typeof agentTranscriptSource?.parseEntries !== "function") missing.push("agentTranscriptSource.parseEntries");
-	if (missing.length > 0) {
-		cachedOutcome = { kind: "missing", targets: missing };
-		return cachedOutcome;
-	}
+function projectSessionEntries(entries: SessionEntry[]): SessionEntry[] {
+	let changed = false;
+	const next = entries.map((entry) => {
+		const projected = projectSessionEntry(entry);
+		if (projected !== entry) changed = true;
+		return projected;
+	});
+	return changed ? next : entries;
+}
 
+function projectTreeNodes(nodes: SessionTreeNode[]): SessionTreeNode[] {
+	let changed = false;
+	const next = nodes.map((node) => {
+		const entry = projectSessionEntry(node.entry);
+		const children = projectTreeNodes(node.children);
+		if (entry === node.entry && children === node.children) return node;
+		changed = true;
+		return { ...node, entry, children };
+	});
+	return changed ? next : nodes;
+}
+
+function withProjectedBranch<T>(manager: BranchProvider | undefined, run: () => T): T {
+	if (!manager) return run();
+	let hadOwn = false;
+	let previousGetBranch: BranchProvider["getBranch"] | undefined;
+	let patched = false;
 	try {
-		const origRenderSessionContext = UiHelpers.prototype.renderSessionContext;
-		UiHelpers.prototype.renderSessionContext = function (this: UiHelpers, sessionContext: SessionContext, options?: RenderOptions): void {
-			let projected = sessionContext;
+		hadOwn = Object.hasOwn(manager, "getBranch");
+		previousGetBranch = manager.getBranch;
+		const orig = previousGetBranch;
+		manager.getBranch = function (this: BranchProvider, leafId?: string): SessionEntry[] {
+			const entries = orig.call(this, leafId);
 			try {
-				projected = projectReplayContext(sessionContext);
-			} catch {}
-			origRenderSessionContext.call(this, projected, options);
-		};
-
-		const origRenderIncrementally = UiHelpers.prototype.renderSessionContextIncrementally;
-		UiHelpers.prototype.renderSessionContextIncrementally = function (
-			this: UiHelpers,
-			sessionContext: SessionContext,
-			options: RenderOptions,
-			renderChunk?: () => void,
-		): Promise<void> {
-			let projected = sessionContext;
-			try {
-				projected = projectReplayContext(sessionContext);
-			} catch {}
-			return origRenderIncrementally.call(this, projected, options, renderChunk);
-		};
-
-		const origReplaySteps = UiHelpers.prototype.replaySteps;
-		UiHelpers.prototype.replaySteps = function (
-			this: UiHelpers,
-			target: ReplayTarget,
-			sessionContext: ReplayContext,
-		): Generator<void, void, void> {
-			let projected = sessionContext;
-			try {
-				projected = projectReplayContext(sessionContext);
-			} catch {}
-			return origReplaySteps.call(this, target, projected);
-		};
-
-		const origHandleEvent = EventController.prototype.handleEvent;
-		EventController.prototype.handleEvent = async function (this: EventController, event: AgentSessionEvent): Promise<void> {
-			if (event.type === "tool_execution_update" && event.toolName === "task" && shouldStripTaskDetails(event.partialResult.details)) {
-				return origHandleEvent.call(this, {
-					...event,
-					partialResult: { ...event.partialResult, details: undefined },
-				});
+				return projectSessionEntries(entries);
+			} catch {
+				return entries;
 			}
-			if (event.type === "tool_execution_end" && event.toolName === "task" && shouldStripTaskDetails(event.result.details)) {
+		};
+		patched = true;
+	} catch {
+		return run();
+	}
+	try {
+		return run();
+	} finally {
+		if (patched) {
+			try {
+				if (hadOwn && previousGetBranch !== undefined) manager.getBranch = previousGetBranch;
+				else Reflect.deleteProperty(manager, "getBranch");
+			} catch {}
+		}
+	}
+}
+
+function wrapUiAndSelectors(targets: GuardTargets): void {
+	const origRenderSessionContext = targets.uiHelpersProto.renderSessionContext!;
+	targets.uiHelpersProto.renderSessionContext = function (this: UiHelpers, sessionContext: SessionContext, options?: RenderOptions): void {
+		let projected = sessionContext;
+		try {
+			projected = projectReplayContext(sessionContext);
+		} catch {}
+		origRenderSessionContext.call(this, projected, options);
+	};
+
+	const origRenderIncrementally = targets.uiHelpersProto.renderSessionContextIncrementally!;
+	targets.uiHelpersProto.renderSessionContextIncrementally = function (
+		this: UiHelpers,
+		sessionContext: SessionContext,
+		options: RenderOptions,
+		renderChunk?: () => void,
+	): Promise<void> {
+		let projected = sessionContext;
+		try {
+			projected = projectReplayContext(sessionContext);
+		} catch {}
+		return origRenderIncrementally.call(this, projected, options, renderChunk);
+	};
+
+	const origReplaySteps = targets.uiHelpersProto.replaySteps!;
+	targets.uiHelpersProto.replaySteps = function (
+		this: UiHelpers,
+		target: ReplayTarget,
+		sessionContext: ReplayContext,
+	): Generator<void, void, void> {
+		let projected = sessionContext;
+		try {
+			projected = projectReplayContext(sessionContext);
+		} catch {}
+		return origReplaySteps.call(this, target, projected);
+	};
+
+	const origShowUserMessageSelector = targets.selectorControllerProto.showUserMessageSelector!;
+	targets.selectorControllerProto.showUserMessageSelector = function (this: SelectorController, startAt?: string): void {
+		withProjectedBranch(getControllerSessionManager(this), () => origShowUserMessageSelector.call(this, startAt));
+	};
+
+	const origShowCopySelector = targets.selectorControllerProto.showCopySelector!;
+	targets.selectorControllerProto.showCopySelector = function (this: SelectorController): void {
+		withProjectedBranch(getViewSessionManager(this), () => origShowCopySelector.call(this));
+	};
+
+	const origGetTree = targets.sessionManagerProto.getTree!;
+	targets.sessionManagerProto.getTree = function (this: SessionManager): SessionTreeNode[] {
+		const forest = origGetTree.call(this);
+		try {
+			return projectTreeNodes(forest);
+		} catch {
+			return forest;
+		}
+	};
+}
+
+function wrapEventAgentAndHub(targets: GuardTargets): void {
+	const origHandleEvent = targets.eventControllerProto.handleEvent!;
+	targets.eventControllerProto.handleEvent = async function (this: EventController, event: AgentSessionEvent): Promise<void> {
+		let forwarded = event;
+		let restorePending: (() => void) | undefined;
+		try {
+			if (event.type === "tool_execution_update" && event.toolName === "task" && shouldStripTaskDetails(event.partialResult.details)) {
+				forwarded = { ...event, partialResult: { ...event.partialResult, details: undefined } };
+			} else if (event.type === "tool_execution_end" && event.toolName === "task" && shouldStripTaskDetails(event.result.details)) {
 				// Preserve synthetic stop details on the event passed to #handleToolExecutionEnd so #syntheticFailureCards still evicts the card on auto_retry_start.
-				const pending = (this as unknown as ControllerWithPendingTools).ctx?.pendingTools?.get(event.toolCallId);
-				if (isSyntheticStop(event.result.details) && pending !== undefined && typeof pending.updateResult === "function") {
+				const pending = getPendingTool(this, event.toolCallId);
+				if (isSyntheticStop(event.result.details) && pending !== undefined) {
 					const hadOwn = Object.hasOwn(pending, "updateResult");
 					const previousUpdateResult = pending.updateResult;
 					let consumed = false;
@@ -147,66 +245,126 @@ function installOnce(): PatchOutcome {
 						}
 						previousUpdateResult.call(this, result, isPartial, toolCallId);
 					};
-					try {
-						return await origHandleEvent.call(this, event);
-					} finally {
-						if (hadOwn) pending.updateResult = previousUpdateResult;
-						else Reflect.deleteProperty(pending, "updateResult");
-					}
+					restorePending = () => {
+						try {
+							if (hadOwn) pending.updateResult = previousUpdateResult;
+							else Reflect.deleteProperty(pending, "updateResult");
+						} catch {}
+					};
+				} else {
+					forwarded = { ...event, result: { ...event.result, details: undefined } };
 				}
-				return origHandleEvent.call(this, {
-					...event,
-					result: { ...event.result, details: undefined },
-				});
 			}
-			return origHandleEvent.call(this, event);
-		};
+		} catch {
+			restorePending?.();
+			restorePending = undefined;
+			forwarded = event;
+		}
+		try {
+			return await origHandleEvent.call(this, forwarded);
+		} finally {
+			restorePending?.();
+		}
+	};
 
-		const origGetPendingToolResults = Agent.prototype.getPendingToolResults;
-		Agent.prototype.getPendingToolResults = function (this: Agent): readonly ToolResultMessage[] {
-			const results = origGetPendingToolResults.call(this);
-			try {
-				if (!results.some((msg) => msg.toolName === "task" && shouldStripTaskDetails(msg.details))) return results;
-				return results.map(projectToolResult);
-			} catch {
-				return results;
+	const origGetPendingToolResults = targets.agentProto.getPendingToolResults!;
+	targets.agentProto.getPendingToolResults = function (this: Agent): readonly ToolResultMessage[] {
+		const results = origGetPendingToolResults.call(this);
+		try {
+			if (!results.some((msg) => msg.toolName === "task" && shouldStripTaskDetails(msg.details))) return results;
+			return results.map(projectToolResult);
+		} catch {
+			return results;
+		}
+	};
+
+	const origParseEntries = targets.transcriptSource.parseEntries!;
+	targets.transcriptSource.parseEntries = function (text: string) {
+		const entries = origParseEntries.call(this, text);
+		try {
+			const needsProjection = entries.some(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "toolResult" &&
+					entry.message.toolName === "task" &&
+					shouldStripTaskDetails(entry.message.details),
+			);
+			if (!needsProjection) return entries;
+			return entries.map((entry) => {
+				if (
+					entry.type === "message" &&
+					entry.message.role === "toolResult" &&
+					entry.message.toolName === "task" &&
+					shouldStripTaskDetails(entry.message.details)
+				) {
+					return { ...entry, message: { ...entry.message, details: undefined } };
+				}
+				return entry;
+			});
+		} catch {
+			return entries;
+		}
+	};
+}
+
+export function createTaskResultGuard(targets: GuardTargets): (pi: ExtensionAPI) => PatchOutcome {
+	let cachedOutcome: PatchOutcome | undefined;
+	let warnedLog = false;
+	let warnedUi = false;
+
+	const installOnce = (): PatchOutcome => {
+		if (cachedOutcome !== undefined) return cachedOutcome;
+
+		const missing: string[] = [];
+		if (typeof targets.uiHelpersProto?.renderSessionContext !== "function") missing.push("UiHelpers.renderSessionContext");
+		if (typeof targets.uiHelpersProto?.renderSessionContextIncrementally !== "function")
+			missing.push("UiHelpers.renderSessionContextIncrementally");
+		if (typeof targets.uiHelpersProto?.replaySteps !== "function") missing.push("UiHelpers.replaySteps");
+		if (typeof targets.selectorControllerProto?.showUserMessageSelector !== "function")
+			missing.push("SelectorController.showUserMessageSelector");
+		if (typeof targets.selectorControllerProto?.showCopySelector !== "function") missing.push("SelectorController.showCopySelector");
+		if (typeof targets.sessionManagerProto?.getTree !== "function") missing.push("SessionManager.getTree");
+		if (typeof targets.eventControllerProto?.handleEvent !== "function") missing.push("EventController.handleEvent");
+		if (typeof targets.agentProto?.getPendingToolResults !== "function") missing.push("Agent.getPendingToolResults");
+		if (typeof targets.transcriptSource?.parseEntries !== "function") missing.push("agentTranscriptSource.parseEntries");
+		if (missing.length > 0) {
+			cachedOutcome = { kind: "missing", targets: missing };
+			return cachedOutcome;
+		}
+
+		try {
+			wrapUiAndSelectors(targets);
+			wrapEventAgentAndHub(targets);
+			cachedOutcome = { kind: "installed" };
+			return cachedOutcome;
+		} catch (error) {
+			cachedOutcome = { kind: "failed", error: errorText(error) };
+			return cachedOutcome;
+		}
+	};
+
+	return (pi: ExtensionAPI): PatchOutcome => {
+		// Never remove registerMessageRenderer: startup-deferral caches extensions without pre-first-frame registrations as deferrable in agent.db, loading them after renderInitialMessages on later starts.
+		pi.registerMessageRenderer(EAGER_RENDERER_TYPE, () => undefined);
+
+		const outcome = installOnce();
+		if (outcome.kind !== "installed") {
+			if (!warnedLog) {
+				warnedLog = true;
+				pi.logger.warn("task-result-guard: non-snapshot task TUI guard inactive", { outcome });
 			}
-		};
-
-		const origParseEntries = agentTranscriptSource.parseEntries;
-		agentTranscriptSource.parseEntries = function (text: string) {
-			const entries = origParseEntries.call(this, text);
-			try {
-				const needsProjection = entries.some(
-					(entry) =>
-						entry.type === "message" &&
-						entry.message.role === "toolResult" &&
-						entry.message.toolName === "task" &&
-						shouldStripTaskDetails(entry.message.details),
-				);
-				if (!needsProjection) return entries;
-				return entries.map((entry) => {
-					if (
-						entry.type === "message" &&
-						entry.message.role === "toolResult" &&
-						entry.message.toolName === "task" &&
-						shouldStripTaskDetails(entry.message.details)
-					) {
-						return { ...entry, message: { ...entry.message, details: undefined } };
-					}
-					return entry;
-				});
-			} catch {
-				return entries;
-			}
-		};
-
-		cachedOutcome = { kind: "installed" };
-		return cachedOutcome;
-	} catch (error) {
-		cachedOutcome = { kind: "failed", error: errorText(error) };
-		return cachedOutcome;
-	}
+			pi.on("session_start", (_event, ctx) => {
+				try {
+					if (warnedUi || ctx.agent.kind !== "main" || !ctx.hasUI) return;
+					warnedUi = true;
+					ctx.ui.notify(warningText(outcome), "warning");
+				} catch (error) {
+					pi.logger.warn("task-result-guard: session_start warning failed", { error: errorText(error) });
+				}
+			});
+		}
+		return outcome;
+	};
 }
 
 function warningText(outcome: Exclude<PatchOutcome, { readonly kind: "installed" }>): string {
@@ -228,21 +386,15 @@ function warningText(outcome: Exclude<PatchOutcome, { readonly kind: "installed"
 	}
 }
 
-export default function taskResultGuard(pi: ExtensionAPI): void {
-	// Never remove registerMessageRenderer: startup-deferral caches extensions without pre-first-frame registrations as deferrable in agent.db, loading them after renderInitialMessages on later starts.
-	pi.registerMessageRenderer(EAGER_RENDERER_TYPE, () => undefined);
+const bindProcessTaskResultGuard = createTaskResultGuard({
+	uiHelpersProto: UiHelpers.prototype,
+	eventControllerProto: EventController.prototype,
+	selectorControllerProto: SelectorController.prototype,
+	sessionManagerProto: SessionManager.prototype,
+	agentProto: Agent.prototype,
+	transcriptSource: agentTranscriptSource,
+});
 
-	const outcome = installOnce();
-	if (outcome.kind !== "installed") {
-		pi.logger.warn("task-result-guard: non-snapshot task TUI guard inactive", { outcome });
-		pi.on("session_start", (_event, ctx) => {
-			try {
-				if (warnedUi || ctx.agent.kind !== "main" || !ctx.hasUI) return;
-				warnedUi = true;
-				ctx.ui.notify(warningText(outcome), "warning");
-			} catch (error) {
-				pi.logger.warn("task-result-guard: session_start warning failed", { error: errorText(error) });
-			}
-		});
-	}
+export default function taskResultGuard(pi: ExtensionAPI): void {
+	bindProcessTaskResultGuard(pi);
 }
