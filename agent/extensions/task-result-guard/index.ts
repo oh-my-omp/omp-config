@@ -15,18 +15,29 @@ type RenderOptions = Parameters<UiHelpers["renderSessionContextIncrementally"]>[
 
 const EAGER_RENDERER_TYPE = "mouriya.omp.task-result-guard";
 
-export type PatchOutcome =
+type PatchOutcome =
 	| { readonly kind: "installed" }
 	| { readonly kind: "missing"; readonly targets: readonly string[] }
 	| { readonly kind: "failed"; readonly error: string };
 
-export type GuardTargets = {
-	readonly uiHelpersProto: Partial<Pick<UiHelpers, "renderSessionContext" | "renderSessionContextIncrementally" | "replaySteps">>;
-	readonly eventControllerProto: Partial<Pick<EventController, "handleEvent">>;
-	readonly selectorControllerProto: Partial<Pick<SelectorController, "showUserMessageSelector" | "showCopySelector">>;
-	readonly sessionManagerProto: Partial<Pick<SessionManager, "getTree">>;
-	readonly agentProto: Partial<Pick<Agent, "getPendingToolResults">>;
-	readonly transcriptSource: Partial<Pick<typeof agentTranscriptSource, "parseEntries">>;
+type GuardTargets = {
+	readonly uiHelpersProto:
+		| Partial<Pick<UiHelpers, "renderSessionContext" | "renderSessionContextIncrementally" | "replaySteps">>
+		| undefined;
+	readonly eventControllerProto: Partial<Pick<EventController, "handleEvent">> | undefined;
+	readonly selectorControllerProto: Partial<Pick<SelectorController, "showUserMessageSelector" | "showCopySelector">> | undefined;
+	readonly sessionManagerProto: Partial<Pick<SessionManager, "getTree">> | undefined;
+	readonly agentProto: Partial<Pick<Agent, "getPendingToolResults">> | undefined;
+	readonly transcriptSource: Partial<Pick<typeof agentTranscriptSource, "parseEntries">> | undefined;
+};
+
+type ValidatedTargets = {
+	readonly uiHelpersProto: Pick<UiHelpers, "renderSessionContext" | "renderSessionContextIncrementally" | "replaySteps">;
+	readonly eventControllerProto: Pick<EventController, "handleEvent">;
+	readonly selectorControllerProto: Pick<SelectorController, "showUserMessageSelector" | "showCopySelector">;
+	readonly sessionManagerProto: Pick<SessionManager, "getTree">;
+	readonly agentProto: Pick<Agent, "getPendingToolResults">;
+	readonly transcriptSource: Pick<typeof agentTranscriptSource, "parseEntries">;
 };
 
 type PendingToolHandle = {
@@ -164,8 +175,8 @@ function withProjectedBranch<T>(manager: BranchProvider | undefined, run: () => 
 	}
 }
 
-function wrapUiAndSelectors(targets: GuardTargets): void {
-	const origRenderSessionContext = targets.uiHelpersProto.renderSessionContext!;
+function wrapUiAndSelectors(targets: ValidatedTargets): void {
+	const origRenderSessionContext = targets.uiHelpersProto.renderSessionContext;
 	targets.uiHelpersProto.renderSessionContext = function (this: UiHelpers, sessionContext: SessionContext, options?: RenderOptions): void {
 		let projected = sessionContext;
 		try {
@@ -174,7 +185,7 @@ function wrapUiAndSelectors(targets: GuardTargets): void {
 		origRenderSessionContext.call(this, projected, options);
 	};
 
-	const origRenderIncrementally = targets.uiHelpersProto.renderSessionContextIncrementally!;
+	const origRenderIncrementally = targets.uiHelpersProto.renderSessionContextIncrementally;
 	targets.uiHelpersProto.renderSessionContextIncrementally = function (
 		this: UiHelpers,
 		sessionContext: SessionContext,
@@ -188,7 +199,7 @@ function wrapUiAndSelectors(targets: GuardTargets): void {
 		return origRenderIncrementally.call(this, projected, options, renderChunk);
 	};
 
-	const origReplaySteps = targets.uiHelpersProto.replaySteps!;
+	const origReplaySteps = targets.uiHelpersProto.replaySteps;
 	targets.uiHelpersProto.replaySteps = function (
 		this: UiHelpers,
 		target: ReplayTarget,
@@ -201,17 +212,17 @@ function wrapUiAndSelectors(targets: GuardTargets): void {
 		return origReplaySteps.call(this, target, projected);
 	};
 
-	const origShowUserMessageSelector = targets.selectorControllerProto.showUserMessageSelector!;
+	const origShowUserMessageSelector = targets.selectorControllerProto.showUserMessageSelector;
 	targets.selectorControllerProto.showUserMessageSelector = function (this: SelectorController, startAt?: string): void {
 		withProjectedBranch(getControllerSessionManager(this), () => origShowUserMessageSelector.call(this, startAt));
 	};
 
-	const origShowCopySelector = targets.selectorControllerProto.showCopySelector!;
+	const origShowCopySelector = targets.selectorControllerProto.showCopySelector;
 	targets.selectorControllerProto.showCopySelector = function (this: SelectorController): void {
 		withProjectedBranch(getViewSessionManager(this), () => origShowCopySelector.call(this));
 	};
 
-	const origGetTree = targets.sessionManagerProto.getTree!;
+	const origGetTree = targets.sessionManagerProto.getTree;
 	targets.sessionManagerProto.getTree = function (this: SessionManager): SessionTreeNode[] {
 		const forest = origGetTree.call(this);
 		try {
@@ -222,8 +233,8 @@ function wrapUiAndSelectors(targets: GuardTargets): void {
 	};
 }
 
-function wrapEventAgentAndHub(targets: GuardTargets): void {
-	const origHandleEvent = targets.eventControllerProto.handleEvent!;
+function wrapEventAgentAndHub(targets: ValidatedTargets): void {
+	const origHandleEvent = targets.eventControllerProto.handleEvent;
 	targets.eventControllerProto.handleEvent = async function (this: EventController, event: AgentSessionEvent): Promise<void> {
 		let forwarded = event;
 		let restorePending: (() => void) | undefined;
@@ -267,7 +278,7 @@ function wrapEventAgentAndHub(targets: GuardTargets): void {
 		}
 	};
 
-	const origGetPendingToolResults = targets.agentProto.getPendingToolResults!;
+	const origGetPendingToolResults = targets.agentProto.getPendingToolResults;
 	targets.agentProto.getPendingToolResults = function (this: Agent): readonly ToolResultMessage[] {
 		const results = origGetPendingToolResults.call(this);
 		try {
@@ -278,7 +289,7 @@ function wrapEventAgentAndHub(targets: GuardTargets): void {
 		}
 	};
 
-	const origParseEntries = targets.transcriptSource.parseEntries!;
+	const origParseEntries = targets.transcriptSource.parseEntries;
 	targets.transcriptSource.parseEntries = function (text: string) {
 		const entries = origParseEntries.call(this, text);
 		try {
@@ -307,64 +318,93 @@ function wrapEventAgentAndHub(targets: GuardTargets): void {
 	};
 }
 
-export function createTaskResultGuard(targets: GuardTargets): (pi: ExtensionAPI) => PatchOutcome {
-	let cachedOutcome: PatchOutcome | undefined;
-	let warnedLog = false;
-	let warnedUi = false;
+let cachedOutcome: PatchOutcome | undefined;
+let warnedLog = false;
+let warnedUi = false;
 
-	const installOnce = (): PatchOutcome => {
-		if (cachedOutcome !== undefined) return cachedOutcome;
-
-		const missing: string[] = [];
-		if (typeof targets.uiHelpersProto?.renderSessionContext !== "function") missing.push("UiHelpers.renderSessionContext");
-		if (typeof targets.uiHelpersProto?.renderSessionContextIncrementally !== "function")
-			missing.push("UiHelpers.renderSessionContextIncrementally");
-		if (typeof targets.uiHelpersProto?.replaySteps !== "function") missing.push("UiHelpers.replaySteps");
-		if (typeof targets.selectorControllerProto?.showUserMessageSelector !== "function")
-			missing.push("SelectorController.showUserMessageSelector");
-		if (typeof targets.selectorControllerProto?.showCopySelector !== "function") missing.push("SelectorController.showCopySelector");
-		if (typeof targets.sessionManagerProto?.getTree !== "function") missing.push("SessionManager.getTree");
-		if (typeof targets.eventControllerProto?.handleEvent !== "function") missing.push("EventController.handleEvent");
-		if (typeof targets.agentProto?.getPendingToolResults !== "function") missing.push("Agent.getPendingToolResults");
-		if (typeof targets.transcriptSource?.parseEntries !== "function") missing.push("agentTranscriptSource.parseEntries");
-		if (missing.length > 0) {
-			cachedOutcome = { kind: "missing", targets: missing };
-			return cachedOutcome;
-		}
-
-		try {
-			wrapUiAndSelectors(targets);
-			wrapEventAgentAndHub(targets);
-			cachedOutcome = { kind: "installed" };
-			return cachedOutcome;
-		} catch (error) {
-			cachedOutcome = { kind: "failed", error: errorText(error) };
-			return cachedOutcome;
-		}
+function resolveHostTargets(): GuardTargets {
+	return {
+		uiHelpersProto: UiHelpers?.prototype,
+		eventControllerProto: EventController?.prototype,
+		selectorControllerProto: SelectorController?.prototype,
+		sessionManagerProto: SessionManager?.prototype,
+		agentProto: Agent?.prototype,
+		transcriptSource: agentTranscriptSource,
 	};
+}
 
-	return (pi: ExtensionAPI): PatchOutcome => {
-		// Never remove registerMessageRenderer: startup-deferral caches extensions without pre-first-frame registrations as deferrable in agent.db, loading them after renderInitialMessages on later starts.
-		pi.registerMessageRenderer(EAGER_RENDERER_TYPE, () => undefined);
-
-		const outcome = installOnce();
-		if (outcome.kind !== "installed") {
-			if (!warnedLog) {
-				warnedLog = true;
-				pi.logger.warn("task-result-guard: non-snapshot task TUI guard inactive", { outcome });
-			}
-			pi.on("session_start", (_event, ctx) => {
-				try {
-					if (warnedUi || ctx.agent.kind !== "main" || !ctx.hasUI) return;
-					warnedUi = true;
-					ctx.ui.notify(warningText(outcome), "warning");
-				} catch (error) {
-					pi.logger.warn("task-result-guard: session_start warning failed", { error: errorText(error) });
-				}
-			});
-		}
-		return outcome;
+function validateTargets(
+	targets: GuardTargets,
+): { readonly ok: true; readonly value: ValidatedTargets } | { readonly ok: false; readonly missing: readonly string[] } {
+	const missing: string[] = [];
+	const ui = targets.uiHelpersProto;
+	const ev = targets.eventControllerProto;
+	const sel = targets.selectorControllerProto;
+	const sm = targets.sessionManagerProto;
+	const ag = targets.agentProto;
+	const ts = targets.transcriptSource;
+	if (typeof ui?.renderSessionContext !== "function") missing.push("UiHelpers.renderSessionContext");
+	if (typeof ui?.renderSessionContextIncrementally !== "function") missing.push("UiHelpers.renderSessionContextIncrementally");
+	if (typeof ui?.replaySteps !== "function") missing.push("UiHelpers.replaySteps");
+	if (typeof sel?.showUserMessageSelector !== "function") missing.push("SelectorController.showUserMessageSelector");
+	if (typeof sel?.showCopySelector !== "function") missing.push("SelectorController.showCopySelector");
+	if (typeof sm?.getTree !== "function") missing.push("SessionManager.getTree");
+	if (typeof ev?.handleEvent !== "function") missing.push("EventController.handleEvent");
+	if (typeof ag?.getPendingToolResults !== "function") missing.push("Agent.getPendingToolResults");
+	if (typeof ts?.parseEntries !== "function") missing.push("agentTranscriptSource.parseEntries");
+	if (
+		missing.length > 0 ||
+		!ui?.renderSessionContext ||
+		!ui.renderSessionContextIncrementally ||
+		!ui.replaySteps ||
+		!sel?.showUserMessageSelector ||
+		!sel.showCopySelector ||
+		!sm?.getTree ||
+		!ev?.handleEvent ||
+		!ag?.getPendingToolResults ||
+		!ts?.parseEntries
+	) {
+		return { ok: false, missing };
+	}
+	return {
+		ok: true,
+		value: {
+			uiHelpersProto: ui as ValidatedTargets["uiHelpersProto"],
+			eventControllerProto: ev as ValidatedTargets["eventControllerProto"],
+			selectorControllerProto: sel as ValidatedTargets["selectorControllerProto"],
+			sessionManagerProto: sm as ValidatedTargets["sessionManagerProto"],
+			agentProto: ag as ValidatedTargets["agentProto"],
+			transcriptSource: ts as ValidatedTargets["transcriptSource"],
+		},
 	};
+}
+
+function installOnce(): PatchOutcome {
+	if (cachedOutcome !== undefined) return cachedOutcome;
+
+	let targets: GuardTargets;
+	try {
+		targets = resolveHostTargets();
+	} catch (error) {
+		cachedOutcome = { kind: "failed", error: errorText(error) };
+		return cachedOutcome;
+	}
+
+	const checked = validateTargets(targets);
+	if (!checked.ok) {
+		cachedOutcome = { kind: "missing", targets: checked.missing };
+		return cachedOutcome;
+	}
+
+	try {
+		wrapUiAndSelectors(checked.value);
+		wrapEventAgentAndHub(checked.value);
+		cachedOutcome = { kind: "installed" };
+		return cachedOutcome;
+	} catch (error) {
+		cachedOutcome = { kind: "failed", error: errorText(error) };
+		return cachedOutcome;
+	}
 }
 
 function warningText(outcome: Exclude<PatchOutcome, { readonly kind: "installed" }>): string {
@@ -386,15 +426,24 @@ function warningText(outcome: Exclude<PatchOutcome, { readonly kind: "installed"
 	}
 }
 
-const bindProcessTaskResultGuard = createTaskResultGuard({
-	uiHelpersProto: UiHelpers.prototype,
-	eventControllerProto: EventController.prototype,
-	selectorControllerProto: SelectorController.prototype,
-	sessionManagerProto: SessionManager.prototype,
-	agentProto: Agent.prototype,
-	transcriptSource: agentTranscriptSource,
-});
-
 export default function taskResultGuard(pi: ExtensionAPI): void {
-	bindProcessTaskResultGuard(pi);
+	// Never remove registerMessageRenderer: startup-deferral caches extensions without pre-first-frame registrations as deferrable in agent.db, loading them after renderInitialMessages on later starts.
+	pi.registerMessageRenderer(EAGER_RENDERER_TYPE, () => undefined);
+
+	const outcome = installOnce();
+	if (outcome.kind !== "installed") {
+		if (!warnedLog) {
+			warnedLog = true;
+			pi.logger.warn("task-result-guard: non-snapshot task TUI guard inactive", { outcome });
+		}
+		pi.on("session_start", (_event, ctx) => {
+			try {
+				if (warnedUi || ctx.agent.kind !== "main" || !ctx.hasUI) return;
+				warnedUi = true;
+				ctx.ui.notify(warningText(outcome), "warning");
+			} catch (error) {
+				pi.logger.warn("task-result-guard: session_start warning failed", { error: errorText(error) });
+			}
+		});
+	}
 }

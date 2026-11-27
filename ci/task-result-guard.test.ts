@@ -13,7 +13,7 @@ import { type ReplayContext, type ReplayTarget, UiHelpers } from "@oh-my-pi/pi-c
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/task-details";
 import { resolveChildren, type UiNode } from "@oh-my-pi/pi-tui";
-import taskResultGuard, { createTaskResultGuard } from "../agent/extensions/task-result-guard/index.ts";
+import taskResultGuard from "../agent/extensions/task-result-guard/index.ts";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
@@ -560,36 +560,62 @@ describe("task-result-guard", () => {
 		expect(rawBranchResults).toEqual([{ __synthetic: true, source: "assistant_stop_error" }]);
 	});
 
-	test("logs once per process and notifies once on the main UI session when a host entrypoint is missing", async () => {
-		const degradedGuard = createTaskResultGuard({
-			uiHelpersProto: {},
-			eventControllerProto: EventController.prototype,
-			selectorControllerProto: SelectorController.prototype,
-			sessionManagerProto: SessionManager.prototype,
-			agentProto: Agent.prototype,
-			transcriptSource: agentTranscriptSource,
+	test("logs once per process and notifies once on the main UI session when a host entrypoint is missing", () => {
+		const script = [
+			'import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";',
+			'import taskResultGuard from "./agent/extensions/task-result-guard/index.ts";',
+			'Reflect.deleteProperty(UiHelpers.prototype, "renderSessionContext");',
+			"const renderers = new Set<string>();",
+			"const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();",
+			"const warnings: Array<{ message: string; data?: unknown }> = [];",
+			"const pi = {",
+			"\tregisterMessageRenderer: (t: string) => renderers.add(t),",
+			"\ton: (ev: string, fn: (...args: unknown[]) => unknown) => {",
+			"\t\tconst list = handlers.get(ev) ?? [];",
+			"\t\tlist.push(fn);",
+			"\t\thandlers.set(ev, list);",
+			"\t},",
+			"\tlogger: { warn: (message: string, data?: unknown) => warnings.push({ message, data }) },",
+			"};",
+			"taskResultGuard(pi as never);",
+			"taskResultGuard(pi as never);",
+			"const notices: Array<{ text: string; level: string }> = [];",
+			'const startHandlers = handlers.get("session_start") ?? [];',
+			"for (const h of startHandlers) {",
+			'\tawait h({}, { agent: { kind: "sub" }, hasUI: true, ui: { notify: (text: string, level: string) => notices.push({ text, level }) } });',
+			"}",
+			"const afterSubCount = notices.length;",
+			"for (const h of startHandlers) {",
+			'\tawait h({}, { agent: { kind: "main" }, hasUI: true, ui: { notify: (text: string, level: string) => notices.push({ text, level }) } });',
+			'\tawait h({}, { agent: { kind: "main" }, hasUI: true, ui: { notify: (text: string, level: string) => notices.push({ text, level }) } });',
+			"}",
+			"console.log(JSON.stringify({ hasRenderer: renderers.has('mouriya.omp.task-result-guard'), warnings, afterSubCount, notices }));",
+		].join("\n");
+
+		const proc = Bun.spawnSync([process.execPath, "-e", script], {
+			cwd: REPO_ROOT,
+			env: { ...process.env, OMOMP_LANG: "en" },
+			stdout: "pipe",
+			stderr: "pipe",
 		});
-
-		const api1 = makeApi();
-		const outcome1 = degradedGuard(api1.pi);
-		const outcome2 = degradedGuard(api1.pi);
-		expect(outcome1.kind).toBe("missing");
-		expect(outcome2).toEqual(outcome1);
-		expect(api1.warnings).toHaveLength(1);
-
-		const notices: Array<{ text: string; level: string }> = [];
-		const startHandlers = api1.handlers.get("session_start") ?? [];
-		for (const h of startHandlers) {
-			await h({}, { agent: { kind: "sub" }, hasUI: true, ui: { notify: (t: string, l: string) => notices.push({ text: t, level: l }) } });
+		if (proc.exitCode !== 0) {
+			throw new Error(`isolated degraded-guard probe failed (${proc.exitCode}): ${new TextDecoder().decode(proc.stderr)}`);
 		}
-		expect(notices).toHaveLength(0);
-
-		for (const h of startHandlers) {
-			await h({}, { agent: { kind: "main" }, hasUI: true, ui: { notify: (t: string, l: string) => notices.push({ text: t, level: l }) } });
-			await h({}, { agent: { kind: "main" }, hasUI: true, ui: { notify: (t: string, l: string) => notices.push({ text: t, level: l }) } });
-		}
-		expect(notices).toHaveLength(1);
-		expect(notices[0]?.level).toBe("warning");
-		expect(notices[0]?.text).toContain("UiHelpers.renderSessionContext");
+		const parsed = JSON.parse(new TextDecoder().decode(proc.stdout).trim()) as {
+			hasRenderer: boolean;
+			warnings: Array<{ message: string; data?: { outcome?: { kind?: string; targets?: string[] } } }>;
+			afterSubCount: number;
+			notices: Array<{ text: string; level: string }>;
+		};
+		expect(parsed.hasRenderer).toBe(true);
+		expect(parsed.warnings).toHaveLength(1);
+		expect(parsed.warnings[0]?.data?.outcome).toEqual({
+			kind: "missing",
+			targets: ["UiHelpers.renderSessionContext"],
+		});
+		expect(parsed.afterSubCount).toBe(0);
+		expect(parsed.notices).toHaveLength(1);
+		expect(parsed.notices[0]?.level).toBe("warning");
+		expect(parsed.notices[0]?.text).toContain("UiHelpers.renderSessionContext");
 	});
 });
