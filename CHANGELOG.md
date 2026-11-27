@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Omitted empty or null schema-declared tool arguments, rejected empty array elements with their paths, and stripped undeclared root keys when the schema disallowed them
+
 ### Fixed
 
 - Fixed skills missing from the sandbox container: `~/.claude/skills` and `~/.claude/CLAUDE.md` are copied with symbolic links resolved to their targets instead of as links that dangle in the container, and the `skills/` directory of every `extensions` root outside `~/.omp` is copied alongside its `rules/`

@@ -211,7 +211,7 @@ cwd: /absolute/path/to/leader-checkout
 - **放行**：其他程序的 argv 启动（`subprocess.run(["ls"])`）、`!ls`、`%run`、只含一条单独百分号命令的 JavaScript 单元格（`%load`、`%pip`、`%bun`、`%environment`，参数写在同一行；omp 在执行任何 JavaScript 之前改写它）、只在字符串或注释里提到 API 名的代码、`list.remove`、`Map.delete`，以及不含上述调用的单元格。
 - **不覆盖**：在之前单元格里起别名的通用名（`remove`、`run`、`exec`、`spawn`、`rm`；独有名不论在哪个单元格都会拦截）、`getattr` 式的动态访问、`os.exec*`/`os.spawn*`/`pty.spawn`，以及脚本文件（`%run`、`%load`）。函数定义体内出现删除 API 名时，即使本单元格没有调用它也会拦截。
 
-**`delete` 工具。** 在 macOS、Linux 与 Windows 上注册（审批级别 `write`，顶层工具）；其他平台不注册，拦截的 reason 写明本会话不能删除。参数：`paths`（非空字符串数组）与 `mode`（`"trash"`，默认；或 `"permanent"`）。工具说明、`mode` 参数说明与拦截的 reason 都要求 agent 省略 `mode`，只有用户明确要求不可恢复的删除时才设 `"permanent"`；「删除」「移除」「清理」或以 `rm -rf` 表述的请求都不算这种要求。
+**`delete` 工具。** 在 macOS、Linux 与 Windows 上注册（审批级别 `write`，顶层工具）；其他平台不注册，拦截的 reason 写明本会话不能删除。参数：`paths`（非空字符串数组）与 `mode`（`"trash"`，默认；或 `"permanent"`）。任一参数写出空值——空白字符串、空数组或 `null`——等同没传，所以 `mode: " "` 按进废纸篓处理；`paths` 里的空元素让整次调用被拒绝并指明元素下标。工具说明、`mode` 参数说明与拦截的 reason 都要求 agent 省略 `mode`，只有用户明确要求不可恢复的删除时才设 `"permanent"`；「删除」「移除」「清理」或以 `rm -rf` 表述的请求都不算这种要求。
 
 - **字面路径**：不展开 `~`、环境变量与 glob；相对路径相对会话 cwd。`"$HOME"`、`"*.log"` 都是文件名。
 - **先校验、后改动**：所有路径先逐个校验，任一被拒则整次拒绝、不动任何文件。拒绝：空串或纯空白、以 `~` 开头、不存在、文件系统根、家目录及其祖先目录、会话 cwd 本身及其祖先目录。受保护目录按文件身份（`dev:ino`）比较，因此大小写变体、firmlink、bind mount 以及指向它们的符号链接都会被拒；检查覆盖路径本身、按原文经链接实际到达的文件，以及符号链接的目标。已不存在的受保护目录（如已删除的 cwd）按拼写比较。`..`、`.` 或末尾 `/` 穿过符号链接的路径（`link/../x`、`link/`）实际到达的文件与规范化后的路径不同，予以拒绝。通过校验的符号链接（含悬空链接）只删除链接本身。Windows 上拒绝裸盘符（`C:`）；根包括盘符根（`C:\`、`C:/`，以及解析到它的 `\` 或 `/`）、UNC 共享根（`\\server\share`）与 `\\?\C:\`；拼写统一转小写、分隔符统一为 `\` 后比较；家目录取 `USERPROFILE`。
@@ -252,7 +252,7 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 - **`wt`**：执行 `/wt [<branch>]`。若当前会话已在 linked worktree 中，首次调用不创建目录，只返回当前 worktree 路径、分支、HEAD、未提交项数、主 checkout 路径与 `confirm` 哈希；需要再次新建时传入该 `confirm` 二次调用。工具描述要求模型在工作区出现自己没做的改动时提出切到 worktree，分不清是否属于干扰时先问用户。
 - **`wt_remove`**：分两步调用。不传 `confirm` 时做只读检查，返回 worktree 与主 checkout 路径、`SAFE`/`UNSAFE`/`BLOCKED` 结论、删除会丢失的文件（staged、unstaged、untracked、ignored，每类最多列 50 项及总数）、主 checkout HEAD 未合并的分支提交（保留在分支上）、运行中任务/子代理阻塞项，以及绑定当前状态指纹的 `confirm` 哈希。传入 `confirm` 二次调用时，在空闲后按 **重检指纹 → `/move <主 checkout>` → 确认新 `cwd` → 再检指纹 → `worktreeRemove(path, true)` → 清理该 worktree 的 git 元数据** 顺序执行，任一步状态变化即停止并报告停在哪一步。
 
-工具描述只写用途和何时使用；调用流程（排队到回合结束、两次调用的 `confirm`、哪些变化让 `wt_remove` 的 `confirm` 失效、取消）放在原生 topic `help://wt/lifecycle` 与 `help://wt_remove/lifecycle`，每个工具结果也会写明下一步。
+工具描述只写用途和何时使用；调用流程（排队到回合结束、两次调用的 `confirm`、哪些变化让 `wt_remove` 的 `confirm` 失效、取消）放在原生 topic `help://wt/lifecycle` 与 `help://wt_remove/lifecycle`，每个工具结果也会写明下一步。`branch` 或 `confirm` 写成空白或 `null` 时等同没传：`wt` 返回当前 worktree 报告，`wt_remove` 返回只读检查结果。
 
 处于 vibe 模式时，两个工具在调用当场返回错误结果且不排队，`wt_remove` 的只读检查调用同样如此。错误文本说明会话处于 vibe 模式，并含 `exit vibe mode first`，要求先退出 vibe 模式。调用之后才进入 vibe 模式的已排队请求，在执行时被宿主拒绝，结果消息中同样带有 `Exit vibe mode first.`。
 
@@ -260,7 +260,7 @@ OMP 的 `/wt` 与 `/move` 在回合流式输出期间拒绝执行，且 `Extensi
 
 源码：`agent/extensions/harness-restart/`。仅在主会话交互式 TUI 启用（轻量模式同样启用）。
 
-使用与 `wt-tool` 相同的空闲队列机制与武装条件触发 `InteractiveMode.restart()`。在调用 `restart()` 前向当前分支写入自定义条目 `mouriya.omp.harness-restart.request`（记录 `reason` 与时间戳）；新进程恢复会话时，在 `session_start` 读到该条目并发送 `"Harness restart completed（<时间>）。Reason was: <原因>。Continue what you were doing."`（`attribution: "agent"`）。只有 OMP 受理该消息之后（该消息引发的回合结束时这次发送才结清）才写入该请求的 `consumed` 标记，写入前重新读取当前分支，待报请求已不是这一个时跳过；消息未被受理时记一条 `harness-restart:` 日志且不写标记，请求保持待报，下一次 `session_start` 或 `session_switch` 再发一次。本扩展发出的每条通知都走同一个发送入口，被拒绝时都会留下日志。
+使用与 `wt-tool` 相同的空闲队列机制与武装条件触发 `InteractiveMode.restart()`。在调用 `restart()` 前向当前分支写入自定义条目 `mouriya.omp.harness-restart.request`（记录 `reason` 与时间戳）；新进程恢复会话时，在 `session_start` 读到该条目并发送 `"Harness restart completed（<时间>）。Reason was: <原因>。Continue what you were doing."`（`attribution: "agent"`）。`reason` 写成空白或 `null` 时记录与复述都没有原因，与没传相同。只有 OMP 受理该消息之后（该消息引发的回合结束时这次发送才结清）才写入该请求的 `consumed` 标记，写入前重新读取当前分支，待报请求已不是这一个时跳过；消息未被受理时记一条 `harness-restart:` 日志且不写标记，请求保持待报，下一次 `session_start` 或 `session_switch` 再发一次。本扩展发出的每条通知都走同一个发送入口，被拒绝时都会留下日志。
 
 ### argon-long-output
 

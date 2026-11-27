@@ -19,6 +19,7 @@ import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { captureInteractiveMode, type InteractiveModeFailure } from "../_shared/interactive-mode.ts";
 import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";
+import { omompTool } from "../_shared/omomp-shared/tool-entry.ts";
 import { describeShown, runSlashCommand } from "./interactive.ts";
 import {
 	CONFIRM_INVALIDATION,
@@ -317,7 +318,7 @@ async function create(runtime: Runtime, ctx: ExtensionContext, rawParams: unknow
 	const ready = readiness(runtime, ctx, CREATE_TOOL);
 	if (ready.kind === "blocked") return fail(ready.reason);
 	const params = createParams.parse(rawParams);
-	const branch = params.branch?.trim() || undefined;
+	const branch = params.branch?.trim();
 	const current = await currentWorktree(ctx, ready.mode);
 	if (current !== undefined && params.confirm?.trim() !== current.confirm) {
 		const mismatch = params.confirm === undefined ? "" : "The given confirm value does not match this worktree, so nothing was queued.\n";
@@ -334,7 +335,7 @@ async function create(runtime: Runtime, ctx: ExtensionContext, rawParams: unknow
 async function remove(runtime: Runtime, ctx: ExtensionContext, rawParams: unknown): Promise<ToolResult> {
 	const ready = readiness(runtime, ctx, REMOVE_TOOL);
 	if (ready.kind === "blocked") return fail(ready.reason);
-	const confirm = removeParams.parse(rawParams).confirm?.trim() || undefined;
+	const confirm = removeParams.parse(rawParams).confirm?.trim();
 	const result = await inspect(runtime.pi, ctx, ctx.sessionManager.getCwd());
 	if (result.kind === "error") return fail(`${REMOVE_TOOL}: ${result.reason}`);
 	const check = result.check;
@@ -432,6 +433,6 @@ export default function wtTool(pi: ExtensionAPI): void {
 		parameters: removeParams,
 		execute: (_toolCallId, rawParams, _signal, _onUpdate, ctx) => guardTool(pi, REMOVE_TOOL, () => remove(runtime, ctx, rawParams)),
 	} satisfies WithTopics<ToolDefinition<typeof removeParams>>;
-	pi.registerTool(createTool);
-	pi.registerTool(removeTool);
+	pi.registerTool(omompTool(createTool));
+	pi.registerTool(omompTool(removeTool));
 }

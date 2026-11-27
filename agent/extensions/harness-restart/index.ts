@@ -4,6 +4,7 @@ import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { captureInteractiveMode, type InteractiveModeFailure } from "../_shared/interactive-mode.ts";
 import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";
+import { omompTool } from "../_shared/omomp-shared/tool-entry.ts";
 
 const TOOL = "harness_restart";
 const MARKER_TYPE = "mouriya.omp.harness-restart.request";
@@ -222,21 +223,23 @@ export default function harnessRestart(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", (_event, ctx) => guardHook(pi, "session_shutdown", () => reset(runtime, ctx)));
 	pi.on("agent_start", (_event, ctx) => guardHook(pi, "agent_start", () => disarm(runtime, ctx)));
 	pi.on("agent_end", (event, ctx) => guardHook(pi, "agent_end", () => onAgentEnd(runtime, event, ctx)));
-	pi.registerTool({
-		name: TOOL,
-		label: tr("Harness Restart", "重启 Harness"),
-		description: DESCRIPTION,
-		approval: "exec",
-		loadMode: "essential",
-		defaultInactive: true,
-		parameters: params,
-		async execute(_toolCallId, toolParams, _signal, _onUpdate, ctx) {
-			try {
-				return restart(runtime, ctx, toolParams.reason);
-			} catch (error) {
-				pi.logger.warn("harness-restart: tool failed", { error: errorText(error) });
-				return { content: [{ type: "text", text: errorText(error) }], isError: true };
-			}
-		},
-	});
+	pi.registerTool(
+		omompTool({
+			name: TOOL,
+			label: tr("Harness Restart", "重启 Harness"),
+			description: DESCRIPTION,
+			approval: "exec",
+			loadMode: "essential",
+			defaultInactive: true,
+			parameters: params,
+			async execute(_toolCallId, toolParams: z.infer<typeof params>, _signal, _onUpdate, ctx) {
+				try {
+					return restart(runtime, ctx, toolParams.reason);
+				} catch (error) {
+					pi.logger.warn("harness-restart: tool failed", { error: errorText(error) });
+					return { content: [{ type: "text", text: errorText(error) }], isError: true };
+				}
+			},
+		}),
+	);
 }
