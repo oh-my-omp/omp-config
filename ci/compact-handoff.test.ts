@@ -141,16 +141,24 @@ describe("omp-config compact-handoff integration", () => {
 
 		const result = results[0];
 		expect(result?.prompt).toContain("## User Intent & Session Rulings");
-		expect(result?.prompt).toContain("## Handoff to Kept Tail");
+		expect(result?.prompt).toContain("## Decisions & Domain Dead Ends");
+		expect(result?.prompt).toContain("## Code Anchors & Verified Invocations");
+		expect(result?.prompt).toContain("## Landed Milestones & Executed Verifications");
+		expect(result?.prompt).not.toContain("## Handoff to Kept Tail");
+		expect(result?.prompt).not.toContain("Active uncommitted worktree/branch state");
+		expect(result?.prompt).not.toContain('"Fix X", "Verify Y"');
 		const extraContext = (result?.context ?? []).join("\n");
+		expect(extraContext).toContain("harness-provided [omp-core]");
+		expect(extraContext).toContain("this request stops at the compaction cut");
+		expect(extraContext).toContain("live runtime handles");
 		expect(extraContext).toContain("[omp-config/repo-rules]");
-		expect(extraContext).toContain("[omp-config/tool-policy-nag]");
+		expect(extraContext).toContain("noise-guard [omp-config/tool-policy-nag]");
 		expect(extraContext).toContain("你为什么不遵守system prompt");
-		expect(extraContext).toContain("[omp-config/turn-judge]");
-		expect(extraContext).toContain("[omp-config/watchdog-agent]");
-		expect(extraContext).toContain("[omp-config/lang-nag]");
-		expect(extraContext).toContain("[omp-config/isolation-nudge]");
-		expect(extraContext).toContain("[omp-config/task-completion-judge]");
+		expect(extraContext).toContain("noise-guard [omp-config/turn-judge]");
+		expect(extraContext).toContain("noise-guard [omp-config/watchdog-agent]");
+		expect(extraContext).toContain("noise-guard [omp-config/lang-nag]");
+		expect(extraContext).toContain("noise-guard [omp-config/isolation-nudge]");
+		expect(extraContext).toContain("noise-guard [omp-config/task-completion-judge]");
 
 		const compactEvent = {
 			type: "session_compact",
