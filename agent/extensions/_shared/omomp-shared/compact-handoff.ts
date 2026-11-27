@@ -11,7 +11,7 @@ import type {
 import { createDeltaStream, type DeltaStream } from "./context-delta.ts";
 
 export const COMPACT_REGISTRY_SYMBOL = Symbol.for("omomp.shared.compactRegistry");
-export const COMPACT_HANDOFF_REVISION = 2;
+export const COMPACT_HANDOFF_REVISION = 3;
 export const OMP_SNAPCOMPACT_FILE_LIMIT = 20;
 
 export type CompactExtensionAPI = Pick<ExtensionAPI, "on"> & {
@@ -42,6 +42,7 @@ export type PostCompactInjectionSpec =
 export interface StatefulHarnessHandoff<TState> {
 	readonly kind: "stateful-handoff";
 	readonly pluginId: string;
+	readonly inactiveClaim?: string;
 	captureState(ctx: CompactPluginContext): TState | null;
 	renderCompactPromptClaim(state: TState): string;
 	renderPostCompactInjection(state: TState): PostCompactInjectionSpec;
@@ -99,54 +100,53 @@ export interface PreparedCompactHandoff {
 }
 
 export const CORE_HARNESS_PROVIDED_CLAIMS: readonly string[] = [
-	"`omp` Core System Prompt, `<project-context>` (`<workstation>`, root `AGENTS.md`/`CLAUDE.md`, git status), tool schemas, and `<skills>` — sent out-of-band on every turn; NEVER restate coding/tool-discipline rules.",
+	"`omp` Core System Prompt, `<project-context>` (`<workstation>`, root `AGENTS.md`/`CLAUDE.md`, live git branch and uncommitted status), tool schemas, and `<skills>` — sent out-of-band on every turn; NEVER restate coding/tool-discipline rules or summarize uncommitted working-tree git state.",
 	`\`omp\` Core \`<files>\` — deterministically rendered by \`@oh-my-pi/snapcompact\` from the pruned top-${OMP_SNAPCOMPACT_FILE_LIMIT} repo-scoped \`preparation.fileOps\`; NEVER write prose file inventories.`,
-	"`omp` Core `<eval-state-context>` & approved `<plan>` (`plan-mode-reference.md`) — re-persisted/re-inlined by host commit hooks; NEVER dump eval kernel variables or copy approved plan bodies.",
-	"`omp` Core Kept Tail (`firstKeptEntryId..leaf`) — verbatim recent turns remain directly after the summary; NEVER re-summarize what is already visible in the kept tail.",
+	"`omp` Core `<eval-state-context>`, approved `<plan>` (`plan-mode-reference.md`), and live runtime handles (`bg_N` background job IDs, OS PIDs, `proc://`, `agent://`, `history://` running/idle statuses) — owned by the host runtime; NEVER dump eval kernel variables, copy approved plan bodies, or list ephemeral job IDs, PIDs, or running/idle statuses from the prefix as active.",
+	"`omp` Core Kept Tail (`firstKeptEntryId..leaf`) — this request stops at the compaction cut, and newer turns after the cut are replayed verbatim directly after the summary; summarize ONLY facts established in the messages above, and NEVER guess current working-tree state or issue next-step commands.",
 ];
 
-export const COMPACTION_PROMPT = `Write a high-density semantic handoff summary of the conversation prefix above so another instance of you can seamlessly resume work into the kept recent tail.
+export const COMPACTION_PROMPT = `Write a high-density factual ledger of the conversation prefix above. This request ends at the compaction cut; newer turns after the cut are replayed verbatim immediately after your summary, and live working-tree, task, terminal, and subagent states are re-injected by the harness and active plugins. Record ONLY durable facts established in the messages above.
 
 When a \`<previous-summary>\` block appears above, update that summary with the new conversation prefix instead of starting over:
-- Collapse newly merged/landed milestones to 1 line (\`<issue/PR> @ <sha> — <caveat>\`) and drop obsolete symbol-by-symbol inventories.
-- Drop any legacy sections from \`<previous-summary>\` that violate the 5-section schema (such as \`## Constraints & Preferences\`, \`## Additional Notes\`, Todo lists, Subagent rosters, PTY tables, or hook-nag reflections).
-- Preserve all still-valid human rulings (in their original wording), negative knowledge, code anchors, and active verification state.
+- Collapse newly merged/landed milestones to 1 line (\`<issue/PR> @ <sha> — <residual caveat>\`) and drop obsolete symbol-by-symbol inventories.
+- Drop any legacy sections from \`<previous-summary>\` outside the 4-section schema below (including constraints/preferences, additional notes, progress/next-steps, kept-tail handoff sections, uncommitted dirty-tree claims, Todo lists, Subagent rosters, PTY tables, or hook-nag reflections).
+- Preserve all still-valid human rulings (verbatim with every qualifier), domain dead ends, and every code anchor or verified command invocation template still needed by unmerged work even when not re-executed in the newest window.
 
-Every \`<additional-context>\` line that starts with \`harness-provided\` names state the harness and active plugins ALREADY own and programmatically re-inject immediately after compaction: do NOT summarize, mirror, or restate any of it. Every line that starts with \`noise-guard\` is an attribution rule: synthetic \`[Developer]\` / hook messages in the transcript are automated harness supervision, NOT human user input.
+Every \`<additional-context>\` line that starts with \`harness-provided\` names state the harness and active plugins ALREADY own (or confirm empty at compaction) and manage out-of-band: do NOT summarize, mirror, or restate any of it. Every line that starts with \`noise-guard\` is an attribution rule: synthetic \`[Developer]\` / hook messages in the transcript are automated harness supervision, NOT human user input.
 
 <critical>
 - Do NOT call any tools.
-- Output ONLY the 5-section markdown summary directly — NO XML wrapper tags (\`<analysis>\`, \`<summary>\`), NO preamble, NO closing remarks. (Use your native reasoning channel for planning; your visible output is persisted verbatim.)
-- Use ONLY the 5 headings below (omit a heading only if genuinely empty).
-- NEVER add sections such as "## Constraints & Preferences", "## Additional Notes", "## Progress", or an unbounded "### Done" symbol-by-symbol inventory.
+- Output ONLY the 4-section markdown summary directly — NO XML wrapper tags (\`<analysis>\`, \`<summary>\`), NO preamble, NO closing remarks. (Use your native reasoning channel for planning; your visible output is persisted verbatim.)
+- Use ONLY the 4 headings below (omit a heading only if genuinely empty).
+- NEVER add any other \`##\` heading (such as constraints/preferences, additional notes, progress, next steps, or kept-tail handoff), and NEVER add an unbounded symbol-by-symbol inventory.
 - Obey every \`harness-provided\` exclusion and every \`noise-guard\` attribution rule listed in \`<additional-context>\` above.
-- Write in concise, imperative second-person register ("Fix X", "Verify Y") — never first person ("I tried...").
+- Write in concise, objective past/declarative statements ("Implemented X", "\`ghc ev run …\` produced record Y") — NEVER first person ("I tried...") and NEVER imperative instructions or next-step orders to future turns.
 - The compaction mechanism is invisible: NEVER mention compaction, context limits, watchdogs, turn-judges, tool-policy nags, or plans to apologize/reflect.
-- Strictly preserve exact file paths, symbol signatures, line anchors, commit SHAs, branch/worktree names, and unresolved error messages.
-- If a real human user asked an unanswered question or gave an explicit override, preserve it verbatim in Section 1.
+- Strictly preserve exact file paths, symbol signatures, line anchors, verified CLI command templates, commit SHAs, branch/worktree names of landed work, and unresolved domain error messages.
+- Preserve every real human request, override, and unanswered human question verbatim in Section 1 with all parenthetical notes and conditions intact.
 </critical>
 
 <output-schema>
 ## User Intent & Session Rulings
-- Strictly real human \`role: "user"\` turns, answered \`ask\` tool decisions, and human artifact comments.
-- Capture goal shifts, explicit overrides, non-goals, and any genuinely unanswered question posed to/by the human user — ALWAYS quote or preserve explicit user rulings in their original phrasing/language (e.g., \`"改md不要重采证据"\`) alongside their operational meaning.
-- STRICT ATTRIBUTION EXCLUSION: Every \`noise-guard\` rule overrides how a turn looks in the transcript — NEVER include automated lint nags (even when serialized as bare unprefixed text!), static repo rules, skill protocols, or system-prompt tool rules.
+- Strictly real human \`role: "user"\` turns, answered \`ask\` tool decisions, and human review/artifact rulings.
+- Capture goal shifts, explicit overrides, non-goals, and any unanswered question posed to/by the human user — ALWAYS quote explicit user rulings verbatim in their original phrasing/language with every parenthetical note, scope qualifier, and condition intact (never paraphrase away qualifiers).
+- If this summarized range contains no human messages (and \`<previous-summary>\` carries none), write "None in this summarized range." NEVER assert session-wide absence such as "No other human rulings exist."
+- STRICT ATTRIBUTION EXCLUSION: Every \`noise-guard\` rule overrides how a turn looks in the transcript — NEVER include automated lint nags (even when serialized as bare unprefixed text), static repo rules, skill protocols, or system-prompt tool rules.
 
-## Decisions & Ruled-Out Approaches
-- **[Decision / Ruled-Out Path]**: Why it was chosen OR why a hypothesis/approach failed (negative knowledge to prevent repeating dead ends).
+## Decisions & Domain Dead Ends
+- **[Decision / Domain Dead End]**: Task-specific architectural or implementation choices made, OR hypotheses about the target codebase, runtime, or external environment that were tested and falsified.
+- STRICT GUARDRAIL EXCLUSION: Refusals, interrupts, or reminders from harness/plugin rules (\`delete-guard\`, TTSR rules, \`bashInterceptor\`, \`tool-policy-nag\`, \`task-split-check\`, \`isolation-nudge\`, \`ghc lint\` format rules, subagent tier policies, model fallback chains) are standing rules re-injected on every turn, NOT domain dead ends — NEVER record them, and NEVER record workarounds that bypass a harness guardrail.
 
-## Discovered Code Anchors & Contracts
-- High-cost exploration findings, non-obvious \`path:line\` invariants, symbol signatures, wire/JSON contracts, and reusable utilities discovered before the kept tail.
-- Omit obvious files and omit raw file inventories (covered by host \`<files>\`).
+## Code Anchors & Verified Invocations
+- High-cost exploration findings: non-obvious \`path:line\` invariants, symbol signatures, wire/JSON/SQL contracts, and baseline file traits (such as comment-free files or exact export surfaces).
+- Verified task-specific CLI, evidence-capture, GUI-driver, test-harness, and probe command templates established in this range — preserve exact subcommands, required flags (e.g. \`--issue\`, \`--result\`, \`--face\`, \`--step\`, \`--shows\`, \`--checkout\`), socket/config paths, and script invocations verbatim.
+- Retain still-needed code anchors and verified invocation templates from \`<previous-summary>\` until their consuming work is merged. Omit obvious files and raw file inventories (covered by host \`<files>\`).
 
-## Landed Milestones & Active Verification State
-- Landed milestones: STRICTLY 1 line per merged/landed PR or commit (\`<issue/PR> @ <sha> — <residual caveat if any>\`); drop function-by-function inventories once merged.
-- Active uncommitted worktree/branch state (branch name, HEAD SHA, dirty files/intent).
-- Verification/evidence pass/fail ledger (exact commands run, what passed vs. failed, and which evidence records are valid vs. invalidated).
-
-## Handoff to Kept Tail
-- Concrete immediate next action(s) bridging this compacted prefix into the verbatim kept tail immediately following the summary.
-- Unify state across split turns so completed earlier turns never contradict the active in-flight turn in the kept tail.
+## Landed Milestones & Executed Verifications
+- Landed milestones: STRICTLY 1 line per merged PR or landed commit (\`<issue/PR> @ <sha> — <residual caveat if any>\`); drop function-by-function inventories once merged.
+- Executed verification & gate ledger: past-tense record of checks, e2e runs, \`ghc ev\` records, and review gates executed in this range (exact command run, artifact/record ID, and observed outcome), strictly distinguishing recorded \`ghc ev\` artifacts on disk from \`ghc gate\` review \`PASS\`/\`FAIL\` verdicts.
+- NEVER record uncommitted working-tree/branch dirty state, live \`bg_N\`/PID/todo/subagent running status, or next-step action instructions.
 </output-schema>`;
 
 function contextLine(kind: "harness-provided" | "noise-guard", source: string, text: string): string {
@@ -312,6 +312,7 @@ type ErasedContribution =
 			readonly kind: "stateful-handoff";
 			readonly pluginId: string;
 			readonly evaluate: (ctx: CompactPluginContext) => CapturedHandoffRecord | null;
+			readonly evaluateInactive?: (ctx: CompactPluginContext) => string | null;
 	  }
 	| {
 			readonly kind: "stateless-noise-guard";
@@ -321,6 +322,7 @@ type ErasedContribution =
 
 function eraseContribution<TState>(contribution: CompactContribution<TState>): ErasedContribution {
 	if (contribution.kind === "stateful-handoff") {
+		const inactive = contribution.inactiveClaim?.trim() ?? "";
 		return {
 			kind: "stateful-handoff",
 			pluginId: contribution.pluginId,
@@ -333,6 +335,7 @@ function eraseContribution<TState>(contribution: CompactContribution<TState>): E
 					injection: contribution.renderPostCompactInjection(state),
 				};
 			},
+			evaluateInactive: () => (inactive.length > 0 ? inactive : null),
 		};
 	}
 	return {
@@ -348,13 +351,25 @@ function eraseContribution<TState>(contribution: CompactContribution<TState>): E
 
 type BarrierKind = "auto" | "manual";
 
+type PreparedSnapshotState =
+	| { readonly kind: "empty" }
+	| { readonly kind: "ready"; readonly prepared: PreparedCompactHandoff }
+	| { readonly kind: "served"; readonly prepared: PreparedCompactHandoff };
+
+type PostCompactDeliveryState =
+	| { readonly kind: "idle" }
+	| { readonly kind: "armed"; readonly compactionId: string }
+	| { readonly kind: "delivered"; readonly compactionId: string };
+
 interface SessionCompactionState {
 	barrier: BarrierKind | null;
 	deferredCallbacks: Map<string, () => void>;
 	fileOpsPruneCount: number;
+	preparedState?: PreparedSnapshotState;
+	postCompactDelivery?: PostCompactDeliveryState;
 	prepared?: PreparedCompactHandoff;
 	armedCompactionId?: string;
-	pendingDeltaHandoffs: CapturedHandoffRecord[];
+	pendingDeltaHandoffs?: CapturedHandoffRecord[];
 }
 
 interface CompactHandoffStore {
@@ -431,7 +446,20 @@ export class SharedCompactCoordinator {
 	}
 
 	getLastPrepared(sessionManager: object): PreparedCompactHandoff | undefined {
-		return this.store.sessionStates.get(sessionManager)?.prepared;
+		const st = this.store.sessionStates.get(sessionManager);
+		if (!st) return undefined;
+		const ps = this.#readPreparedState(st);
+		switch (ps.kind) {
+			case "empty":
+				return undefined;
+			case "ready":
+			case "served":
+				return ps.prepared;
+			default: {
+				const _exhaustive: never = ps;
+				return _exhaustive;
+			}
+		}
 	}
 
 	getFileOpsPruneCount(sessionManager: object): number {
@@ -481,11 +509,34 @@ export class SharedCompactCoordinator {
 				barrier: null,
 				deferredCallbacks: new Map(),
 				fileOpsPruneCount: 0,
-				pendingDeltaHandoffs: [],
+				preparedState: { kind: "empty" },
+				postCompactDelivery: { kind: "idle" },
 			};
 			this.store.sessionStates.set(sessionManager, state);
 		}
 		return state;
+	}
+
+	#readPreparedState(st: SessionCompactionState): PreparedSnapshotState {
+		if (st.preparedState) return st.preparedState;
+		const migrated: PreparedSnapshotState = st.prepared ? { kind: "served", prepared: st.prepared } : { kind: "empty" };
+		st.preparedState = migrated;
+		return migrated;
+	}
+
+	#readPostCompactDelivery(st: SessionCompactionState): PostCompactDeliveryState {
+		if (st.postCompactDelivery) return st.postCompactDelivery;
+		if (typeof st.armedCompactionId === "string") {
+			const legacyHasPending = Array.isArray(st.pendingDeltaHandoffs) && st.pendingDeltaHandoffs.length > 0;
+			const migrated: PostCompactDeliveryState = legacyHasPending
+				? { kind: "armed", compactionId: st.armedCompactionId }
+				: { kind: "delivered", compactionId: st.armedCompactionId };
+			st.postCompactDelivery = migrated;
+			return migrated;
+		}
+		const initial: PostCompactDeliveryState = { kind: "idle" };
+		st.postCompactDelivery = initial;
+		return initial;
 	}
 
 	#getDeltaStream(source: string): DeltaStream {
@@ -504,6 +555,7 @@ export class SharedCompactCoordinator {
 	handleBeforeCompact(event: SessionBeforeCompactEvent, ctx: ExtensionContext): undefined {
 		this.enterCompactionBarrier(ctx.sessionManager, event.signal);
 		const st = this.#getSessionState(ctx.sessionManager);
+		const prev = this.#readPreparedState(st);
 		const prefixMessages = [...event.preparation.messagesToSummarize, ...event.preparation.turnPrefixMessages];
 
 		let fileOpsPruneReport: FileOpsPruneReport;
@@ -512,10 +564,10 @@ export class SharedCompactCoordinator {
 			fileOpsPruneReport = prunePreparationFileOpsInPlace(event.preparation.fileOps, prefixMessages, ctx.cwd);
 			st.fileOpsPruneCount += 1;
 		} else {
-			fileOpsPruneReport = st.prepared?.fileOpsPruneReport ?? EMPTY_PRUNE_REPORT;
+			fileOpsPruneReport = prev.kind === "empty" ? EMPTY_PRUNE_REPORT : prev.prepared.fileOpsPruneReport;
 		}
 
-		st.prepared = this.prepareSnapshot(
+		const prepared = this.prepareSnapshot(
 			{
 				cwd: ctx.cwd,
 				branchEntries: event.branchEntries,
@@ -525,32 +577,59 @@ export class SharedCompactCoordinator {
 			},
 			fileOpsPruneReport,
 		);
+		st.prepared = prepared;
+		st.preparedState = { kind: "ready", prepared };
 		return undefined;
 	}
 
 	handleCompacting(event: SessionCompactingEvent, ctx: ExtensionContext): SessionCompactingResult {
 		this.enterCompactionBarrier(ctx.sessionManager);
 		const st = this.#getSessionState(ctx.sessionManager);
-		if (!st.prepared) {
-			st.prepared = this.prepareSnapshot(
-				{
-					cwd: ctx.cwd,
-					branchEntries: ctx.sessionManager.getEntries(),
-					messagesToSummarize: event.messages,
-					extensionCtx: ctx,
-					runtimeFlags: this.store.runtimeFlagsBySession.get(ctx.sessionManager),
-				},
-				EMPTY_PRUNE_REPORT,
-			);
+		const ps = this.#readPreparedState(st);
+		switch (ps.kind) {
+			case "ready":
+				st.preparedState = { kind: "served", prepared: ps.prepared };
+				return ps.prepared.compactingResult;
+			case "empty":
+			case "served": {
+				const prepared = this.prepareSnapshot(
+					{
+						cwd: ctx.cwd,
+						branchEntries: ctx.sessionManager.getEntries(),
+						messagesToSummarize: event.messages,
+						extensionCtx: ctx,
+						runtimeFlags: this.store.runtimeFlagsBySession.get(ctx.sessionManager),
+					},
+					EMPTY_PRUNE_REPORT,
+				);
+				st.prepared = prepared;
+				st.preparedState = { kind: "served", prepared };
+				return prepared.compactingResult;
+			}
+			default: {
+				const _exhaustive: never = ps;
+				return _exhaustive;
+			}
 		}
-		return st.prepared.compactingResult;
 	}
 
 	handleSessionCompact(event: SessionCompactEvent, ctx: ExtensionContext): void {
-		const st = this.store.sessionStates.get(ctx.sessionManager);
-		if (st?.prepared && st.armedCompactionId !== event.compactionEntry.id) {
-			st.armedCompactionId = event.compactionEntry.id;
-			st.pendingDeltaHandoffs = st.prepared.activeHandoffs.filter((handoff) => handoff.injection.delivery === "delta-stream");
+		const st = this.#getSessionState(ctx.sessionManager);
+		const current = this.#readPostCompactDelivery(st);
+		switch (current.kind) {
+			case "idle":
+			case "armed":
+				st.postCompactDelivery = { kind: "armed", compactionId: event.compactionEntry.id };
+				break;
+			case "delivered":
+				if (current.compactionId !== event.compactionEntry.id) {
+					st.postCompactDelivery = { kind: "armed", compactionId: event.compactionEntry.id };
+				}
+				break;
+			default: {
+				const _exhaustive: never = current;
+				void _exhaustive;
+			}
 		}
 		this.releaseCompactionBarrier(ctx.sessionManager);
 	}
@@ -567,15 +646,35 @@ export class SharedCompactCoordinator {
 
 	handleBeforeAgentStart(ctx: ExtensionContext) {
 		const st = this.store.sessionStates.get(ctx.sessionManager);
-		if (!st || st.pendingDeltaHandoffs.length === 0) return undefined;
-		const pending = st.pendingDeltaHandoffs;
-		st.pendingDeltaHandoffs = [];
+		if (!st) return undefined;
+		const delivery = this.#readPostCompactDelivery(st);
+		switch (delivery.kind) {
+			case "idle":
+			case "delivered":
+				return undefined;
+			case "armed":
+				st.postCompactDelivery = { kind: "delivered", compactionId: delivery.compactionId };
+				break;
+			default: {
+				const _exhaustive: never = delivery;
+				return _exhaustive;
+			}
+		}
+		const liveCtx: CompactPluginContext = {
+			cwd: ctx.cwd,
+			branchEntries: ctx.sessionManager.getEntries(),
+			messagesToSummarize: [],
+			extensionCtx: ctx,
+			runtimeFlags: this.store.runtimeFlagsBySession.get(ctx.sessionManager),
+		};
 		const deliveredBlocks: string[] = [];
-		for (const handoff of pending) {
-			if (handoff.injection.delivery !== "delta-stream") continue;
-			const stream = this.#getDeltaStream(handoff.injection.source);
+		for (const entry of this.store.contributions.values()) {
+			if (entry.kind !== "stateful-handoff") continue;
+			const captured = entry.evaluate(liveCtx);
+			if (captured === null || captured.injection.delivery !== "delta-stream") continue;
+			const stream = this.#getDeltaStream(captured.injection.source);
 			stream.turnStarted();
-			const res = stream.atPrompt(ctx, { kind: "text", body: handoff.injection.content });
+			const res = stream.atPrompt(ctx, { kind: "text", body: captured.injection.content });
 			if (res) deliveredBlocks.push(res.message.content);
 		}
 		if (deliveredBlocks.length === 0) return undefined;
@@ -637,6 +736,7 @@ export class SharedCompactCoordinator {
 	prepareSnapshot(ctx: CompactPluginContext, fileOpsPruneReport: FileOpsPruneReport): PreparedCompactHandoff {
 		const activeHandoffs: CapturedHandoffRecord[] = [];
 		const inactiveStatefulPluginIds: string[] = [];
+		const inactiveClaims: { readonly pluginId: string; readonly claim: string }[] = [];
 		const noiseGuards: CapturedNoiseGuardRecord[] = [];
 
 		for (const entry of this.store.contributions.values()) {
@@ -644,6 +744,10 @@ export class SharedCompactCoordinator {
 				const captured = entry.evaluate(ctx);
 				if (captured === null) {
 					inactiveStatefulPluginIds.push(entry.pluginId);
+					const emptyClaim = entry.evaluateInactive?.(ctx) ?? null;
+					if (emptyClaim !== null && emptyClaim.trim().length > 0) {
+						inactiveClaims.push({ pluginId: entry.pluginId, claim: emptyClaim.trim() });
+					}
 				} else {
 					activeHandoffs.push(captured);
 				}
@@ -656,6 +760,7 @@ export class SharedCompactCoordinator {
 		const context = [
 			...CORE_HARNESS_PROVIDED_CLAIMS.map((claim) => contextLine("harness-provided", "omp-core", claim)),
 			...activeHandoffs.map((handoff) => contextLine("harness-provided", handoff.pluginId, handoff.claim)),
+			...inactiveClaims.map((item) => contextLine("harness-provided", item.pluginId, item.claim)),
 			...noiseGuards.map((guard) => contextLine("noise-guard", guard.pluginId, guard.directive)),
 		];
 
