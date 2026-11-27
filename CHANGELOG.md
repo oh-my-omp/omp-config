@@ -2,10 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added daily failure tracking to the `omomp-check` workflow: a scheduled run, or a `workflow_dispatch` run with `report_issue` set, keeps one issue in this repository marked `<!-- omomp-upstream-check:v1:repo -->` through `oh-my-omp/shared`'s `report.ts`, opening it on a failure, updating it when the failure changes and closing it on the next passing run; push and pull-request runs only write the step summary and touch no issue
+
 ### Changed
 
 - Changed watchdog observers to end their reply with a last line `STATUS: done`, `STATUS: nothing` or `STATUS: failed — <reason>`: only `done` and `nothing` advance the cursor, while `failed` (logged as `observer failed`) and a reply without a `STATUS` line keep the window for the next run, so a window whose `intent` command failed is no longer skipped
 - Changed observer runs to refuse a `bash` command that already failed in the same run when it is issued again unchanged, because a failed write such as `intent decide` may still have landed; this stops one run from writing the same decision twice. The comparison ignores the observer's `env` export lines, and the `env` hook no longer prefixes a command that already starts with them, so a model copying the rewritten command neither doubles the lines nor slips past the refusal
+- Changed the `omomp-check` workflow to run `oh-my-omp/shared`'s `deps.ts gate` as its Gate stage: production files under `agent/extensions/` and `agent/extensions-last/` fail on an `@oh-my-pi/*` import the omp binary cannot load, a named value the module it runs does not export, an import of another extension's directory, or a chained cast without `// SAFETY: <reason>`; `bun run check` no longer runs `ci/host-imports.ts`, which is removed, and the workflow checks out the `oh-my-omp/shared` branch with the name of the pull request's base branch (of the run's own branch outside pull requests) when shared has one, otherwise `main`
 - Changed `omp-playbooks` from a required plugin to a commented-out optional entry of `install-plugins.sh`, and declared `omp-dispatch` the same way beside `omp-remote-build`: onboarding and `/update-omp` no longer install any of them on a new machine, while a machine that already has one keeps it and the updater still refreshes it
 
 ### Fixed

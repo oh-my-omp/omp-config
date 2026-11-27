@@ -82,14 +82,19 @@ function parseEntry(line: string): WantedEntry | undefined {
 	if (!isRecord(value) || typeof value.type !== "string") return undefined;
 	switch (value.type) {
 		case "message":
+			// SAFETY: isWantedHead admits only lines starting `{"type":"message"` with `"message":{"role":"assistant"`; fold type-checks every other field it reads.
 			return value as unknown as SessionMessageEntry;
 		case "model_usage":
+			// SAFETY: fold type-checks provider, model, timestamp and usage cost before using them.
 			return value as unknown as ModelUsageEntry;
 		case "session_init":
+			// SAFETY: fold type-checks agent and resolvedModel before using them.
 			return value as unknown as SessionInitEntry;
 		case "model_change":
+			// SAFETY: fold reads only resolvedModelIsFallback, compared with `=== true`.
 			return value as unknown as ModelChangeEntry;
 		case "custom":
+			// SAFETY: customType is checked here and fold reads no other field of a custom entry.
 			return value.customType === "session_exit" ? (value as unknown as CustomEntry) : undefined;
 		default:
 			return undefined;
