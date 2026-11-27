@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-27
+
 ### Added
 
 - Added daily failure tracking to the `omomp-check` workflow: a scheduled run, or a `workflow_dispatch` run with `report_issue` set, keeps one issue in this repository marked `<!-- omomp-upstream-check:v1:repo -->` through `oh-my-omp/shared`'s `report.ts`, opening it on a failure, updating it when the failure changes and closing it on the next passing run; push and pull-request runs only write the step summary and touch no issue
