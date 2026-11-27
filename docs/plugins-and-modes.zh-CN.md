@@ -21,11 +21,12 @@
 | [`https://github.com/oh-my-omp/omp-actual-terminal#release`](https://github.com/oh-my-omp/omp-actual-terminal) | `omp-actual-terminal` | 必装（GitHub） | 原生 launch 已关闭（`agent/config.yml` 中 `launch.enabled: false`）；接管 `bash`（`pty: true` 终端 job），提供 `write_stdin` / `monitor` / `term://` 与 `help://bash/terminal`。 |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | 必装（GitHub fork） | — |
 | [`https://github.com/oh-my-omp/omp-thinking-translator#release`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | 必装（GitHub） | 插件拥有的配置不由更新器或同步操作写入；见 [思考翻译](#思考翻译)。 |
-| [`https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-ask-ng#release`](https://github.com/oh-my-omp/omp-ask-ng) | `omp-ask-ng` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-peers#release`](https://github.com/oh-my-omp/omp-peers) | `omp-peers` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-sessions#release`](https://github.com/oh-my-omp/omp-sessions) | `omp-sessions` | 必装（GitHub） | — |
 | [`https://github.com/oh-my-omp/omp-subagent-ng#release`](https://github.com/oh-my-omp/omp-subagent-ng) | `omp-subagent-ng` | 必装（GitHub） | 提供 `fork_task`。 |
+| [`# https://github.com/oh-my-omp/omp-dispatch#release`](https://github.com/oh-my-omp/omp-dispatch) | `omp-dispatch` | 可选（默认注释） | — |
+| [`# https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | 可选（默认注释） | — |
 | [`# https://github.com/oh-my-omp/omp-remote-build#release`](https://github.com/oh-my-omp/omp-remote-build) | `omp-remote-build` | 可选（默认注释） | — |
 
 ### todo-ng
@@ -54,7 +55,7 @@
 | `bashInterceptor.enabled` | `true`（`config.yml` 的规则把 `cat`/`grep`/`find`/`sed -i`/`echo >` 等转向专用工具） | `false`：`bash` 直接执行这些命令，不拦截 |
 | `disabledExtensions` | 无 | 禁用以下扩展：`fork-task`（插件 `omp-subagent-ng` 的扩展入口）、`isolation-nudge`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`turn-judge`、`user-prompt-inject`、`watchdog-agent` |
 | `config.yml` 的 `extensions` 路径列表 | 加载 `extensions-last/system-prompt-replace` | `config-light.yml` 用自己的列表覆盖 `extensions`，同样最后加载 `extensions-last/system-prompt-replace`（其 `REPLACE-SYSTEM-*.yml` 规则用 `mode` / `exclude.mode` 区分模式，仓库自带规则写 `mode: full`）；`omp-light.ts` 读取本机 `config.yml`，把不含 `/extensions-last/` 的本机条目（如 `~/.claude`）通过 `-e` 传回 |
-| 其余本地扩展 | 启用 | 保留：`append-system-model`、`argon-long-output`、`ast-top-level`、`child-memory-warning`、`delete-guard`、`harness-restart`、`input-polish`、`lang-nag`、`model-compaction`、`omomp-changelog`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`subagent-usage`、`tool-topics`、`wt-tool`（轻量模式下 OMP 自有工具的说明同样有表层文本与 `Topics` 索引；插件工具保留自身说明） |
+| 其余本地扩展 | 启用 | 保留：`append-system-model`、`argon-long-output`、`ast-top-level`、`child-memory-warning`、`delete-guard`、`harness-restart`、`input-polish`、`lang-nag`、`model-compaction`、`omomp-changelog`、`omomp-lang`、`omp-config-autoupdate`、`repo-rules`、`subagent-usage`、`task-result-guard`、`tool-topics`、`wt-tool`（轻量模式下 OMP 自有工具的说明同样有表层文本与 `Topics` 索引；插件工具保留自身说明） |
 | 已安装插件 | 全部加载 | 全部加载，除上面 `disabledExtensions` 列出的 `fork-task` 插件扩展入口外 |
 | 轻量模式减少的本地工具 | — | 无（`fork_task` 是插件 `omp-subagent-ng` 的工具，其 `fork-task` 扩展入口被 `config-light.yml` 禁用） |
 

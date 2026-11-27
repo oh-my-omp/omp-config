@@ -21,11 +21,12 @@ Independent plugins are installed into `~/.omp/plugins/` via `install-plugins.sh
 | [`https://github.com/oh-my-omp/omp-actual-terminal#release`](https://github.com/oh-my-omp/omp-actual-terminal) | `omp-actual-terminal` | Required (GitHub) | Native launch is disabled (`agent/config.yml` `launch.enabled: false`); registers `bash` (`pty: true` terminal jobs), `write_stdin`, `monitor`, `term://`, and `help://bash/terminal`. |
 | [`https://github.com/mouriya-s-lab/pi-bansos`](https://github.com/mouriya-s-lab/pi-bansos) | `pi-bansos` | Required (GitHub fork) | — |
 | [`https://github.com/oh-my-omp/omp-thinking-translator#release`](https://github.com/oh-my-omp/omp-thinking-translator) | `omp-thinking-translator` | Required (GitHub) | Plugin-owned configuration is excluded from updater and sync writes; see [Thinking translation](#thinking-translation). |
-| [`https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | Required (GitHub) | — |
 | [`https://github.com/oh-my-omp/omp-ask-ng#release`](https://github.com/oh-my-omp/omp-ask-ng) | `omp-ask-ng` | Required (GitHub) | — |
 | [`https://github.com/oh-my-omp/omp-peers#release`](https://github.com/oh-my-omp/omp-peers) | `omp-peers` | Required (GitHub) | — |
 | [`https://github.com/oh-my-omp/omp-sessions#release`](https://github.com/oh-my-omp/omp-sessions) | `omp-sessions` | Required (GitHub) | — |
 | [`https://github.com/oh-my-omp/omp-subagent-ng#release`](https://github.com/oh-my-omp/omp-subagent-ng) | `omp-subagent-ng` | Required (GitHub) | Ships `fork_task`. |
+| [`# https://github.com/oh-my-omp/omp-dispatch#release`](https://github.com/oh-my-omp/omp-dispatch) | `omp-dispatch` | Optional (commented out) | — |
+| [`# https://github.com/oh-my-omp/omp-playbooks#release`](https://github.com/oh-my-omp/omp-playbooks) | `omp-playbooks` | Optional (commented out) | — |
 | [`# https://github.com/oh-my-omp/omp-remote-build#release`](https://github.com/oh-my-omp/omp-remote-build) | `omp-remote-build` | Optional (commented out) | — |
 
 ### todo-ng
@@ -54,7 +55,7 @@ Set up translation using the [omp-thinking-translator README](https://github.com
 | `bashInterceptor.enabled` | `true` (the `config.yml` patterns redirect `cat`/`grep`/`find`/`sed -i`/`echo >` etc. to dedicated tools) | `false`: `bash` runs those commands unblocked |
 | `disabledExtensions` | None | Disables these extensions: `fork-task` (the `omp-subagent-ng` plugin's extension entry), `isolation-nudge`, `task-completion-judge`, `task-split-check`, `tool-policy-nag`, `turn-judge`, `user-prompt-inject`, `watchdog-agent` |
 | `config.yml` `extensions` path list | Loads `extensions-last/system-prompt-replace` | `config-light.yml` overrides `extensions` with a list that loads `extensions-last/system-prompt-replace` last too (its `REPLACE-SYSTEM-*.yml` rules select modes with `mode` / `exclude.mode`; the shipped rules say `mode: full`); `omp-light.ts` reads the machine's `config.yml` and passes any non-`/extensions-last/` entries (such as `~/.claude`) back via `-e` |
-| Remaining local extensions | Loaded | Loaded: `append-system-model`, `argon-long-output`, `ast-top-level`, `child-memory-warning`, `delete-guard`, `harness-restart`, `input-polish`, `lang-nag`, `model-compaction`, `omomp-changelog`, `omomp-lang`, `omp-config-autoupdate`, `repo-rules`, `subagent-usage`, `tool-topics`, `wt-tool` (OMP-owned tool descriptions still get their surfaces and `Topics` indexes in light mode; plugin tools keep their own descriptions) |
+| Remaining local extensions | Loaded | Loaded: `append-system-model`, `argon-long-output`, `ast-top-level`, `child-memory-warning`, `delete-guard`, `harness-restart`, `input-polish`, `lang-nag`, `model-compaction`, `omomp-changelog`, `omomp-lang`, `omp-config-autoupdate`, `repo-rules`, `subagent-usage`, `task-result-guard`, `tool-topics`, `wt-tool` (OMP-owned tool descriptions still get their surfaces and `Topics` indexes in light mode; plugin tools keep their own descriptions) |
 | Installed plugins | All loaded | All loaded except the `fork-task` plugin extension entry named in `disabledExtensions` above |
 | Local tools removed in light mode | — | None (`fork_task` is the `omp-subagent-ng` plugin's tool; its `fork-task` extension entry is disabled by `config-light.yml`) |
 

@@ -32,6 +32,7 @@
 | 22 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
 | 23 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
 | 24 | `omomp-changelog` | [omomp-changelog](#omomp-changelog) | 主 TUI | 是 | `startup.changelogMode`、`startup.quiet`（OMP 设置）；标记文件 | 选择 `summary`、`expanded` 或 `hidden` 的启动更新说明；用 `/omomp-changelog [full\|last [N]]` 查看历史 |
+| 25 | `task-result-guard` | [task-result-guard](#task-result-guard) | 进程全局 TUI + 主 + 子 | 是 | 无扩展配置文件 | 保护 OMP TUI 渲染非快照 `task` 结果；停用后需重启生效 |
 
 ---
 
@@ -141,13 +142,13 @@
 | `target`（必填） | `main`、子代理名（如 `task:low`）或注册 id、`*`、`subagents` 或逗号列表 | 决定哪些会话运行该 watchdog |
 | `cwd` | 可选的 Bun glob 逗号列表，每项为绝对路径或以 `~/` 开头；省略表示不限目录 | 与经 `node:path.resolve` 规范化的会话实时 cwd 匹配：`/a/repo` 只匹配该目录，`/a/repo/**` 只匹配其子目录，`/a/repo{,/**}` 两者都匹配，`/**/worktrees/*` 匹配任一 `worktrees` 目录的直接子目录。与 `target` 取 AND，`target: *` 也不例外。空列表或相对路径模式使整个文件无效 |
 | `watchModel`、`watchProvider` | 可选；各一个 JavaScript 正则（多选用 `\|`），不锚定 | 匹配被监督会话每条助手消息的 `model` 与 `provider`；只有匹配消息的动作计数，实时计数和重载后恢复计数都按此筛选。空值或无效正则使文件无效。`model` 仍是聊天 reviewer 自己的模型 |
-| `inject` | `system`（默认）、`user` 或 `none` | `none` 使文件成为观察者：从不向被监督会话发送任何内容，正文是每次审阅时用 `tools` 执行的任务，单行回复只写日志；同时写 `delivery`、`maxPerContext`、`note`、`instructions` 或 `option.*` 会使文件无效。`system`：带 `<watchdog name=… severity=…>` 标签的提醒作为 `watchdog` 自定义消息（`details.filePaths`）发送，即 OMP 自身的 harness 通知通道。模型实际收到的角色取决于 provider：OpenAI Responses（如 `openai-codex`）为 `developer`；支持对话中途 system 的 Anthropic 模型为 `system`；其余情况为带标签的 `user` 消息（实测 `anthropic/claude-haiku-5-5` 与 `opencode-go` 均如此，后者的 `openai-completions` 端点没有 developer 角色）。`user`：提醒作为 `attribution: "agent"` 的 user 消息发送，不带标签；聊天 reviewer 在同一次调用里直接以用户口吻对代理说话（第一人称、口语化、按严重程度带情绪），JUDGE 则原样发送所选选项的 `.prompt`。user 形式的 `steer` 会被 OMP 套上 “User interjection” 提示 |
+| `inject` | `system`（默认）、`user` 或 `none` | `none` 使文件成为观察者：从不向被监督会话发送任何内容，正文是每次审阅时用 `tools` 执行的任务，回复只写日志且以 `STATUS:` 行结尾（见 `model`、`tools`）；同时写 `delivery`、`maxPerContext`、`note`、`instructions` 或 `option.*` 会使文件无效。`system`：带 `<watchdog name=… severity=…>` 标签的提醒作为 `watchdog` 自定义消息（`details.filePaths`）发送，即 OMP 自身的 harness 通知通道。模型实际收到的角色取决于 provider：OpenAI Responses（如 `openai-codex`）为 `developer`；支持对话中途 system 的 Anthropic 模型为 `system`；其余情况为带标签的 `user` 消息（实测 `anthropic/claude-haiku-5-5` 与 `opencode-go` 均如此，后者的 `openai-completions` 端点没有 developer 角色）。`user`：提醒作为 `attribution: "agent"` 的 user 消息发送，不带标签；聊天 reviewer 在同一次调用里直接以用户口吻对代理说话（第一人称、口语化、按严重程度带情绪），JUDGE 则原样发送所选选项的 `.prompt`。user 形式的 `steer` 会被 OMP 套上 “User interjection” 提示 |
 | `name`、`enabled` | `name` 默认取文件名标签；`enabled` 默认 `true` | `/watchdog` 按 `name` 操作；多个文件重名时报错并列出路径 |
 | `delivery` | `aside`（默认）、`steer`、`nextTurn`、`followUp` | 提醒发送方式；system 形式的 `aside`/`steer`/`followUp` 在会话空闲时开启新回合。`nextTurn` 等待下次用户输入或子代理 `before_agent_start`，并进入该回合的第一次模型调用：system 提醒作为钩子返回的自定义消息，user 提醒作为 prompt 准备期间排队的 steer |
 | `every`、`scope` | `every` 默认 `30`；`scope` 为 `full`（默认）或 `window` | 计数助手消息中的每次工具调用和每条非空文字回复各计 1 步；满 `every` 步后台审阅，终态 `agent_end` 或等待后台任务的 `agent_end`（`awaitingAsyncWork`）对剩余步数补跑一次。`window` 只读上次游标之后的新消息 |
 | `maxPerContext` | 正整数，默认不限 | 两次 compaction 之间最多注入几条提醒（compaction 重置封顶计数，不重置步数与 `window` 游标） |
-| `model`、`tools` | 聊天 reviewer 模式（默认）与观察者模式（`inject: none`） | 在禁加载扩展、`taskDepth: 1` 的内存会话中运行（声明了 `env` 的观察者只带 `env` 钩子）；`model` 未填时依次尝试 `@advisor`、`advisor`、`@slow`、当前会话模型；`tools` 默认 `[read, grep, glob]`（可加 `ast_grep, web_search, edit, write, bash, eval`）。审阅提示词附带被监督会话的 `sessionId` 与 `cwd`，仅配置只读工具时按只读方式引导工具使用，授予动作类工具时按配置的优先级引导使用。首行以 `PASS`/`OK`/`LGTM`/`NONE` 开头视为通过；含 `SEVERITY: nit\|concern\|blocker` 行时，将该行之后的文字按 `inject` 形式注入；两者都没有的回复只记日志并丢弃，游标不前进，下次审阅重新读这段工作。观察者的时限为 300 秒而非 90 秒；运行完成即推进游标，超时或失败时游标不动，下次运行重新覆盖这段工作 |
-| `env` | 仅观察者模式；`[NAME=value, …]`，名称符合 `[A-Za-z_][A-Za-z0-9_]*`，值不含逗号；包住整个条目或值的一对引号会被去掉 | 观察者执行的每条 `bash` 命令都带上这些变量，与模型是否写出无关：观察者会话里的 `tool_call` 钩子在命令前为每个变量加一行 `export NAME='value'`。要求 `tools` 含 `bash`；`tools` 含 `eval`（其 shell 拿不到这些变量）、条目格式错误或重复、列表为空，或未写 `inject: none` 时写 `env`，都会使文件无效。示例：`env: [INTENT_ACTOR=watchdog]` |
+| `model`、`tools` | 聊天 reviewer 模式（默认）与观察者模式（`inject: none`） | 在禁加载扩展、`taskDepth: 1` 的内存会话中运行（观察者只带失败命令拦截钩子，声明了 `env` 时再加 `env` 钩子）；`model` 未填时依次尝试 `@advisor`、`advisor`、`@slow`、当前会话模型；`tools` 默认 `[read, grep, glob]`（可加 `ast_grep, web_search, edit, write, bash, eval`）。审阅提示词附带被监督会话的 `sessionId` 与 `cwd`，仅配置只读工具时按只读方式引导工具使用，授予动作类工具时按配置的优先级引导使用。首行以 `PASS`/`OK`/`LGTM`/`NONE` 开头视为通过；含 `SEVERITY: nit\|concern\|blocker` 行时，将该行之后的文字按 `inject` 形式注入；两者都没有的回复只记日志并丢弃，游标不前进，下次审阅重新读这段工作。观察者的时限为 300 秒而非 90 秒，回复以 `STATUS: done`、`STATUS: nothing` 或 `STATUS: failed — <原因>` 结尾，`failed` 表示任务需要的命令失败了。`done` 与 `nothing` 推进游标并记 `observer done`；`failed`（记 `observer failed`）、缺少 `STATUS` 行的回复、provider 错误、300 秒时限到达（记 `observer timed out`）以及被 compaction 或会话切换取消（记 `observer canceled (<原因>)`）都不推进游标，下次运行重新覆盖这段工作。运行已经返回之后才到达的取消不改变它的结局；模型已答完、运行尚未返回时到达的取消仍按取消处理，所以会写入的观察者任务要自行查重先前的写入。同一次观察者运行里，已失败的 `bash` 命令再次原样执行时被拒绝（比较时忽略 `env` 的 export 行），因为失败的写入可能已经生效。只有回复的最后一行算作 `STATUS` 行。会话关闭时，聊天与 JUDGE 审阅被取消，正在运行的观察者不取消：进程退出等它结束，最长 300 秒，等待期间终端显示 `watchdog "<name>": waiting for the observer to finish`。在会话关闭后才结束的观察者只记日志、不写游标，恢复该会话时会重新审阅这段工作 |
+| `env` | 仅观察者模式；`[NAME=value, …]`，名称符合 `[A-Za-z_][A-Za-z0-9_]*`，值不含逗号；包住整个条目或值的一对引号会被去掉 | 观察者执行的每条 `bash` 命令都带上这些变量，与模型是否写出无关：观察者会话里的 `tool_call` 钩子在命令前为每个变量加一行 `export NAME='value'`，只加一次：命令已经以这些行开头（模型照抄了它看到的改写后命令）时不再重复添加。要求 `tools` 含 `bash`；`tools` 含 `eval`（其 shell 拿不到这些变量）、条目格式错误或重复、列表为空，或未写 `inject: none` 时写 `env`，都会使文件无效。示例：`env: [INTENT_ACTOR=watchdog]` |
 | `instructions`、`option.<标签>[.prompt\|.delivery]` | JUDGE 模式（声明 $\ge 2$ 个 `option.*` 时启用） | 不能与 `model`/`tools`/`note` 同用；调 `openJudge` 从声明的小写标签选项中选一个，若带 `.prompt` 则注入该文本（无 `.prompt` 视为通过）。报错或 90 秒超时不回退聊天模式 |
 
 只监督领导 checkout 时，可使用如下 `WATCHDOG-LeaderScope.md`：
@@ -283,6 +284,16 @@ OMP 的 tool command 通道启用时，OMP 把 `loadMode` 为 `discoverable` 的
 - **晚绑定**：OMP 可能在会话已完成工具分区后才绑定本扩展（首帧前无需注册任何东西的扩展会被延后加载）。OMP 会把 `session_start` 补发给晚绑定的扩展；此时含这两个工具之一的会话重新应用一次自身当前工具集，依据该表重新分区；新会话与恢复会话因此按相同顺序列出工具。
 - **生命周期**：该表进程全局且不会还原；停用扩展后重启才生效。
 - **失败处理**：导出被改名时扩展加载失败。表拒绝写入或 OMP 不再查询该表时，加载时记 warning，每次主会话启动弹一次警告；两个工具保持为 bash 里的 tool command。
+
+### task-result-guard
+
+源码：`agent/extensions/task-result-guard/`。进程全局 TUI 兼容保护，完整与轻量模式均启用；无配置。
+
+当 `tool_call` 钩子拦截 `task`（如 `isolation-nudge`、`task-split-check`）或回合因错误/中止结束且留有未执行调用时，OMP 落盘的 `task` `toolResult` 的 `details` 为 `{}` 或 `{ __synthetic: true, source: "assistant_stop_error" | "assistant_stop_aborted" }` 而非 `TaskToolDetails` 快照。OMP 的 `taskPresenter` 仅判断 `if (!details)` 即展开 `[...details.results]`，而 `tool-block` 在 `details?.source === "interrupt_skipped"` 时切到 `defaultPresenter` 显示 `cancelled`：
+
+- **投影边界**：每进程幂等包装 `UiHelpers.prototype`（`renderSessionContext`、`renderSessionContextIncrementally`、`replaySteps`）、`SelectorController.prototype`（`showUserMessageSelector`、`showCopySelector`）与 `SessionManager.prototype.getTree`、`EventController.prototype.handleEvent`（`tool_execution_update`、`tool_execution_end`）、`Agent.prototype.getPendingToolResults` 及 `agentTranscriptSource.parseEntries`。对 `toolName === "task"`，凡 `details` 既非 `undefined`、非合法 `TaskToolDetails` 快照（`isTaskToolDetails`）、且非 `source: "interrupt_skipped"` 时，向视图层传入 `details: undefined` 的浅拷贝，不修改落盘会话条目与调用方原对象。对存在挂起卡片的合成停止 `tool_execution_end` 事件，单次包装卡片的 `updateResult` 将 `details` 置为 `undefined`，同时把原事件透传给 `EventController`，保持 `auto_retry_start` 清理被取代卡片的行为。
+- **首帧前急切绑定**：注册命名空间消息渲染器（`mouriya.omp.task-result-guard`），使 `canBindAfterStartup` 在命中 `agent.db` 启动延迟缓存时仍为 `false`，确保每次启动都在 `renderInitialMessages` 前生效。
+- **失败处理**：若后续 OMP 版本移除或改名目标方法，加载时记 warning 并在首个有 UI 的主会话启动时弹一次警告，不阻塞启动；停用扩展需重启后生效。
 
 ### tool-topics
 

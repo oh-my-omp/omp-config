@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-This node designs omp-config's configuration check: in a throwaway environment it installs the latest omp, applies the config with the repository's own updater, runs real sessions on a free model, and reports the faults and warnings that omp and the extensions print, deduplicated, one by one. The code checks — `bun install`, `bun run check` (Biome formatting and lint, `tsc --noEmit`, and `ci/host-imports.ts`, which fails on a value import outside the omp binary's module table), `bun run test` (the unit tests in `ci/`, such as `ci/omp-config-update.test.ts`) and the shared-copy comparison — run in the `omomp-check` workflow, which needs full git history for the tests' `git show` fixtures; their rules are in the code conventions section of the repository's `AGENTS.md` and are not part of this node.
+This node designs omp-config's configuration check: in a throwaway environment it installs the latest omp, applies the config with the repository's own updater, runs real sessions on a free model, and reports the faults and warnings that omp and the extensions print, deduplicated, one by one. The code checks — `bun install`, `bun run check` (Biome formatting and lint, `tsc --noEmit`), `bun run test` (the unit tests in `ci/`, such as `ci/omp-config-update.test.ts`), the shared gate `deps.ts gate` and the shared-copy comparison — run in the `omomp-check` workflow, which needs full git history for the tests' `git show` fixtures; their rules are in the code conventions section of the repository's `AGENTS.md` and are not part of this node. That workflow, its gate and its tracking-issue feedback are described in the [omomp-check workflow](#omomp-check-workflow) section.
 
 - **Owns**: the stages of a check run, the criteria and classification of diagnostics, how the free model and shadow models are wired in, and the workflow's trigger events and permissions.
 - **Does not own**: the rules of the config items themselves (`README.md` and `docs/*.md`, Chinese version `README.zh-CN.md` and `docs/*.zh-CN.md`); what the updater writes and deletes (`agent/extensions/omp-config-autoupdate/omp-config-update.ts`); the behavior of each extension (`docs/prompts-and-context.md`, `docs/agents.md`, and `docs/extensions.md`).
@@ -153,6 +153,17 @@ CI_KEEP_ROOT=1 bun ci/check.ts       # keep the temporary root for debugging
 ```
 
 Needs Bun, git and public internet access.
+
+## omomp-check workflow
+
+The `omomp-check` workflow runs the deterministic code checks without model sessions. It checks out this repository with full history and `oh-my-omp/shared` on the branch named like the pull request's base branch (the run's own branch outside pull requests) when shared has one, otherwise `main`, each with its own frozen `bun install` so a broken dependency update of this repository cannot take the reporter down with it. The stages are `deps.ts check` (the dependency convention), `bun install --frozen-lockfile`, the `@oh-my-pi` upgrade, `bun run check`, `bun run test`, the gate, and the shared-copy comparison `verify.ts`; every stage tees its output to a per-stage log.
+
+The gate is `bun omomp-shared/deps.ts gate repository`: it derives this repository's `config-bundle` shape and checks production TypeScript under `agent/extensions/` and `agent/extensions-last/` against the installed host — the deterministic upstream-export checks, the cross-extension isolation and chained-cast `// SAFETY:` rules of the AST gates, and the test-file requirement, exactly as the [oh-my-omp/shared README](https://github.com/oh-my-omp/shared#readme) documents them. The same gate runs locally from a checkout of `oh-my-omp/shared` whose own dependencies are installed: after this repository's `bun install` and host upgrade, run `bun deps.ts gate <path to omp-config>` there.
+
+The failure feedback is `if: always() && !cancelled()` and split by event:
+
+- On `push` and `pull_request` the reporter only prints the run summary to the step summary; it touches no issue.
+- On `schedule`, and on `workflow_dispatch` with `report_issue` set, the reporter maintains this repository's single `repo`-scope tracking issue — found by the body marker `<!-- omomp-upstream-check:v1:repo -->` — using `${{ github.token }}` under the workflow's `issues: write` permission. The open/update/close lifecycle and the shared-scope issues that `oh-my-omp/shared`'s own daily check files in this repository are documented in the shared README.
 
 ## delete-guard Windows acceptance
 
