@@ -32,6 +32,7 @@
 | 22 | `argon-long-output` | [argon-long-output](#argon-long-output) | 主 + 子 | 是 | `ARGON_PROMPT.md` 与支持的流超时设置 | 为匹配模型定制长输出指令和显式超时预算 |
 | 23 | `ast-top-level` | [ast-top-level](#ast-top-level) | 进程全局 + 主 + 子 | 是 | 无扩展配置文件 | 语法工具开关由 OMP 提供；本扩展让启用的工具直接可见，停用后需重启 |
 | 24 | `omomp-changelog` | [omomp-changelog](#omomp-changelog) | 主 TUI | 是 | `startup.changelogMode`、`startup.quiet`（OMP 设置）；标记文件 | 选择 `summary`、`expanded` 或 `hidden` 的启动更新说明；用 `/omomp-changelog [full\|last [N]]` 查看历史 |
+| 25 | `task-result-guard` | [task-result-guard](#task-result-guard) | 进程全局 TUI + 主 + 子 | 是 | 无扩展配置文件 | 保护 OMP TUI 渲染非快照 `task` 结果；停用后需重启生效 |
 
 ---
 
@@ -283,6 +284,16 @@ OMP 的 tool command 通道启用时，OMP 把 `loadMode` 为 `discoverable` 的
 - **晚绑定**：OMP 可能在会话已完成工具分区后才绑定本扩展（首帧前无需注册任何东西的扩展会被延后加载）。OMP 会把 `session_start` 补发给晚绑定的扩展；此时含这两个工具之一的会话重新应用一次自身当前工具集，依据该表重新分区；新会话与恢复会话因此按相同顺序列出工具。
 - **生命周期**：该表进程全局且不会还原；停用扩展后重启才生效。
 - **失败处理**：导出被改名时扩展加载失败。表拒绝写入或 OMP 不再查询该表时，加载时记 warning，每次主会话启动弹一次警告；两个工具保持为 bash 里的 tool command。
+
+### task-result-guard
+
+源码：`agent/extensions/task-result-guard/`。进程全局 TUI 兼容保护，完整与轻量模式均启用；无配置。
+
+当 `tool_call` 钩子拦截 `task`（如 `isolation-nudge`、`task-split-check`）或回合因错误/中止结束且留有未执行调用时，OMP 落盘的 `task` `toolResult` 的 `details` 为 `{}` 或 `{ __synthetic: true, source: "assistant_stop_error" | "assistant_stop_aborted" }` 而非 `TaskToolDetails` 快照。OMP 的 `taskPresenter` 仅判断 `if (!details)` 即展开 `[...details.results]`，而 `tool-block` 在 `details?.source === "interrupt_skipped"` 时切到 `defaultPresenter` 显示 `cancelled`：
+
+- **投影边界**：每进程幂等包装 `UiHelpers.prototype`（`renderSessionContext`、`renderSessionContextIncrementally`、`replaySteps`）、`SelectorController.prototype`（`showUserMessageSelector`、`showCopySelector`）与 `SessionManager.prototype.getTree`、`EventController.prototype.handleEvent`（`tool_execution_update`、`tool_execution_end`）、`Agent.prototype.getPendingToolResults` 及 `agentTranscriptSource.parseEntries`。对 `toolName === "task"`，凡 `details` 既非 `undefined`、非合法 `TaskToolDetails` 快照（`isTaskToolDetails`）、且非 `source: "interrupt_skipped"` 时，向视图层传入 `details: undefined` 的浅拷贝，不修改落盘会话条目与调用方原对象。对存在挂起卡片的合成停止 `tool_execution_end` 事件，单次包装卡片的 `updateResult` 将 `details` 置为 `undefined`，同时把原事件透传给 `EventController`，保持 `auto_retry_start` 清理被取代卡片的行为。
+- **首帧前急切绑定**：注册命名空间消息渲染器（`mouriya.omp.task-result-guard`），使 `canBindAfterStartup` 在命中 `agent.db` 启动延迟缓存时仍为 `false`，确保每次启动都在 `renderInitialMessages` 前生效。
+- **失败处理**：若后续 OMP 版本移除或改名目标方法，加载时记 warning 并在首个有 UI 的主会话启动时弹一次警告，不阻塞启动；停用扩展需重启后生效。
 
 ### tool-topics
 
