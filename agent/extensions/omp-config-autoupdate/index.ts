@@ -457,7 +457,7 @@ function registerAutoupdateCommand(pi: ExtensionAPI): void {
 						await ctx.waitForIdle();
 						pi.sendMessage(
 							{ customType: REPORT_TYPE, content: detailedReport(outcome, agentDir), display: true, attribution: "agent" },
-							{ triggerTurn: false },
+							{ deliverAs: "nextTurn", triggerTurn: false },
 						);
 						return;
 					}
