@@ -13,6 +13,7 @@ import { callerSession } from "../_shared/caller-session.ts";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
 import { applyActiveTools } from "../_shared/omomp-shared/active-tools.ts";
+import { omompTool } from "../_shared/omomp-shared/tool-entry.ts";
 import { defineSettings, readSettings, writeSetting } from "../_shared/plugin-settings.ts";
 import { availableAgents, bindAgent, rootSession } from "./agents.ts";
 import { type CalibrationOutcome, calibrate, QUOTA_MAX_AGE_MS, QUOTA_WINDOW_MS, scanTranscripts, stopCalibration } from "./calibrate.ts";
@@ -278,23 +279,25 @@ export default function subagentUsage(pi: ExtensionAPI): void {
 	};
 	pi.on("session_start", activate);
 	pi.on("session_switch", activate);
-	pi.registerTool({
-		name: TOOL,
-		label: tr("Subagent Usage", "子代理用量"),
-		description: DESCRIPTION,
-		approval: "read",
-		loadMode: "essential",
-		defaultInactive: true,
-		parameters: params,
-		async execute(_toolCallId, _rawParams, _signal, _onUpdate, ctx) {
-			try {
-				return await runTool(ctx);
-			} catch (error) {
-				pi.logger.warn("subagent-usage: tool failed", { error: errorText(error) });
-				return failure(`subagent_usage failed: ${errorText(error)}`);
-			}
-		},
-	});
+	pi.registerTool(
+		omompTool({
+			name: TOOL,
+			label: tr("Subagent Usage", "子代理用量"),
+			description: DESCRIPTION,
+			approval: "read",
+			loadMode: "essential",
+			defaultInactive: true,
+			parameters: params,
+			async execute(_toolCallId, _rawParams, _signal, _onUpdate, ctx) {
+				try {
+					return await runTool(ctx);
+				} catch (error) {
+					pi.logger.warn("subagent-usage: tool failed", { error: errorText(error) });
+					return failure(`subagent_usage failed: ${errorText(error)}`);
+				}
+			},
+		}),
+	);
 	pi.registerCommand(COMMAND, {
 		description: tr(
 			"Agent-side /usage for subagents: /subagent-usage [status|on|off|recalibrate|reset]. `on` consents to reading this machine's sessions and usage history.",
