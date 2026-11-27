@@ -1,6 +1,7 @@
 import { type AgentToolResult, type ExtensionAPI, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../_shared/errors.ts";
 import { tr } from "../_shared/i18n.ts";
+import { omompTool } from "../_shared/omomp-shared/tool-entry.ts";
 import { type Outcome, type Platform, runDeletion, supportedPlatform, trashUnavailable } from "./backends.ts";
 import { type EvalSession, guardToolCall, newEvalSession, resetEvalSession } from "./guard.ts";
 import { type Target, validateTargets } from "./targets.ts";
@@ -116,35 +117,37 @@ export default function deleteGuard(pi: ExtensionAPI): void {
 	});
 	const platform = supportedPlatform(process.platform);
 	if (platform === null) return;
-	pi.registerTool({
-		name: DELETE_TOOL,
-		label: tr("Delete", "删除"),
-		description: DELETE_DESCRIPTION,
-		approval: "write",
-		loadMode: "essential",
-		parameters: deleteParams,
-		async execute(_toolCallId, rawParams, signal, _onUpdate, ctx) {
-			const askPermanent: AskPermanent = async (targets) => {
-				if (!ctx.hasUI) return "unavailable";
-				const confirmed = await ctx.ui.confirm(
-					tr("Delete permanently?", "永久删除？"),
-					[
-						tr(
-							"The agent asks to delete these paths recursively. This cannot be undone; they will not go to the trash:",
-							"agent 要求递归删除以下路径，不可恢复，不进回收站：",
-						),
-						...targets.map((target) => `  ${target.operand}`),
-					].join("\n"),
-					{ signal },
-				);
-				return confirmed ? "granted" : "declined";
-			};
-			try {
-				return await runDelete(platform, rawParams, ctx.cwd, askPermanent);
-			} catch (error) {
-				pi.logger.warn("delete: tool failed", { error: errorText(error) });
-				return text(`${DELETE_TOOL}: ${errorText(error)}`, true);
-			}
-		},
-	});
+	pi.registerTool(
+		omompTool({
+			name: DELETE_TOOL,
+			label: tr("Delete", "删除"),
+			description: DELETE_DESCRIPTION,
+			approval: "write",
+			loadMode: "essential",
+			parameters: deleteParams,
+			async execute(_toolCallId, rawParams, signal, _onUpdate, ctx) {
+				const askPermanent: AskPermanent = async (targets) => {
+					if (!ctx.hasUI) return "unavailable";
+					const confirmed = await ctx.ui.confirm(
+						tr("Delete permanently?", "永久删除？"),
+						[
+							tr(
+								"The agent asks to delete these paths recursively. This cannot be undone; they will not go to the trash:",
+								"agent 要求递归删除以下路径，不可恢复，不进回收站：",
+							),
+							...targets.map((target) => `  ${target.operand}`),
+						].join("\n"),
+						{ signal },
+					);
+					return confirmed ? "granted" : "declined";
+				};
+				try {
+					return await runDelete(platform, rawParams, ctx.cwd, askPermanent);
+				} catch (error) {
+					pi.logger.warn("delete: tool failed", { error: errorText(error) });
+					return text(`${DELETE_TOOL}: ${errorText(error)}`, true);
+				}
+			},
+		}),
+	);
 }
