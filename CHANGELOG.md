@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-28
+
 ### Added
 
 - Added a one-time TUI warning if the task-result guard failed to initialize
