@@ -8,11 +8,13 @@ import { openJudge } from "../_shared/judge.ts";
 import { textOf as textBlocks } from "../_shared/messages.ts";
 import type { Model, ThinkingLevel } from "../_shared/models.ts";
 import type { InjectMode, Producer } from "../_shared/session-filter.ts";
-import { bashEnvHook } from "./env.ts";
+import { bashEnvHook, envPrefix } from "./env.ts";
+import { failedCommandGuard } from "./guard.ts";
 import type { ChatWatchdog, DeliverAs, JevWatchdog, ObserverWatchdog, Scope, Verdict } from "./spec.ts";
+import type { CancelCause } from "./state.ts";
 
 const REVIEW_TIMEOUT_MS = 90_000;
-const OBSERVE_TIMEOUT_MS = 300_000;
+export const OBSERVE_TIMEOUT_MS = 300_000;
 const OBSERVE_LOG_CHARS = 300;
 
 function toolCallSummaries(content: AssistantMessage["content"]): string[] {
@@ -285,12 +287,52 @@ export function buildObservePrompt(guidance: string, transcript: string, tools: 
 		`Nothing you write reaches the watched agent or its user: your final reply is only written to a log.\n\n` +
 		`Your task:\n${guidance}\n\n` +
 		`Carry out your task on the latest work in the transcript below with your tools (${tools.join(", ")}). ` +
-		`When you are done, reply with one line saying what you did, or "nothing to do".\n\n` +
+		`Finish your reply with exactly one last line: "STATUS: done — <what you did>", "STATUS: nothing", or "STATUS: failed — <which command failed and why>". ` +
+		`Use "failed" whenever a command your task needed failed or the task could not be completed. ` +
+		`A failed command may still have taken effect, so never run it again in this run: stop and end with "STATUS: failed"; the same work is reviewed again later.\n\n` +
 		`Watched session:\n` +
 		`- sessionId: ${session.sessionId}\n` +
 		`- cwd: ${session.cwd}\n\n` +
 		`TRANSCRIPT:\n"""\n${transcript}\n"""`
 	);
+}
+
+type ObserverStatus = { readonly kind: "done" } | { readonly kind: "failed"; readonly reason: string } | { readonly kind: "missing" };
+
+const CANCEL_CAUSES: Readonly<Record<CancelCause, true>> = { compaction: true, "session-switch": true, shutdown: true };
+
+function isCancelCause(reason: unknown): reason is CancelCause {
+	return typeof reason === "string" && Object.hasOwn(CANCEL_CAUSES, reason);
+}
+
+function observerStatus(reply: string): ObserverStatus {
+	const lastLine = reply.trimEnd().split(/\r?\n/).at(-1) ?? "";
+	const match = /^\s*STATUS:\s*(done|nothing|failed)\b[\s—:-]*(.*)$/i.exec(lastLine);
+	if (match === null) return { kind: "missing" };
+	return match[1]?.toLowerCase() === "failed" ? { kind: "failed", reason: match[2]?.trim() || "no reason given" } : { kind: "done" };
+}
+
+function squeeze(text: string): string {
+	return text.replace(/\s+/g, " ").slice(0, OBSERVE_LOG_CHARS);
+}
+
+function observerVerdict(pi: ExtensionAPI, spec: ObserverWatchdog, reply: string): Verdict | null {
+	const status = observerStatus(reply);
+	switch (status.kind) {
+		case "done":
+			pi.logger.info(`watchdog "${spec.name}": observer done — ${squeeze(reply)}`);
+			return { kind: "pass" };
+		case "failed":
+			pi.logger.warn(`watchdog "${spec.name}": observer failed — will retry this window: ${squeeze(status.reason)}`);
+			return null;
+		case "missing":
+			pi.logger.warn(`watchdog "${spec.name}": observer reply has no STATUS line — will retry this window: ${squeeze(reply)}`);
+			return null;
+		default: {
+			const unreachable: never = status;
+			return unreachable;
+		}
+	}
 }
 
 export async function runObserver(
@@ -305,6 +347,7 @@ export async function runObserver(
 		pi.logger.warn(`watchdog "${spec.name}": no observer model resolved (model=${spec.model ?? "@advisor"}) — skipping`);
 		return null;
 	}
+	const deadline = AbortSignal.timeout(OBSERVE_TIMEOUT_MS);
 	const result = await runHelperPrompt(ctx, {
 		agentId: helperAgentId(spec.name),
 		model: observer.model,
@@ -312,18 +355,21 @@ export async function runObserver(
 		prompt: buildObservePrompt(spec.guidance, transcript, spec.tools, watchedSession(ctx)),
 		systemPrompt: "default",
 		toolNames: spec.tools,
-		hooks: spec.env.length > 0 ? [bashEnvHook(spec.env)] : [],
-		signal: AbortSignal.any([signal, AbortSignal.timeout(OBSERVE_TIMEOUT_MS)]),
+		hooks: [failedCommandGuard(envPrefix(spec.env)), ...(spec.env.length > 0 ? [bashEnvHook(spec.env)] : [])],
+		signal: AbortSignal.any([signal, deadline]),
 	});
 	switch (result.kind) {
 		case "text":
-			pi.logger.info(`watchdog "${spec.name}": observer done — ${result.text.replace(/\s+/g, " ").slice(0, OBSERVE_LOG_CHARS)}`);
-			return { kind: "pass" };
+			return observerVerdict(pi, spec, result.text);
 		case "provider-error":
 			pi.logger.warn(`watchdog "${spec.name}": observer provider error — will retry this window`, { error: result.message });
 			return null;
 		case "canceled":
-			pi.logger.warn(`watchdog "${spec.name}": observer timed out — will retry this window`);
+			if (signal.aborted)
+				pi.logger.warn(
+					`watchdog "${spec.name}": observer canceled (${isCancelCause(signal.reason) ? signal.reason : "unknown"}) — will retry this window`,
+				);
+			else pi.logger.warn(`watchdog "${spec.name}": observer timed out — will retry this window`);
 			return null;
 		case "failed":
 			pi.logger.warn(`watchdog "${spec.name}": observer run failed — will retry this window`, { error: result.message });
